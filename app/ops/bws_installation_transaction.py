@@ -1455,6 +1455,7 @@ def candidate_manifest(
 ) -> tuple[tuple[Any, ...], dict[tuple[str, str], bytes], dict[str, Any]]:
     """Build an exact candidate delta from an old disk snapshot and Git tree."""
     from app.ops.bws_control_installation import Change
+    from app.ops.bws_installation_lifecycle import _LifecycleCloseUncertain
     from app.ops.host_secret_contract import load_host_secret_contract_bytes
 
     required = {
@@ -1714,15 +1715,20 @@ def candidate_manifest(
                 separators=(",", ":"),
             ).encode("ascii")),
         }
+    except _LifecycleCloseUncertain:
+        raise
     except Exception:
         _refuse()
     finally:
+        close_uncertain = False
         for _name, (_root_fd, opened) in reversed(tuple(root_fds.items())):
             for descriptor in reversed(opened):
                 try:
                     os.close(descriptor)
                 except OSError:
-                    _refuse()
+                    close_uncertain = True
+        if close_uncertain:
+            raise _LifecycleCloseUncertain("bws_lifecycle_unproven") from None
 
 def _validate_request(channel: str, request: object) -> dict[str, str]:
     fields = {"action", "operation_id", "candidate_sha", "image_digest", "bundle_name"}
@@ -2259,6 +2265,7 @@ class _NativePorts:
         self._descriptor_service: Any = None
         self._descriptor_handle: Any = None
         self._descriptor_prepare_uncertain = False
+        self.lifecycle_close_uncertain = False
         self._caller_profile_sent = False
         self._caller_source_modules: list[dict[str, object]] | None = None
         caller_root = getattr(sys, "_yggdrasil_bws_candidate_checkout", None)
@@ -2383,10 +2390,11 @@ class _NativePorts:
     def source_resources_closed(self) -> bool:
         handle, service = self._descriptor_handle, self._descriptor_service
         try:
-            return (not self._descriptor_prepare_uncertain
+            return (not self._descriptor_prepare_uncertain and not self.lifecycle_close_uncertain
                     and (handle is None or (handle.state == "closed" and not handle._fds))
                     and (service is None or not service.runtime_context_started
                          or (service.runtime_close_completed is True
+                             and not getattr(service, "lifecycle_close_uncertain", False)
                              and not getattr(getattr(service, "control_path_binding", None),
                                              "close_uncertain", False))))
         except Exception:
@@ -2472,6 +2480,9 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
             nonlocal phase, receipt, terminal_safe, handle, recovery_attempted
             nonlocal handle_close_uncertain
             recovery_attempted = True
+            from app.ops.bws_installation_lifecycle import _LifecycleCloseUncertain
+            if isinstance(failure, _LifecycleCloseUncertain):
+                ports.lifecycle_close_uncertain = True
             start_revocation_uncertain = False
             try:
                 admission.revoke_service_start()
@@ -2542,7 +2553,10 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
             path_close_uncertain = bool(getattr(
                 getattr(service, "control_path_binding", None), "close_uncertain", False,
             ))
-            if start_revocation_uncertain or handle_close_uncertain or path_close_uncertain:
+            reader_close_uncertain = (getattr(ports, "lifecycle_close_uncertain", False)
+                                      or getattr(service, "lifecycle_close_uncertain", False))
+            if (start_revocation_uncertain or handle_close_uncertain or path_close_uncertain
+                    or reader_close_uncertain):
                 # Preserve ownership even before backup: a later successful
                 # runtime close cannot turn uncertain PATH metadata closes into
                 # a terminal refusal. Never retry the uncertain original FD.

@@ -121,6 +121,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         admission._OWNER_UID, admission._OWNER_GID = os.geteuid(), os.getegid()
         admission._RUNTIME_DIRECTORY = admission._RECEIPT_DIRECTORY = receipts
         admission._FIXED_RUNTIME, admission._FIXED_LAUNCHER = runtime, public_launcher
+        original_public_launcher_bytes = lifecycle._public_launcher_bytes
         lifecycle._public_launcher_bytes = public_launcher.read_bytes
         def private_target_directory(path):
             assert path == base or base in path.parents
@@ -235,6 +236,10 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             state['path_properties'] = configure_control_path_service(
                 lifecycle, patch, state, control_root, installed, runtime, public_launcher, channel, environment,
             )
+            patch.setattr(lifecycle, '_public_launcher_bytes', original_public_launcher_bytes)
+            assert lifecycle._public_launcher_bytes is original_public_launcher_bytes
+            assert lifecycle._public_launcher_bytes.__name__ == '_public_launcher_bytes'
+            assert lifecycle._pid_token.__name__ == '_pid_token'
             state['path_environment'] = list(environment)
             if fault == 'path-process-cwd':
                 process_cwd = lifecycle.PROC / '123/cwd'
@@ -245,7 +250,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 assert json.loads(permit.read_text())['operation_id'] == request['operation_id']
                 permit.unlink()
             state['consume_start'] = consume_start
-            if fault in {'path-close', 'path-transient-initial', 'path-transient-prebackup'}:
+            if fault in {'path-close', 'path-transient-initial', 'path-transient-prebackup',
+                         'path-proc-close', 'path-launcher-close'}:
                 original_close = lifecycle.os.close
                 def uncertain_close(fd):
                     binding = getattr(state.get('service'), 'control_path_binding', None)
@@ -256,6 +262,14 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                         or (fault == 'path-transient-prebackup' and binding.snapshot is not None and not binding.closed
                             and state['service'].phase == 'qualified')
                     )
+                    if fault == 'path-proc-close':
+                        info = lifecycle.os.fstat(fd)
+                        target = (lifecycle.PROC / '123/stat').stat()
+                        owned = (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino)
+                    elif fault == 'path-launcher-close':
+                        info = lifecycle.os.fstat(fd)
+                        target = public_launcher.stat()
+                        owned = (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino)
                     original_close(fd)
                     if owned and not state.get('close_failed'):
                         state['close_failed'] = True
@@ -464,6 +478,10 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                               source_only=sys.pycache_prefix == '/dev/null')))
         return
     status = namespace["run"]()
+    if fault in {'path-close', 'path-transient-initial', 'path-transient-prebackup',
+                 'path-proc-close', 'path-launcher-close'}:
+        assert status == 78 and output.getvalue() == '' and state['close_failed']
+        raise SystemExit(status)
     assert status == 0, (status, output.getvalue(), state.get("bootstrap_failure"))
     result = json.loads(output.getvalue())["source_installation"]
     assert resource.getrlimit(resource.RLIMIT_NOFILE) == state["original_limits"]
@@ -569,7 +587,7 @@ def exercise_control_path_transaction(base, channel, slot):
              str(Path(__file__).resolve().parents[2]), channel, 'path-' + slot, str(Path(directory).resolve())],
             cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
         )
-    if slot in {'close', 'transient-initial', 'transient-prebackup'}:
+    if slot in {'close', 'transient-initial', 'transient-prebackup', 'proc-close', 'launcher-close'}:
         assert completed.returncode == 78 and completed.stdout == '', completed.stderr
         owner = json.loads((base / 'receipts' / (channel + '.source-installation.lock')).read_text())
         assert owner['operation_id']

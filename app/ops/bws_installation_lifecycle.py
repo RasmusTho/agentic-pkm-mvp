@@ -68,6 +68,17 @@ def _refuse(subgate: str | None = None) -> NoReturn:
     raise _OldQualificationRefusal(subgate) from None
 
 
+class _LifecycleCloseUncertain(RuntimeError):
+    """One original finite lifecycle reader close has an unknown outcome."""
+
+
+def _close_lifecycle_reader(fd: int) -> None:
+    try:
+        os.close(fd)
+    except OSError:
+        raise _LifecycleCloseUncertain('bws_lifecycle_unproven') from None
+
+
 def _control_projection_descriptor_bound() -> int:
     """Bound all descriptors retained by one control projection call.
 
@@ -454,7 +465,7 @@ def _public_launcher_bytes() -> bytes:
         _refuse('launcher')
     finally:
         if fd is not None:
-            os.close(fd)
+            _close_lifecycle_reader(fd)
 
 
 def require_no_cleanup_callers(channel: str, *, caller_pid: int | None = None) -> None:
@@ -765,7 +776,7 @@ def _pid_token(
                     _refuse('service_process')
                 return data
             finally:
-                os.close(fd)
+                _close_lifecycle_reader(fd)
 
         def identity() -> str:
             raw = read('stat', 16384)
@@ -801,7 +812,7 @@ def _pid_token(
                 if os.listdir(tasks) != [str(pid)]:
                     _refuse('service_process')
             finally:
-                os.close(tasks)
+                _close_lifecycle_reader(tasks)
             return fields[19].decode('ascii')
 
         start = identity()
@@ -810,7 +821,7 @@ def _pid_token(
             _refuse('service_process')
         return hashlib.sha256(f'{unit}:{pid}:{start}'.encode()).hexdigest()
     finally:
-        os.close(descriptor)
+        _close_lifecycle_reader(descriptor)
 
 
 class FixedBwsService:
@@ -839,9 +850,12 @@ class FixedBwsService:
         self.new_token: str | None = None
         self.runtime_fd: int | None = None
         self.runtime_context_started = self.runtime_close_completed = False
+        self.lifecycle_close_uncertain = False
 
     def _held_runtime(self) -> None:
         try:
+            if self.lifecycle_close_uncertain:
+                _refuse('retained_runtime')
             if self.runtime_version is None:
                 _refuse('retained_runtime')
             if self.runtime_fd is None:
@@ -860,6 +874,25 @@ class FixedBwsService:
         if self.application is None or self.runtime_version is None:
             _refuse('retained_runtime')
         return self.application, self.runtime_version
+
+    def _launcher_bytes(self) -> bytes:
+        if self.lifecycle_close_uncertain:
+            _refuse('retained_runtime')
+        try:
+            return _public_launcher_bytes()
+        except _LifecycleCloseUncertain:
+            self.lifecycle_close_uncertain = True
+            raise
+
+    def _process_token(self, pid: int) -> str:
+        if self.lifecycle_close_uncertain:
+            _refuse('retained_runtime')
+        application, runtime_version = self._runtime_contract()
+        try:
+            return _pid_token(self.unit, self.channel, pid, application, runtime_version)
+        except _LifecycleCloseUncertain:
+            self.lifecycle_close_uncertain = True
+            raise
 
     @contextmanager
     def retained_runtime(self) -> Iterator[None]:
@@ -988,7 +1021,7 @@ class FixedBwsService:
                 or any(type(row) is not list or len(row) != 2 or type(row[0]) is not str
                        or '\0' in row[0] or len(row[0]) > 4096 or type(row[1]) is not bool for row in files)):
             _refuse('unit_properties')
-        launcher = _public_launcher_bytes()
+        launcher = self._launcher_bytes()
         allowed = (
             (self.launcher_before,) if self.phase in {
                 'qualifying', 'restore_start_requested', 'old_kernel_restored', 'restored_stop_requested',
@@ -1127,7 +1160,7 @@ class FixedBwsService:
             self.launcher_after = proposed_launcher
         except Exception:
             _refuse('launcher')
-        self.launcher_before = _public_launcher_bytes()
+        self.launcher_before = self._launcher_bytes()
         self.object = self._call('GetUnit', 'o')
         if (type(self.object) is not str
                 or re.fullmatch(r'/org/freedesktop/systemd1/unit/[A-Za-z0-9_]+', self.object) is None):
@@ -1139,7 +1172,7 @@ class FixedBwsService:
             _refuse('retained_runtime')
         self.old_pid = old_pid
         self._single_process(old_pid)
-        old_token = _pid_token(self.unit, self.channel, old_pid, application, runtime_version)
+        old_token = self._process_token(old_pid)
         self.old_token = old_token
         if expected_service_identity is not None and old_token != expected_service_identity:
             _refuse('service_process')
@@ -1164,14 +1197,12 @@ class FixedBwsService:
 
     def stop_old(self) -> None:
         if (self.phase != 'qualified' or self.launcher_after is None
-                or _public_launcher_bytes() != self.launcher_after):
+                or self._launcher_bytes() != self.launcher_after):
             _refuse()
         if self._config() != self.contract or self._state(True) != self.old_pid:
             _refuse()
         self._single_process(self.old_pid)
-        application, runtime_version = self._runtime_contract()
-        if _pid_token(self.unit, self.channel, self.old_pid,
-                      application, runtime_version) != self.old_token:
+        if self._process_token(self.old_pid) != self.old_token:
             _refuse()
         # Recorded BEFORE the action; an uncertain return can never be retried.
         self.stop_started = time.monotonic_ns() // 1000
@@ -1188,11 +1219,10 @@ class FixedBwsService:
             _refuse()
         if (self.phase != 'qualified' or self.old_pid is None or self.old_token is None
                 or self._config() != self.contract or self._state(True) != self.old_pid
-                or _public_launcher_bytes() != launcher_content):
+                or self._launcher_bytes() != launcher_content):
             _refuse()
         self._single_process(self.old_pid)
-        application, runtime_version = self._runtime_contract()
-        if _pid_token(self.unit, self.channel, self.old_pid, application, runtime_version) != self.old_token:
+        if self._process_token(self.old_pid) != self.old_token:
             _refuse()
 
     def _stopped(self) -> None:
@@ -1229,7 +1259,7 @@ class FixedBwsService:
 
     def start_new(self) -> None:
         self.require_stopped()
-        if _public_launcher_bytes() != self.launcher_after:
+        if self._launcher_bytes() != self.launcher_after:
             _refuse()
         self.phase = 'start_requested'
         _run(['systemctl', '--system', '--no-pager', '--no-ask-password',
@@ -1241,8 +1271,7 @@ class FixedBwsService:
             _refuse()
         pid = self._state(True)
         self._single_process(pid)
-        application, runtime_version = self._runtime_contract()
-        token = _pid_token(self.unit, self.channel, pid, application, runtime_version)
+        token = self._process_token(pid)
         if token == self.old_token:
             _refuse()
         self.new_pid, self.new_token = pid, token
@@ -1258,9 +1287,7 @@ class FixedBwsService:
                 or self._config() != self.contract or self._state(True) != self.new_pid):
             _refuse()
         self._single_process(self.new_pid)
-        application, runtime_version = self._runtime_contract()
-        if _pid_token(self.unit, self.channel, self.new_pid,
-                      application, runtime_version) != self.new_token:
+        if self._process_token(self.new_pid) != self.new_token:
             _refuse()
 
     def stop_new(self) -> None:
@@ -1269,9 +1296,7 @@ class FixedBwsService:
                 or self._config() != self.contract or self._state(True) != self.new_pid):
             _refuse()
         self._single_process(self.new_pid)
-        application, runtime_version = self._runtime_contract()
-        if _pid_token(self.unit, self.channel, self.new_pid,
-                      application, runtime_version) != self.new_token:
+        if self._process_token(self.new_pid) != self.new_token:
             _refuse()
         self.stop_started = time.monotonic_ns() // 1000
         self.phase = 'new_stop_requested'
@@ -1283,13 +1308,11 @@ class FixedBwsService:
     def stop_restored_old(self) -> None:
         """Stop only the exact restored-old process after a final close-boundary failure."""
         if (self.phase != 'old_kernel_restored' or self.new_pid is None or self.new_token is None
-                or _public_launcher_bytes() != self.launcher_before
+                or self._launcher_bytes() != self.launcher_before
                 or self._config() != self.contract or self._state(True) != self.new_pid):
             _refuse()
         self._single_process(self.new_pid)
-        application, runtime_version = self._runtime_contract()
-        if _pid_token(self.unit, self.channel, self.new_pid,
-                      application, runtime_version) != self.new_token:
+        if self._process_token(self.new_pid) != self.new_token:
             _refuse()
         self.stop_started = time.monotonic_ns() // 1000
         self.phase = 'restored_stop_requested'
@@ -1304,8 +1327,7 @@ class FixedBwsService:
             _refuse()
         pid = self._state(True)
         self._single_process(pid)
-        application, runtime_version = self._runtime_contract()
-        token = _pid_token(self.unit, self.channel, pid, application, runtime_version)
+        token = self._process_token(pid)
         if token == self.old_token:
             _refuse()
         self.new_pid, self.new_token = pid, token
@@ -1315,7 +1337,7 @@ class FixedBwsService:
     def start_restored_old(self) -> None:
         """Start the exact old source only after the caller proved same-handle restore."""
         self.require_stopped()
-        if _public_launcher_bytes() != self.launcher_before:
+        if self._launcher_bytes() != self.launcher_before:
             _refuse()
         self.phase = 'restore_start_requested'
         _run(['systemctl', '--system', '--no-pager', '--no-ask-password',
@@ -1324,12 +1346,11 @@ class FixedBwsService:
     def require_restored_old_kernel(self) -> str:
         if self.phase != 'restore_start_requested' or self._config() != self.contract:
             _refuse()
-        if _public_launcher_bytes() != self.launcher_before:
+        if self._launcher_bytes() != self.launcher_before:
             _refuse()
         pid = self._state(True)
         self._single_process(pid)
-        application, runtime_version = self._runtime_contract()
-        token = _pid_token(self.unit, self.channel, pid, application, runtime_version)
+        token = self._process_token(pid)
         if token == self.old_token:
             _refuse()
         self.new_pid, self.new_token = pid, token
@@ -1338,11 +1359,9 @@ class FixedBwsService:
 
     def require_same_restored_old_kernel(self) -> None:
         if (self.phase != 'old_kernel_restored' or self.new_pid is None
-                or _public_launcher_bytes() != self.launcher_before
+                or self._launcher_bytes() != self.launcher_before
                 or self._config() != self.contract or self._state(True) != self.new_pid):
             _refuse()
         self._single_process(self.new_pid)
-        application, runtime_version = self._runtime_contract()
-        if _pid_token(self.unit, self.channel, self.new_pid,
-                      application, runtime_version) != self.new_token:
+        if self._process_token(self.new_pid) != self.new_token:
             _refuse()

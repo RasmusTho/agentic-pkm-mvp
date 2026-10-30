@@ -3723,7 +3723,8 @@ def test_control_path_slots_bind_complete_effect_footprint(monkeypatch, secure_t
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
-@pytest.mark.parametrize('fault', ['partial', 'close', 'transient-initial', 'transient-prebackup'])
+@pytest.mark.parametrize('fault', ['partial', 'close', 'transient-initial', 'transient-prebackup',
+                                   'proc-close', 'launcher-close'])
 def test_control_path_slots_restore_original_generation(secure_tmp_path, channel, fault):
     from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
     result = exercise_control_path_transaction(secure_tmp_path, channel, fault)
