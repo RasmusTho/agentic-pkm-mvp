@@ -7,7 +7,10 @@ from app.observability.log import with_trace_id
 from app.stores import get_object_store
 from tests.helpers.pkm_alpha_helper import load_pkm_alpha_subset_for_reasoning, reset_memory_stores
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [
+    pytest.mark.not_pg,
+    pytest.mark.usefixtures("product_model_access_gateway"),
+]
 
 
 @pytest.fixture
