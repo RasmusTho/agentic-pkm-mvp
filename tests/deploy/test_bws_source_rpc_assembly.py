@@ -239,6 +239,12 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             )
             if slot_kind.startswith('preserved-'):
                 from tests.ops.test_bws_installation_lifecycle import configure_preserved_dropin
+                class ObservedEvents(list):
+                    def append(self, event):
+                        super().append(event)
+                        (base / 'preserved-events.json').write_text(json.dumps(self))
+                state['events'] = ObservedEvents(state['events'])
+                state['events'].append('preserved-fixture')
                 selected = configure_preserved_dropin(lifecycle, patch, base, state['path_properties'],
                     channel, quoted=slot_kind == 'preserved-quoted', template=slot_kind == 'preserved-quoted')
                 state.update(selected_dropin=selected, dropin_bytes=selected.read_bytes())
@@ -259,6 +265,11 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                     original_close = lifecycle.os.close
                     target_info = selected.stat()
                     def close_selected(fd):
+                        if state.get('selected_failed_fd') == fd:
+                            state['selected_failed_attempts'] += 1
+                            (base / 'selected-close-proof.json').write_text(json.dumps({
+                                'attempts': state['selected_failed_attempts'],
+                            }))
                         info = lifecycle.os.fstat(fd)
                         owned = (info.st_dev, info.st_ino) == (target_info.st_dev, target_info.st_ino)
                         binding = getattr(state.get('service'), 'control_path_binding', None)
@@ -267,6 +278,9 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                         original_close(fd)
                         if owned and selected_phase and not state.get('close_failed'):
                             state['close_failed'] = True
+                            state['selected_failed_fd'] = fd
+                            state['selected_failed_attempts'] = 1
+                            (base / 'selected-close-proof.json').write_text(json.dumps({'attempts': 1}))
                             raise OSError('PRIVATE_CANARY ambiguous close')
                     patch.setattr(lifecycle.os, 'close', close_selected)
             if fault.startswith('unit-'):
@@ -350,6 +364,9 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                             # Independent manager reload changes effective semantics;
                             # the on-disk bytes and pending-reload flag stay unchanged.
                             state['path_properties']['Service', 'StandardOutput'] = 'journal'
+                            (base / 'preserved-drift-proof.json').write_text(json.dumps({
+                                'mode': fault, 'drifted': True,
+                            }))
                         return original_config(**kwargs)
                     patch.setattr(value, '_config', config)
                 return value
@@ -543,6 +560,21 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                               source_only=sys.pycache_prefix == '/dev/null')))
         return
     status = namespace["run"]()
+    if fault in {'path-preserved-prestop', 'path-preserved-after-start',
+                 'path-preserved-closing', 'path-preserved-restored-drift'}:
+        # Existing RPC semantics preserve unresolved ownership without a public
+        # terminal receipt when changed configuration prevents quiescence proof.
+        assert status == 78 and output.getvalue() == '' and state['drifted']
+        assert not list(state['receipts'].glob('*.receipt.json'))
+        assert state['selected_dropin'].read_bytes() == state['dropin_bytes']
+        assert state['path_properties']['Unit', 'NeedDaemonReload'] is False
+        assert state['events'].count('start') <= 1
+        if fault == 'path-preserved-prestop':
+            assert state['events'].count('stop') == 0
+        elif fault == 'path-preserved-restored-drift':
+            assert state['events'].count('stop') == 2 and state['events'].count('start') == 1
+            assert (state['installed'] / 'app/ops/bws_control_installation.py').read_bytes() == state['old_source']
+        raise SystemExit(status)
     if fault in {'path-preserved-close', 'path-preserved-transient-close'}:
         assert status == 78 and output.getvalue() == '' and state['close_failed']
         raise SystemExit(status)
@@ -579,12 +611,6 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 assert not list(state['backups'].iterdir())
                 assert all(result[k] is None for k in ('old_generation_sha256', 'new_generation_sha256',
                                                        'backup_manifest_sha256'))
-            elif mode in {'prestop', 'after-start', 'closing', 'restored-drift'}:
-                assert state['drifted']
-                assert result['status'] == 'unknown', result
-                assert state['events'].count('start') <= 1
-                if mode == 'prestop':
-                    assert state['events'].count('stop') == 0
             else:
                 assert result['status'] == ('compensated_stopped' if mode == 'partial' else 'installed'), result
                 assert service.contract[2] == tuple(state['path_environment'])
@@ -717,11 +743,24 @@ def exercise_control_path_transaction(base, channel, slot):
             cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
         )
     if slot in {'close', 'transient-initial', 'transient-prebackup', 'proc-close', 'launcher-close',
-                'preserved-close', 'preserved-transient-close'}:
+                'preserved-close', 'preserved-transient-close', 'preserved-prestop',
+                'preserved-after-start', 'preserved-closing', 'preserved-restored-drift'}:
         assert completed.returncode == 78 and completed.stdout == '', completed.stderr
         owner = json.loads((base / 'receipts' / (channel + '.source-installation.lock')).read_text())
         assert owner['operation_id']
         assert not list((base / 'receipts').glob('*.receipt.json'))
+        if slot in {'preserved-prestop', 'preserved-after-start', 'preserved-closing', 'preserved-restored-drift'}:
+            assert json.loads((base / 'preserved-drift-proof.json').read_text()) == {
+                'mode': 'path-' + slot, 'drifted': True,
+            }
+            events = json.loads((base / 'preserved-events.json').read_text())
+            assert events.count('start') <= 1
+            if slot == 'preserved-prestop':
+                assert events.count('stop') == events.count('start') == 0
+            elif slot == 'preserved-restored-drift':
+                assert events.count('stop') == 2 and events.count('start') == 1
+        elif slot in {'preserved-close', 'preserved-transient-close'}:
+            assert json.loads((base / 'selected-close-proof.json').read_text()) == {'attempts': 1}
         return {'status': 'unknown'}
     assert completed.returncode == 0, completed.stderr
     result = json.loads(completed.stdout)

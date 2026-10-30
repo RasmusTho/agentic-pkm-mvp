@@ -343,15 +343,15 @@ class _ControlPathBinding:
             selected_projection: tuple[Any, ...] = ()
             if self.selected_dropin is not None:
                 path = self.selected_dropin
-                parent, _, name = path.rpartition('/')
+                selected_parent, _, name = path.rpartition('/')
                 # Full root/target-parent/staging/restoration footprint is already
                 # retained above. Same-mount no-follow walks exclude bind aliases;
                 # the selected directory must be disjoint from every effect root.
-                if any(parent == root['path'] or parent.startswith(root['path'] + '/')
-                       or root['path'].startswith(parent + '/') for root in roots):
+                if any(selected_parent == root['path'] or selected_parent.startswith(root['path'] + '/')
+                       or root['path'].startswith(selected_parent + '/') for root in roots):
                     _refuse('root_control')
-                parent_fd = directory(parent)
-                if any(opened[parent][1][:2] == opened[root['path']][1][:2] for root in roots):
+                parent_fd = directory(selected_parent)
+                if any(opened[selected_parent][1][:2] == opened[root['path']][1][:2] for root in roots):
                     _refuse('root_control')
                 if len(opened) >= _control_path_descriptor_bound():
                     _refuse('root_control')
@@ -448,7 +448,7 @@ class _ControlPathBinding:
                     except OSError:
                         self.close_uncertain = True
                         _refuse('retained_runtime')
-            snapshot = (tuple((p, identity) for p, (_fd, identity) in sorted(opened.items())),
+            snapshot: tuple[Any, ...] = (tuple((p, identity) for p, (_fd, identity) in sorted(opened.items())),
                         tuple(observations))
             if selected_projection:
                 snapshot += (selected_projection,)
@@ -1237,7 +1237,7 @@ class FixedBwsService:
                 # Finite effective semantics, not historical unit-byte identity.
                 # NeedDaemonReload is only a supplementary pending-change guard.
                 loaded = []
-                for interface, name, signature, expected in (
+                for interface, name, signature, profile_expected in (
                     ('Unit', 'NeedDaemonReload', 'b', False),
                     ('Service', 'StandardOutput', 's', 'null'),
                     ('Service', 'StandardError', 's', 'null'),
@@ -1247,7 +1247,7 @@ class FixedBwsService:
                     ('Service', 'LoadCredential', 'a(ss)', []),
                 ):
                     value = self._get(interface, name, signature)
-                    if type(value) is not type(expected) or value != expected:
+                    if type(value) is not type(profile_expected) or value != profile_expected:
                         _refuse('unit_properties')
                     loaded.append(tuple(tuple(row) for row in value) if type(value) is list else value)
                 loaded_projection = tuple(loaded)
