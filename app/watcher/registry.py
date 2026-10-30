@@ -630,6 +630,7 @@ def _process_panel_note(
             write_outbox_event(
                 event,
                 idempotency_key=derive_idempotency_key(event.event, event.event_id, EVENT_ID_FINGERPRINT),
+                producer="watcher.registry.panel_note_events",
             )
         except Exception:
             state.enqueue_failures_total += 1
@@ -2218,6 +2219,7 @@ def _emit_watch_event(
                         PANEL_SCAN_REQUESTED, str(rel_path), payload_fingerprint(payload)
                     ),
                     required_db=require_db,
+                    producer="watcher.registry.panel_scan_requested",
                 )
             except Exception:
                 state.enqueue_failures_total += 1
@@ -2268,6 +2270,7 @@ def _emit_watch_event(
                     trace_id=trace_id,
                     source="watcher.registry",
                     required_db=require_db,
+                    producer="watcher.registry.watch_event",
                 )
             except Exception:
                 state.enqueue_failures_total += 1

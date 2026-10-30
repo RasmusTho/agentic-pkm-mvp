@@ -299,6 +299,7 @@ def _emit_admission_event(
                         outbox_evt.event, receipt_id, content_sha256
                     ),
                     vault_binding_id=OUTBOX_GLOBAL_BINDING_ID,
+                    producer="heimdal.media.admitted",
                 )
                 # Returning normally means the row exists: `write_outbox_event`
                 # yields the new id on insert and "" when its ON CONFLICT

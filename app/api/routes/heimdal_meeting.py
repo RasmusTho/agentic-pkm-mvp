@@ -481,6 +481,7 @@ def _emit_user_note_event(payload: Dict[str, Any], *, trace_id: str) -> bool:
                         f"{payload['note_block_id']}\x1f{payload['revision']}",
                         str(payload["content_sha256"]),
                     ),
+                    producer="heimdal.meeting.user_note",
                 )
                 emitted = True
             except Exception as exc:

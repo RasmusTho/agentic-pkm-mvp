@@ -349,3 +349,166 @@ def test_gate_fails_on_stale_route_classification(monkeypatch: pytest.MonkeyPatc
     assert inventory.stale_route_classifications() == frozenset(
         {"app/api/routes/ghost.py", "app/api/routes/ask.py"}
     )
+
+
+# --- MVR-05D: closed production outbox producer registry (#3862) ---------------
+
+_OUTBOX_PRODUCER_CALLS = frozenset({"write_outbox_event", "insert_object_and_outbox"})
+_OUTBOX_DEFINING_MODULE = "app/services/outbox.py"
+
+
+def _outbox_call_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _discover_outbox_call_sites() -> tuple[list[tuple[str, str, int, str | None]], list[str]]:
+    """Every production DB-outbox call site and every non-call alias of the seam."""
+
+    sites: list[tuple[str, str, int, str | None]] = []
+    aliases: list[str] = []
+    for path in sorted((ROOT / "app").rglob("*.py")):
+        relative = str(path.relative_to(ROOT))
+        if relative == _OUTBOX_DEFINING_MODULE:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+        parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+        call_funcs = {
+            id(node.func)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and _outbox_call_name(node.func) in _OUTBOX_PRODUCER_CALLS
+        }
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and _outbox_call_name(node.func) in _OUTBOX_PRODUCER_CALLS:
+                chain: list[str] = []
+                current = parents.get(node)
+                while current is not None:
+                    if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        chain.append(current.name)
+                    current = parents.get(current)
+                producer = next(
+                    (
+                        keyword.value.value
+                        for keyword in node.keywords
+                        if keyword.arg == "producer"
+                        and isinstance(keyword.value, ast.Constant)
+                        and isinstance(keyword.value.value, str)
+                    ),
+                    None,
+                )
+                sites.append((relative, ".".join(reversed(chain)), node.lineno, producer))
+            elif (
+                isinstance(node, (ast.Name, ast.Attribute))
+                and _outbox_call_name(node) in _OUTBOX_PRODUCER_CALLS
+                and id(node) not in call_funcs
+            ):
+                # Passing the seam around (``emit = write_outbox_event``) would hide
+                # an unregistered call site from this gate.
+                aliases.append(f"{relative}:{node.lineno}")
+    return sites, aliases
+
+
+def test_vault_bound_outbox_producers_cannot_emit_legacy_envelopes() -> None:
+    """MVR-05D: every production outbox call site is registered; none writes a legacy envelope."""
+
+    from app.events.models import new_event
+    from app.services import outbox as outbox_service
+    from app.services.outbox_producers import (
+        OUTBOX_ENVELOPE_VERSION,
+        PRODUCER_REGISTRY,
+        OutboxProducerRoutingError,
+        UnregisteredOutboxProducerError,
+    )
+
+    sites, aliases = _discover_outbox_call_sites()
+    assert sites, "the production outbox call-site scan found nothing"
+    assert aliases == [], f"outbox seam referenced outside a direct call: {aliases}"
+
+    unregistered = [
+        f"{module}:{line} {function}" for module, function, line, producer in sites if producer is None
+    ]
+    assert unregistered == [], (
+        "production outbox call sites without a literal registered producer= "
+        f"(add them to app/services/outbox_producers.py): {unregistered}"
+    )
+    misplaced = []
+    for module, function, line, producer in sites:
+        registered = PRODUCER_REGISTRY.get(producer or "")
+        if registered is None or (registered.module, registered.function) != (module, function):
+            misplaced.append(f"{module}:{line} {function} -> {producer}")
+    assert misplaced == [], f"producer ids that are unknown or belong to another call site: {misplaced}"
+
+    used = {producer for *_rest, producer in sites}
+    stale = sorted(set(PRODUCER_REGISTRY) - used)
+    assert stale == [], f"registered producers with no production call site: {stale}"
+
+    families = {producer.family for producer in PRODUCER_REGISTRY.values()}
+    assert {"watcher", "api", "ingest", "capture", "heimdal", "shared"} <= families
+    assert all(
+        producer.routing in {"vault_bound", "global", "inherited"}
+        for producer in PRODUCER_REGISTRY.values()
+    )
+
+    # Runtime half: the choke point never writes a legacy envelope, refuses an
+    # unregistered producer, and refuses a routing-class contradiction.
+    statements: list[tuple[str, tuple]] = []
+
+    class _Conn:
+        def execute(self, sql, params=()):
+            statements.append((sql, tuple(params)))
+
+            class _Cursor:
+                def fetchone(self_inner):
+                    return (params[0],)
+
+            return _Cursor()
+
+    key = outbox_service.derive_idempotency_key("mvr05d.guard", "source", "fingerprint")
+    with pytest.raises(UnregisteredOutboxProducerError):
+        outbox_service.write_outbox_event(
+            new_event(event_type="mvr05d.guard", payload={}),
+            conn=_Conn(),
+            idempotency_key=key,
+            producer="unregistered.call_site",
+        )
+    with pytest.raises(OutboxProducerRoutingError):
+        outbox_service.write_outbox_event(
+            new_event(event_type="mvr05d.guard", payload={}),
+            conn=_Conn(),
+            idempotency_key=key,
+            vault_binding_id="explicitly-global",
+            producer="ingest.vault_sync",
+        )
+    with pytest.raises(OutboxProducerRoutingError):
+        outbox_service.write_outbox_event(
+            new_event(event_type="mvr05d.guard", payload={}),
+            conn=_Conn(),
+            idempotency_key=key,
+            vault_binding_id="binding-a",
+            producer="shared.instance.default_vault",
+        )
+    assert statements == [], "a refused emission reached the outbox insert"
+
+    for producer in (None, "ingest.vault_sync"):
+        legacy_meta = {"vault_binding_id": "forged", "binding_revision": 99}
+        outbox_service.write_outbox_event(
+            new_event(event_type="mvr05d.guard", payload={}, meta=legacy_meta),
+            conn=_Conn(),
+            idempotency_key=key,
+            vault_binding_id="binding-a",
+            producer=producer,
+        )
+        sql, params = statements[-1]
+        assert sql.lower().startswith("insert into outbox")
+        stored = new_event(event_type="x").model_validate_json(params[2])
+        meta = dict(stored.meta or {})
+        assert meta["outbox_envelope"] == OUTBOX_ENVELOPE_VERSION
+        assert meta["routing_class"] == "vault_bound"
+        assert meta["vault_binding_id"] == "binding-a"
+        assert "binding_revision" not in meta, "a forged source stamp survived re-stamping"
+        assert meta["idempotency"] == {"legacy_key": key, "binding_scoped_key": params[0]}
+        assert meta["producer_context"]["kind"] == "no_binding_runtime"
+        assert meta["outbox_producer"] == producer

@@ -770,6 +770,7 @@ def _emit_ka_consumer_signal(
                 event,
                 idempotency_key=key,
                 vault_binding_id=source_vault_binding_id,
+                producer="worker.ka_consumer_signal",
             )
     except Exception:
         # Best-effort observability signal: a failure here must never re-block
@@ -1198,6 +1199,7 @@ def _emit_retry_dead_letter(
                 f"retry-exhausted:{reason}:{retry_count}",
             ),
             vault_binding_id=source_vault_binding_id,
+            producer="worker.retry_dead_letter",
         )
 
 
@@ -1256,12 +1258,14 @@ def _dead_letter_outbox_message(
                         conn=conn,
                         idempotency_key=key,
                         vault_binding_id=source_vault_binding_id,
+                        producer="worker.dead_letter",
                     )
             else:
                 write_outbox_event(
                     event,
                     idempotency_key=key,
                     vault_binding_id=source_vault_binding_id,
+                    producer="worker.dead_letter",
                 )
         logger.warning(
             "worker dead-lettered poison outbox row topic=%s id=%s reason=%s attempts=%s",
@@ -1598,6 +1602,7 @@ def _queue_transient_retry(
                 required_db=True,
                 vault_binding_id=source_vault_binding_id,
                 payload_schema=payload_schema,
+                producer="worker.transient_retry",
             )
         else:
             append_jsonl_outbox_event(_outbox_audit_path(), retry_event, default_source="worker")
