@@ -170,7 +170,10 @@ def load_context(registry_path: Path, *, required: bool = False, observation_onl
 def require_native_fixture(context: dict[str, Any], registry: Any) -> None:
     """Current native fixture facts for effects and observation-only recovery."""
     fixture = context["fixture"]
-    snapshot = registry._read_current_locked(recover=False)
+    try:
+        snapshot, authority_sha256 = registry.read_qualification_state()
+    except Exception:
+        raise OperationsAcceptanceRefusal("native_registry_state_unqualified") from None
     registration = snapshot.registrations.get(fixture["binding_id"])
     from app.instance.runtime import local_operator_principal_path, open_local_operator_principal_store
     principal = open_local_operator_principal_store(registry.path).require()
@@ -181,7 +184,7 @@ def require_native_fixture(context: dict[str, Any], registry: Any) -> None:
         or str(Path(registration.path).resolve(strict=True)) != fixture["root"]
         or snapshot.revision != fixture["registry_revision"]):
         raise OperationsAcceptanceRefusal("native_actor_instance_binding_changed")
-    if (file_hash(registry.path) != fixture["registry_sha256"]
+    if (authority_sha256 != fixture.get("registry_authority_sha256")
         or file_hash(local_operator_principal_path(registry.path)) != fixture["principal_record_sha256"]):
         raise OperationsAcceptanceRefusal("native_principal_registry_generation_changed")
     identity = context["identity"]

@@ -410,6 +410,17 @@ The existing layout owner must also resolve a valid configuration note inside th
 hash-binds only that selected layout note rather than permitting other Markdown in its directory.
 The common native guard rechecks these exact passive path identities and bytes before effects and
 native observations. The first freeze also rejects intervening file or link inventory changes.
+The native registry owner freezes a fingerprint of the complete canonical document, excluding
+only its validated `bindingEffectLeases` mechanical slot. Ordinary principal/ownership-fenced
+read leases advance that slot without changing authority. Every other field and unknown extension
+remains bound; noncanonical document bytes and malformed lease state refuse qualification.
+While the fixed private qualification exists, the native registry lock checks the predecessor
+before normal recovery or lease serialization can heal or normalize that drift; ordinary Product
+instances retain their existing behavior. An unfinished registry transaction requires its separate
+native recovery owner and cannot be repaired by the acceptance runner.
+The original whole-file hash is retained as evidence and is never rebased. Principal bytes remain
+fully frozen, and the existing real lease owner still refuses physical/registry divergence before
+source effects. This fact projection grants no read or write permission.
 An unavailable archive environment blocks qualification; it is not an unsupported operation family.
 Neither the producer nor the runner initializes a vault, provisions a principal, grants consent,
 changes configuration or repairs projections.
@@ -439,6 +450,9 @@ The seven-scenario DEV smoke is `native_admission`, `sdk_profiles`, `qualified_r
 It revalidates the original complete TEST receipt **and its artifacts**, requires the same
 SHA/image/resource/producer/sidecar identity, and admits one synthetic update plus receipt reads.
 Doctor, invariant and source/Store/index/link probes are independent, read-only observations;
+the real doctor diagnoses the configured index backend. Its optional legacy PostgreSQL coverage
+scan over the compatibility binding is separate from this runner's actual selected-binding
+source/Store/index/link coverage, which remains required and is reported independently.
 committed source effects never imply projection convergence. Lag or any missing, blocked, failed,
 skipped, xfailed or excluded required scenario prevents aggregate PASS.
 

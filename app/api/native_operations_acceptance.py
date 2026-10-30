@@ -119,7 +119,10 @@ def prepare_native_context(identity: dict[str, Any], *, registry_path: Path) -> 
     require_identity(identity)
     registry = VaultRegistryStore(registry_path)
     # Inspect without transaction recovery, lock creation, restore or reload.
-    snapshot = registry._read_current_locked(recover=False)
+    try:
+        snapshot, registry_authority_sha256 = registry.read_qualification_state()
+    except Exception:
+        raise OperationsAcceptanceRefusal("native_registry_state_unqualified") from None
     declared = [row for row in snapshot.registrations.values()
         if row.extensions.get(PROFILE) == {"operation_id": identity["operation_id"]}]
     if len(declared) != 1:
@@ -229,6 +232,7 @@ def prepare_native_context(identity: dict[str, Any], *, registry_path: Path) -> 
             "principal_id": principal.local_operator_role_id, "principal_revision": principal.revision,
             "principal_record_sha256": file_hash(local_operator_principal_path(registry_path)),
             "registry_sha256": file_hash(registry_path),
+            "registry_authority_sha256": registry_authority_sha256,
             "instance_identity": snapshot.app_install_id, "registry_revision": snapshot.revision,
             "sources": sources, "raw_source": raw_source, "files": files,
             "passive_paths": passive_paths}, "selection": None, "slots": None}
@@ -398,7 +402,11 @@ def native_probe(registry_path: Path) -> dict[str, Any]:
             request_id = reservation.outcome.extensions["native_request_id"]
             original = store.lookup(request_id)
             receipts[request_id] = original.outcome.to_dict() if original else None
-    doctor = diagnose_index(use_cache=False, include_vault_coverage=True)
+    # The real configured-backend doctor is distinct from the selected-source
+    # coverage above. Its optional legacy coverage scans COMPATIBILITY_BINDING_ID
+    # through PostgreSQL, so it cannot qualify this MVR-selected binding (or a
+    # memory fixture). Keep that unrelated optional scan out of this proof.
+    doctor = diagnose_index(use_cache=False)
     healthy = all(all(row[key] for key in ("source_store_match", "store_index_match", "store_locator_match", "index_locator_match", "link_read_checked"))
                   for row in sources.values())
     settled = all(value is not None and value.get("receipt", {}).get("status") == "committed"

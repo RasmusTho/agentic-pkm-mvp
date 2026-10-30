@@ -20,6 +20,122 @@ from tests.operations._surface_harness import runtime_http
 pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 
+def test_native_read_leases_preserve_frozen_authority_and_original_evidence(tmp_path, monkeypatch):
+    instance = host(tmp_path, monkeypatch, freeze=False)
+    prepared = read_private(instance.runtime.registry.path.parent / CONTEXT_FILE)
+    original_hash = prepared["fixture"]["registry_sha256"]
+    frozen = instance.client.post("/api/operations/acceptance/admission", json={}, headers=instance.headers)
+    assert frozen.status_code == 200, frozen.text
+    first = frozen.json()
+    # Another real runtime composition advances native mechanical leases.
+    again = instance.client.post("/api/operations/acceptance/admission", json={}, headers=instance.headers)
+    assert again.status_code == 200 and again.json() == first
+    retained = read_private(instance.runtime.registry.path.parent / CONTEXT_FILE)
+    snapshot, authority = instance.runtime.registry.read_qualification_state()
+    assert retained["fixture"]["registry_sha256"] == original_hash
+    assert file_hash(instance.runtime.registry.path) != original_hash
+    assert authority == prepared["fixture"]["registry_authority_sha256"]
+    assert snapshot.extensions["bindingEffectLeases"][instance.binding_id]["generation"] >= 2
+    assert len(retained["slots"]) == 15
+    assert "registry_checkpoint" not in retained
+    # Keep the real configured-backend doctor and independent selected-source
+    # coverage. No DATABASE_URL or optional legacy-PG scan is needed for memory.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    observed = native_probe(instance.runtime.registry.path)
+    assert observed["native_doctor"]["checked"]
+    assert observed["source_store_index_links"]["status"] == "healthy"
+
+
+@pytest.mark.parametrize("case", ["instance", "unknown-extension", "binding-extension", "principal", "body", "formatting", "lease-malformed", "transaction", "fingerprint-missing"])
+def test_frozen_native_authority_drift_refuses_real_effect_without_rebasing(tmp_path, monkeypatch, case):
+    import json
+    from app.instance.runtime import open_local_operator_principal_store
+    from tests.operations.live_operations_acceptance import OperationsJourney
+    from tests.operations._operations_acceptance_harness import LocalNative
+    instance = host(tmp_path, monkeypatch)
+    registry = instance.runtime.registry
+    context_path = registry.path.parent / CONTEXT_FILE
+    original_context = context_path.read_bytes()
+    before = {str(path): file_hash(path) for path in instance.root.rglob("*.md")}
+    run = OperationsJourney(LocalNative(instance), tmp_path / "unused")
+    run.binding = instance.binding
+    command = run.command("edit")
+    if case == "fingerprint-missing":
+        context = read_private(context_path)
+        del context["fixture"]["registry_authority_sha256"]
+        write_private(context_path, context)
+    elif case == "transaction":
+        registry.transaction_path.write_bytes(b"Unqualified interrupted native transaction.\n")
+    elif case == "principal":
+        principal = open_local_operator_principal_store(registry.path)
+        payload = json.loads(principal.path.read_bytes())
+        payload["updated_at"] += 1  # Valid, same principal identity/revision.
+        principal.path.write_bytes(principal._serialize(payload))
+        assert principal.require().revision == payload["revision"]
+    elif case in {"body", "formatting", "lease-malformed"}:
+        payload = registry.path.read_bytes()
+        if case == "body":
+            payload += b"Unqualified body drift.\n"
+        elif case == "formatting":
+            payload = payload.replace(b"\nrevision: ", b"\nrevision:  ", 1)
+        else:
+            from app.instance.vault_registry import _split_rendered, _render_markdown_settings
+            frontmatter, body = _split_rendered(payload.decode(), registry.path)
+            frontmatter["bindingEffectLeases"][instance.binding_id]["generation"] = "unqualified"
+            payload = _render_markdown_settings(frontmatter, body).encode()
+        registry.path.write_bytes(payload)
+    else:
+        with registry._locked():
+            snapshot = registry._read_current_locked(recover=False)
+            if case == "instance":
+                changed = replace(snapshot, app_install_id=snapshot.app_install_id + "-drift")
+            elif case == "unknown-extension":
+                changed = replace(snapshot, extensions={**snapshot.extensions, "unrecognizedFutureAuthority": {"changed": True}})
+            else:
+                registration = snapshot.registrations[instance.binding_id]
+                rows = {**snapshot.registrations, instance.binding_id:
+                        replace(registration, extensions={**registration.extensions, "unrecognizedFutureBinding": True})}
+                changed = replace(snapshot, registrations=rows)
+            assert changed.revision == snapshot.revision
+            registry._write_locked(changed)
+    current_context = context_path.read_bytes()
+    with pytest.raises(OperationsAcceptanceRefusal):
+        native_probe(registry.path)
+    raw_before_effect = registry.path.read_bytes()
+    refused = instance.client.post("/api/operations", json=command, headers=instance.headers)
+    assert refused.status_code in {401, 403, 409} or refused.json().get("status") in {"rejected", "invalid", "conflicted"}, refused.text
+    assert before == {str(path): file_hash(path) for path in instance.root.rglob("*.md")}
+    assert context_path.read_bytes() == current_context
+    if case != "fingerprint-missing":
+        assert current_context == original_context
+    if case in {"body", "formatting", "lease-malformed", "transaction"}:
+        assert registry.path.read_bytes() == raw_before_effect  # No native heal/normalization.
+    if case == "transaction":
+        assert registry.transaction_path.read_bytes() == b"Unqualified interrupted native transaction.\n"
+
+
+def test_native_lease_divergence_keeps_existing_effect_fence(tmp_path, monkeypatch):
+    from tests.operations.live_operations_acceptance import OperationsJourney
+    from tests.operations._operations_acceptance_harness import LocalNative
+    instance = host(tmp_path, monkeypatch)
+    registry = instance.runtime.registry
+    _, original_authority = registry.read_qualification_state()
+    with registry._locked():
+        snapshot = registry._read_current_locked(recover=False)
+        extensions = deepcopy(snapshot.extensions)
+        extensions["bindingEffectLeases"][instance.binding_id]["generation"] += 1
+        registry._write_locked(replace(snapshot, extensions=extensions))
+    # Mechanical shape is valid; the existing owner still detects a mismatch
+    # with its physical state before entering any actual source effect.
+    assert registry.read_qualification_state()[1] == original_authority
+    run = OperationsJourney(LocalNative(instance), tmp_path / "unused")
+    run.binding = instance.binding
+    before = {str(path): file_hash(path) for path in instance.root.rglob("*.md")}
+    refused = instance.client.post("/api/operations", json=run.command("edit"), headers=instance.headers)
+    assert refused.status_code == 403 and refused.json()["detail"] == "operation_authority_unavailable", refused.text
+    assert before == {str(path): file_hash(path) for path in instance.root.rglob("*.md")}
+
+
 @pytest.mark.parametrize("case", ["note", "directory-link"])
 def test_added_source_between_preparation_and_freeze_is_refused(tmp_path, monkeypatch, case):
     instance = host(tmp_path, monkeypatch, freeze=False)
