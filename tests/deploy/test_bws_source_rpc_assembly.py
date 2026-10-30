@@ -75,7 +75,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     namespace.update(__name__="__main__", _OWNER_UID=os.geteuid(), _OWNER_GID=os.getegid())
     binding, _source = namespace["_candidate_launcher_binding"](checkout, revision)
     setattr(sys, namespace["_VERIFIED_CANDIDATE_ENTRYPOINT"], binding)
-    if not fault.startswith(('root-', 'unit-')):
+    if not fault.startswith(('root-', 'unit-', 'path-preserved-')):
         namespace["_candidate_checkout_root"] = lambda _sha: checkout
     namespace["_preimport_reservation"] = lambda *_args: namespace["_PreimportReservation"](None)
     real_loader = namespace["_install_source_loader"]
@@ -237,6 +237,52 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             state['path_properties'] = configure_control_path_service(
                 lifecycle, patch, state, control_root, installed, runtime, public_launcher, channel, environment,
             )
+            if slot_kind.startswith('preserved-'):
+                from tests.ops.test_bws_installation_lifecycle import configure_preserved_dropin
+                class ObservedEvents(list):
+                    def append(self, event):
+                        super().append(event)
+                        (base / 'preserved-events.json').write_text(json.dumps(self))
+                state['events'] = ObservedEvents(state['events'])
+                state['events'].append('preserved-fixture')
+                selected = configure_preserved_dropin(lifecycle, patch, base, state['path_properties'],
+                    channel, quoted=slot_kind == 'preserved-quoted', template=slot_kind == 'preserved-quoted')
+                state.update(selected_dropin=selected, dropin_bytes=selected.read_bytes())
+                if slot_kind == 'preserved-malformed':
+                    selected.write_bytes(selected.read_bytes() + b'ExecStart=/PRIVATE_CANARY\n')
+                if slot_kind == 'preserved-mismatch':
+                    info = selected.stat()
+                    selected.write_bytes(selected.read_bytes().replace(b'/usr/bin', b'/opt/bin'))
+                    os.utime(selected, ns=(info.st_atime_ns, info.st_mtime_ns - 100000))
+                if slot_kind == 'preserved-backend':
+                    transport = lifecycle._run
+                    def unavailable(argv):
+                        if argv[-1] == 'LoadCredentialEncrypted':
+                            raise OSError('PRIVATE_CANARY backend')
+                        return transport(argv)
+                    patch.setattr(lifecycle, '_run', unavailable)
+                if slot_kind in {'preserved-close', 'preserved-transient-close'}:
+                    original_close = lifecycle.os.close
+                    target_info = selected.stat()
+                    def close_selected(fd):
+                        if state.get('selected_failed_fd') == fd:
+                            state['selected_failed_attempts'] += 1
+                            (base / 'selected-close-proof.json').write_text(json.dumps({
+                                'attempts': state['selected_failed_attempts'],
+                            }))
+                        info = lifecycle.os.fstat(fd)
+                        owned = (info.st_dev, info.st_ino) == (target_info.st_dev, target_info.st_ino)
+                        binding = getattr(state.get('service'), 'control_path_binding', None)
+                        selected_phase = binding is not None and (
+                            binding.closed if slot_kind == 'preserved-close' else not binding.closed)
+                        original_close(fd)
+                        if owned and selected_phase and not state.get('close_failed'):
+                            state['close_failed'] = True
+                            state['selected_failed_fd'] = fd
+                            state['selected_failed_attempts'] = 1
+                            (base / 'selected-close-proof.json').write_text(json.dumps({'attempts': 1}))
+                            raise OSError('PRIVATE_CANARY ambiguous close')
+                    patch.setattr(lifecycle.os, 'close', close_selected)
             if fault.startswith('unit-'):
                 from tests.ops.test_bws_installation_lifecycle import install_unit_property_transport
                 _, site, kind = fault.split(':')
@@ -301,6 +347,28 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 value = real_service(ports, selected_channel)
                 state['service'] = value
                 state['events'].append('service')
+                if slot_kind.startswith('preserved-'):
+                    original_config = value._config
+                    def config(**kwargs):
+                        state.setdefault('configuration_phases', []).append((value.phase, bool(kwargs.get('restored'))))
+                        stage = slot_kind.removeprefix('preserved-')
+                        trigger = (
+                            (stage == 'prebackup' and value.phase == 'qualified' and 'prepare' not in state['events'])
+                            or (stage == 'prestop' and value.phase == 'qualified' and 'prepare' in state['events'])
+                            or (stage == 'after-start' and value.phase == 'start_requested')
+                            or (stage == 'closing' and value.runtime_close_completed)
+                            or (stage == 'restored-drift' and kwargs.get('restored'))
+                        )
+                        if trigger and not state.get('drifted'):
+                            state['drifted'] = True
+                            # Independent manager reload changes effective semantics;
+                            # the on-disk bytes and pending-reload flag stay unchanged.
+                            state['path_properties']['Service', 'StandardOutput'] = 'journal'
+                            (base / 'preserved-drift-proof.json').write_text(json.dumps({
+                                'mode': fault, 'drifted': True,
+                            }))
+                        return original_config(**kwargs)
+                    patch.setattr(value, '_config', config)
                 return value
             patch.setattr(transaction._NativePorts, 'service', service)
             original_prepare = transaction._NativePorts.prepare
@@ -324,7 +392,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         # stay real and independently reject drift.
         def supervisor_rpc(selected_channel, selected):
             assert selected_channel == channel and selected["action"] == "source-installation-profile"
-            if fault == 'path-partial' and 'start' in state['events']:
+            if fault in {'path-partial', 'path-preserved-partial', 'path-preserved-restored-drift'} and 'start' in state['events']:
                 raise RuntimeError('synthetic external profile unavailable')
             profile = transaction.loaded_source_profile(
                 SimpleNamespace(channel=channel, root=checkout), operation_id=request["operation_id"],
@@ -342,9 +410,9 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         linux._rpc_via_supervisor = supervisor_rpc
 
         # Only this disposable child receives a finite synthetic resource ceiling.
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 512 if fault == "hard" else 8192))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 512 if fault in {"hard", "path-preserved-hard"} else 8192))
         state["original_limits"] = resource.getrlimit(resource.RLIMIT_NOFILE)
-        if fault == "unknown":
+        if fault in {"unknown", "path-preserved-unknown"}:
             control._source_descriptor_capacity_snapshot = lambda: None
         if fault == "prepare-interrupt":
             def interrupt_backup(*_args):
@@ -492,6 +560,20 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                               source_only=sys.pycache_prefix == '/dev/null')))
         return
     status = namespace["run"]()
+    if fault in {'path-preserved-prestop', 'path-preserved-after-start',
+                 'path-preserved-closing', 'path-preserved-restored-drift'}:
+        # Existing RPC semantics preserve unresolved ownership without a public
+        # terminal receipt when changed configuration prevents quiescence proof.
+        assert status == 78 and output.getvalue() == '' and state['drifted']
+        assert not list(state['receipts'].glob('*.receipt.json'))
+        assert state['selected_dropin'].read_bytes() == state['dropin_bytes']
+        assert state['path_properties']['Unit', 'NeedDaemonReload'] is False
+        if fault == 'path-preserved-restored-drift':
+            assert (state['installed'] / 'app/ops/bws_control_installation.py').read_bytes() == state['old_source']
+        raise SystemExit(status)
+    if fault in {'path-preserved-close', 'path-preserved-transient-close'}:
+        assert status == 78 and output.getvalue() == '' and state['close_failed']
+        raise SystemExit(status)
     if fault in {'path-close', 'path-transient-initial', 'path-transient-prebackup',
                  'path-proc-close', 'path-launcher-close'} or fault.startswith(('unit-close:', 'unit-runtime-close:')):
         if fault.startswith('unit-'):
@@ -505,7 +587,44 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     result = json.loads(output.getvalue())["source_installation"]
     assert resource.getrlimit(resource.RLIMIT_NOFILE) == state["original_limits"]
     assert not hasattr(sys, "_yggdrasil_bws_source_rpc_process")
-    if fault in {"hard", "unknown"}:
+    if fault.startswith('path-preserved-'):
+        mode = fault.removeprefix('path-preserved-')
+        assert 'PRIVATE_CANARY' not in output.getvalue()
+        assert 'arbitrary-PATH-private-canary' not in output.getvalue()
+        if mode in {'hard', 'unknown'}:
+            assert result['status'] == 'refused_before_backup'
+            assert result['prebackup_gate'] == ('descriptor_capacity_insufficient' if mode == 'hard'
+                                                else 'descriptor_capacity_unknown')
+            assert not {'service', 'prepare', 'stop', 'start'} & set(state['events'])
+        else:
+            service = state['service']
+            assert service.runtime_close_completed
+            if service.control_path_binding:
+                assert not service.control_path_binding.fds
+            if mode in {'malformed', 'mismatch', 'backend', 'prebackup'}:
+                assert result['status'] == 'refused_before_backup', result
+                assert not {'prepare', 'stop', 'start'} & set(state['events'])
+                assert not list(state['backups'].iterdir())
+                assert all(result[k] is None for k in ('old_generation_sha256', 'new_generation_sha256',
+                                                       'backup_manifest_sha256'))
+            else:
+                assert result['status'] == ('compensated_stopped' if mode == 'partial' else 'installed'), result
+                assert service.contract[2] == tuple(state['path_environment'])
+                assert state['path_properties']['Service', 'Environment'] == state['path_environment']
+                manifest = json.loads((state['backups'] / 'assembled/manifest.json').read_text())
+                assert all(row['root'] in {'application', 'launcher'} for row in manifest)
+                assert state['events'].count('start') == 1
+                if mode == 'partial':
+                    assert (state['installed'] / 'app/ops/bws_control_installation.py').read_bytes() == state['old_source']
+                    assert (base / 'launcher/yggdrasil-bws-deploy').read_bytes() == state['old_launcher']
+                    assert any(restored for _, restored in state['configuration_phases'])
+                else:
+                    assert result['new_generation_sha256'] == state['transaction']._generation_sha(
+                        state['last_profile'], service.new_token, service.contract)
+            if mode not in {'malformed', 'mismatch'}:
+                assert state['selected_dropin'].read_bytes() == state['dropin_bytes']
+            assert (state['control_root'] / 'unrelated.txt').read_bytes() == b'preserved synthetic non-executable data'
+    elif fault in {"hard", "unknown"}:
         assert result["status"] == "refused_before_backup", result
         assert result["prebackup_gate"] == ("descriptor_capacity_insufficient" if fault == "hard"
                                              else "descriptor_capacity_unknown")
@@ -619,17 +738,45 @@ def exercise_control_path_transaction(base, channel, slot):
              str(Path(__file__).resolve().parents[2]), channel, 'path-' + slot, str(Path(directory).resolve())],
             cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
         )
-    if slot in {'close', 'transient-initial', 'transient-prebackup', 'proc-close', 'launcher-close'}:
+    if slot in {'close', 'transient-initial', 'transient-prebackup', 'proc-close', 'launcher-close',
+                'preserved-close', 'preserved-transient-close', 'preserved-prestop',
+                'preserved-after-start', 'preserved-closing', 'preserved-restored-drift'}:
         assert completed.returncode == 78 and completed.stdout == '', completed.stderr
         owner = json.loads((base / 'receipts' / (channel + '.source-installation.lock')).read_text())
         assert owner['operation_id']
         assert not list((base / 'receipts').glob('*.receipt.json'))
+        if slot in {'preserved-prestop', 'preserved-after-start', 'preserved-closing', 'preserved-restored-drift'}:
+            assert json.loads((base / 'preserved-drift-proof.json').read_text()) == {
+                'mode': 'path-' + slot, 'drifted': True,
+            }
+            events = json.loads((base / 'preserved-events.json').read_text())
+            expected_actions = {
+                'preserved-prestop': [],
+                'preserved-after-start': ['stop', 'start'],
+                'preserved-closing': ['stop', 'start'],
+                'preserved-restored-drift': ['stop', 'start', 'stop'],
+            }
+            assert [event for event in events if event in {'stop', 'start'}] == expected_actions[slot]
+        elif slot in {'preserved-close', 'preserved-transient-close'}:
+            assert json.loads((base / 'selected-close-proof.json').read_text()) == {'attempts': 1}
         return {'status': 'unknown'}
     assert completed.returncode == 0, completed.stderr
     result = json.loads(completed.stdout)
     assert result['restored'] and result['source_only']
     return result
 
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('mode', ['valid', 'quoted', 'malformed', 'mismatch', 'backend'])
+def test_preserved_dropin_profile_crosses_verified_source_rpc(secure_tmp_path, channel, mode):
+    exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode)
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('mode', ['hard', 'unknown', 'close', 'transient-close'])
+def test_preserved_dropin_profile_resource_privacy_and_close(secure_tmp_path, channel, mode):
+    exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode)
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
 @pytest.mark.parametrize('site', ['Service_Environment', 'Service_PrivateTmp', 'Unit_ActiveState'])

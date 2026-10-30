@@ -1415,7 +1415,7 @@ def configure_control_path_service(module, patch, state, control, application, r
             value = properties[interface, name]
             signature = (module.EXEC_TYPE if name.startswith('Exec') and name != 'ExecSearchPath' else
                          'a(sb)' if name == 'EnvironmentFiles' else 'a(ssbt)' if name in {'BindPaths', 'BindReadOnlyPaths'} else
-                         'a(ss)' if name == 'TemporaryFileSystem' else
+                         'a(ss)' if name in {'TemporaryFileSystem', 'LoadCredentialEncrypted', 'LoadCredential'} else
                          'a(ssba(ss))' if name == 'MountImages' else
                          'a(sba(ss))' if name == 'ExtensionImages' else '(uo)' if name == 'Job' else
                          'b' if type(value) is bool else 'u' if type(value) is int else
@@ -1464,6 +1464,139 @@ def control_path_fixture(monkeypatch, secure_tmp_path, *, channel='dev', slot='d
     return SimpleNamespace(service=service, arguments=arguments, properties=properties,
                            state=state, roots=roots, slot=path, environment=environment)
 
+
+
+def configure_preserved_dropin(module, patch, base, properties, channel, *, quoted=False, template=False):
+    """Independent temporary disk and loaded manager state; no native input."""
+    directory = base / 'systemd'
+    unit_directory = directory / f"yggdrasil-bws-deploy@{'' if template else channel}.service.d"
+    unit_directory.mkdir(mode=0o755, parents=True)
+    patch.setattr(module, '_SYSTEMD_DIRECTORY', str(directory))
+    selected = unit_directory / 'arbitrary-PATH-private-canary.conf'
+    assignment = next(value for value in properties['Service', 'Environment'] if value.startswith('PATH='))
+    line = '"' + assignment + '"' if quoted else assignment
+    selected.write_bytes(('[Service]\nEnvironment=' + line + '\n').encode())
+    selected.chmod(0o644)
+    properties.update({
+        ('Unit', 'DropInPaths'): [str(selected)], ('Unit', 'NeedDaemonReload'): False,
+        ('Service', 'StandardOutput'): 'null', ('Service', 'StandardError'): 'null',
+        ('Service', 'UMask'): 0o077,
+        ('Service', 'LoadCredentialEncrypted'): [
+            ['bws-machine-account-token', f'/var/lib/yggdrasil/bws-tokens/{channel}/current']],
+        ('Service', 'LoadCredential'): [],
+    })
+    return selected
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('fault', [
+    'valid', 'quoted-template', 'two', 'wrong-directory', 'hidden', 'long-name', 'traversal',
+    'extra-directive', 'extra-section', 'multiple', 'reset', 'expansion', 'escape', 'encoding',
+    'oversize', 'no-newline', 'whitespace', 'empty-component', 'duplicate-component',
+    'executable', 'writable', 'hardlink', 'symlink', 'foreign', 'directory',
+    'PATH', 'Environment-order', 'namespace', 'exec', 'stdout', 'stderr', 'umask',
+    'credential', 'plain-credential', 'reload', 'reload-type', 'missing', 'backend', 'signature',
+    'equal-mtime', 'older-mtime',
+])
+def test_preserved_dropin_profile_semantic_matrix(monkeypatch, secure_tmp_path, channel, fault):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path, channel=channel)
+    selected = configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(),
+        fixture.properties, channel, quoted=fault == 'quoted-template', template=fault == 'quoted-template')
+    original = selected.read_bytes()
+    properties = fixture.properties
+    if fault == 'two':
+        properties['Unit', 'DropInPaths'] *= 2
+    elif fault == 'wrong-directory':
+        properties['Unit', 'DropInPaths'] = ['/run/systemd/system/unit.service.d/path.conf']
+    elif fault in {'hidden', 'long-name', 'traversal'}:
+        name = {'hidden': '.hidden.conf', 'long-name': 'x' * 81 + '.conf', 'traversal': '../path.conf'}[fault]
+        properties['Unit', 'DropInPaths'] = [str(selected.parent) + '/' + name]
+    elif fault in {'extra-directive', 'extra-section', 'multiple', 'reset', 'expansion', 'escape',
+                   'encoding', 'oversize', 'no-newline', 'whitespace', 'empty-component', 'duplicate-component'}:
+        malformed = {
+            'extra-directive': original + b'ExecStart=/bin/false\n',
+            'extra-section': original + b'[Unit]\n', 'multiple': original + original,
+            'reset': b'[Service]\nEnvironment=\n', 'expansion': original.replace(b'/usr/bin', b'$HOME'),
+            'escape': original.replace(b'/usr/bin', b'/usr/\\bin'), 'encoding': original + b'\xff',
+            'oversize': b'x' * 4097, 'no-newline': original[:-1],
+            'whitespace': original.replace(b'/usr/bin', b'/usr/ bin'),
+            'empty-component': original.replace(b'/usr/bin:', b'/usr/bin::'),
+            'duplicate-component': original.replace(b'/usr/bin:', b'/usr/bin:/usr/bin:'),
+        }
+        selected.write_bytes(malformed[fault])
+    elif fault in {'executable', 'writable'}:
+        selected.chmod(0o755 if fault == 'executable' else 0o666)
+    elif fault == 'hardlink':
+        os.link(selected, selected.with_name('second.conf'))
+    elif fault == 'symlink':
+        other = selected.with_name('other.conf')
+        selected.rename(other)
+        selected.symlink_to(other)
+    elif fault == 'directory':
+        selected.unlink()
+        selected.mkdir()
+    elif fault == 'foreign':
+        from types import SimpleNamespace
+        real = lifecycle.os.fstat
+        inode = selected.stat().st_ino
+        def foreign(fd):
+            value = real(fd)
+            return (SimpleNamespace(**{**{n: getattr(value, n) for n in dir(value) if n.startswith('st_')},
+                                      'st_uid': value.st_uid + 1}) if value.st_ino == inode else value)
+        monkeypatch.setattr(lifecycle.os, 'fstat', foreign)
+    elif fault in {'PATH', 'equal-mtime', 'older-mtime'}:
+        before = selected.stat()
+        selected.write_bytes(original.replace(b'/usr/bin', b'/opt/bin'))
+        if fault != 'PATH':
+            os.utime(selected, ns=(before.st_atime_ns, before.st_mtime_ns - (0 if fault == 'equal-mtime' else 100000)))
+        assert properties['Unit', 'NeedDaemonReload'] is False
+    elif fault in {'namespace', 'exec', 'stdout', 'stderr', 'umask', 'credential', 'plain-credential', 'reload', 'reload-type'}:
+        key, value = {
+            'namespace': (('Service', 'PrivateMounts'), True),
+            'exec': (('Service', 'ExecStartPre'), properties['Service', 'ExecStart']),
+            'stdout': (('Service', 'StandardOutput'), 'journal'),
+            'stderr': (('Service', 'StandardError'), 'inherit'),
+            'umask': (('Service', 'UMask'), 0o022),
+            'credential': (('Service', 'LoadCredentialEncrypted'), [['bws-machine-account-token', '/private-canary']]),
+            'plain-credential': (('Service', 'LoadCredential'), [['secret', '/private-canary']]),
+            'reload': (('Unit', 'NeedDaemonReload'), True),
+            'reload-type': (('Unit', 'NeedDaemonReload'), 0),
+        }[fault]
+        properties[key] = value
+    transport = lifecycle._run
+    reads = []
+    def manager(argv):
+        import json
+        reads.append(argv[-1])
+        assert argv[-1] not in {'SetCredential', 'SetCredentialEncrypted'}
+        if argv[-1] == 'NeedDaemonReload':
+            if fault in {'missing', 'backend'}:
+                raise OSError('PRIVATE_CANARY manager failure')
+            if fault == 'signature':
+                return json.dumps(dict(type='s', data=False)).encode()
+        return transport(argv)
+    monkeypatch.setattr(lifecycle, '_run', manager)
+    if fault in {'valid', 'quoted-template', 'Environment-order'}:
+        with fixture.service.retained_runtime():
+            fixture.service.qualify_old(**fixture.arguments)
+            contract = fixture.service.contract
+            assert contract[2] == tuple(fixture.environment)
+            assert fixture.service._config() == contract
+            assert selected.read_bytes() == original
+            if fault == 'Environment-order':
+                properties['Service', 'Environment'].reverse()
+                with pytest.raises(RuntimeError):
+                    fixture.service.revalidate_empty_control_configuration()
+        assert not fixture.service.control_path_binding.fds
+    else:
+        with pytest.raises(RuntimeError) as failure:
+            with fixture.service.retained_runtime():
+                fixture.service.qualify_old(**fixture.arguments)
+        assert str(failure.value) == 'bws_lifecycle_unproven'
+        assert fixture.state['events'] == []
+        if fixture.service.control_path_binding:
+            assert not fixture.service.control_path_binding.fds
+    assert not any('SetCredential' in name for name in reads)
 
 @pytest.mark.parametrize('slot', ['root', 'descendant', 'absent'])
 def test_control_path_projection_preserves_typed_environment(monkeypatch, secure_tmp_path, slot):
@@ -1668,3 +1801,42 @@ def test_initial_unit_property_sites_and_failure_kinds(monkeypatch, secure_tmp_p
     assert fixture.state['unit_fault_fired'] and not fixture.state['events']
     assert fixture.service.runtime_close_completed
     assert 'PRIVATE_CANARY' not in str(caught.value) + repr(capsys.readouterr())
+
+
+def test_preserved_dropin_descriptor_saturation_refuses_before_file_open(monkeypatch, secure_tmp_path):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    selected = configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(),
+                                         fixture.properties, 'dev')
+    # Independent finite fixture topology: qualification opens these root and
+    # effect-parent ancestors before selecting the file. Leave exactly no slot.
+    directories = set()
+    for path in (*fixture.roots.values(), selected.parent):
+        directories.update((path, *path.parents))
+    limit = len(directories)
+    monkeypatch.setattr(lifecycle, '_control_path_descriptor_bound', lambda: limit)
+    real_open, real_close = lifecycle.os.open, lifecycle.os.close
+    owned = set()
+    selected_opens = []
+    maximum = 0
+    def open_fd(path, flags, *args, **kwargs):
+        nonlocal maximum
+        if str(path) == selected.name:
+            selected_opens.append(path)
+        fd = real_open(path, flags, *args, **kwargs)
+        assert fd not in owned
+        owned.add(fd)
+        maximum = max(maximum, len(owned))
+        return fd
+    def close_fd(fd):
+        assert fd in owned  # exactly one close per original open, including reuse
+        owned.remove(fd)
+        real_close(fd)
+    monkeypatch.setattr(lifecycle.os, 'open', open_fd)
+    monkeypatch.setattr(lifecycle.os, 'close', close_fd)
+    with pytest.raises(RuntimeError, match='bws_lifecycle_unproven'):
+        with fixture.service.retained_runtime():
+            fixture.service.qualify_old(**fixture.arguments)
+    assert selected_opens == []
+    assert not owned and not fixture.service.control_path_binding.fds
+    assert maximum <= limit + 1  # existing separately budgeted runtime reader
+    assert fixture.state['events'] == []

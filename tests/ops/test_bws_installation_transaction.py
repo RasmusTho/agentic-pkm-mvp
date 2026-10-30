@@ -3817,3 +3817,85 @@ def test_initial_unit_property_refinement_preserves_privacy_and_legacy_fallback(
             'old_kernel_initial_unit_properties')
     _assert_old_refusal(result, events, gate)
     assert events.count('runtime_close') == 1
+
+
+@pytest.mark.parametrize('mode', ['manifest', 'selection', 'content', 'ancestor', 'lookup', 'mount',
+                                  'effect-mount', 'application-overlap', 'backup-overlap',
+                                  'prebackup', 'prestop', 'after-start', 'closing'])
+def test_preserved_dropin_profile_binds_effects_and_revalidation(monkeypatch, secure_tmp_path, mode):
+    import base64
+    from tests.ops.test_bws_installation_lifecycle import configure_control_path_service, configure_preserved_dropin
+    if mode in {'prebackup', 'prestop', 'after-start', 'closing'}:
+        from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
+        result = exercise_control_path_transaction(secure_tmp_path, 'dev', 'preserved-' + mode)
+        assert result['status'] == ('refused_before_backup' if mode == 'prebackup' else 'unknown')
+        return
+    case = _empty_control_manifest_case(monkeypatch, secure_tmp_path)
+    changes, payloads, proof = case.invoke()
+    assert {c.root for c in changes} == {'application', 'launcher'}
+    runtime = secure_tmp_path / 'runtime'
+    runtime.write_bytes(b'synthetic runtime')
+    runtime.chmod(0o755)
+    launcher = Path(case.roots['launcher'].path) / 'yggdrasil-bws-deploy'
+    launcher.write_bytes(b'legacy launcher bytes\n')
+    launcher.chmod(0o755)
+    state = {'events': []}
+    module = bws_installation_lifecycle
+    properties = configure_control_path_service(module, monkeypatch, state, case.control_root,
+        case.app_root, runtime, launcher, 'dev', ['PATH=/usr/bin:' + str(case.control_root)])
+    directory = (case.app_root if mode == 'application-overlap' else Path(proof['backup_root'].path)
+                 if mode == 'backup-overlap' else secure_tmp_path.resolve())
+    selected = configure_preserved_dropin(module, monkeypatch, directory, properties, 'dev')
+    raw = payloads['launcher', 'yggdrasil-bws-deploy']
+    service = module.FixedBwsService(unit='yggdrasil-bws-deploy@dev.service', channel='dev')
+    arguments = dict(application_root=dict(path=str(case.app_root), **case.profile['roots']['application']),
+        control_root=dict(path=str(case.control_root), **case.profile['roots']['control']),
+        control_inventory_empty=True, installation_footprint=proof['control_path_footprint'],
+        installation_effect_parents=proof['control_path_effect_parents'],
+        launcher_content=dict(sha256=transaction._sha(raw), base64=base64.b64encode(raw).decode()))
+    with service.retained_runtime():
+        if mode.endswith('overlap'):
+            with pytest.raises(RuntimeError):
+                service.qualify_old(**arguments)
+        else:
+            service.qualify_old(**arguments)
+            contract = service.contract
+            held = service.control_path_binding.fds
+            assert str(selected) in held
+            assert all(path in held for path in proof['control_path_effect_parents'])
+            assert all(root['path'] in held for root in proof['control_path_footprint'])
+            if mode == 'manifest':
+                assert service._config() == contract
+                assert transaction._generation_sha(case.profile, 'a' * 64, contract) != transaction._generation_sha(
+                    case.profile, 'a' * 64, contract[:-1])
+            else:
+                if mode == 'selection':
+                    properties['Unit', 'DropInPaths'] = []
+                elif mode == 'content':
+                    selected.write_bytes(selected.read_bytes().replace(b'/usr/bin', b'/opt/bin'))
+                elif mode == 'ancestor':
+                    selected.parent.chmod(0o777)
+                elif mode == 'lookup':
+                    data = selected.read_bytes()
+                    selected.rename(selected.with_name('retained.conf'))
+                    selected.write_bytes(data)
+                elif mode in {'mount', 'effect-mount'}:
+                    target = selected if mode == 'mount' else case.app_root / 'app/ops'
+                    identity = target.stat()
+                    original = module._control_path_mount
+                    def mount(fd):
+                        info = module.os.fstat(fd)
+                        return original(fd) + int((info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino))
+                    monkeypatch.setattr(module, '_control_path_mount', mount)
+                with pytest.raises(RuntimeError):
+                    service.revalidate_empty_control_configuration()
+    assert not state['events']
+    assert not service.control_path_binding.fds
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('mode', ['partial', 'restored-drift'])
+def test_preserved_dropin_profile_preserves_compensation_boundaries(secure_tmp_path, channel, mode):
+    from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
+    result = exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode)
+    assert result['status'] == ('compensated_stopped' if mode == 'partial' else 'unknown')
