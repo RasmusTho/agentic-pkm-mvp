@@ -30,7 +30,7 @@ from app.operations.contracts import OperationRequest
 from app.operations.execution_kernel import JsonReceiptStore
 from app.ops.operations_acceptance import (
     CONTEXT_FILE, MAX_SECONDS, PROFILE, ROLES, OperationsAcceptanceRefusal,
-    digest, file_hash, load_context, public_binding, require_identity, require_runtime, write_private,
+    digest, file_hash, load_context, public_binding, require_identity, require_native_fixture, require_runtime, write_private,
 )
 
 router = APIRouter(prefix="/operations/acceptance", tags=["native-qualification"],
@@ -298,6 +298,7 @@ def native_probe(registry_path: Path) -> dict[str, Any]:
     """Read existing sources, durable receipts and each projection separately."""
     context = load_context(registry_path, required=True, observation_only=True)
     assert context is not None
+    require_native_fixture(context, VaultRegistryStore(registry_path))
     from app.index.doctor import diagnose_index
     from app.index.artifact_metadata import canonicalize_indexable_text, compute_payload_content_hash
     from app.stores import get_object_store, get_relation_index, get_vector_index, resolve_store_backend

@@ -91,23 +91,29 @@ class NativeChannel:
     def _native(self, expected_operation_id: str | None = None) -> tuple[Path, dict[str, Any], dict[str, Any]]:
         # This path reads original receipt/request facts. It obtains no BWS
         # reader, channel lock, native lease, controller or deploy authority.
-        from app.ops.postgres_deploy_linux import LinuxConfig, _private_json
+        from app.ops.postgres_deploy_linux import LinuxConfig
+        config = LinuxConfig.load(self.channel, require_runtime_env=False)
+        receipt, plan = self._native_record(config, expected_operation_id or self.operation_id)
+        return config.root, receipt, plan
+
+    def _native_record(self, config: Any, expected: str, *, historical: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Use the existing native current/historical contract readers only."""
         from app.ops.postgres_deploy import DeployPlan
         from app.ops.pg_acceptance import require_pass
-        config = LinuxConfig.load(self.channel, require_runtime_env=False)
-        expected = expected_operation_id or self.operation_id
-        receipt = config.journal.read()
-        raw = _private_json(config.journal.directory / (self.channel + ".request.json"))
+        receipt = config.journal.operation_receipt(expected) if historical else config.journal.read()
+        request = config.journal.operation_request(expected) if historical else config.journal.current_request()
         if (receipt is None or receipt.operation_id != expected
             or receipt.terminal_result != "committed" or receipt.activation_scope != "full"
-            or raw.get("operation_id") != expected or raw.get("bootstrap") is not False
+            or request is None or request[0].get("operation_id") != expected or request[0].get("bootstrap") is not False
             or receipt.pg_acceptance is None):
             raise OperationsAcceptanceRefusal("current_committed_full_native_operation_required")
-        plan = DeployPlan.from_payload(raw["plan"])
+        plan = request[1]
+        if not isinstance(plan, DeployPlan):
+            raise OperationsAcceptanceRefusal("native_request_binding_mismatch")
         require_pass(receipt.pg_acceptance, plan.revision, plan.image_digest or "", self.channel, expected)
         if plan.channel != self.channel or plan.activation_scope != "full":
             raise OperationsAcceptanceRefusal("native_request_binding_mismatch")
-        return config.root, asdict(receipt), plan.payload()
+        return asdict(receipt), plan.payload()
 
     def _running(self, revision: str, image_digest: str) -> dict[str, Any]:
         observed = {}
@@ -178,11 +184,7 @@ class NativeChannel:
         package["source_sha"] = revision
         return package
 
-    def admit(self) -> dict[str, Any]:
-        root, receipt, plan = self._native()
-        revision, image_digest = plan["revision"], plan["image_digest"]
-        running = self._running(revision, image_digest)
-        package = self._package(root, revision)
+    def _resources(self, root: Path, revision: str) -> tuple[dict[str, str], dict[str, str]]:
         resources = {}
         records = self._git(root, "ls-tree", "-r", revision, "--", *BAKED, *PRODUCERS)
         producers = {}
@@ -203,6 +205,19 @@ class NativeChannel:
                 resources[name] = measured
         if set(producers) != set(PRODUCERS):
             raise OperationsAcceptanceRefusal("committed_operations_producer_missing")
+        return resources, producers
+
+    def admit(self) -> dict[str, Any]:
+        from app.ops.postgres_deploy_linux import LinuxConfig
+        config = LinuxConfig.load(self.channel, require_runtime_env=False)
+        current = config.journal.read()
+        if current is not None and current.operation_id != self.operation_id:
+            return self._retained_admission(config)
+        root, receipt, plan = self._native()
+        revision, image_digest = plan["revision"], plan["image_digest"]
+        running = self._running(revision, image_digest)
+        package = self._package(root, revision)
+        resources, producers = self._resources(root, revision)
         import yaml
         compose = yaml.safe_load(self._git(root, "show", revision + ":docker-compose.yaml"))
         expected_command = [item.replace("$$", "$") for item in compose["services"]["api"]["command"]]
@@ -232,9 +247,54 @@ class NativeChannel:
         self.repository = root
         return context
 
+    def _retained_admission(self, config: Any) -> dict[str, Any]:
+        """Recover only the exact existing original and committed successor.
+
+        No prepare command, new context, selection or effect is permitted on
+        this path. The protected native history and actual replacement process
+        qualify a read of the original retained context, never a new approval.
+        """
+        successor = str(uuid5(UUID(self.operation_id), PROFILE + ":backend-wsp-restart"))
+        root, current, plan = self._native(successor)
+        original, original_plan = self._native_record(config, self.operation_id, historical=True)
+        if (plan["revision"] != original_plan["revision"] or plan["image_digest"] != original_plan["image_digest"]
+            or "api" not in plan["services"]):
+            raise OperationsAcceptanceRefusal("separate_native_restart_receipt_unqualified")
+        running = self._running(plan["revision"], plan["image_digest"])
+        if running["api"]["Image"] != current["pg_acceptance"]["app_image_id"]:
+            raise OperationsAcceptanceRefusal("actual_native_program_or_image_mismatch")
+        probe = json.loads(command(["docker", "exec", running["api"]["Id"],
+            "python", "-m", "app.api.native_operations_acceptance", "probe"]))
+        binding = probe["binding"]
+        identity = binding["identity"]
+        require_identity(identity, channel=self.channel)
+        resources, producers = self._resources(root, plan["revision"])
+        if (not binding.get("selection") or not binding.get("slots")
+            or identity["operation_id"] != self.operation_id or identity.get("restart_operation_id") != successor
+            or identity["source_sha"] != original_plan["revision"] or identity["image_digest"] != original_plan["image_digest"]
+            or identity["native_receipt_sha256"] != digest(original)
+            or identity["resource_tree"] != self._git(root, "rev-parse", plan["revision"] + "^{tree}").strip()
+            or identity["resource_hashes"] != resources or identity["producer_hashes"] != producers
+            or identity["sidecar"] != self._package(root, plan["revision"])
+            or identity["api_image_id"] != running["api"]["Image"] or identity["ui_image_id"] != running["companion-ui"]["Image"]
+            or identity["execution_kind"] != running["api"]["Config"].get("Labels", {}).get("io.yggdrasil.acceptance-kind", "deployed")):
+            raise OperationsAcceptanceRefusal("foreign_or_changed_retained_native_context")
+        self.identity, self.repository = identity, root
+        if self.observe_restart().get("status") != "observed":
+            raise OperationsAcceptanceRefusal("separate_native_restart_receipt_unqualified")
+        if self.observe()["binding"] != binding:
+            raise OperationsAcceptanceRefusal("original_native_producer_binding_mismatch")
+        return binding
+
     def observe(self) -> dict[str, Any]:
         if self.identity is None:
             raise OperationsAcceptanceRefusal("native_admission_required")
+        if self.restart_binding is None:
+            from app.ops.postgres_deploy_linux import LinuxConfig
+            current = LinuxConfig.load(self.channel, require_runtime_env=False).journal.read()
+            if current is not None and current.operation_id == self.identity["restart_operation_id"]:
+                if self.observe_restart().get("status") != "observed":
+                    raise OperationsAcceptanceRefusal("separate_native_restart_receipt_unqualified")
         expected = self.restart_binding["operation_id"] if self.restart_binding else self.operation_id
         root, receipt, plan = self._native(expected)
         receipt_hash = self.restart_binding["native_receipt_sha256"] if self.restart_binding else self.identity["native_receipt_sha256"]
@@ -268,13 +328,17 @@ class NativeChannel:
             return {"status": "blocked", "separate_native_authority": False,
                 "expected_operation_id": expected, "reason": "separately_authorized_native_backend_wsp_restart_required"}
         root, receipt, plan = self._native(expected)
-        original = config.journal.operation_receipt(self.operation_id)
-        if (original is None or digest(asdict(original)) != self.identity["native_receipt_sha256"]
+        original, original_plan = self._native_record(config, self.operation_id, historical=True)
+        if (digest(original) != self.identity["native_receipt_sha256"]
+            or original_plan["revision"] != self.identity["source_sha"] or original_plan["image_digest"] != self.identity["image_digest"]
             or plan["revision"] != self.identity["source_sha"] or plan["image_digest"] != self.identity["image_digest"]
             or "api" not in plan["services"] or self._package(root, plan["revision"]) != self.identity["sidecar"]):
             raise OperationsAcceptanceRefusal("separate_native_restart_receipt_unqualified")
         running = self._running(plan["revision"], plan["image_digest"])
-        if running["api"]["Id"] == self.identity["api_container_id"]:
+        if (running["api"]["Image"] != receipt["pg_acceptance"]["app_image_id"]
+            or running["api"]["Image"] != self.identity["api_image_id"]
+            or running["companion-ui"]["Image"] != self.identity["ui_image_id"]
+            or running["api"]["Id"] == self.identity["api_container_id"]):
             raise OperationsAcceptanceRefusal("actual_backend_replacement_not_observed")
         self.restart_binding = {"operation_id": expected, "native_receipt_sha256": digest(receipt),
             "api_container_id": running["api"]["Id"], "ui_container_id": running["companion-ui"]["Id"]}

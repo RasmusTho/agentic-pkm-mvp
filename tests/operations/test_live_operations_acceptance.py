@@ -97,6 +97,19 @@ def test_channel_entrypoints_enforce_native_operations_admission(tmp_path, monke
 
 def test_real_sdk_profiles_and_operation_parity_are_observed(tmp_path, monkeypatch):
     instance = host(tmp_path, monkeypatch)
+    import os
+    from app.operations.execution_kernel import JsonReceiptStore
+    original_link = os.link
+    publications = []
+    def publish(source, destination, *args, **kwargs):
+        role = {"operations-acceptance-moved.md": "move", "operations-acceptance-renamed.md": "rename"}.get(str(destination))
+        if source == "original" and role:
+            reservation = JsonReceiptStore(instance.runtime.registry.path.parent / "operation-receipts.json").lookup(
+                "ygg.acceptance:" + OPERATION + ":" + role)
+            assert reservation is not None, "native placement published before durable acceptance reservation"
+            publications.append(role)
+        return original_link(source, destination, *args, **kwargs)
+    monkeypatch.setattr(os, "link", publish)
     with runtime_http(instance) as (url, calls, _):
         run = journey(instance, tmp_path / "original-sdk", url)
         run.profiles_and_operations()
@@ -114,6 +127,7 @@ def test_real_sdk_profiles_and_operation_parity_are_observed(tmp_path, monkeypat
         assert instance.identity["sidecar"]["distribution"] == "mimer-mcp-sidecar"
         assert instance.identity["sidecar"]["sdk_files"]
         assert instance.identity["sidecar"]["runtime"]["executable"] == sdk_python()
+        assert publications == ["move", "rename"]
 
 
 @pytest.mark.parametrize("case", ["missing", "unknown", "expired", "replaced", "wrong-principal", "wrong-instance",
@@ -184,9 +198,10 @@ def test_recovery_preserves_original_receipts_without_replay(tmp_path, monkeypat
             assert run.bearer.encode() not in path.read_bytes() and raw.encode() not in path.read_bytes()
 
 
-def _receipt_fixture(tmp_path, channel="test"):
+def _receipt_fixture(tmp_path, channel="test", *, facts=None):
     """Receipt-validator data only, explicitly incapable of deployed PASS."""
-    facts = identity(channel)
+    facts = deepcopy(facts) if facts is not None else identity(channel)
+    facts["channel"] = channel
     binding = {"identity": facts, "principal_id": "existing-principal", "instance_identity": "existing-instance",
         "binding_id": "existing-binding", "fixture_sha256": "f" * 64, "native_context_sha256": "e" * 64,
         "source_inventory": {}, "selection": {"context_id": "ctx", "generation": 1}, "slots": []}
@@ -272,16 +287,20 @@ def test_qualified_channel_commands_cover_test_and_dev(tmp_path, monkeypatch, ch
     # Full public orchestration over original Product outcomes. Native host
     # process/network/output ports alone use a canonical temporary fixture.
     import tests.operations.live_operations_acceptance as caller
-    from tests.operations._operations_acceptance_harness import LocalNative
+    from tests.operations._operations_acceptance_harness import NativeFixturePorts
     from app.api.routes.active_context_selection import get_selection_store
-    instance = host(tmp_path, monkeypatch, channel=channel, freeze=False)
+    instance = host(tmp_path, monkeypatch, channel=channel, freeze=False, prepare=False)
+    ports = NativeFixturePorts(instance, tmp_path, monkeypatch)
+    native = caller.NativeChannel(channel, OPERATION)
+    original = native.admit()
+    instance.identity = original["identity"]
     clock = [time()]
     monkeypatch.setattr(caller, "time", lambda: clock[0])
     monkeypatch.setattr(caller, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     monkeypatch.setattr(get_selection_store(), "_clock", lambda: clock[0])
     prior = None
     if channel == "dev":
-        binding, rows, evidence = _receipt_fixture(tmp_path)
+        binding, rows, evidence = _receipt_fixture(tmp_path, facts=instance.identity)
         # Both temporary channels share the same actual installed artifacts.
         now = time()
         prior = evidence / "receipt.json"
@@ -290,7 +309,7 @@ def test_qualified_channel_commands_cover_test_and_dev(tmp_path, monkeypatch, ch
         import httpx
         # No browser replacement: TEST stops with an honest partial report
         # when browser execution is absent in this non-browser lane.
-        run = caller.OperationsJourney(LocalNative(instance), tmp_path / "assembled",
+        run = caller.OperationsJourney(native, tmp_path / "assembled",
             client=httpx.Client(base_url=url, timeout=60), browser=lambda _: None)
         run.api_url = url
         result = run.run(test_receipt_path=prior)
@@ -304,3 +323,23 @@ def test_qualified_channel_commands_cover_test_and_dev(tmp_path, monkeypatch, ch
             assert run.observations["browser_discovery"]["status"] == "blocked"
         else:
             assert run.observations["dev_operation_receipt"]["proof"]["sdk"] == run.observations["dev_operation_receipt"]["proof"]["native"]
+        # A separately owned temporary native successor completes before the
+        # preceding observation. Both the old object and a newly constructed
+        # public runner must recover the exact original without prepare/replay.
+        source_hashes = {str(path): file_hash(path) for path in instance.root.rglob("*.md")}
+        native_context = file_hash(instance.runtime.registry.path.parent / CONTEXT_FILE)
+        observed_calls, prepares = len(calls), ports.prepares
+        successor = ports.successor()
+        assert native.observe()["binding"] == run.binding
+        assert native.observe_restart()["restart_binding"]["operation_id"] == successor
+        fresh = caller.NativeChannel(channel, OPERATION)
+        recovered = caller.OperationsJourney(fresh, run.directory, client=httpx.Client(base_url=url, timeout=60)).run(test_receipt_path=prior)
+        assert recovered == result and fresh.restart_binding["operation_id"] == successor
+        assert ports.prepares == prepares and len(calls) == observed_calls
+        assert native_context == file_hash(instance.runtime.registry.path.parent / CONTEXT_FILE)
+        assert source_hashes == {str(path): file_hash(path) for path in instance.root.rglob("*.md")}
+        from uuid import uuid4
+        ports.commit(str(uuid4()))
+        with pytest.raises(OperationsAcceptanceRefusal, match="current_committed_full_native_operation_required"):
+            caller.NativeChannel(channel, OPERATION).admit()
+        assert ports.prepares == prepares and len(calls) == observed_calls

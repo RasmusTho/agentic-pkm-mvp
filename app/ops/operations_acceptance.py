@@ -167,28 +167,28 @@ def load_context(registry_path: Path, *, required: bool = False, observation_onl
     return value
 
 
-def require_runtime(context: dict[str, Any], runtime: Any, *, frozen: bool = True) -> None:
+def require_native_fixture(context: dict[str, Any], registry: Any) -> None:
+    """Current native fixture facts for effects and observation-only recovery."""
     fixture = context["fixture"]
-    snapshot = runtime.registry._read_current_locked(recover=False)
+    snapshot = registry._read_current_locked(recover=False)
     registration = snapshot.registrations.get(fixture["binding_id"])
-    if (runtime.actor != fixture["principal_id"] or runtime.selection_record.instance_identity != fixture["instance_identity"]
-        or runtime.active_context.principal_context.revision != fixture["principal_revision"]
-        or runtime.selection_record.binding_ids != (fixture["binding_id"],)
+    from app.instance.runtime import local_operator_principal_path, open_local_operator_principal_store
+    principal = open_local_operator_principal_store(registry.path).require()
+    if (principal.local_operator_role_id != fixture["principal_id"] or principal.revision != fixture["principal_revision"]
+        or snapshot.app_install_id != fixture["instance_identity"]
         or registration is None or registration.extensions.get("status") != "initialized"
+        or registration.extensions.get(PROFILE) != {"operation_id": context["identity"]["operation_id"]}
         or str(Path(registration.path).resolve(strict=True)) != fixture["root"]
         or snapshot.revision != fixture["registry_revision"]):
         raise OperationsAcceptanceRefusal("native_actor_instance_binding_changed")
-    from app.instance.runtime import local_operator_principal_path
-    if (file_hash(runtime.registry.path) != fixture["registry_sha256"]
-        or file_hash(local_operator_principal_path(runtime.registry.path)) != fixture["principal_record_sha256"]):
+    if (file_hash(registry.path) != fixture["registry_sha256"]
+        or file_hash(local_operator_principal_path(registry.path)) != fixture["principal_record_sha256"]):
         raise OperationsAcceptanceRefusal("native_principal_registry_generation_changed")
     identity = context["identity"]
     if identity["execution_kind"] == "deployed":
         if (os.environ.get("VCS_REF") != identity["source_sha"] or os.environ.get("PKM_ENVIRONMENT") != identity["channel"]
             or any(file_hash(Path("/app") / name) != expected for name, expected in identity["resource_hashes"].items())):
             raise OperationsAcceptanceRefusal("actual_native_candidate_changed")
-    if frozen and context.get("selection") != runtime.selection_record.redacted():
-        raise OperationsAcceptanceRefusal("frozen_selection_changed")
     settings = Path(fixture["root"]) / "settings"
     current_settings = {path.relative_to(Path(fixture["root"])).as_posix(): file_hash(path)
                         for path in settings.rglob("*") if path.is_file()}
@@ -197,6 +197,17 @@ def require_runtime(context: dict[str, Any], runtime: Any, *, frozen: bool = Tru
         current_settings["_heimdal/settings.md"] = file_hash(heimdal)
     if current_settings != {name: value for name, value in fixture["files"].items() if name.startswith("settings/") or name == "_heimdal/settings.md"}:
         raise OperationsAcceptanceRefusal("frozen_source_configuration_changed")
+
+
+def require_runtime(context: dict[str, Any], runtime: Any, *, frozen: bool = True) -> None:
+    require_native_fixture(context, runtime.registry)
+    fixture = context["fixture"]
+    if (runtime.actor != fixture["principal_id"] or runtime.selection_record.instance_identity != fixture["instance_identity"]
+        or runtime.active_context.principal_context.revision != fixture["principal_revision"]
+        or runtime.selection_record.binding_ids != (fixture["binding_id"],)):
+        raise OperationsAcceptanceRefusal("native_actor_instance_binding_changed")
+    if frozen and context.get("selection") != runtime.selection_record.redacted():
+        raise OperationsAcceptanceRefusal("frozen_selection_changed")
 
 
 def require_effect(runtime: Any, operation: Any, *, consume: bool = True) -> None:

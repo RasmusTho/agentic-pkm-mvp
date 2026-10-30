@@ -426,11 +426,17 @@ def build_production_operation_runtime(
             if operation_id == UPDATE_OPERATION_ID else None
         )
         if operation_id in {"artifact.move", "artifact.rename"}:
+            def placement_authority(*_: Any) -> bool:
+                # Placement rechecks these ports at its actual publication
+                # seams, including after queue waits and syscall boundaries.
+                require_effect()
+                return True
+
             placement_owner = KnowledgePlacementOwner(
                 vault_root=root, context_ref=context.context_id, vault_generation=str(context.generation),
                 actor=actor, active_context=context, target_binding_id=target_binding_id,
-                registry_store=registry, context_is_current=lambda: validate_token(),
-                authority_is_current=lambda _: validate_token(), filesystem="local-posix-v1",
+                registry_store=registry, context_is_current=placement_authority,
+                authority_is_current=placement_authority, filesystem="local-posix-v1",
             )
             placement_config = PlacementOperationServerConfig(
                 placement_owner, operation_context, artifact_id or "", resource,

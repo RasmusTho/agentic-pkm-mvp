@@ -54,7 +54,7 @@ def identity(channel="test"):
         "resource_hashes": {"app/api/native_operations_acceptance.py": file_hash(ROOT / "app/api/native_operations_acceptance.py")}}
 
 
-def host(tmp_path, monkeypatch, *, channel="test", freeze=True):
+def host(tmp_path, monkeypatch, *, channel="test", freeze=True, prepare=True):
     runtime = new_runtime(tmp_path, channel=channel)
     root = tmp_path / "synthetic-vault"
     root.mkdir()
@@ -92,7 +92,7 @@ def host(tmp_path, monkeypatch, *, channel="test", freeze=True):
     selection = selected.json()
     headers = {"X-Active-Context-Session": selection["context_selection_id"]}
     facts = identity(channel)
-    public = prepare_native_context(facts, registry_path=runtime.registry.path)
+    public = prepare_native_context(facts, registry_path=runtime.registry.path) if prepare else None
     result = SimpleNamespace(runtime=runtime, root=root, binding_id=registration.vault_binding_id,
         artifact_id=sources["read"]["artifact_id"], note=root / sources["read"]["path"],
         client=client, selection=selection, headers=headers, sources=sources, identity=facts, initial=public)
@@ -187,13 +187,97 @@ class LocalNative:
         return native_probe(self.host.runtime.registry.path)
 
 
-def journey(host, directory, api_url, ui_url=None):
+def journey(host, directory, api_url, ui_url=None, *, native=None):
     import httpx
     from tests.operations.live_operations_acceptance import OperationsJourney
-    result = OperationsJourney(LocalNative(host), directory, client=httpx.Client(base_url=api_url, timeout=60))
+    result = OperationsJourney(native or LocalNative(host), directory, client=httpx.Client(base_url=api_url, timeout=60))
     result.api_url = api_url
     if ui_url is not None:
         result.ui_url = ui_url
     result.binding, result.bearer = host.binding, host.selection["context_selection_id"]
     directory.mkdir(mode=0o700)
     return result
+
+
+class NativeFixturePorts:
+    """Temporary native journal + external Docker/browser ports, no live PASS.
+
+    Public NativeChannel orchestration/readers, Git resources, actual installed
+    SDK qualification, native fixture producer and Product owners remain real.
+    Only physical host/container/browser facts use this premerge fixture.
+    """
+    def __init__(self, host, tmp_path, monkeypatch):
+        import yaml
+        from app.ops import native_operations_acceptance_runner as runner
+        from app.ops.postgres_deploy import DeployJournal, DeployPlan
+        from app.ops.postgres_deploy_linux import LinuxConfig
+        from tests.deploy.test_postmerge_pg_acceptance import _result, DIGEST, IMAGE_ID
+        self.host = host
+        self.runner, self.digest, self.image_id = runner, DIGEST, IMAGE_ID
+        self.channel = host.identity["channel"]
+        self.sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        self.journal = DeployJournal(tmp_path / "native-journal", self.channel)
+        self.plan = DeployPlan(self.channel, self.sha, ("db", "api"), ("postgres-db", "postgres-api"),
+                               image_digest=DIGEST, automatic=True)
+        self.result = _result
+        self.api_id, self.ui_id = "1" * 64, "2" * 64
+        self.prepares = 0
+        self.compose = yaml.safe_load((ROOT / "docker-compose.yaml").read_text())
+        self.commit(OPERATION)
+        monkeypatch.setattr(LinuxConfig, "load", lambda *args, **kwargs: SimpleNamespace(root=ROOT, journal=self.journal))
+        monkeypatch.setattr(runner, "SDK_PYTHON", Path(sdk_python()))
+        original = runner.command
+        self.browser = {"playwright": "premerge-external-port", "executable": "/native-fixture/browser",
+                        "executable_sha256": "b" * 64}
+        def port(argv, *, payload=None, cwd=None):
+            if argv == [str(runner.SDK_PYTHON), "-I", "-c", runner.BROWSER_PROBE]:
+                return json.dumps(self.browser)
+            if argv[0] != "docker":
+                return original(argv, payload=payload, cwd=cwd)
+            if argv[1] == "ps":
+                return self.api_id if "label=com.docker.compose.service=api" in argv else self.ui_id
+            if argv[1] == "inspect":
+                return json.dumps([self.container("api" if argv[2] == self.api_id else "companion-ui")])
+            if argv[1:3] == ["image", "inspect"]:
+                return json.dumps([{"RepoDigests": ["ghcr.io/rasmustho/pkm-app@" + DIGEST]}])
+            assert argv[1] == "exec", argv
+            if "app.api.native_operations_acceptance" not in argv:
+                assert "socket.getaddrinfo" in argv[-1]
+                return json.dumps(["172.24.0.2"])
+            if argv[-1] == "prepare":
+                self.prepares += 1
+                return json.dumps(prepare_native_context(payload, registry_path=host.runtime.registry.path))
+            assert argv[-1] == "probe", argv
+            return json.dumps(native_probe(host.runtime.registry.path))
+        monkeypatch.setattr(runner, "command", port)
+
+    def commit(self, operation):
+        self.journal.bind_request(operation, self.plan, False, create=True)
+        for stage in ("prepared", "preflighted", "materialized", "authenticating", "activating", "verifying"):
+            self.journal.write(operation, stage)
+        self.journal.write(operation, "committed", self.result(self.sha, self.channel, operation))
+
+    def successor(self):
+        from uuid import uuid5
+        operation = str(uuid5(UUID(OPERATION), PROFILE + ":backend-wsp-restart"))
+        self.commit(operation)
+        self.api_id = "6" * 64
+        active_context_selection.reset_selection_store_for_tests()
+        return operation
+
+    def container(self, service):
+        api = service == "api"
+        api_port, ui_port = ((18001, 8111) if self.channel == "dev" else (18002, 8112))
+        env = ["PKM_ENVIRONMENT=" + self.channel, "VCS_REF=" + self.sha, "PKM_ACTIVATION_SCOPE=full"]
+        if not api:
+            env += ["COMPANION_API_BASE_URL=http://api:8000", "PORT=" + str(ui_port)]
+        inner, outer = (8000, api_port) if api else (ui_port, ui_port)
+        command = ([value.replace("$$", "$") for value in self.compose["services"]["api"]["command"]]
+                   if api else ["/bin/bash", "-c", 'python -m "${COMPANION_UI_SERVE_MODULE:-companion_ui.workspace.serve_dev_page}"'])
+        return {"Id": self.api_id if api else self.ui_id, "Image": self.image_id, "State": {"Running": True}, "Mounts": [],
+            "Config": {"Env": env, "Entrypoint": None, "Cmd": command,
+                "WorkingDir": "/app" if api else "/app/companion-ui/companion-app",
+                "Labels": {"org.opencontainers.image.revision": self.sha, "com.docker.compose.project": "pkm-" + self.channel,
+                           "com.docker.compose.service": service, "io.yggdrasil.acceptance-kind": "premerge"}},
+            "NetworkSettings": {"Ports": {str(inner) + "/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(outer)}]},
+                "Networks": {"fixture": {"Aliases": ["api" if api else "companion-ui"], "IPAddress": "172.24.0.2" if api else "172.24.0.3"}}}}
