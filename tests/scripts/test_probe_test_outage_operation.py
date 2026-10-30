@@ -1507,9 +1507,9 @@ class NativeProcess:
         return self.returncode
 
     def wait(self, timeout):
-        self.returncode = 0
+        self.returncode = getattr(self.kernel, "forced_returncodes", {}).get(self.argv, 0)
         self.kernel.reaped.append(self.pid)
-        return 0
+        return self.returncode
 
 
 class NativeSelector:
@@ -1882,6 +1882,13 @@ class NativeKernel:
             return b""
         if argv == target.watchdog_stop(self.scope):
             self.guardian_active = False
+            group = (
+                "/sys/fs/cgroup/system.slice/" + target.watchdog_unit(self.scope) + "/cgroup.procs"
+            )
+            self.os.files.pop(group, None)
+            self.os.meta.pop(group, None)
+            # A successfully stopped transient unit is already unloaded.
+            self.forced_returncodes = {target.watchdog_show(self.scope): 4}
             return b""
         if argv == target.watchdog_show(self.scope):
             active = getattr(self, "guardian_active", False)
@@ -2519,6 +2526,240 @@ def test_core_observations_cannot_satisfy_live_receipt_without_native_custody(se
     with self.assertRaisesRegex(target.Unknown, "native_completed_evidence_unqualified"):
         target.native_completion_receipt(observations, {"operation": kernel.scope.handle.operation})
     self.assertFalse(observations["live_acceptance"])
+
+
+def _remote_boundary(outcome, *, guest="ygg-test"):
+    """Actual bootstrap/CLI; only kernel, clock and systemd/Docker ports fake."""
+    import base64
+    import signal
+    import selectors
+    import subprocess
+    from datetime import datetime, timezone
+
+    archive, manifest, _ = fixture_source()
+    program = Path(target.__file__).read_bytes()
+    packet = {
+        "schema": "fixed_test_probe.carrier.v1",
+        "issue": 6493,
+        "operation": "1" * 32,
+        "namespace": "2" * 32,
+        "reviewed_head": "3" * 40,
+        "program_sha256": target.sha(program),
+        "issue_body_sha256": "4" * 64,
+        "lease_id": "synthetic",
+        "keeper_standing_reference": "synthetic-window",
+        "window_start_utc": datetime.fromtimestamp(900, timezone.utc).isoformat(),
+        "window_end_utc": datetime.fromtimestamp(1900, timezone.utc).isoformat(),
+        "bootstrap_interpreter": "/usr/bin/python3",
+        "local_fence_references": [["original5b47", "5" * 64], ["successor329", "6" * 64]],
+        "normal_interval_seconds": 60,
+        "heartbeat_stale_seconds": 60,
+        "gh_executable": "/opt/homebrew/bin/gh",
+        "caller_interpreter": "/usr/bin/python3",
+    }
+    envelope = {
+        "packet": packet,
+        "program": base64.b64encode(program).decode(),
+        "archive": base64.b64encode(archive).decode(),
+        "manifest": base64.b64encode(manifest).decode(),
+        "custody_source": (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
+    }
+    root = "/var/lib/ygg-test-probe-" + packet["namespace"]
+    unit = "yggdrasil-test-probe-" + packet["operation"] + ".service"
+    k = SimpleNamespace(
+        scope=SimpleNamespace(
+            binding=SimpleNamespace(state_file="/unused-state", sdk_realpath="/unused-sdk")
+        ),
+        processes=[],
+        reaped=[],
+        killed=[],
+        calls=[],
+        forced_returncodes={},
+    )
+    k.os = MemoryLinuxOS(k)
+    k.os.add("/var/lib", directory=True, mode=0o755)
+    k.os.add("/proc/sys/kernel/hostname", (guest + "\n").encode(), mode=0o444)
+    k.os.add("/etc/machine-id", b"d" * 32 + b"\n", mode=0o444)
+    k.os.add("/proc/sys/kernel/random/boot_id", b"a" * 32 + b"\n", mode=0o444)
+    k.os.links["/proc/self/ns/net"] = "net:[51917]"
+    started = {
+        "operation": packet["operation"],
+        "program_sha256": packet["program_sha256"],
+        "unit": unit,
+        "invocation": "b" * 32,
+        "pid": "999",
+        "cgroup": "/system.slice/" + unit,
+        "boot_id": "a" * 32,
+    }
+    actual_path = Path
+
+    def namespace_path(value):
+        if str(value) == root + "/program.py":
+            return SimpleNamespace(resolve=lambda: SimpleNamespace(parent=root))
+        return actual_path(value)
+
+    def response(argv, payload):
+        k.calls.append(argv)
+        if argv[0] == "/usr/bin/systemd-run":
+            if outcome == "success_unloaded":
+                k.os.add(root + "/supervisor-start.json", json.dumps(started).encode())
+                k.os.add(
+                    root + "/result.json",
+                    json.dumps(
+                        {
+                            "schema": "fixed_test_probe.observations.v1",
+                            "status": "OBSERVATIONS_COMPLETE",
+                            "operation": packet["operation"],
+                            "live_acceptance": False,
+                        }
+                    ).encode(),
+                )
+            elif outcome == "preflight_refused":
+                # Execute the actual final role/CLI and authored refusal path.
+                with (
+                    patch.object(target, "__file__", root + "/program.py"),
+                    patch.object(target, "Path", side_effect=namespace_path),
+                    patch.object(target.LinuxDependencies, "standard_library", return_value=deps),
+                ):
+                    try:
+                        target.main(["--supervised-first-preflight", packet["operation"]])
+                    except target.Refusal:
+                        k.forced_returncodes[argv] = 78
+                    else:
+                        raise AssertionError(
+                            "actual first preflight should refuse missing API producer"
+                        )
+            return b""
+        if argv[0] == "/usr/bin/systemctl":
+            if outcome == "success_unloaded":
+                raise AssertionError(
+                    "successful transient unit was unloaded; no post-exit show is valid"
+                )
+            fields = {
+                "Id": unit,
+                "ActiveState": "active",
+                "SubState": "running",
+                "MainPID": "999",
+                "InvocationID": started["invocation"],
+                "ControlGroup": started["cgroup"],
+                "ExecStart": "{ argv[]=/usr/bin/python3 -I "
+                + root
+                + "/program.py --supervised-first-preflight "
+                + packet["operation"]
+                + " ; }",
+                "WorkingDirectory": root,
+                "KillMode": "control-group",
+                "Restart": "no",
+            }
+            return "".join(key + "=" + value + "\n" for key, value in fields.items()).encode()
+        if argv[0] == "/usr/bin/docker":
+            return b""  # Actual bounded discovery rejects zero API candidates.
+        raise AssertionError("unrecognized fake external boundary")
+
+    k.response = response
+
+    def spawn(argv, **kwargs):
+        process = NativeProcess(k, argv)
+        k.processes.append(process)
+        return process
+
+    deps = SimpleNamespace(
+        os=k.os,
+        time=SimpleNamespace(time=lambda: 1000.0, monotonic=lambda: 1000.0),
+        subprocess=SimpleNamespace(
+            Popen=spawn,
+            PIPE=subprocess.PIPE,
+            CompletedProcess=subprocess.CompletedProcess,
+            TimeoutExpired=subprocess.TimeoutExpired,
+        ),
+        selectors=SimpleNamespace(
+            DefaultSelector=NativeSelector,
+            EVENT_READ=selectors.EVENT_READ,
+            EVENT_WRITE=selectors.EVENT_WRITE,
+        ),
+        signal=signal,
+    )
+    return k, deps, envelope, root
+
+
+def test_wrong_guest_is_rejected_before_any_bootstrap_write_or_child(self):
+    kernel, dependencies, envelope, root = _remote_boundary("unused", guest="ygg-prod")
+    result = target.remote_launch(envelope, dependencies)
+    self.assertEqual(
+        ("REFUSED", "bootstrap_guest_not_fixed_test"), (result["status"], result["reason"])
+    )
+    self.assertNotIn(root, kernel.os.meta)
+    self.assertEqual([], kernel.processes)
+    self.assertEqual([], kernel.calls)
+
+
+def test_completed_unloaded_supervisor_uses_retained_original_identity(self):
+    kernel, dependencies, envelope, root = _remote_boundary("success_unloaded")
+    result = target.remote_launch(envelope, dependencies)
+    self.assertEqual("b" * 32, result["supervisor"]["invocation"])
+    self.assertEqual(0, result["supervisor"]["manager_exit_code"])
+    self.assertTrue(result["supervisor"]["reaped"])
+    self.assertTrue(result["supervisor"]["cgroup_empty"])
+    self.assertFalse(result["live_acceptance"])
+    self.assertFalse(any(argv[0] == "/usr/bin/systemctl" for argv in kernel.calls))
+    self.assertTrue(all(process.returncode == 0 for process in kernel.processes))
+    self.assertTrue(
+        all(
+            stream.closed
+            for process in kernel.processes
+            for stream in (process.stdin, process.stdout, process.stderr)
+        )
+    )
+
+
+def test_actual_supervised_preflight_retains_authored_refusal_and_original_handle(self):
+    kernel, dependencies, envelope, root = _remote_boundary("preflight_refused")
+    result = target.remote_launch(envelope, dependencies)
+    self.assertEqual("REFUSED", result["status"])
+    self.assertEqual("first_preflight", result["phase"])
+    self.assertEqual("normal_test_api_producer_candidates_unqualified", result["reason"])
+    self.assertEqual(
+        target.Handle(envelope["packet"]["operation"], "ygg-test", "ygg-test").fingerprint,
+        result["original_handle_sha256"],
+    )
+    self.assertIn(root + "/supervisor-start.json", kernel.os.files)
+    self.assertIn(root + "/failure.json", kernel.os.files)
+    self.assertNotIn(root + "/result.json", kernel.os.files)
+    self.assertFalse(result["live_acceptance"])
+    self.assertTrue(all(process.returncode is not None for process in kernel.processes))
+    self.assertTrue(
+        all(
+            stream.closed
+            for process in kernel.processes
+            for stream in (process.stdin, process.stdout, process.stderr)
+        )
+    )
+
+
+def test_temporary_first_start_is_contained_before_lost_ack_or_admission(self):
+    envelope, archive, manifest = self.installation(absent=True)
+    envelope.prepare(archive, manifest, self.h.healthy)
+    armed = []
+
+    def contain(adapter):
+        self.assertEqual("inactive", adapter.unit["ActiveState"])
+        self.assertIsNotNone(adapter.current_config)
+        self.assertFalse(any(argv == target.systemd("start") for argv in self.h.command.effects))
+        armed.append(adapter)
+
+    def lose_after_start():
+        self.assertEqual(1, len(armed))
+        raise target.Unknown("synthetic_first_start_ack_lost")
+
+    self.h.command.on_start = lose_after_start
+    with self.assertRaises(target.Unknown):
+        envelope.activate(before_start=contain)
+    self.assertEqual("active", self.h.unit["ActiveState"])
+    self.assertEqual(1, len(armed))
+    self.assertEqual(1, self.h.command.effects.count(target.systemd("start")))
+    with self.assertRaises(target.Unknown):
+        envelope.activate(before_start=contain)
+    self.assertEqual(1, self.h.command.effects.count(target.systemd("start")))
 
 
 def test_live_archive_pins_remain_independent_of_generated_portable_fixtures(self):

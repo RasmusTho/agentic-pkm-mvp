@@ -139,6 +139,8 @@ def native_entry(role: Any = None, data: Any = None, **unsupported: Any) -> Any:
         raise Refusal(UNBOUND_OFFLINE_DRAFT)
     result = native_dispatch(role, data, LinuxDependencies.standard_library())
     if role == "remote-launch":
+        if result.get("schema") == "fixed_test_probe.outcome.v1":
+            return result
         return native_completion_receipt(
             result, carrier_packet(json.dumps(data["packet"]).encode())
         )
@@ -2265,9 +2267,13 @@ class TemporaryTestInstallation:
         return self.selected
 
     @fs_guard
-    def activate(self) -> TestProbeAdapter:
+    def activate(
+        self, *, before_start: Callable[[TestProbeAdapter], None] | None = None
+    ) -> TestProbeAdapter:
         if self.state != "prepared":
             raise Refusal("temporary_activation_replay_or_out_of_order")
+        if self.caller.native_scope is not None and before_start is None:
+            raise Refusal("native_first_start_requires_independent_containment")
         self._originals()
         for name, expected in self.owned.items():
             if self._read(name, mode=expected.mode) != expected:
@@ -2301,10 +2307,18 @@ class TemporaryTestInstallation:
             or self.files.read("incident") is not None
         ):
             raise Refusal("independent_prelaunch_heartbeat_or_incident_unhealthy")
+        adapter = TestProbeAdapter(self.selected, self.caller, self.files)
+        # Qualification is read-only. The native callback arms the independent
+        # guardian before the first managed-unit start, including a lost ACK.
+        adapter.original_config = adapter.current_config = config
+        adapter.original_unit = adapter.unit = unit
+        adapter.runtime = runtime
+        adapter.cadence = int(values["PROBE_INTERVAL_SECONDS"])
+        if before_start is not None:
+            before_start(adapter)
         self.state = "start_intent"  # Never clear/retry a lost start.
         intent_usec = int(self.caller.clock() * 1_000_000)
         self.caller.run(systemd("start"), effect=True)
-        adapter = TestProbeAdapter(self.selected, self.caller, self.files)
         adapter.admit()
         if int(adapter.unit["ExecMainStartTimestampMonotonic"]) < intent_usec:
             raise Unknown("temporary_first_start_not_owned_by_original_intent")
@@ -4069,19 +4083,27 @@ def run_fixed_test_worker(
     scope, caller, files = assembly.scope, assembly.caller, assembly.files
     original = parse_unit(caller.run(systemd("show")), allow_absent=True)
     installation = None
+    guard = None
+
+    def contain_before_start(selected: TestProbeAdapter) -> None:
+        nonlocal guard
+        guard = NativeFaultGuard(assembly, selected)
+        guard.arm()
+
     if original["ActiveState"] == "active":
         adapter = TestProbeAdapter(scope.binding, caller, files)
         adapter.admit()
+        contain_before_start(adapter)
     else:
         qualification = native_installation_qualification(scope, assembly.io, original)
         installation = NativeInstallation(files, scope.binding, qualification)
         installation.prepare(archive, scope.manifest, healthy_config)
-        adapter = installation.activate()
+        adapter = installation.activate(before_start=contain_before_start)
     baseline = adapter.runtime
     if baseline is None or adapter.original_config is None:
         raise Refusal("qualified_baseline_observations_missing")
-    guard = NativeFaultGuard(assembly, adapter)
-    guard.arm()
+    if guard is None:
+        raise Unknown("independent_containment_missing_before_probe_effect")
     fault_url = adapter.reserve_fault()
     guard.fault_intent(fault_url)
     adapter.stop_owned()
@@ -4108,7 +4130,7 @@ def run_fixed_test_worker(
     result = adapter.finish_restoration()
     adapter.stop_owned()
     guard.remove_marker()
-    adapter.original_unit = parse_unit(caller.run(systemd("show")))
+    adapter.original_unit = dict(guard.before_unit)
     if installation is not None:
         result["temporary_installation"] = installation.restore_and_cleanup(already_stopped=True)
     else:
@@ -4454,6 +4476,10 @@ class NativeFaultGuard:
                 self.caller.close("guard_parent_removal", lambda: self.ops.close(parent))
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
 
+        restored = parse_unit(self.caller.run(systemd("show")))
+        if any(restored[key] != self.before_unit[key] for key in UNIT_KEYS if key not in VOLATILE):
+            raise Unknown("original_unit_profile_not_restored_after_owned_marker")
+
     def disarm(self) -> None:
         self.record["disarmed"] = True
         self.write_record()
@@ -4473,15 +4499,10 @@ class NativeFaultGuard:
         ):
             raise Unknown("watchdog_incarnation_changed_no_stop")
         self.caller.run(watchdog_stop(self.scope), effect=True)
-        after = dict(
-            line.split("=", 1)
-            for line in self.caller.run(watchdog_show(self.scope)).decode().splitlines()
-        )
-        if (
-            after.get("ActiveState") != "inactive"
-            or after.get("MainPID") != "0"
-            or self.io.cgroup(current["ControlGroup"])
-        ):
+        # The authenticated stop job is synchronous. Successful transient
+        # units may unload immediately; retain the pre-stop incarnation and
+        # prove its saved cgroup empty/removed rather than querying a new unit.
+        if self.io.cgroup(current["ControlGroup"]):
             raise Unknown("watchdog_reaping_unknown")
 
 
@@ -5688,6 +5709,172 @@ def _scope_json(scope: FrozenNativeScope, config: bytes, custody_source: str) ->
     ).encode()
 
 
+def _bootstrap_read(
+    path: str,
+    dependencies: LinuxDependencies,
+    budget: BootstrapBudget,
+    *,
+    limit: int,
+    private: bool = False,
+) -> bytes:
+    api = dependencies.os
+    budget.check()
+    descriptor = api.open(path, api.O_RDONLY | api.O_NOFOLLOW | api.O_NONBLOCK | api.O_CLOEXEC)
+    try:
+        info = api.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != 0
+            or info.st_nlink != 1
+            or (private and (info.st_gid != 0 or stat.S_IMODE(info.st_mode) != 0o600))
+        ):
+            raise Refusal("bootstrap_read_metadata_unqualified")
+        result = bytearray()
+        while True:
+            budget.check()
+            chunk = api.read(descriptor, min(65536, limit + 1 - len(result)))
+            if not chunk:
+                return bytes(result)
+            result.extend(chunk)
+            budget.check(len(chunk))
+            if len(result) > limit:
+                raise Unknown("bootstrap_read_bound")
+    finally:
+        budget.close("bootstrap_read", lambda: api.close(descriptor))
+
+
+def _bootstrap_guest(dependencies: LinuxDependencies, budget: BootstrapBudget) -> dict[str, str]:
+    """Read-only target qualification before any namespace or systemd write."""
+    guest = (
+        _bootstrap_read("/proc/sys/kernel/hostname", dependencies, budget, limit=256)
+        .decode()
+        .strip()
+    )
+    if guest != "ygg-test":
+        raise Refusal("bootstrap_guest_not_fixed_test")
+    machine = _bootstrap_read("/etc/machine-id", dependencies, budget, limit=128).decode().strip()
+    boot = (
+        _bootstrap_read("/proc/sys/kernel/random/boot_id", dependencies, budget, limit=128)
+        .decode()
+        .strip()
+        .replace("-", "")
+    )
+    if not identifier(machine) or not identifier(boot):
+        raise Refusal("bootstrap_machine_or_boot_unqualified")
+    network = dependencies.os.readlink("/proc/self/ns/net")
+    if re.fullmatch(r"net:\[[0-9]+\]", network) is None:
+        raise Refusal("bootstrap_network_namespace_unqualified")
+    budget.check()
+    return {"hostname": guest, "machine_id": machine, "boot_id": boot, "net_namespace": network}
+
+
+def _bootstrap_commands(dependencies: LinuxDependencies, source: str) -> dict[str, Any]:
+    selected = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in {
+            "OperationFailure",
+            "_bounded_process",
+            "_safe_command",
+        }:
+            selected[node.name] = (
+                "\n".join(source.splitlines()[node.lineno - 1 : node.end_lineno]) + "\n"
+            )
+    if (
+        set(selected) != {"OperationFailure", "_bounded_process", "_safe_command"}
+        or sha(selected["_bounded_process"].encode()) != CUSTODY_SHA256
+    ):
+        raise Refusal("remote_custody_program")
+    namespace = {
+        key: getattr(dependencies, key)
+        for key in ("os", "subprocess", "selectors", "signal", "time")
+    }
+    exec(
+        "from __future__ import annotations\n"
+        + "\n".join(
+            selected[key] for key in ("OperationFailure", "_bounded_process", "_safe_command")
+        ),
+        namespace,
+    )
+    return namespace
+
+
+def _failure_reason(error: BaseException) -> str:
+    reason = (
+        str(error) if isinstance(error, (Refusal, Unknown)) else "unqualified_operation_failure"
+    )
+    return (
+        reason
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", reason)
+        else "unqualified_operation_failure"
+    )
+
+
+def _failure_outcome(packet: dict[str, Any], phase: str, error: BaseException) -> dict[str, Any]:
+    return {
+        "schema": "fixed_test_probe.outcome.v1",
+        "status": "REFUSED" if isinstance(error, Refusal) else "UNKNOWN",
+        "operation": packet["operation"],
+        "original_handle_sha256": Handle(packet["operation"], "ygg-test", "ygg-test").fingerprint,
+        "phase": phase,
+        "reason": _failure_reason(error),
+        "live_acceptance": False,
+        "program_sha256": packet["program_sha256"],
+    }
+
+
+def _supervisor_start(
+    envelope: dict[str, Any], dependencies: LinuxDependencies, budget: BootstrapBudget
+) -> dict[str, str]:
+    packet = budget.packet
+    unit = "yggdrasil-test-probe-" + packet["operation"] + ".service"
+    command = _bootstrap_commands(dependencies, envelope["custody_source"])["_safe_command"]
+    raw = command(
+        [
+            "/usr/bin/systemctl",
+            "show",
+            unit,
+            "--property=Id,ActiveState,SubState,MainPID,InvocationID,ControlGroup,ExecStart,WorkingDirectory,KillMode,Restart",
+            "--no-pager",
+        ],
+        timeout=min(5.0, budget.check() - 2.1),
+        limit=16384,
+    )
+    fields = dict(line.split("=", 1) for line in raw.splitlines())
+    root = "/var/lib/ygg-test-probe-" + packet["namespace"]
+    expected = (
+        packet["bootstrap_interpreter"]
+        + " -I "
+        + root
+        + "/program.py --supervised-first-preflight "
+        + packet["operation"]
+    )
+    if (
+        fields.get("Id") != unit
+        or fields.get("ActiveState") != "active"
+        or fields.get("SubState") != "running"
+        or fields.get("MainPID") != str(dependencies.os.getpid())
+        or not identifier(fields.get("InvocationID"))
+        or fields.get("ControlGroup") != "/system.slice/" + unit
+        or fields.get("WorkingDirectory") != root
+        or fields.get("KillMode") != "control-group"
+        or fields.get("Restart") != "no"
+        or ("argv[]=" + expected + " ;") not in fields.get("ExecStart", "")
+    ):
+        raise Refusal("original_hard_supervisor_identity_unqualified")
+    identity = _bootstrap_guest(dependencies, budget)
+    if identity != envelope.get("bootstrap_identity"):
+        raise Refusal("bootstrap_guest_identity_changed_before_preflight")
+    return {
+        "operation": packet["operation"],
+        "program_sha256": packet["program_sha256"],
+        "unit": unit,
+        "invocation": fields["InvocationID"],
+        "pid": fields["MainPID"],
+        "cgroup": fields["ControlGroup"],
+        "boot_id": identity["boot_id"],
+    }
+
+
 def _decode_scope(raw: bytes) -> tuple[FrozenNativeScope, bytes, str]:
     import base64
 
@@ -5721,6 +5908,12 @@ def remote_launch(envelope: dict[str, Any], dependencies: LinuxDependencies) -> 
         or sha(manifest) != MANIFEST_SHA256
     ):
         raise Refusal("remote_reviewed_envelope_bytes")
+    try:
+        identity = _bootstrap_guest(dependencies, budget)
+    except Exception as error:
+        return _failure_outcome(packet, "bootstrap_target", error)
+    # These are observations made here, before the first privileged write.
+    envelope = dict(envelope, bootstrap_identity=identity)
     root_path = "/var/lib/ygg-test-probe-" + packet["namespace"]
     api = dependencies.os
     parent = _bootstrap_directory("/var/lib", dependencies, budget)
@@ -5753,34 +5946,7 @@ def remote_launch(envelope: dict[str, Any], dependencies: LinuxDependencies) -> 
         if root is not None:
             budget.close("remote_namespace", lambda: api.close(root))
         budget.close("remote_namespace_parent", lambda: api.close(parent))
-    # Accepted process custody is independent of the later frozen machine facts.
-    selected = {}
-    source = envelope["custody_source"]
-    for node in ast.parse(source).body:
-        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in {
-            "OperationFailure",
-            "_bounded_process",
-            "_safe_command",
-        }:
-            selected[node.name] = (
-                "\n".join(source.splitlines()[node.lineno - 1 : node.end_lineno]) + "\n"
-            )
-    if (
-        set(selected) != {"OperationFailure", "_bounded_process", "_safe_command"}
-        or sha(selected["_bounded_process"].encode()) != CUSTODY_SHA256
-    ):
-        raise Refusal("remote_custody_program")
-    namespace = {
-        key: getattr(dependencies, key)
-        for key in ("os", "subprocess", "selectors", "signal", "time")
-    }
-    exec(
-        "from __future__ import annotations\n"
-        + "\n".join(
-            selected[key] for key in ("OperationFailure", "_bounded_process", "_safe_command")
-        ),
-        namespace,
-    )
+    namespace = _bootstrap_commands(dependencies, envelope["custody_source"])
     unit = "yggdrasil-test-probe-" + packet["operation"] + ".service"
     properties = {
         "RuntimeMaxSec": str(max(1, int(budget.check() - 5))),
@@ -5819,53 +5985,96 @@ def remote_launch(envelope: dict[str, Any], dependencies: LinuxDependencies) -> 
         "--supervised-first-preflight",
         packet["operation"],
     ]
-    namespace["_safe_command"](argv, timeout=budget.check() - 2.1, limit=131072, effect=True)
-    # Read once after --wait. No polling a live original supervisor handle.
-    raw = namespace["_safe_command"](
-        [
-            "/usr/bin/systemctl",
-            "show",
-            unit,
-            "--property=ActiveState,SubState,MainPID,Job,ControlGroup,InvocationID",
-            "--no-pager",
-        ],
-        timeout=min(5, budget.check() - 2.1),
-        limit=16384,
+    completed = namespace["_bounded_process"](
+        argv,
+        timeout=budget.check() - 2.1,
+        limit=131072,
+        environment={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"},
     )
-    fields = dict(line.split("=", 1) for line in raw.splitlines())
-    if (
-        fields.get("ActiveState") != "inactive"
-        or fields.get("MainPID") != "0"
-        or fields.get("Job") not in {"", "0"}
-    ):
-        raise Unknown("original_supervisor_reap_unconfirmed")
-    group = fields.get("ControlGroup", "")
-    if group:
-        descriptor = api.open(
-            "/sys/fs/cgroup" + group + "/cgroup.procs",
-            api.O_RDONLY | api.O_NOFOLLOW | api.O_CLOEXEC,
-        )
-        try:
-            if api.read(descriptor, 16385).strip():
-                raise Unknown("original_supervisor_cgroup_not_empty")
-        finally:
-            budget.close("supervisor_cgroup", lambda: api.close(descriptor))
-    result_file = api.open(
-        root_path + "/result.json", api.O_RDONLY | api.O_NOFOLLOW | api.O_CLOEXEC
-    )
+    # --wait authenticates termination of this original job. Its successful
+    # transient unit can already be unloaded, so use the incarnation captured
+    # by that worker before discovery/SDK exec instead of post-exit show.
+    root = _bootstrap_directory(root_path, dependencies, budget)
     try:
-        result = json.loads(api.read(result_file, 131073), object_pairs_hook=unique)
+
+        def read_json(name: str) -> tuple[dict[str, Any] | None, bytes]:
+            try:
+                raw = _bootstrap_read(
+                    root_path + "/" + name, dependencies, budget, limit=131072, private=True
+                )
+            except FileNotFoundError:
+                return None, b""
+            try:
+                value = json.loads(raw, object_pairs_hook=unique)
+            except (ValueError, TypeError, UnicodeError):
+                raise Unknown("original_outcome_json_unqualified") from None
+            if not isinstance(value, dict):
+                raise Unknown("original_outcome_shape_unqualified")
+            return value, raw
+
+        failure, _ = read_json("failure.json")
+        started, started_raw = read_json("supervisor-start.json")
+        if failure is not None:
+            if (
+                failure.get("schema") != "fixed_test_probe.outcome.v1"
+                or failure.get("status") not in {"REFUSED", "UNKNOWN"}
+                or failure.get("operation") != packet["operation"]
+                or failure.get("program_sha256") != packet["program_sha256"]
+                or failure.get("original_handle_sha256")
+                != Handle(packet["operation"], "ygg-test", "ygg-test").fingerprint
+                or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", failure.get("reason", "")) is None
+                or failure.get("phase") not in {"first_preflight", "qualified_worker"}
+                or completed.returncode != 78
+            ):
+                raise Unknown("original_failure_evidence_unqualified")
+        if started is None:
+            if failure is not None:
+                budget.check()
+                return failure
+            raise Unknown("original_supervisor_start_evidence_missing")
+        if (
+            started.get("operation") != packet["operation"]
+            or started.get("program_sha256") != packet["program_sha256"]
+            or started.get("unit") != unit
+            or not identifier(started.get("invocation"))
+            or started.get("boot_id") != identity["boot_id"]
+            or started.get("cgroup") != "/system.slice/" + unit
+            or not str(started.get("pid", "")).isdigit()
+            or _bootstrap_guest(dependencies, budget) != identity
+        ):
+            raise Unknown("original_supervisor_start_evidence_unqualified")
+        try:
+            members = _bootstrap_read(
+                "/sys/fs/cgroup" + started["cgroup"] + "/cgroup.procs",
+                dependencies,
+                budget,
+                limit=16384,
+            )
+        except FileNotFoundError:
+            members = b""
+        if members.strip():
+            raise Unknown("original_supervisor_cgroup_not_empty")
+        if failure is not None:
+            budget.check()
+            return failure
+        result, _ = read_json("result.json")
+        if completed.returncode != 0 or completed.stdout or completed.stderr or result is None:
+            raise Unknown("original_supervisor_completion_unqualified")
+        if result.get("operation") != packet["operation"]:
+            raise Unknown("original_result_handle_changed")
+        result["supervisor"] = {
+            "reaped": True,
+            "cgroup_empty": True,
+            "unit": unit,
+            "invocation": started["invocation"],
+            "manager_exit_code": completed.returncode,
+            "start_record_sha256": sha(started_raw),
+        }
+        budget.check()
+        return result
     finally:
-        budget.close("operation_result", lambda: api.close(result_file))
-    if result.get("operation") != packet["operation"]:
-        raise Unknown("original_result_handle_changed")
-    result["supervisor"] = {
-        "reaped": True,
-        "cgroup_empty": True,
-        "unit": unit,
-        "invocation": fields.get("InvocationID"),
-    }
-    return result
+        budget.close("original_outcome_root", lambda: api.close(root))
+        budget.check()
 
 
 def native_completion_receipt(result: dict[str, Any], packet: dict[str, Any]) -> dict[str, Any]:
@@ -5892,7 +6101,9 @@ def native_completion_receipt(result: dict[str, Any], packet: dict[str, Any]) ->
         or not identifier(result.get("qualified_interpreter_sha256"), 64)
         or supervisor.get("reaped") is not True
         or supervisor.get("cgroup_empty") is not True
+        or supervisor.get("manager_exit_code") != 0
         or not identifier(supervisor.get("invocation"))
+        or not identifier(supervisor.get("start_record_sha256"), 64)
         or baseline.get("readyz_status") != 200
         or baseline.get("required_ok") is not True
         or baseline.get("source_manifest_sha256") != MANIFEST_SHA256
@@ -5955,6 +6166,22 @@ def supervised_first_preflight(envelope: dict[str, Any], dependencies: LinuxDepe
 
     packet = carrier_packet(json.dumps(envelope["packet"]).encode())
     budget = BootstrapBudget(packet, dependencies)
+    original = _supervisor_start(envelope, dependencies, budget)
+    root = _bootstrap_directory(
+        "/var/lib/ygg-test-probe-" + packet["namespace"], dependencies, budget
+    )
+    try:
+        _write_bootstrap_file(
+            root,
+            "supervisor-start.json",
+            json.dumps(original, sort_keys=True, separators=(",", ":")).encode(),
+            dependencies,
+            budget,
+        )
+        dependencies.os.fsync(root)
+    finally:
+        budget.close("supervisor_start_record", lambda: dependencies.os.close(root))
+    budget.check()
     archive = base64.b64decode(envelope["archive"], validate=True)
     manifest = base64.b64decode(envelope["manifest"], validate=True)
     source, _ = exact_source(archive, manifest, budget)
@@ -5963,6 +6190,11 @@ def supervised_first_preflight(envelope: dict[str, Any], dependencies: LinuxDepe
         envelope["custody_source"],
         deadline=dependencies.time.monotonic() + budget.check() - 2.1,
     )
+    if any(
+        facts[key] != envelope["bootstrap_identity"][key]
+        for key in ("hostname", "machine_id", "boot_id", "net_namespace")
+    ):
+        raise Refusal("bootstrap_target_changed_during_first_preflight")
     scope, config = scope_from_first_preflight(
         packet,
         facts,
@@ -6008,6 +6240,28 @@ def qualified_test_worker(root_path: str, dependencies: LinuxDependencies) -> di
         scope, config, custody = _decode_scope(api.read(descriptor, 1048577))
     finally:
         api.close(descriptor)
+    budget = BootstrapBudget(
+        {
+            "_start_epoch": dependencies.time.time() - 1,
+            "_end_epoch": dependencies.time.time()
+            + scope.binding.window_end
+            - dependencies.time.monotonic(),
+        },
+        dependencies,
+    )
+    original = json.loads(
+        _bootstrap_read(
+            root_path + "/supervisor-start.json", dependencies, budget, limit=16384, private=True
+        ),
+        object_pairs_hook=unique,
+    )
+    if (
+        original.get("pid") != str(api.getpid())
+        or original.get("operation") != scope.handle.operation
+        or original.get("boot_id") != scope.binding.boot_id
+        or original.get("program_sha256") != scope.program_sha256
+    ):
+        raise Refusal("qualified_worker_not_original_supervised_process")
     assembly = assemble_native(scope, dependencies, custody)
     descriptor = api.open(root_path + "/source.tar", api.O_RDONLY | api.O_NOFOLLOW | api.O_CLOEXEC)
     try:
@@ -6063,6 +6317,54 @@ def native_dispatch(role: str, data: Any, dependencies: LinuxDependencies) -> An
     if role == "cli":
         return enabled_cli_dispatch(data, dependencies)
     raise Refusal("unsupported_fixed_test_dispatch_role")
+
+
+def retain_worker_failure(args: Any, error: BaseException, dependencies: LinuxDependencies) -> None:
+    """Persist one bounded authored outcome before a supervised worker exits."""
+    requested = (
+        args.supervised_first_preflight or args.qualified_test_worker or args.fixed_test_worker
+    )
+    if not requested:
+        return
+    root_path = str(Path(__file__).resolve().parent)
+    if re.fullmatch(r"/var/lib/ygg-test-probe-[0-9a-f]{32}", root_path) is None:
+        return
+    probe_budget = BootstrapBudget(
+        {"_start_epoch": dependencies.time.time() - 1, "_end_epoch": dependencies.time.time() + 5},
+        dependencies,
+    )
+    root = _bootstrap_directory(root_path, dependencies, probe_budget)
+    try:
+        envelope = json.loads(
+            _bootstrap_read(
+                root_path + "/carrier-envelope.json",
+                dependencies,
+                probe_budget,
+                limit=4194304,
+                private=True,
+            ),
+            object_pairs_hook=unique,
+        )
+        packet = carrier_packet(json.dumps(envelope["packet"]).encode())
+        if (
+            root_path != "/var/lib/ygg-test-probe-" + packet["namespace"]
+            or requested != packet["operation"]
+        ):
+            return
+        budget = BootstrapBudget(packet, dependencies)
+        phase = "first_preflight" if args.supervised_first_preflight else "qualified_worker"
+        outcome = _failure_outcome(packet, phase, error)
+        _write_bootstrap_file(
+            root,
+            "failure.json",
+            json.dumps(outcome, sort_keys=True, separators=(",", ":")).encode(),
+            dependencies,
+            budget,
+        )
+        dependencies.os.fsync(root)
+    finally:
+        probe_budget.close("failure_outcome_root", lambda: dependencies.os.close(root))
+        probe_budget.check()
 
 
 def enabled_cli_dispatch(args: Any, dependencies: LinuxDependencies) -> Any:
@@ -6159,9 +6461,25 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     # Native dispatch creates its own actual platform ports and validates the
     # complete claimed caller or original private remote namespace.
-    result = native_entry("cli", args)
+    try:
+        result = native_entry("cli", args)
+    except Exception as error:
+        try:
+            retain_worker_failure(args, error, LinuxDependencies.standard_library())
+        except Exception:
+            # A lost write/close is not evidence. The supervisor still exits
+            # nonzero and the original caller retains UNKNOWN.
+            pass
+        raise
     if isinstance(result, bytes):
-        print(result.decode("utf-8"))
+        value = json.loads(result, object_pairs_hook=unique)
+        if not isinstance(value, dict) or value.get("schema") not in {
+            "probe_test_outage_recovery.v1",
+            "fixed_test_probe.outcome.v1",
+        }:
+            raise Unknown("original_remote_outcome_schema_unqualified")
+        print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+        return 0 if value.get("status") == "PASS" and value.get("live_acceptance") is True else 78
     return 0
 
 
@@ -6174,7 +6492,7 @@ if __name__ == "__main__":
             json.dumps(
                 {
                     "status": "UNKNOWN" if isinstance(error, Unknown) else "REFUSED",
-                    "reason": str(error),
+                    "reason": _failure_reason(error),
                 }
             )
         )
