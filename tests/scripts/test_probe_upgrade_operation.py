@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import io
 import json
@@ -1528,6 +1529,128 @@ def test_streaming_bound_and_deadline_reap_actual_private_children(tmp_path):
             environment={},
         )
     assert time.monotonic() - before < 4
+
+
+@pytest.fixture
+def bounded_process_resources(monkeypatch):
+    """Track real private resources, with fallback cleanup after test assertions."""
+    real_popen = subprocess.Popen
+    real_selector = operation.selectors.DefaultSelector
+    resources = SimpleNamespace(processes=[], selectors=[], on_spawn=None)
+
+    def spawn(argv, **kwargs):
+        process = real_popen(argv, **kwargs)
+        resources.processes.append(process)
+        if resources.on_spawn is not None:
+            resources.on_spawn(process)
+        return process
+
+    def selector():
+        result = real_selector()
+        resources.selectors.append(result)
+        return result
+
+    resources.spawn = spawn
+    monkeypatch.setattr(operation.subprocess, "Popen", spawn)
+    monkeypatch.setattr(operation.selectors, "DefaultSelector", selector)
+    try:
+        yield resources
+    finally:
+        for process in resources.processes:
+            if process.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=2)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+        for allocated in resources.selectors:
+            allocated.close()
+
+
+def assert_bounded_process_resources_closed(resources):
+    for process in resources.processes:
+        assert process.returncode is not None, "owned child was not reaped by helper"
+        assert all(stream.closed for stream in (process.stdin, process.stdout, process.stderr))
+        with pytest.raises(ChildProcessError):
+            os.waitpid(process.pid, os.WNOHANG)
+    assert all(allocated.get_map() is None for allocated in resources.selectors)
+
+
+def test_bounded_process_selector_setup_failure_reaps_owned_resources(
+    monkeypatch, bounded_process_resources
+):
+    resources = bounded_process_resources
+    selector_calls = []
+
+    def private_child(argv, **kwargs):
+        assert argv[0] == "/usr/bin/ssh"
+        kwargs["env"] = {}
+        return resources.spawn(
+            [sys.executable, "-I", "-c", "import sys;sys.stdin.buffer.read()"], **kwargs
+        )
+
+    def allocation_failure():
+        selector_calls.append(True)
+        raise OSError(errno.EMFILE, "injected selector allocation failure")
+
+    monkeypatch.setattr(operation.subprocess, "Popen", private_child)
+    monkeypatch.setattr(operation.selectors, "DefaultSelector", allocation_failure)
+    with pytest.raises(carrier.CarrierUnknown, match="transport unavailable or unknown"):
+        carrier._ssh(b"private test input")
+    assert selector_calls == [True]
+    assert len(resources.processes) <= 1
+    assert_bounded_process_resources_closed(resources)
+
+
+@pytest.mark.parametrize("boundary", ["success", "deadline", "output", "descriptor", "blocking"])
+def test_bounded_process_failure_boundaries_preserve_cleanup(
+    boundary, monkeypatch, bounded_process_resources
+):
+    resources = bounded_process_resources
+    input_bytes = b"input" * 20_000
+    script = (
+        "import os,sys;data=sys.stdin.buffer.read();"
+        "sys.stdout.buffer.write(os.environ['PROBE_TEST'].encode()+b':'+data);"
+        "sys.stderr.buffer.write(b'err');sys.exit(7)"
+    )
+    timeout, limit = 5, len(input_bytes) + 64
+    expected = None
+    if boundary == "deadline":
+        script, timeout = "import time;time.sleep(60)", 0.05
+        expected = "process_deadline"
+    elif boundary == "output":
+        script = "import os,time;os.write(1,b'x'*2048);os.write(2,b'y'*2049);time.sleep(60)"
+        limit, expected = 4096, "process_output_bound"
+    elif boundary in {"descriptor", "blocking"}:
+        def setup_failure(*args):
+            raise OSError(errno.EBADF, "injected stream setup failure")
+
+        if boundary == "descriptor":
+            resources.on_spawn = lambda process: monkeypatch.setattr(
+                process.stdin, "fileno", setup_failure
+            )
+        else:
+            monkeypatch.setattr(operation.os, "set_blocking", setup_failure)
+
+    argv = [sys.executable, "-I", "-c", script]
+    arguments = dict(
+        timeout=timeout, limit=limit, environment={"PROBE_TEST": "kept"}, input_bytes=input_bytes
+    )
+    if boundary in {"descriptor", "blocking"}:
+        with pytest.raises(OSError, match="injected stream setup failure") as failure:
+            operation._bounded_process(argv, **arguments)
+        assert failure.value.errno == errno.EBADF
+    elif expected is not None:
+        with pytest.raises(operation.OperationFailure, match=expected) as failure:
+            operation._bounded_process(argv, **arguments)
+        assert failure.value.unknown is True
+    else:
+        result = operation._bounded_process(argv, **arguments)
+        assert result.args == argv and result.returncode == 7
+        assert result.stdout == b"kept:" + input_bytes and result.stderr == b"err"
+    assert len(resources.processes) == 1
+    assert_bounded_process_resources_closed(resources)
 
 
 def test_supervisor_original_handle_cross_id_guard_and_no_prepare_replay(host):
