@@ -725,12 +725,49 @@ class Runtime:
 
 def systemd(action: str) -> tuple[str, ...]:
     if action == "show":
-        return "/usr/bin/systemctl", "show", UNIT, "--property=" + ",".join(UNIT_KEYS), "--no-pager"
+        return (
+            "/usr/bin/systemctl",
+            "show",
+            UNIT,
+            "--property=" + ",".join(UNIT_KEYS),
+            "--all",
+            "--no-pager",
+        )
     if action in {"stop", "start"}:
         return "/usr/bin/systemctl", action, UNIT, "--no-pager"
     if action == "reload_for_temporary_test":
         return "/usr/bin/systemctl", "daemon-reload"
     raise Refusal("outside_fixed_test_service_operations")
+
+
+def systemctl_fields(raw: bytes | str, keys: tuple[str, ...]) -> dict[str, str]:
+    """Decode our exact --all property projection, including empty arrays.
+
+    systemctl-show's EnvironmentFiles/Exec* structure-array printers emit one
+    line per element and no line for an empty array, even with --all. Only
+    those fixed array properties have an implicit empty representation; every
+    scalar/string/list property must be present. Nonempty duplicate array
+    entries remain unsupported rather than being silently overwritten.
+    """
+    fields: dict[str, str] = {}
+    try:
+        for line in (raw.decode("utf-8") if isinstance(raw, bytes) else raw).splitlines():
+            key, separator, value = line.partition("=")
+            if (
+                not separator
+                or key not in keys
+                or key in fields
+                or any(ord(char) < 32 for char in value)
+            ):
+                raise ValueError()
+            fields[key] = value
+    except (ValueError, UnicodeError):
+        raise Refusal("unit_metadata_shape_or_duplicate") from None
+    for key in {"EnvironmentFiles", "ExecStart", "ExecStop", "ExecStopPost"}.intersection(keys):
+        fields.setdefault(key, "")
+    if set(fields) != set(keys):
+        raise Refusal("unit_metadata_missing_property")
+    return fields
 
 
 def configured_exec(raw: str) -> tuple[tuple[tuple[str, str], ...], ...]:
@@ -823,21 +860,8 @@ def parse_unit(
     allow_restarts: bool = False,
     cleanup_states: bool = False,
 ) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    try:
-        for line in raw.decode("utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if (
-                not separator
-                or key not in UNIT_KEYS
-                or key in fields
-                or any(ord(char) < 32 for char in value)
-            ):
-                raise ValueError()
-            fields[key] = value
-    except (ValueError, UnicodeError):
-        raise Refusal("unit_metadata_shape_or_duplicate") from None
-    if set(fields) != set(UNIT_KEYS) or fields["Id"] != UNIT or fields["Names"].split() != [UNIT]:
+    fields = systemctl_fields(raw, UNIT_KEYS)
+    if fields["Id"] != UNIT or fields["Names"].split() != [UNIT]:
         raise Refusal("unit_metadata_missing_aliased_or_wrong_channel")
     if allow_absent and fields["LoadState"] == "not-found":
         if (
@@ -4450,7 +4474,8 @@ def watchdog_show(scope: FrozenNativeScope) -> tuple[str, ...]:
         "/usr/bin/systemctl",
         "show",
         watchdog_unit(scope),
-        "--property=ActiveState,SubState,MainPID,InvocationID,ControlGroup,ExecStart,ExecMainStartTimestampMonotonic,Job",
+        "--property=" + ",".join(WATCHDOG_SHOW_KEYS),
+        "--all",
         "--no-pager",
     )
 
@@ -4474,6 +4499,26 @@ SUPERVISOR_PROFILE_KEYS = (
     "FinalKillSignal",
     "TimeoutStopFailureMode",
 )
+SUPERVISOR_SHOW_KEYS = (
+    "Id",
+    "ActiveState",
+    "SubState",
+    "MainPID",
+    "InvocationID",
+    "ControlGroup",
+    "Job",
+    *SUPERVISOR_PROFILE_KEYS,
+)
+WATCHDOG_SHOW_KEYS = (
+    "ActiveState",
+    "SubState",
+    "MainPID",
+    "InvocationID",
+    "ControlGroup",
+    "ExecStart",
+    "ExecMainStartTimestampMonotonic",
+    "Job",
+)
 
 
 def supervisor_show(operation: str) -> tuple[str, ...]:
@@ -4481,19 +4526,8 @@ def supervisor_show(operation: str) -> tuple[str, ...]:
         "/usr/bin/systemctl",
         "show",
         "yggdrasil-test-probe-" + operation + ".service",
-        "--property="
-        + ",".join(
-            (
-                "Id",
-                "ActiveState",
-                "SubState",
-                "MainPID",
-                "InvocationID",
-                "ControlGroup",
-                "Job",
-                *SUPERVISOR_PROFILE_KEYS,
-            )
-        ),
+        "--property=" + ",".join(SUPERVISOR_SHOW_KEYS),
+        "--all",
         "--no-pager",
     )
 
@@ -4549,9 +4583,8 @@ def quiesce_original_supervisor(assembly: NativeAssembly, record: dict[str, Any]
     unit_name = saved["unit"]
     group = saved["cgroup"]
     if io_port.cgroup(group):
-        current = dict(
-            line.split("=", 1)
-            for line in caller.run(supervisor_show(scope.handle.operation)).decode().splitlines()
+        current = systemctl_fields(
+            caller.run(supervisor_show(scope.handle.operation)), SUPERVISOR_SHOW_KEYS
         )
         if (
             current.get("Id") != unit_name
@@ -4728,7 +4761,7 @@ class NativeFaultGuard:
         self.write_record()
         self.caller.run(watchdog_command(self.scope), effect=True)
         raw = self.caller.run(watchdog_show(self.scope))
-        self.guardian = dict(line.split("=", 1) for line in raw.decode().splitlines())
+        self.guardian = systemctl_fields(raw, WATCHDOG_SHOW_KEYS)
         expected = (
             self.scope.binding.sdk
             + " -I "
@@ -4828,10 +4861,7 @@ class NativeFaultGuard:
     def disarm(self) -> None:
         self.record["disarmed"] = True
         self.write_record()
-        current = dict(
-            line.split("=", 1)
-            for line in self.caller.run(watchdog_show(self.scope)).decode().splitlines()
-        )
+        current = systemctl_fields(self.caller.run(watchdog_show(self.scope)), WATCHDOG_SHOW_KEYS)
         if any(
             current.get(key) != self.guardian.get(key)
             for key in (
@@ -5506,11 +5536,12 @@ def supervise_fixed_native_worker(scope: FrozenNativeScope, caller: Caller) -> d
         "show",
         "yggdrasil-test-probe-" + scope.handle.operation + ".service",
         "--property=ActiveState,SubState,MainPID,InvocationID,ControlGroup,Transient,Restart,KillMode,RuntimeMaxUSec,TimeoutStopUSec,ExecStart,WorkingDirectory",
+        "--all",
         "--no-pager",
     )
     raw = caller.command.safe(list(argv), timeout=min(5.0, caller.check() - 2.1), limit=16384)
     caller.check(len(raw.encode()))
-    fields = dict(line.split("=", 1) for line in raw.splitlines())
+    fields = systemctl_fields(raw, tuple(argv[3].removeprefix("--property=").split(",")))
     expected_argv = (
         scope.binding.sdk
         + " -I "
@@ -6317,7 +6348,7 @@ def _supervisor_start(
         timeout=min(5.0, budget.check() - 2.1),
         limit=16384,
     )
-    fields = dict(line.split("=", 1) for line in raw.splitlines())
+    fields = systemctl_fields(raw, SUPERVISOR_SHOW_KEYS)
     root = "/var/lib/ygg-test-probe-" + packet["namespace"]
     expected = (
         packet["bootstrap_interpreter"]

@@ -1546,6 +1546,19 @@ class NativeSelector:
         self.closed = True
 
 
+def manager_show(argv, fields):
+    """Real show projection: empty structure arrays emit no line, even --all."""
+    keys = next(
+        arg.removeprefix("--property=") for arg in argv if arg.startswith("--property=")
+    ).split(",")
+    arrays = {"EnvironmentFiles", "ExecStart", "ExecStop", "ExecStopPost"}
+    return "".join(
+        key + "=" + fields[key] + "\n"
+        for key in keys
+        if key in fields and (fields[key] or key not in arrays and "--all" in argv)
+    ).encode()
+
+
 class NativeKernel:
     def __init__(self, h):
         self.h, self.clock, self.processes, self.reaped, self.killed, self.selectors = (
@@ -1953,9 +1966,7 @@ class NativeKernel:
             )
             return b""
         if argv == target.supervisor_show(self.scope.handle.operation):
-            return "".join(
-                key + "=" + value + "\n" for key, value in self.supervisor.items()
-            ).encode()
+            return manager_show(argv, self.supervisor)
         if argv == target.supervisor_stop(self.scope):
             self.supervisor.update(ActiveState="inactive", MainPID="0", Job="")
             self.os.files["/sys/fs/cgroup" + self.supervisor["ControlGroup"] + "/cgroup.procs"] = (
@@ -1996,9 +2007,9 @@ class NativeKernel:
                 + self.scope.handle.operation
                 + " ; ignore_errors=no ; }",
             }
-            return "".join(key + "=" + value + "\n" for key, value in fields.items()).encode()
+            return manager_show(argv, fields)
         if argv == target.systemd("show"):
-            return "".join(key + "=" + self.unit[key] + "\n" for key in target.UNIT_KEYS).encode()
+            return manager_show(argv, self.unit)
         if argv == target.systemd("stop"):
             self.unit.update(
                 ActiveState="inactive",
@@ -2884,6 +2895,7 @@ def _remote_boundary(outcome, *, guest="ygg-test"):
                 "MainPID": "999",
                 "InvocationID": started["invocation"],
                 "ControlGroup": started["cgroup"],
+                "Job": "",
                 "ExecStart": "{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -I "
                 + root
                 + "/program.py --supervised-first-preflight "
@@ -2902,7 +2914,7 @@ def _remote_boundary(outcome, *, guest="ygg-test"):
                 "FinalKillSignal": "9",
                 "TimeoutStopFailureMode": "terminate",
             }
-            return "".join(key + "=" + value + "\n" for key, value in fields.items()).encode()
+            return manager_show(argv, fields)
         if argv[0] == "/usr/bin/docker":
             return b""  # Actual bounded discovery rejects zero API candidates.
         raise AssertionError("unrecognized fake external boundary")
@@ -3048,6 +3060,242 @@ def test_actual_first_preflight_does_not_require_an_unused_canonical_config_pare
                 self.assertNotIn(root + "/failure.json", kernel.os.files)
             self.assertEqual(config_parent_present, "/etc/yggdrasil/host-probe" in kernel.os.meta)
             self.assertNotIn(root + "/result.json", kernel.os.files)
+
+
+def test_cold_four_file_bootstrap_reaches_observed_sdk_without_preseeded_source(self):
+    from datetime import datetime, timezone
+
+    class SDKHandoff(BaseException):
+        pass
+
+    kernel = NativeKernel(self.h)
+    _, _, envelope, _ = _remote_boundary("unused")
+    packet, root = envelope["packet"], kernel.scope.root
+    packet.update(
+        namespace=kernel.scope.namespace,
+        window_start_utc=datetime.fromtimestamp(kernel.clock.epoch - 1, timezone.utc).isoformat(),
+        window_end_utc=datetime.fromtimestamp(kernel.clock.epoch + 1799, timezone.utc).isoformat(),
+    )
+    # Remove every fixture-provided operation/source/config artifact. The real
+    # launcher must create exactly its four initial leaves before its first CLI.
+    for path in list(kernel.os.meta):
+        if any(
+            path == prefix or path.startswith(prefix + "/")
+            for prefix in (
+                root,
+                kernel.scope.binding.package,
+                "/etc/yggdrasil/host-probe",
+            )
+        ):
+            kernel.os.meta.pop(path)
+            kernel.os.files.pop(path, None)
+    kernel.unit.update(
+        LoadState="not-found",
+        ActiveState="inactive",
+        SubState="dead",
+        MainPID="0",
+        UnitFileState="",
+        FragmentPath="",
+        DropInPaths="",
+        Job="",
+        InvocationID="",
+        ControlGroup="",
+        WorkingDirectory="",
+        EnvironmentFiles="",
+        ExecStart="",
+        ExecStop="",
+        ExecStopPost="",
+        Type="",
+        Environment="",
+    )
+    kernel.os.path.realpath = lambda path: (
+        kernel.scope.binding.sdk_realpath if path == kernel.scope.binding.sdk else path
+    )
+    api = {
+        "id": "a" * 64,
+        "image_id": "sha256:" + "c" * 64,
+        "revision": "f" * 40,
+        "pid": 808,
+        "project": "observed-test-project",
+        "service": "api",
+        "channel": "test",
+        "ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "47777"}]},
+        "mounts": [],
+    }
+    worker = dict(
+        api,
+        id="b" * 64,
+        pid=707,
+        service="worker",
+        ports={},
+        heartbeat="/runtime/producer.json",
+        mounts=[{"Source": "/var/lib/actual-backing", "Destination": "/runtime"}],
+    )
+    response, actual_path, calls, handoffs = kernel.response, Path, [], []
+
+    def namespace_path(value):
+        if str(value) == root + "/program.py":
+            return SimpleNamespace(resolve=lambda: SimpleNamespace(parent=root))
+        return actual_path(value)
+
+    def execve(executable, argv, environment):
+        # The SDK handoff is the first executable after the bootstrap CLI;
+        # source extraction belongs to the qualified worker and is not assumed.
+        scope, config, custody = target._decode_scope(kernel.os.files[root + "/native-input.json"])
+        self.assertEqual(kernel.scope.binding.sdk, executable)
+        self.assertEqual(
+            [
+                executable,
+                "-I",
+                root + "/program.py",
+                "--qualified-test-worker",
+                packet["operation"],
+            ],
+            argv,
+        )
+        self.assertEqual({"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}, environment)
+        self.assertEqual(root + "/source", scope.binding.package)
+        self.assertNotIn(scope.binding.package, kernel.os.meta)
+        self.assertEqual(scope.request_bytes, kernel.os.files[root + "/request.json"])
+        self.assertEqual(
+            packet["program_sha256"], target.sha(kernel.os.files[root + "/program.py"])
+        )
+        self.assertEqual(scope.binding.sdk_realpath, kernel.scope.binding.sdk_realpath)
+        self.assertEqual("http://127.0.0.1:47777", target.parse_config(config)["PROBE_BASE_URL"])
+        self.assertEqual(envelope["custody_source"], custody)
+        started = json.loads(kernel.os.files[root + "/supervisor-start.json"])
+        self.assertEqual("999", started["pid"])
+        self.assertEqual(5, target.finite_stop_seconds(started["profile"]))
+        self.assertEqual("", started["profile"]["ExecStop"])
+        handoffs.append(scope)
+        raise SDKHandoff()
+
+    def ports(argv, payload):
+        calls.append(argv)
+        if argv[0] == "/usr/bin/systemd-run":
+            self.assertEqual(
+                {
+                    root + "/" + name
+                    for name in (
+                        "program.py",
+                        "source.tar",
+                        "manifest.json",
+                        "carrier-envelope.json",
+                    )
+                },
+                {path for path in kernel.os.files if path.startswith(root + "/")},
+            )
+            self.assertIn("--property=WorkingDirectory=" + root, argv)
+            self.assertTrue(stat.S_ISDIR(kernel.os.meta[root].st_mode))
+            self.assertEqual(
+                (
+                    "/usr/bin/python3",
+                    "-I",
+                    root + "/program.py",
+                    "--supervised-first-preflight",
+                    packet["operation"],
+                ),
+                argv[-5:],
+            )
+            with (
+                patch.object(target, "__file__", root + "/program.py"),
+                patch.object(target, "Path", side_effect=namespace_path),
+                patch.object(
+                    target.LinuxDependencies, "standard_library", return_value=kernel.dependencies
+                ),
+            ):
+                target.main(["--supervised-first-preflight", packet["operation"]])
+            raise AssertionError("first preflight must exec the qualified SDK")
+        if argv[:2] == ("/usr/bin/docker", "ps"):
+            return (
+                "b" * 12 if "label=com.docker.compose.service=worker" in argv else "a" * 12
+            ).encode() + b"\n"
+        if argv[:2] == ("/usr/bin/docker", "inspect"):
+            return json.dumps(worker if argv[-1].startswith("b") else api).encode()
+        return response(argv, payload)
+
+    kernel.response, kernel.os.execve = ports, execve
+    with self.assertRaises(SDKHandoff):
+        target.remote_launch(envelope, kernel.dependencies)
+    self.assertEqual(1, len(handoffs))
+    self.assertFalse(
+        any(
+            path.endswith(("failure.json", "result.json", "watchdog.json"))
+            for path in kernel.os.files
+            if path.startswith(root + "/")
+        )
+    )
+    self.assertFalse(
+        any(argv in {target.systemd("start"), target.systemd("stop")} for argv in calls)
+    )
+    self.assertTrue(all(not kernel.os.fds and selector.closed for selector in kernel.selectors))
+    self.assertTrue(
+        all(
+            stream.closed
+            for process in kernel.processes
+            for stream in (process.stdin, process.stdout, process.stderr)
+        )
+    )
+    self.assertFalse(
+        any(
+            path == kernel.scope.credential_source or path.endswith("secret-runtime.env")
+            for path in kernel.os.opened
+        )
+    )
+
+
+def test_show_projection_keeps_scalar_and_nonempty_command_failures_closed(self):
+    for change in (
+        "missing_timeout",
+        "duplicate",
+        "unknown",
+        "exec_stop",
+        "exec_stop_post",
+        "empty_start",
+    ):
+        with self.subTest(change=change):
+            kernel, dependencies, envelope, root = _remote_boundary("preflight_refused")
+            response = kernel.response
+
+            def broken_projection(argv, payload):
+                raw = response(argv, payload)
+                if argv[0] != "/usr/bin/systemctl":
+                    return raw
+                if change == "missing_timeout":
+                    return (
+                        b"\n".join(
+                            line
+                            for line in raw.splitlines()
+                            if not line.startswith(b"TimeoutStopUSec=")
+                        )
+                        + b"\n"
+                    )
+                if change == "duplicate":
+                    return raw + b"Restart=no\n"
+                if change == "unknown":
+                    return raw + b"UnknownProperty=0\n"
+                if change == "empty_start":
+                    return (
+                        b"\n".join(
+                            line for line in raw.splitlines() if not line.startswith(b"ExecStart=")
+                        )
+                        + b"\n"
+                    )
+                key = "ExecStop" if change == "exec_stop" else "ExecStopPost"
+                return (
+                    raw
+                    + (
+                        key + "={ path=/bin/sleep ; argv[]=/bin/sleep 999 ; ignore_errors=no ; }\n"
+                    ).encode()
+                )
+
+            kernel.response = broken_projection
+            result = target.remote_launch(envelope, dependencies)
+            self.assertEqual(("REFUSED", "first_preflight"), (result["status"], result["phase"]))
+            self.assertNotEqual("unqualified_operation_failure", result["reason"])
+            self.assertNotIn(root + "/supervisor-start.json", kernel.os.files)
+            self.assertNotIn(root + "/native-input.json", kernel.os.files)
+            self.assertFalse(any(argv[0] == "/usr/bin/docker" for argv in kernel.calls))
 
 
 def test_temporary_first_start_is_contained_before_lost_ack_or_admission(self):
