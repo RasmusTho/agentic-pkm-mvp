@@ -351,6 +351,7 @@ def test_channel_entrypoints_enforce_native_operations_admission(tmp_path, monke
     assert not principal_path.exists()
 
 
+@pytest.mark.timeout(360)
 def test_real_sdk_profiles_and_operation_parity_are_observed(tmp_path, monkeypatch):
     instance = host(tmp_path, monkeypatch)
     # Ambient proxies must not receive fixed loopback requests or carriers.
@@ -435,6 +436,7 @@ def test_authority_and_stale_cases_refuse_without_effects(tmp_path, monkeypatch,
     assert raw not in response.text and override not in response.text
 
 
+@pytest.mark.timeout(360)
 def test_recovery_preserves_original_receipts_without_replay(tmp_path, monkeypatch):
     from app.api.routes.active_context_selection import get_selection_store
     instance = host(tmp_path, monkeypatch)
@@ -568,7 +570,10 @@ def test_acceptance_receipt_binds_complete_observed_inventory(tmp_path, monkeypa
         produce_receipt(binding, observations, directory, started_at=now - 5, finished_at=now)
 
 
-@pytest.mark.parametrize("channel", ["test", "dev"])
+@pytest.mark.parametrize("channel", [
+    pytest.param("test", marks=pytest.mark.timeout(600)),
+    pytest.param("dev", marks=pytest.mark.timeout(360)),
+])
 def test_qualified_channel_commands_cover_test_and_dev(tmp_path, monkeypatch, channel):
     # Full public orchestration over original Product outcomes. Native host
     # process/network/output ports alone use a canonical temporary fixture.

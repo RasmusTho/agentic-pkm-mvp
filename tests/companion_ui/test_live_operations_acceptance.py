@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import os
+from time import sleep
 
 import pytest
 
@@ -21,6 +22,24 @@ def served_journey(tmp_path, monkeypatch):
     instance = host(tmp_path, monkeypatch)
     with runtime_http(instance) as (api, calls, _), gateway(instance) as (ui, _):
         run = journey(instance, tmp_path / "served-original", api, ui)
+        original_command, original_probe = run.command, run.native.observe
+        conflict_phase = [False]
+
+        def command(role, *args, **kwargs):
+            if role == "concurrent":
+                conflict_phase[0] = True
+            return original_command(role, *args, **kwargs)
+
+        def observe():
+            # Real remote observations can exceed the UI's 1s receipt poll.
+            # Keep that ordering deterministic without replacing a native
+            # outcome or reducing the admitted source/effect obligations.
+            if conflict_phase[0]:
+                sleep(1.25)
+            return original_probe()
+
+        monkeypatch.setattr(run, "command", command)
+        monkeypatch.setattr(run.native, "observe", observe)
         try:
             browser_journeys(run)
             yield instance, run, calls

@@ -8,7 +8,7 @@ from time import monotonic
 from urllib.parse import parse_qs, urlparse
 
 from app.ops.operations_acceptance import OperationsAcceptanceRefusal, file_hash, write_private
-from app.operations.contracts import OperationStatus
+from app.operations.contracts import OperationStatus, ReceiptStatus, SourceEffectStatus
 
 
 def browser_journeys(journey):
@@ -60,6 +60,35 @@ def browser_journeys(journey):
             if journey.bearer in json.dumps(trace):
                 raise OperationsAcceptanceRefusal("browser_trace_contains_selection_carrier")
             write_private(path, trace, create=True)
+            # This repository is public. Only finite typed facts and the
+            # private original's hash may leave the runner, never native
+            # envelopes, request bodies/identities, paths or carrier material.
+            allowed = {str(value) for value in OperationStatus} | {
+                "observed", "pending", "partial", "not_completed", "cancelled"}
+            summaries = []
+            for row in trace["responses"]:
+                body = row["response"]
+                body = body if isinstance(body, dict) else {}
+                receipt = body.get("receipt")
+                convergence = body.get("convergence")
+                receipt = receipt if isinstance(receipt, dict) else {}
+                convergence = convergence if isinstance(convergence, dict) else {}
+                status = body.get("status")
+                receipt_status = receipt.get("status")
+                effect = convergence.get("source_effect")
+                summaries.append({"http_status": row["http_status"],
+                    "native_status": status if isinstance(status, str) and status in allowed else None,
+                    "receipt_present": body.get("receipt") is not None,
+                    "receipt_status": receipt_status if isinstance(receipt_status, str)
+                        and receipt_status in {str(value) for value in ReceiptStatus} else None,
+                    "source_effect": effect if isinstance(effect, str)
+                        and effect in {str(value) for value in SourceEffectStatus} else None,
+                    "observed_after_seconds": row["observed_after_seconds"]})
+            write_private(path.with_suffix(".public.json"), {
+                "kind": "finite_browser_status_summary", "original_sha256": file_hash(path),
+                "responses": summaries, "visible_runtime_statuses": trace.get("visible_runtime_statuses", []),
+                "complete_original_evidence": False,
+            }, create=True)
 
         page.route("**/*", guard)
         page.on("response", observe_response)

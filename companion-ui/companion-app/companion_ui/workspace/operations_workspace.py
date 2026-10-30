@@ -122,7 +122,7 @@ def operations_workspace_script() -> str:
   // HTTP guards end at response settlement; read tokens and scope generations own presentation.
   var preparation=null, executeRequest=null, cancelRequest=null, submitted=false, timer=null;
   var generation=0, scopeEpoch=0, listEpoch=0, lastResult=null, readbackUnknown=false, freshRequired=false;
-  var readEpoch=0, pendingRead=null, effectEpoch=0, bootstrapped=false, announcedItems=new Map(), aggregateAnnouncement='';
+  var readEpoch=0, pendingRead=null, effectEpoch=0, bootstrapped=false, announcedItems=new Map(), aggregateAnnouncement='', directRefusal=null;
   function foreground() {return !root.hidden && overlayHost.topmost()==='operations';}
   function focusResults() {if(foreground())el('results').focus();}
   function effectPending() {return !!(executeRequest||cancelRequest);}
@@ -251,7 +251,7 @@ def operations_workspace_script() -> str:
     ref={id:ref.id,digest:ref.digest||undefined};
     if(!sameReference(ref)) {
       ++scopeEpoch;++generation;++listEpoch;preparation=null;++readEpoch;pendingRead=null;
-      announcedItems.clear();aggregateAnnouncement='';lastResult=null;readbackUnknown=false;freshRequired=true;
+      announcedItems.clear();aggregateAnnouncement='';lastResult=null;directRefusal=null;readbackUnknown=false;freshRequired=true;
       stopObserving();el('progress').textContent='';el('preview-region').hidden=true;el('confirm').disabled=true;
       el('results').hidden=false;message('Loading durable state for '+ref.id+'…');focusResults();
     }
@@ -318,8 +318,8 @@ def operations_workspace_script() -> str:
       'receipt identity':r.receipt_id||'not declared','receipt status':r.status||'not declared',
       'recovery action':recovery.action||'not declared','recovery instructions':recovery.instructions||'not declared'};
   }
-  function renderResult(result) {
-    var restoredRead=readbackUnknown;readbackUnknown=false;freshRequired=false;
+  function renderResult(result,originalResponse) {
+    var restoredRead=readbackUnknown&&!originalResponse;readbackUnknown=false;freshRequired=false;
     if(lastResult && json(lastResult)===json(result) && !restoredRead) {
       if(!statusFromObservation)observedMessage(aggregateAnnouncement);
       reconcileControls();observePending();return;
@@ -375,16 +375,36 @@ def operations_workspace_script() -> str:
     function current() {return epoch===readEpoch && currentScope(scope,ref) && !root.hidden;}
     try {
       var result=ref.digest?await api.inspectBatch(ref.id,ref.digest):await api.receipt(ref.id);
-      if(!current())return;renderResult(result);if(!quiet)focusResults();return result;
+      if(!current())return;directRefusal=null;renderResult(result);if(!quiet)focusResults();return result;
     } catch(error) {
-      if(!current())return;stopObserving();readbackUnknown=true;freshRequired=true;el('results').hidden=false;reconcileControls();
+      if(!current())return;
+      // A native refusal before journal reservation legitimately has no
+      // receipt. Preserve that original response only after this same-scope
+      // read confirms absence. Other read failures keep their UNKNOWN state
+      // alongside this last known original; a returned record always wins.
+      if(directRefusal && directRefusal.scope===scope && directRefusal.effect===effectEpoch &&
+          unrecordedRefusal(directRefusal.result,ref) && (!lastResult || json(lastResult)===json(directRefusal.result))) {
+        if(error.status===404) {
+          renderResult(directRefusal.result,true);if(!quiet)focusResults();return directRefusal.result;
+        }
+        if(!lastResult)renderResult(directRefusal.result,true);
+      }
+      stopObserving();readbackUnknown=true;freshRequired=true;el('results').hidden=false;reconcileControls();
       if(!lastResult){el('progress').textContent='';el('progress').append(node('p','No durable state was returned by this read. Nothing has been retried.'));}
       message('Current readback unavailable; latest progress unknown. Retained reference '+ref.id+'. '+error.message);
       if(!quiet)focusResults();
     } finally {if(pendingRead===epoch)pendingRead=null;}
   }
+  function unrecordedRefusal(result,ref) {
+    return !ref.digest && result && result.request_id===ref.id && result.receipt===null &&
+      ['rejected','conflicted','not_found','invalid','not_supported'].includes(result.status) &&
+      (result.convergence===null || (result.convergence && result.convergence.source_effect==='not_applied')) &&
+      context && result.context && result.context.active_context_ref===context.active_context_ref &&
+      String(result.context.vault_generation)===String(context.vault_generation);
+  }
   function settleMutation(scope,ref,effect,observed,result,error,label) {
     if(!currentScope(scope,ref) || effect!==effectEpoch)return;
+    if(!error && unrecordedRefusal(result,ref))directRefusal={scope:scope,effect:effect,result:clone(result)};
     if(!error && observed===readEpoch && !root.hidden) {++readEpoch;renderResult(result);return;}
     freshRequired=true;reconcileControls();
     if(error)message(label+' response unavailable; inspecting durable state. '+error.message);
@@ -423,7 +443,7 @@ def operations_workspace_script() -> str:
   el('back').onclick=function(){if(submitted)return;frozen=null;el('preview-region').hidden=true;lock(false);if(foreground())el('preview').focus();};
   el('new').onclick=safe(function(){
     if(effectPending())return;stopObserving();++scopeEpoch;++generation;++listEpoch;++effectEpoch;++readEpoch;pendingRead=null;preparation=null;
-    submitted=false;frozen=null;reference=null;lastResult=null;readbackUnknown=false;freshRequired=false;announcedItems.clear();aggregateAnnouncement='';
+    submitted=false;frozen=null;reference=null;lastResult=null;directRefusal=null;readbackUnknown=false;freshRequired=false;announcedItems.clear();aggregateAnnouncement='';
     var draftRoot=el('arguments');draftRoot.textContent='';delete draftRoot.dataset.draftContext;delete draftRoot.dataset.draftScope;
     syncReferenceURL();el('preview-region').hidden=true;el('confirm').disabled=true;el('results').hidden=true;lock(false);reconcileControls();renderResources();
     el('intent').disabled=true;el('preview').disabled=true;

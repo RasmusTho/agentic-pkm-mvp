@@ -102,8 +102,47 @@ jobs:
           name: operations-source-proof-${{ github.sha }}
           path: |
             ${{ runner.temp }}/operations-acceptance.xml
-            ${{ runner.temp }}/operations-acceptance-tmp/**/browser-actions.json
-            ${{ runner.temp }}/operations-acceptance-tmp/**/browser-actions.failure.json
+            ${{ runner.temp }}/operations-acceptance-tmp/**/browser-actions*.public.json
+          if-no-files-found: error
+
+      # #6479: retain the real no-receipt/CAS and current-read repair proof.
+      # Review this fixed inventory after acceptance, by 2026-11-20.
+      - name: Verify operations response and readback ownership
+        env:
+          STORE_BACKEND: memory
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/operations-response-ownership.xml"
+          pytest -q --junitxml="$proof" \
+            tests/companion_ui/test_operations_workspace.py::test_original_native_refusal_respects_current_receipt_and_scope \
+            tests/companion_ui/test_operations_workspace.py::test_late_mutation_response_cannot_regress_cancellation_or_change_reference \
+            tests/companion_ui/test_operations_workspace.py::test_lost_effect_response_reads_receipt_without_retry \
+            tests/companion_ui/test_operations_workspace.py::test_overlapping_mutation_ack_reads_fresh_state_before_rendering
+          python - "$proof" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          expected = {
+              "test_original_native_refusal_respects_current_receipt_and_scope[" + value + "]"
+              for value in ("missing", "transport", "unknown", "new_scope", "lost_response")
+          } | {
+              "test_late_mutation_response_cannot_regress_cancellation_or_change_reference[" + value + "]"
+              for value in ("True", "False")
+          } | {
+              "test_overlapping_mutation_ack_reads_fresh_state_before_rendering[" + value + "]"
+              for value in ("execute", "cancel")
+          } | {"test_lost_effect_response_reads_receipt_without_retry"}
+          cases = list(ET.parse(sys.argv[1]).getroot().iter("testcase"))
+          assert len(cases) == len(expected) == 10
+          assert {case.get("name") for case in cases} == expected
+          assert not any(list(case.iter(tag)) for case in cases for tag in ("skipped", "failure", "error"))
+          PY
+
+      - name: Retain operations response ownership proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operations-response-ownership-${{ github.sha }}
+          path: ${{ runner.temp }}/operations-response-ownership.xml
           if-no-files-found: error
 
       # #5958: adds missing/skip detection for the required five-case proof.

@@ -473,6 +473,21 @@ zero-skip JUnit inventory. Automation delivery in #6479 leaves the real qualifie
 run, all remaining #5340/#5329 criteria and their single post-acceptance owner-doc/State promotion
 pending on those existing contracts.
 
+The served proof includes native observation latency beyond the UI's receipt-poll interval.
+An original, same-context non-applied terminal refusal can precede journal reservation and have
+no durable receipt. It remains inspectable after same-reference 404 reads; a newer returned
+receipt or UNKNOWN outcome wins, and changed-scope responses are ignored. A failed read keeps
+its unavailable/UNKNOWN state alongside any already observed refusal. A missing original reply
+plus a missing receipt remains UNKNOWN and never permits replay. Separate browser regressions
+exercise these states with real native CAS, receipt stores and served controls.
+
+Browser failures preserve private original action/response JSON before cleanup without masking
+the primary error. These originals stay outside the vault with owner-only protections; headers,
+cookies, raw carriers and HAR are excluded. This public repository's CI artifacts contain JUnit
+and finite native/visible-status summaries plus original hashes only, without request bodies,
+identities, paths or native receipt envelopes. A public summary is not complete original evidence
+and cannot qualify deployed acceptance.
+
 Use `agent:needs-human` / `action:human-acceptance` only for a **human acceptance exception** that
 names the observable choice or observation, why it cannot be automated, the owner, and an exact
 `unblocks_when`. Put these facts in the self-sufficient **Issue body**, which readiness callers
