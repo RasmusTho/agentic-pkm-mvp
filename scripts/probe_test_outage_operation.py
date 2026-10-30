@@ -724,7 +724,11 @@ def systemd(action: str) -> tuple[str, ...]:
 
 
 def parse_unit(
-    raw: bytes, *, allow_absent: bool = False, allow_restarts: bool = False
+    raw: bytes,
+    *,
+    allow_absent: bool = False,
+    allow_restarts: bool = False,
+    cleanup_states: bool = False,
 ) -> dict[str, str]:
     fields: dict[str, str] = {}
     try:
@@ -767,7 +771,7 @@ def parse_unit(
         fields["LoadState"] != "loaded"
         or fields["UnitFileState"] not in {"enabled", "disabled", "static", "indirect"}
         or fields["NeedDaemonReload"] != "no"
-        or fields["Job"] not in {"", "0"}
+        or (not cleanup_states and fields["Job"] not in {"", "0"})
         or (
             fields["NRestarts"] != "0"
             and not (
@@ -779,6 +783,19 @@ def parse_unit(
     for key in ("MainPID", "ExecMainStartTimestampMonotonic", "InactiveEnterTimestampMonotonic"):
         if not fields[key].isascii() or not fields[key].isdigit():
             raise Refusal("unit_numeric_identity_unqualified")
+    if cleanup_states:
+        # This is decoding only. The guardian must separately prove its
+        # physical marker, exact profile/config and any live incarnation.
+        if (
+            fields["ActiveState"]
+            not in {"active", "activating", "deactivating", "reloading", "inactive", "failed"}
+            or re.fullmatch(r"[a-z][a-z-]{0,63}", fields["SubState"]) is None
+            or len(fields["Job"]) > 4096
+            or (int(fields["MainPID"]) > 0 and not identifier(fields["InvocationID"]))
+            or (fields["ControlGroup"] and fields["ControlGroup"] != "/system.slice/" + UNIT)
+        ):
+            raise Unknown("guard_unit_lifecycle_metadata_unqualified")
+        return fields
     if fields["ActiveState"] == "active":
         if (
             fields["SubState"] != "running"
@@ -4514,23 +4531,88 @@ def cleanup_owned_test_fault(assembly: NativeAssembly, record: dict[str, Any]) -
         return {"status": "disarmed", "operation": assembly.scope.handle.operation}
     caller, io_port = assembly.caller, assembly.io
     binding = Binding(**record["binding"])
-    unit = parse_unit(caller.run(systemd("show")), allow_restarts=True)
     guarded = record["guarded_unit"]
-    if any(unit[key] != guarded[key] for key in UNIT_KEYS if key not in VOLATILE):
-        raise Unknown("guard_refuses_foreign_test_profile")
-    stopped = False
-    if unit["ActiveState"] == "active":
-        assembly.runtime._sources(binding)
-        producer, values = io_port.process(unit["MainPID"], binding.boot_id)
-        actual = [
-            unit[key]
-            for key in (
-                "InvocationID",
-                "MainPID",
-                "ControlGroup",
-                "ExecMainStartTimestampMonotonic",
-            )
-        ]
+
+    def observe() -> dict[str, str]:
+        value = parse_unit(caller.run(systemd("show")), allow_restarts=True, cleanup_states=True)
+        if any(value[key] != guarded[key] for key in UNIT_KEYS if key not in VOLATILE | {"Job"}):
+            raise Unknown("guard_refuses_foreign_test_profile")
+        return value
+
+    # A queued restart has no live creator PID. Its ownership comes from the
+    # exact effective profile AND the still-owned physical operation marker,
+    # never merely from the unit name or a caller-supplied Boolean.
+    marker = "99-ygg-test-owner-" + assembly.scope.handle.operation + ".conf"
+    if record.get("marker") != marker:
+        raise Unknown("guard_marker_reference_unqualified")
+    parent = io_port.directory("/run/systemd/system/" + UNIT + ".d")
+    descriptor = None
+
+    def identity(info: Any) -> tuple[int, ...]:
+        return (
+            info.st_dev,
+            info.st_ino,
+            info.st_uid,
+            info.st_gid,
+            info.st_mode,
+            info.st_nlink,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+        )
+
+    try:
+        descriptor = io_port.os.open(
+            marker,
+            io_port.os.O_RDONLY
+            | io_port.os.O_NOFOLLOW
+            | io_port.os.O_NONBLOCK
+            | io_port.os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+        expected = tuple(record["marker_identity"])
+        body = (
+            "[Service]\nEnvironment=YGG_TEST_OPERATION=" + assembly.scope.handle.operation + "\n"
+        ).encode()
+        if (
+            identity(io_port.os.fstat(descriptor)) != expected
+            or io_port.os.read(descriptor, 257) != body
+            or identity(io_port.os.stat(marker, dir_fd=parent, follow_symlinks=False)) != expected
+        ):
+            raise Unknown("guard_refuses_unowned_physical_marker")
+    finally:
+        if descriptor is not None:
+            caller.close("guard_marker_descriptor", lambda: io_port.os.close(descriptor))
+        caller.close("guard_marker_parent", lambda: io_port.os.close(parent))
+    caller.check()
+
+    saved = dict(record["config"])
+    saved["data"] = base64.b64decode(saved["data"], validate=True)
+    original = FileState(**saved)
+    assembly.files.names["config"] = binding.config
+    current = assembly.files.read("config")
+    fault = base64.b64decode(record["fault"], validate=True) if record.get("fault") else None
+    if current.data not in {original.data, fault}:
+        raise Unknown("guard_refuses_unowned_config_delta")
+    assembly.runtime._sources(binding)
+
+    keys = ("InvocationID", "MainPID", "ControlGroup", "ExecMainStartTimestampMonotonic")
+    # One ordinary exit can race the observation while systemd schedules its
+    # 60-second retry. Re-read that bounded transition; never adopt a live
+    # foreign incarnation, and never wait for the next automatic start.
+    for _ in range(5):
+        unit = observe()
+        if unit["MainPID"] == "0":
+            again = observe()
+            if again["MainPID"] == "0":
+                unit = again
+                break
+            continue
+        try:
+            producer, values = io_port.process(unit["MainPID"], binding.boot_id)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        actual = [unit[key] for key in keys]
         owned_marker = values.get("YGG_TEST_OPERATION") == assembly.scope.handle.operation
         if not owned_marker and actual != record["preexisting_identity"]:
             raise Unknown("guard_refuses_foreign_incarnation")
@@ -4541,34 +4623,30 @@ def cleanup_owned_test_fault(assembly: NativeAssembly, record: dict[str, Any]) -
             or producer.cgroup != unit["ControlGroup"]
         ):
             raise Unknown("guard_refuses_foreign_creator")
-        again = parse_unit(caller.run(systemd("show")), allow_restarts=True)
-        if any(
-            again[key] != unit[key]
-            for key in (
-                "InvocationID",
-                "MainPID",
-                "ControlGroup",
-                "ExecMainStartTimestampMonotonic",
-            )
-        ):
-            raise Unknown("guard_identity_changed_before_stop")
+        again = observe()
+        if all(again[key] == unit[key] for key in keys):
+            unit = again
+            break
+    else:
+        raise Unknown("guard_owned_lifecycle_observation_unstable")
+    members = io_port.cgroup(unit["ControlGroup"]) if unit["ControlGroup"] else ()
+    stopped = (
+        unit["ActiveState"] != "inactive"
+        or unit["MainPID"] != "0"
+        or unit["Job"] not in {"", "0"}
+        or bool(members)
+    )
+    if stopped:
+        # stop synchronously cancels the owned queued start/restart job too.
         caller.run(systemd("stop"), effect=True)
-        stopped = True
-    after = parse_unit(caller.run(systemd("show")), allow_restarts=True)
+    after = observe()
     if (
         after["ActiveState"] != "inactive"
         or after["MainPID"] != "0"
-        or io_port.cgroup(unit["ControlGroup"])
+        or after["Job"] not in {"", "0"}
+        or (unit["ControlGroup"] and io_port.cgroup(unit["ControlGroup"]))
     ):
         raise Unknown("guard_owned_test_reap_unconfirmed")
-    saved = dict(record["config"])
-    saved["data"] = base64.b64decode(saved["data"], validate=True)
-    original = FileState(**saved)
-    assembly.files.names["config"] = binding.config
-    current = assembly.files.read("config")
-    fault = base64.b64decode(record["fault"], validate=True) if record.get("fault") else None
-    if current.data not in {original.data, fault}:
-        raise Unknown("guard_refuses_unowned_config_delta")
     if current.data != original.data:
         assembly.files.atomic_config(current, original.data, restore=original)
     return {
@@ -4609,7 +4687,7 @@ def watch_test_operation(root_path: str, dependencies: LinuxDependencies) -> dic
             ):
                 raise ProcessLookupError("original helper identity already gone")
             pidfd = dependencies.os.pidfd_open(int(record["helper_pid"]), 0)
-        except ProcessLookupError:
+        except (FileNotFoundError, ProcessLookupError):
             pidfd = None
         if pidfd is not None:
             selector = dependencies.selectors.DefaultSelector()

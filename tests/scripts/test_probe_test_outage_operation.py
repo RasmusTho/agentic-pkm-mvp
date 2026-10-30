@@ -1920,6 +1920,7 @@ class NativeKernel:
                 ActiveState="inactive",
                 SubState="dead",
                 MainPID="0",
+                Job="",
                 InactiveEnterTimestampMonotonic=str(int(self.clock.value * 1_000_000)),
             )
             self._processes()
@@ -2526,6 +2527,106 @@ def test_core_observations_cannot_satisfy_live_receipt_without_native_custody(se
     with self.assertRaisesRegex(target.Unknown, "native_completed_evidence_unqualified"):
         target.native_completion_receipt(observations, {"operation": kernel.scope.handle.operation})
     self.assertFalse(observations["live_acceptance"])
+
+
+def _armed_native_fault(self):
+    kernel, assembly = _native(self)
+    adapter = target.TestProbeAdapter(kernel.scope.binding, assembly.caller, assembly.files)
+    adapter.admit()
+    guard = target.NativeFaultGuard(assembly, adapter)
+    guard.arm()
+    url = adapter.reserve_fault()
+    guard.fault_intent(url)
+    adapter.stop_owned()
+    adapter.swap_base_url()
+    adapter.start_owned()
+    return kernel, assembly, guard
+
+
+def test_guard_contains_the_owned_systemd_lifecycle_and_cancels_queued_restarts(self):
+    rows = [
+        ("activating", "auto-restart", False, "41 /org/freedesktop/systemd1/job/41"),
+        ("activating", "start", True, "42 /org/freedesktop/systemd1/job/42"),
+        ("deactivating", "stop-sigterm", True, "43 /org/freedesktop/systemd1/job/43"),
+        ("reloading", "reload", True, "44 /org/freedesktop/systemd1/job/44"),
+        ("failed", "failed", False, ""),
+        ("inactive", "dead", False, ""),
+    ]
+    for index, (state, substate, live, job) in enumerate(rows):
+        with self.subTest(state=state, substate=substate):
+            if index:
+                self.fresh()
+            kernel, assembly, guard = _armed_native_fault(self)
+            saved_incident = (self.root / "native-incident.json").read_bytes()
+            kernel.unit.update(ActiveState=state, SubState=substate, Job=job, NRestarts="1")
+            if not live:
+                kernel.unit["MainPID"] = "0"
+                kernel._processes()
+            before = sum(process.argv == target.systemd("stop") for process in kernel.processes)
+            result = target.cleanup_owned_test_fault(assembly, guard.record)
+            self.assertEqual(
+                ("unknown", "inactive", "0", ""),
+                (
+                    result["status"],
+                    kernel.unit["ActiveState"],
+                    kernel.unit["MainPID"],
+                    kernel.unit["Job"],
+                ),
+            )
+            self.assertEqual(
+                before + int(state != "inactive"),
+                sum(process.argv == target.systemd("stop") for process in kernel.processes),
+            )
+            self.assertEqual(saved_incident, (self.root / "native-incident.json").read_bytes())
+            self.assertEqual(
+                guard.record["config"]["data"],
+                __import__("base64").b64encode(assembly.files.read("config").data).decode(),
+            )
+
+
+def test_actual_watchdog_handles_helper_death_during_automatic_restart(self):
+    kernel, assembly, guard = _armed_native_fault(self)
+    incident = (self.root / "native-incident.json").read_bytes()
+    kernel.unit.update(
+        ActiveState="activating",
+        SubState="auto-restart",
+        MainPID="0",
+        NRestarts="1",
+        Job="46 /org/freedesktop/systemd1/job/46",
+    )
+    kernel._processes()
+    helper_stat = "/proc/" + guard.record["helper_pid"] + "/stat"
+    kernel.os.files.pop(helper_stat, None)
+    kernel.os.meta.pop(helper_stat, None)
+    result = target.watch_test_operation(kernel.scope.root, kernel.dependencies)
+    self.assertEqual("unknown", result["status"])
+    self.assertTrue(result["owned_test_stopped"])
+    self.assertEqual(
+        ("inactive", "0", ""),
+        (kernel.unit["ActiveState"], kernel.unit["MainPID"], kernel.unit["Job"]),
+    )
+    self.assertEqual(incident, (self.root / "native-incident.json").read_bytes())
+    self.assertIn(kernel.scope.root + "/watchdog-result.json", kernel.os.files)
+
+
+def test_guard_refuses_foreign_config_or_physical_marker_before_stopping(self):
+    for index, drift in enumerate(("config", "marker")):
+        with self.subTest(drift=drift):
+            if index:
+                self.fresh()
+            kernel, assembly, guard = _armed_native_fault(self)
+            if drift == "config":
+                kernel.os.files[kernel.scope.binding.config] = b"unowned configuration"
+            else:
+                marker = guard.parent_path + "/" + guard.marker
+                kernel.os.files[marker] = b"[Service]\nEnvironment=YGG_TEST_OPERATION=foreign\n"
+            before = sum(process.argv == target.systemd("stop") for process in kernel.processes)
+            with self.assertRaisesRegex(target.Unknown, "guard_refuses_unowned"):
+                target.cleanup_owned_test_fault(assembly, guard.record)
+            self.assertEqual(
+                before, sum(process.argv == target.systemd("stop") for process in kernel.processes)
+            )
+            self.assertEqual("active", kernel.unit["ActiveState"])
 
 
 def _remote_boundary(outcome, *, guest="ygg-test"):
