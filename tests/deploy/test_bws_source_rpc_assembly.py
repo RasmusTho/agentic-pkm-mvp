@@ -568,11 +568,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         assert not list(state['receipts'].glob('*.receipt.json'))
         assert state['selected_dropin'].read_bytes() == state['dropin_bytes']
         assert state['path_properties']['Unit', 'NeedDaemonReload'] is False
-        assert state['events'].count('start') <= 1
-        if fault == 'path-preserved-prestop':
-            assert state['events'].count('stop') == 0
-        elif fault == 'path-preserved-restored-drift':
-            assert state['events'].count('stop') == 2 and state['events'].count('start') == 1
+        if fault == 'path-preserved-restored-drift':
             assert (state['installed'] / 'app/ops/bws_control_installation.py').read_bytes() == state['old_source']
         raise SystemExit(status)
     if fault in {'path-preserved-close', 'path-preserved-transient-close'}:
@@ -754,11 +750,13 @@ def exercise_control_path_transaction(base, channel, slot):
                 'mode': 'path-' + slot, 'drifted': True,
             }
             events = json.loads((base / 'preserved-events.json').read_text())
-            assert events.count('start') <= 1
-            if slot == 'preserved-prestop':
-                assert events.count('stop') == events.count('start') == 0
-            elif slot == 'preserved-restored-drift':
-                assert events.count('stop') == 2 and events.count('start') == 1
+            expected_actions = {
+                'preserved-prestop': [],
+                'preserved-after-start': ['stop', 'start'],
+                'preserved-closing': ['stop', 'start'],
+                'preserved-restored-drift': ['stop', 'start', 'stop'],
+            }
+            assert [event for event in events if event in {'stop', 'start'}] == expected_actions[slot]
         elif slot in {'preserved-close', 'preserved-transient-close'}:
             assert json.loads((base / 'selected-close-proof.json').read_text()) == {'attempts': 1}
         return {'status': 'unknown'}
