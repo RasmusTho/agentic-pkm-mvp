@@ -46,6 +46,36 @@ def test_native_read_leases_preserve_frozen_authority_and_original_evidence(tmp_
     assert observed["source_store_index_links"]["status"] == "healthy"
 
 
+def test_native_probe_preserves_unknown_original_without_receipt_or_replay(tmp_path, monkeypatch):
+    from app.operations.contracts import OperationContext, OperationOutcome, OperationStatus
+    from app.operations.execution_kernel import JsonReceiptStore
+    from tests.operations.live_operations_acceptance import OperationsJourney
+    from tests.operations._operations_acceptance_harness import LocalNative
+    instance = host(tmp_path, monkeypatch)
+    run = OperationsJourney(LocalNative(instance), tmp_path / "unused")
+    run.binding = instance.binding
+    command = run.command("edit")
+    context = OperationContext(command["active_context_ref"], command["vault_generation"])
+    request_id = command["request_id"]
+    pending = OperationOutcome(request_id, OperationStatus.RECOVERY_REQUIRED,
+                               command["operation_id"], context)
+    journal = JsonReceiptStore(instance.runtime.registry.path.parent / "operation-receipts.json")
+    assert journal.reserve(request_id, digest(command), pending)[0] == "reserved"
+    slot_key = "ygg.acceptance:" + OPERATION + ":edit"
+    slot = OperationOutcome(slot_key, OperationStatus.RECOVERY_REQUIRED, command["operation_id"], context,
+                            extensions={"native_request_id": request_id, "slot": "edit"})
+    assert journal.reserve(slot_key, digest(command), slot)[0] == "reserved"
+    original = journal.lookup(request_id).outcome.to_dict()
+    assert original["receipt"] is None and original["convergence"] is None
+    before = {str(path): file_hash(path) for path in instance.root.rglob("*.md")}
+    observed = native_probe(instance.runtime.registry.path)
+    assert observed["native_invariants"]["status"] == "recovery_required"
+    assert observed["receipts"][request_id] == original
+    assert journal.lookup(request_id).outcome.to_dict() == original
+    assert before == {str(path): file_hash(path) for path in instance.root.rglob("*.md")}
+    run.http.close()
+
+
 @pytest.mark.parametrize("case", ["instance", "unknown-extension", "binding-extension", "principal", "body", "formatting", "lease-malformed", "transaction", "fingerprint-missing"])
 def test_frozen_native_authority_drift_refuses_real_effect_without_rebasing(tmp_path, monkeypatch, case):
     import json
@@ -465,7 +495,7 @@ def _receipt_fixture(tmp_path, channel="test", *, facts=None):
             proof.update(cases={kind: {} for kind in ("traversal", "absolute", "protected", "collision", "stale_cas")},
                          source_hashes={"seed": "a"}, after_source_hashes={"seed": "a"})
         if name == "concurrent_refusal":
-            proof["outcomes"] = [committed, {"status": "conflicted"}]
+            proof["outcomes"] = [committed, {"status": "conflicted", "convergence": None}]
         if name == "partial_batch":
             proof.update(partial={"counts": {"completed": 1}, "items": []}, retained={"items": []}, cancelled={"items": []},
                          successful_batch={"counts": {"completed": 2}})
@@ -492,6 +522,29 @@ def test_acceptance_receipt_binds_complete_observed_inventory(tmp_path, monkeypa
     now = time()
     receipt = produce_receipt(binding, observations, directory, started_at=now - 5, finished_at=now)
     assert receipt["status"] == "PREMERGE_PASS" and receipt["execution_kind"] == "premerge"
+    def refuse_matching_original(rows, name, reason):
+        row = next(row for row in rows if row["id"] == name)
+        path = directory / (name + ".json")
+        original = path.read_bytes()
+        try:
+            write_private(path, row["proof"])
+            row["artifacts"][path.name] = file_hash(path)
+            with pytest.raises(OperationsAcceptanceRefusal, match=reason):
+                produce_receipt(binding, rows, directory, started_at=now - 5, finished_at=now)
+        finally:
+            path.write_bytes(original)
+
+    for committed_count in (0, 2):
+        rows = deepcopy(observations)
+        race = next(row for row in rows if row["id"] == "concurrent_refusal")
+        race["proof"]["outcomes"] = [{"convergence": {"source_effect": "committed"}}] * committed_count + [
+            {"status": "rejected", "convergence": None}] * (2 - committed_count)
+        refuse_matching_original(rows, "concurrent_refusal", "original_concurrent_refusal_missing")
+    rows = deepcopy(observations)
+    parity = next(row for row in rows if row["id"] == "operation_receipt_parity")
+    parity["proof"]["receipts"]["edit"] = {
+        surface: {**value, "receipt": None} for surface, value in parity["proof"]["receipts"]["edit"].items()}
+    refuse_matching_original(rows, "operation_receipt_parity", "original_receipt_parity_missing")
     for status in ("missing", "blocked", "failed", "skipped", "xfailed", "excluded"):
         rows = deepcopy(observations)
         if status == "missing":

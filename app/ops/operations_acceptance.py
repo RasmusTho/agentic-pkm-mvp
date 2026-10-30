@@ -349,7 +349,7 @@ def produce_receipt(binding: dict[str, Any], observations: list[dict[str, Any]],
         parity = rows["operation_receipt_parity"]["proof"].get("receipts", {})
         if set(parity) != {"capture", "edit", "move", "rename", "archive", "restore"} or any(
             not value.get("sdk") or value.get("sdk") != value.get("http") or value.get("sdk") != value.get("native")
-            or value["sdk"].get("receipt", {}).get("status") != "committed" for value in parity.values()
+            or (value["sdk"].get("receipt") or {}).get("status") != "committed" for value in parity.values()
         ):
             raise OperationsAcceptanceRefusal("original_receipt_parity_missing")
         refusals = rows["authority_refusals"]["proof"]
@@ -362,7 +362,7 @@ def produce_receipt(binding: dict[str, Any], observations: list[dict[str, Any]],
             or not hostile.get("source_hashes") or hostile["source_hashes"] != hostile.get("after_source_hashes")):
             raise OperationsAcceptanceRefusal("original_path_refusals_missing")
         concurrent = rows["concurrent_refusal"]["proof"].get("outcomes", [])
-        if len(concurrent) != 2 or sum(value.get("convergence", {}).get("source_effect") == "committed" for value in concurrent) != 1:
+        if len(concurrent) != 2 or sum((value.get("convergence") or {}).get("source_effect") == "committed" for value in concurrent) != 1:
             raise OperationsAcceptanceRefusal("original_concurrent_refusal_missing")
         partial = rows["partial_batch"]["proof"]
         if (partial.get("partial", {}).get("counts", {}).get("completed") != 1

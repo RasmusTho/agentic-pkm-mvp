@@ -409,7 +409,7 @@ def native_probe(registry_path: Path) -> dict[str, Any]:
     doctor = diagnose_index(use_cache=False)
     healthy = all(all(row[key] for key in ("source_store_match", "store_index_match", "store_locator_match", "index_locator_match", "link_read_checked"))
                   for row in sources.values())
-    settled = all(value is not None and value.get("receipt", {}).get("status") == "committed"
+    settled = all(value is not None and (value.get("receipt") or {}).get("status") == "committed"
                   for value in receipts.values())
     raw_observation = None
     if context["fixture"].get("raw_source") is not None:
