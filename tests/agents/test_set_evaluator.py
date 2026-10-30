@@ -12,6 +12,8 @@ from app.agents.reviewer.agent import run as review_run
 from app.agents.set_evaluator.agent import run as evaluate_run, run_set_evaluator
 from app.components.reasoning.facade import RankingEntry, RankingResult
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 
 def _ingest_note(path: Path, text: str, trace_id: str) -> str:
     path.write_text(text)

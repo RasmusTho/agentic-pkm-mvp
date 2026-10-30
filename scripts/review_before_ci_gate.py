@@ -978,7 +978,14 @@ def _git_allows_pr_update(
     if _git_is_strict_ancestor(live_head_sha, candidate_sha):
         return True
     if live_head_sha == candidate_sha:
-        return False
+        # An authenticated unchanged head can publish metadata only. Dirty index,
+        # worktree or untracked content would make that classification ambiguous.
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            capture_output=True,
+            check=False,
+        )
+        return status.returncode == 0 and not status.stdout
     live_identity = _git_patch_identity(live_head_sha, base_ref)
     candidate_identity = _git_patch_identity(candidate_sha, base_ref)
     return live_identity is not None and live_identity == candidate_identity
@@ -1433,7 +1440,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 history["live_pr_head_sha"], evidence.head_sha, args.workflow_risk_base
             ):
                 raise ReviewBeforeCiGateError(
-                    "local publication candidate is neither a strict descendant nor a byte-identical rebase of the authenticated live PR head"
+                    "local publication candidate is neither a clean unchanged head, a strict descendant, nor a byte-identical rebase of the authenticated live PR head"
                 )
             validate_pr_scope_revalidation(
                 args.pr_number,

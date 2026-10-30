@@ -6,6 +6,8 @@ from uuid import UUID
 from app.retrieval.hybrid import get_store, hybrid_search
 from app.stores import get_relation_index, reset_store_backends
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 
 @pytest.fixture(autouse=True)
 def _reset_store_backends() -> None:
