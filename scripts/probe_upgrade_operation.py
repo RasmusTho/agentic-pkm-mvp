@@ -225,14 +225,15 @@ def _bounded_process(
         env=environment,
         start_new_session=True,
     )
-    assert process.stdin and process.stdout and process.stderr
-    streams = (process.stdin, process.stdout, process.stderr)
-    stream_by_descriptor = {stream.fileno(): stream for stream in streams}
-    selector = selectors.DefaultSelector()
-    output = {"stdout": bytearray(), "stderr": bytearray()}
-    pending = memoryview(input_bytes)
-    deadline = time.monotonic() + timeout
+    selector = None
     try:
+        assert process.stdin and process.stdout and process.stderr
+        streams = (process.stdin, process.stdout, process.stderr)
+        stream_by_descriptor = {stream.fileno(): stream for stream in streams}
+        selector = selectors.DefaultSelector()
+        output = {"stdout": bytearray(), "stderr": bytearray()}
+        pending = memoryview(input_bytes)
+        deadline = time.monotonic() + timeout
         for stream in streams:
             os.set_blocking(stream.fileno(), False)
         if pending:
@@ -281,9 +282,13 @@ def _bounded_process(
             raise OperationFailure("process_reap_unknown", unknown=True) from None
         raise
     finally:
-        selector.close()
-        for stream in streams:
-            stream.close()
+        try:
+            if selector is not None:
+                selector.close()
+        finally:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
 
 
 def _safe_command(
