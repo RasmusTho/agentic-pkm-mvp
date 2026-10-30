@@ -1656,6 +1656,13 @@ def test_product_embedding_adapters_select_their_regression_coverage() -> None:
             "memory_retrieval",
             "app/components/retrieval.py",
         ),
+        ("tests/cli/test_panel_cli.py", "promotion_panel", "app/agents/panel_agent/runtime.py"),
+        (
+            "tests/cli/test_panel_orchestrator_cli.py",
+            "promotion_panel",
+            "app/agents/panel_agent/runtime.py",
+        ),
+        ("tests/cli/test_panel_runtime_cli.py", "promotion_panel", "app/agents/panel_agent/runtime.py"),
     )
     for module, owner, runtime_trigger in module_owners:
         module_selection = select_tests([module])
@@ -1677,7 +1684,9 @@ def test_product_embedding_adapters_select_their_regression_coverage() -> None:
     ]
     mixed = select_tests(mixed_paths)
     assert mixed.full_suite is False
-    assert mixed.subsystems == ("governance", "vault", "memory_retrieval", "llm_eval")
+    assert mixed.subsystems == (
+        "governance", "vault", "memory_retrieval", "llm_eval", "promotion_panel",
+    )
     assert mixed.unowned_paths == ()
     assert set(selector.CI_INTEGRITY_TARGETS) <= set(mixed.targets)
     assert {module for module, _, _ in module_owners} <= set(mixed.targets)
@@ -1953,7 +1962,7 @@ def test_cli_standing_questions_migration_file_resolves_to_full_suite() -> None:
 
 @pytest.mark.parametrize(
     "path",
-    ("app/new_surface/example.py", "tests/agents/test_normalizer.py"),
+    ("app/new_surface/example.py", "tests/agents/test_normalizer.py", "tests/cli/test_external_ingest.py"),
 )
 def test_cli_rejects_an_unowned_path(path: str) -> None:
     result = subprocess.run(
