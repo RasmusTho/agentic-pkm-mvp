@@ -2220,6 +2220,83 @@ Before migration execution begins, a pending marker makes interruption recovery 
 
 For failures before migration execution starts, the ordinary fail-closed recovery path preserves the failing gate's original non-zero status and diagnostics, restores the previous pin, and attempts to recreate the prior service set before returning. The instance-state fence remains in place if its finalization fails, so consumer preflight refuses restart.
 
+#### Planned retained PATH-input vector
+
+**State: selected target contract; not implemented or natively qualified.** The
+current supported preserved-input profile above remains empty or one selected
+PATH-only file. The [#6170 engineering disposition](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6170#issuecomment-6534813553)
+selects this conditional source extension after comparing a separate fit observer
+with qualification inside the installation transaction. Actual native fit remains
+unknown. Source delivery must not be reported as DEV/TEST or parent acceptance.
+
+The implementation must preserve empty/singleton behavior and accept at most four
+selected files, all satisfying the existing PATH-only profile. Four is a fixed
+public engineering bound, not an observed native count or a resource-derived
+maximum. Validate the complete exact typed vector before content reads; retain its
+original order. Keep the existing two instance/template parent forms and basename
+grammar/length. Repeated full paths, repeated basenames, aliased file identities,
+unsupported entries and any incomplete subset must refuse. No native refusal may
+dynamically widen this bound or select a different profile.
+
+Every selected file must retain the existing protected no-follow ancestry,
+same-mount identity, exact ownership, single-link regular-file, non-executable,
+read-only and non-inheritable checks. Every input and its ancestry must remain
+disjoint from the complete control/application/launcher/backup and target-parent,
+staging and restoration footprint. All selected members must be treated as files
+in both retained identity checks and fresh-edge reopen; scalar-only classification
+in either walk is insufficient.
+
+The accepted aggregate content ceiling is 4096 bytes, with the existing per-file
+ceiling retained. Validate all selected metadata and the sum of declared sizes
+before reading content. One remaining-total budget plus one sentinel byte must
+bound all returned content to at most 4097 bytes per fresh verification walk,
+including failure. Independent per-file 4097-byte reads do not satisfy that bound.
+Growth, shrink, replacement, short reads and changed metadata refuse. Every full
+file must match the existing exact two-line grammar and decode to the same sole
+typed loaded PATH assignment. Different values, extra directives or sections,
+resets, escaping and expansion remain unsupported. Identical assignments make the
+effective PATH value independent of their precedence; they do not permit dropping
+an earlier file or sorting the original vector into a new baseline.
+
+Bind the entire vector and each file's original bytes, identity and private
+projection into initial qualification, prebackup, prestop, postapply/start, closing
+and same-handle restoration checks. Preserve complete loaded Environment bytes and
+order, all six loaded-property checks, namespace/root/exec/import guards, early and
+final source provenance, writer/idle/no-write requirements and generation binding.
+Credential checks remain metadata-only. Reorder/add/remove, loaded/disk disagreement
+or any input drift must refuse or retain phase-appropriate uncertainty. Attempt
+each original owned close once when ownership still matches; transient and retained
+close uncertainty stays sticky and dominates success. Preserve exact OLD compensation,
+`compensated_stopped` and the rule against closing replacement descriptors.
+
+Descriptor admission must cover the entire selected bound. The maximum complete
+path walk becomes `644 + 4 + 2 + 4 = 654`; two walks plus one transient require
+`1309`. The other projection branch remains `4 + 16*(32 + 2*33) = 1572`, so that
+projection maximum remains `1572`. This does **not** prove unchanged total demand:
+`_source_descriptor_peak` separately adds the path bound to its handle/transient
+and handle/source-inventory branches. Verify all three admission branches and
+subtract only the path descriptors actually retained at preparation. Partial open,
+metadata, read and close failures must remain inside the admitted envelope.
+
+The source proof must extend the existing production selector/configuration,
+`_NativePorts`, verified-candidate RPC/manifest and compensation seams for both
+DEV and TEST. Cover empty/singleton regression, two/four successes, five inputs,
+duplicates/aliases/both parents, aggregate 4096/4097, every file index's failures,
+all loaded-property changes, vector/content/identity/mount drift, full effect
+disjointness, all descriptor-peak branches and original-close uncertainty. Retain
+public-output privacy and verified-source binding; any changed cardinality
+diagnostic must correspond to this new bound without exporting a count or value.
+The existing lifecycle, control-installation, transaction and source-RPC profile
+tests are the executable proof seams; scalar-only passes do not qualify the vector.
+
+No new directive/profile, general parser, path allowlist, ignored input, configuration
+rewrite/removal, manager reload, principal, credential/provider or PROD effect is
+part of this extension. After source and exact-image delivery, the native owner
+must separately admit the changed configuration-content footprint and exact
+assembled operation. Current capacity, device/preservation, before/idle/ownership,
+no-write and actual profile fit must be qualified inside that transaction. A prior
+observer, consumed request or source-only result cannot substitute for these gates.
+
 ## Linux channel secret provisioning
 
 The empty-data exception is bound to the effective managed `db:5432` target and its default `app` role/channel database, without connection-option overrides. An empty local volume never proves an external or overridden target empty: these targets require real password authentication and cannot bootstrap a new BWS password. External-target authentication and activation never start or stop the unrelated local database. The supervisor binds the Compose topology to the same effective target. For external targets, the dedicated overlay removes only local `db` dependency edges and excludes its service/volume from the selected graph, while preserving migration, instance-state, and provider dependencies. Ambient profiles cannot re-enable the excluded database; the inherited worker guard refuses a missing or mismatched topology selector before provider access. The governed BWS prod outbox-retry preflight uses the same file-aware resolver and host endpoint translation; invalid or missing file/connection configuration blocks deployment before pins or Compose mutation. After connection resolution, the existing #3903 policy for genuinely unavailable databases or queries remains in force, including first initialization; a successfully queried terminal-pending row blocks deployment. Legacy non-BWS behavior is unchanged.
