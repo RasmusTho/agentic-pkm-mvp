@@ -91,16 +91,32 @@ and running postconditions without adopting lifecycle ownership or rewriting tha
 request/program/result/handle bytes and pinned follow tooling remain preserved; the original resource
 guard still fences later #6457 apply requests. No guard clearance or further compensation was needed.
 
-[Source prerequisite #6475](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6475) adds one
-fixed successor admission for the verified Swedish rendering from source
+The [2026-10-30 readable-rendering installation receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6476#issuecomment-6512944547)
+verifies the current one-file update from `0172…` to renderer source
 `7436ca29b863fca98faeb8e729d00e9832a71c22`: script SHA-256
-`17c2dced67a7830e453f4bf5d18e1e330086dab186501b80b259f569936c8e90`, retaining the same 59 files,
-with after-manifest `317f99b147d23dcf20c3e59be2d542cd9f3f74aeca98d519ba2393a9eab3a635`.
-This is source/protocol support; the last verified installation remains `0172…` and the 43-cycle
-receipt above. [Installation Issue #6476](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6476)
-owns any later actual installation and receipt. Its fixed contract and fresh normal claim must bind
-the lease holder to the actual native owner UUID and the same runtime/registered worktree;
-the closing #6475 source lease cannot authorize installation.
+`17c2dced67a7830e453f4bf5d18e1e330086dab186501b80b259f569936c8e90` (28,710 bytes), retaining the same
+59 files from `777726d3139fc82cd69097dcd3bccc4d1c6c167a`. The mixed 60-file manifest is
+`317f99b147d23dcf20c3e59be2d542cd9f3f74aeca98d519ba2393a9eab3a635`.
+The normal active/enabled invocation completed 59 qualified cycles with zero restarts. The existing
+unhealthy incident remained suppressed, with its latest acknowledgment/correlation state unchanged
+and no new down or recovery sends. Configuration, effective unit, normal BWS launcher/SDK child,
+interpreter and source/cache compatibility were qualified.
+
+The new executor `32967742602847edb920cab7a1023faf` remains `UNKNOWN` at
+`start_intent/main_process_boundary`, with its helper/cgroup reaped. A separately reviewed read-only
+qualification verified the actual installed and running postconditions without adopting lifecycle
+ownership or rewriting that result. Both the original5b47 and successor request/program/phase/handle/
+result bytes and resource fences remain preserved; the original pinned follow tooling remains
+intact. Qualification performed no lifecycle, metadata, incident or cache writes and did not resend,
+rearm or reset the existing incident. The original installation and 43-cycle upgrade receipts above
+retain their exact historical source mappings.
+
+The fixed successor admission came from
+[source prerequisite #6475](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6475), merged as
+`f3372e5fe88146266825cfa595f667f7d974ceee`. Installation Issue
+[#6476](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6476) bound its fresh normal claim to the
+actual native owner UUID and the same runtime/registered worktree, generation and committed programs;
+the closed source lease supplied no installation authority.
 
 The successor reads and pins the original request, programs, authorization, phase, handle and
 UNKNOWN result, freshly proves helper/cgroup quiescence, and qualifies the current source,
@@ -111,7 +127,8 @@ empty or missing prior selector cannot open another operation. Admission and sou
 responses follow the same new handle, with finite, code-only recovery preserving the latest
 incident. Missing, changed, foreign or incomplete proof refuses admission. See
 [the operator prerequisites](../OPERATIONS.md#prod-probe-and-push-alert-scheduled-backstop).
-This source delivery neither performs a host operation nor adds a gate to #4076's accepted TEST drill.
+The linked #6476 receipt verifies the actual installation; #6475 remains source/protocol support.
+#4076's accepted TEST drill remains independent.
 
 The existing shared webhook import is committed under #6347, catalog standing is owner-accepted
 under #5506, and the declared consuming-host BWS launch succeeded. No credential was created or
