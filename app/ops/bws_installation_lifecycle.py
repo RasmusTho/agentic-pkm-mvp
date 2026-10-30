@@ -79,7 +79,241 @@ def _control_projection_descriptor_bound() -> int:
     ancestors_per_hint = _CONTROL_PROJECTION_MAX_COMPONENTS + 1
     per_hint = (_CONTROL_PROJECTION_MAX_COMPONENTS
                 + _CONTROL_PROJECTION_ANCHOR_COMPONENTS * ancestors_per_hint)
-    return fixed_root_descriptors + _CONTROL_PROJECTION_MAX_HINTS * per_hint
+    return max(fixed_root_descriptors + _CONTROL_PROJECTION_MAX_HINTS * per_hint,
+               2 * _CONTROL_PATH_MAX_DIRECTORIES + 1)
+
+
+# The PATH-specific namespace is deliberately finite and has no content reader.
+_CONTROL_PATH_MAX_ENTRIES = 128
+_CONTROL_PATH_MAX_DIRECTORIES = 4 * 33 + 16 * 32
+
+
+def _control_path_mount(fd: int) -> int:
+    """Read the Linux mount identity of an already held directory (no pathname IO)."""
+    import ctypes
+    import struct
+    if sys.platform != 'linux':
+        _refuse('root_control')
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        result = ctypes.create_string_buffer(256)  # Linux UAPI struct statx
+        if libc.statx(fd, b'', 0x1000 | 0x100 | 0x800, 0x1000, result) != 0:
+            _refuse('root_control')
+        mask = struct.unpack_from('=I', result.raw, 0)[0]
+        mount = struct.unpack_from('=Q', result.raw, 144)[0]
+        if not mask & 0x1000 or mount == 0:
+            _refuse('root_control')
+        return mount
+    except Exception:
+        _refuse('root_control')
+
+
+def _control_path_slots(environment: list[str]) -> tuple[str, ...]:
+    paths = [value[5:] for value in environment if value.startswith('PATH=')]
+    if len(paths) != 1 or any(CONTROL_DIRECTORY in value for value in environment
+                              if not value.startswith('PATH=')):
+        _refuse('root_control')
+    components = paths[0].split(':')
+    if not 0 < len(components) <= _CONTROL_PROJECTION_MAX_HINTS:
+        _refuse('root_control')
+    for path in components:
+        if (not path.startswith('/') or '\\' in path or '\0' in path
+                or any(part in {'', '.', '..'} for part in path.split('/')[1:])
+                or len(path.split('/')) > _CONTROL_PROJECTION_MAX_COMPONENTS + 1):
+            _refuse('root_control')
+        if CONTROL_DIRECTORY in path and not (
+                path == CONTROL_DIRECTORY or path.startswith(CONTROL_DIRECTORY + '/')):
+            _refuse('root_control')
+    slots = tuple(path for path in components if path == CONTROL_DIRECTORY
+                  or path.startswith(CONTROL_DIRECTORY + '/'))
+    if not slots or len(set(components)) != len(components):
+        _refuse('root_control')
+    return slots
+
+
+class _ControlPathBinding:
+    """Retained, metadata-only proof for the immutable control PATH slots.
+
+    All forward/restore/staging effects are below disjoint application, launcher
+    and backup roots. The control tree receives no writes. Reject all mount
+    crossings (including same-device bind mounts), rather than guessing aliases.
+    No directory listing outside a selected control slot, or recursion, occurs.
+    """
+
+    def __init__(self, control: dict[str, Any], slots: tuple[str, ...],
+                 footprint: tuple[dict[str, Any], ...]) -> None:
+        self.control, self.slots, self.footprint = control, slots, footprint
+        self.fds: dict[str, tuple[int, tuple[int, ...]]] = {}
+        self.closed = False
+        self.snapshot: tuple[Any, ...] | None = None
+
+    @staticmethod
+    def _identity(fd: int) -> tuple[int, ...]:
+        value = os.fstat(fd)
+        if (not stat.S_ISDIR(value.st_mode) or value.st_mode & 0o022
+                or (value.st_uid, value.st_gid) not in {(0, 0), (_CONTROL_OWNER_UID, _CONTROL_OWNER_GID)}
+                or os.get_inheritable(fd)):
+            _refuse('root_control')
+        return (value.st_dev, value.st_ino, value.st_uid, value.st_gid,
+                stat.S_IMODE(value.st_mode), _control_path_mount(fd))
+
+    @staticmethod
+    def _close(fds: dict[str, tuple[int, tuple[int, ...]]]) -> bool:
+        unknown = False
+        for fd, identity in reversed(tuple(fds.values())):
+            try:
+                info = os.fstat(fd)
+                if (info.st_dev, info.st_ino) != identity[:2]:
+                    unknown = True
+                    continue  # Never close a replacement descriptor.
+                os.close(fd)
+            except Exception:
+                unknown = True
+        fds.clear()
+        return not unknown
+
+    def close(self) -> None:
+        self.closed = True
+        if not self._close(self.fds):
+            _refuse('retained_runtime')
+
+    def revalidate(self) -> tuple[Any, ...]:
+        opened: dict[str, tuple[int, tuple[int, ...]]] = {}
+        keep = False
+        try:
+            for fd, identity in self.fds.values():
+                if self._identity(fd) != identity:
+                    _refuse('root_control')
+
+            def directory(path: str) -> int:
+                if path in opened:
+                    return opened[path][0]
+                parts = path.split('/')[1:]
+                if path != '/' and (not path.startswith('/') or len(parts) > 32
+                                    or any(p in {'', '.', '..'} for p in parts)):
+                    _refuse('root_control')
+                parent_path, _, name = path.rpartition('/')
+                parent = None if path == '/' else directory(parent_path or '/')
+                if len(opened) >= _CONTROL_PATH_MAX_DIRECTORIES:
+                    _refuse('root_control')
+                fd = os.open('/' if parent is None else name,
+                             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             **({} if parent is None else {'dir_fd': parent}))
+                # Even a failing first metadata read must close the original FD.
+                try:
+                    identity = self._identity(fd)
+                except BaseException:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        _refuse('retained_runtime')
+                    raise
+                opened[path] = (fd, identity)
+                if parent is not None and identity[5] != opened['/'][1][5]:
+                    _refuse('root_control')
+                return fd
+
+            if (type(self.footprint) is not tuple or len(self.footprint) != 3
+                    or any(type(root) is not dict for root in self.footprint)):
+                _refuse('root_control')
+            roots = (self.control, *self.footprint)
+            for index, root in enumerate(roots):
+                path = root['path']
+                for other in roots[:index]:
+                    if (path == other['path'] or path.startswith(other['path'] + '/')
+                            or other['path'].startswith(path + '/')):
+                        _refuse('root_control')
+                fd = directory(path)
+                if opened[path][1][:5] != tuple(root[key] for key in ('device', 'inode', 'uid', 'gid', 'mode')):
+                    _refuse('root_control')
+            control_fd = opened[self.control['path']][0]
+            for name in ('app', 'scripts'):
+                try:
+                    os.stat(name, dir_fd=control_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                _refuse('root_control')
+            observations: list[tuple[str, Any]] = []
+            for slot in self.slots:
+                current = self.control['path']
+                missing = None
+                for name in slot[len(current):].strip('/').split('/') if slot != current else ():
+                    parent = directory(current)
+                    try:
+                        info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                    except FileNotFoundError:
+                        missing = (current, name)
+                        break
+                    if not stat.S_ISDIR(info.st_mode):
+                        _refuse('root_control')
+                    current += '/' + name
+                    directory(current)
+                if missing is not None:
+                    observations.append((slot, missing))
+                    continue
+                fd = directory(current)
+                before = os.fstat(fd)
+                entries: list[tuple[Any, ...]] = []
+                # scandir holds at most one extra FD; iteration is bounded before stat.
+                with os.scandir(fd) as iterator:
+                    for entry in iterator:
+                        if len(entries) >= _CONTROL_PATH_MAX_ENTRIES:
+                            _refuse('root_control')
+                        info = entry.stat(follow_symlinks=False)
+                        if ((info.st_uid, info.st_gid) != (_CONTROL_OWNER_UID, _CONTROL_OWNER_GID)
+                                or info.st_mode & 0o022
+                                or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))
+                                or (stat.S_ISREG(info.st_mode) and (info.st_mode & 0o111 or info.st_nlink != 1))):
+                            _refuse('root_control')
+                        # A direct subdirectory is not a command. Its contents are never read.
+                        entries.append((entry.name, info.st_dev, info.st_ino, info.st_mode,
+                                        info.st_uid, info.st_gid, info.st_nlink,
+                                        info.st_mtime_ns, info.st_ctime_ns))
+                after = os.fstat(fd)
+                if (before.st_mtime_ns, before.st_ctime_ns) != (after.st_mtime_ns, after.st_ctime_ns):
+                    _refuse('root_control')
+                observations.append((slot, tuple(sorted(entries))))
+            for slot, observation in observations:
+                if type(observation) is tuple and len(observation) == 2 and type(observation[0]) is str:
+                    missing_parent, name = observation
+                    try:
+                        os.stat(name, dir_fd=opened[missing_parent][0], follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue
+                    _refuse('root_control')
+            # Recheck every held/current ancestor edge including the lookup root.
+            for path, (fd, identity) in opened.items():
+                parent_path, _, name = path.rpartition('/')
+                current = os.stat('/' if path == '/' else name, follow_symlinks=False,
+                                  **({} if path == '/' else {'dir_fd': opened[parent_path or '/'][0]}))
+                if self._identity(fd) != identity or (current.st_dev, current.st_ino) != identity[:2]:
+                    _refuse('root_control')
+                current_fd = os.open('/' if path == '/' else name,
+                                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                     **({} if path == '/' else {'dir_fd': opened[parent_path or '/'][0]}))
+                try:
+                    if self._identity(current_fd) != identity:
+                        _refuse('root_control')
+                finally:
+                    try:
+                        os.close(current_fd)
+                    except OSError:
+                        _refuse('retained_runtime')
+            snapshot = (tuple((p, identity) for p, (_fd, identity) in sorted(opened.items())),
+                        tuple(observations))
+            if self.snapshot is not None and snapshot != self.snapshot:
+                _refuse('root_control')
+            if self.snapshot is None:
+                self.snapshot = snapshot
+                self.fds, keep = opened, True
+            return snapshot
+        except _OldQualificationRefusal:
+            raise
+        except Exception:
+            _refuse('root_control')
+        finally:
+            if not keep and not self._close(opened):
+                _refuse('retained_runtime')
 
 
 def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -578,6 +812,8 @@ class FixedBwsService:
         self.runtime_version: tuple[int, ...] | None = None
         self.control: dict[str, Any] | None = None
         self.control_inventory_empty = False
+        self.control_path_binding: _ControlPathBinding | None = None
+        self.installation_footprint: tuple[dict[str, Any], ...] = ()
         self.launcher_before: bytes | None = None
         self.launcher_after: bytes | None = None
         self.new_pid: int | None = None
@@ -636,6 +872,11 @@ class FixedBwsService:
             yield
         finally:
             unknown = False
+            if self.control_path_binding is not None:
+                try:
+                    self.control_path_binding.close()
+                except Exception:
+                    unknown = True
             if fd is not None:
                 # Retain the original local FD/identity, not a reconstructed
                 # handle or a newly opened alias. Before yield this context
@@ -703,7 +944,7 @@ class FixedBwsService:
             _refuse('cleanup_contract' if action == 'cleanup' else 'launcher')
         return row
 
-    def _config(self) -> tuple[Any, ...]:
+    def _config(self, *, restored: bool = False) -> tuple[Any, ...]:
         self._held_runtime()
         for interface, values in (
             ('Unit', {'Id': self.unit, 'LoadState': 'loaded'}),
@@ -740,6 +981,10 @@ class FixedBwsService:
             } else
             (self.launcher_before, self.launcher_after)
         )
+        if restored:
+            if self.phase not in {'stopped_checked', 'new_stopped_checked'}:
+                _refuse('root_control')
+            allowed = (self.launcher_before,)
         if launcher not in allowed:
             _refuse('launcher')
         # Qualify the proposed public launcher against the SAME current typed
@@ -750,6 +995,42 @@ class FixedBwsService:
         expected_empty_control_root = (
             self.control if self.control_inventory_empty else None
         )
+        if self.control_inventory_empty and any(CONTROL_DIRECTORY in value for value in environment):
+            slots = _control_path_slots(environment)
+            if files or any(CONTROL_DIRECTORY.encode() in raw for raw in (launcher, self.launcher_after)):
+                _refuse('root_control')
+            # Only the fixed unit's ordinary host lookup view is supported.
+            for name, signature, namespace_expected in (
+                ('RootDirectory', 's', ''), ('RootImage', 's', ''),
+                ('WorkingDirectory', 's', ''), ('BindPaths', 'a(ssbt)', []),
+                ('BindReadOnlyPaths', 'a(ssbt)', []), ('TemporaryFileSystem', 'a(ss)', []),
+                ('ReadOnlyPaths', 'as', []), ('ReadWritePaths', 'as', []),
+                ('InaccessiblePaths', 'as', []), ('PassEnvironment', 'as', []),
+                ('ExtensionDirectories', 'as', []), ('MountImages', 'a(ssba(ss))', []),
+                ('ExtensionImages', 'a(sba(ss))', []), ('PAMName', 's', ''),
+                ('UnsetEnvironment', 'as', []), ('ExecSearchPath', 'as', []),
+                ('PrivateMounts', 'b', False), ('PrivateTmp', 'b', False),
+                ('PrivateDevices', 'b', False), ('PrivateUsers', 'b', False),
+                ('DynamicUser', 'b', False), ('ProtectHome', 's', 'no'),
+                ('ProtectSystem', 's', 'no'),
+            ):
+                namespace_value = self._get('Service', name, signature)
+                if type(namespace_value) is not type(namespace_expected) or namespace_value != namespace_expected:
+                    _refuse('unit_properties')
+            if self._get('Unit', 'DropInPaths', 'as') != [] or self._get('Unit', 'JoinsNamespaceOf', 'as') != []:
+                _refuse('unit_properties')
+            if (len(self.installation_footprint) != 3 or self.installation_footprint[0] != self.application
+                    or self.installation_footprint[1]['path'] != str(Path(LAUNCHER).parent)):
+                _refuse('root_control')
+            if self.control_path_binding is None:
+                self.control_path_binding = _ControlPathBinding(self.control, slots, self.installation_footprint)
+            elif self.control_path_binding.slots != slots:
+                _refuse('root_control')
+            projection = self.control_path_binding.revalidate()
+            # Keep exact typed bytes and ordering private, bound into generations.
+            return start[:3], cleanup[:3], tuple(environment), tuple(tuple(row) for row in files), projection
+        if self.control_path_binding is not None:
+            _refuse('root_control')
         for side, raw in (('old', launcher), ('proposed', self.launcher_after)):
             if _discovered_control_projection(
                 raw, environment, files,
@@ -789,6 +1070,7 @@ class FixedBwsService:
         self, expected_service_identity: str | None = None, *, application_root: dict[str, Any],
         control_root: dict[str, Any], launcher_content: dict[str, Any],
         control_inventory_empty: bool = False,
+        installation_footprint: tuple[dict[str, Any], ...] = (),
     ) -> None:
         if (self.phase != 'unqualified' or (expected_service_identity is not None
                 and (type(expected_service_identity) is not str
@@ -803,6 +1085,7 @@ class FixedBwsService:
         self.application = application
         self.control = control
         self.control_inventory_empty = control_inventory_empty
+        self.installation_footprint = installation_footprint
         if control['path'] == application['path']:
             _root_control_refuse('separation', mode=mode, role='roots')
         if not (control['path'] == CONTROL_DIRECTORY
@@ -850,6 +1133,11 @@ class FixedBwsService:
             _root_control_refuse('contract_missing', mode='captured_empty', role='revalidation')
         if self._config() != self.contract:
             _root_control_refuse('configuration', mode='captured_empty', role='revalidation')
+
+    def revalidate_restored_control_configuration(self) -> None:
+        """Check authenticated restoration without granting legacy OLD restart."""
+        if self.control_path_binding is None or self._config(restored=True) != self.contract:
+            _refuse('root_control')
 
     def stop_old(self) -> None:
         if (self.phase != 'qualified' or self.launcher_after is None

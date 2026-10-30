@@ -222,6 +222,55 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 lifecycle, transaction, state, control_root, installed, runtime, public_launcher,
                 channel, anchored=anchored,
             )
+        elif fault.startswith('path-'):
+            from tests.ops.test_bws_installation_lifecycle import configure_control_path_service
+            slot_kind = fault.removeprefix('path-')
+            slot = control_root if slot_kind == 'root' else control_root / (
+                'absent/deeper' if slot_kind == 'absent' else 'lookup')
+            if slot_kind not in {'root', 'absent'}:
+                slot.mkdir(mode=0o755)
+            (control_root / 'unrelated.txt').write_bytes(b'preserved synthetic non-executable data')
+            (control_root / 'unrelated.txt').chmod(0o644)
+            environment = ['LLM_PROVIDER=mock', f'PATH=/usr/bin:{slot}:/bin', 'EXACT=value with spaces']
+            state['path_properties'] = configure_control_path_service(
+                lifecycle, patch, state, control_root, installed, runtime, public_launcher, channel, environment,
+            )
+            state['path_environment'] = list(environment)
+            def consume_start():
+                permit = receipts / admission._start_authorization_name(channel)
+                assert json.loads(permit.read_text())['operation_id'] == request['operation_id']
+                permit.unlink()
+            state['consume_start'] = consume_start
+            if fault == 'path-close':
+                original_close = lifecycle.os.close
+                def uncertain_close(fd):
+                    binding = getattr(state.get('service'), 'control_path_binding', None)
+                    owned = binding is not None and binding.closed and any(
+                        record[0] == fd for record in binding.fds.values())
+                    original_close(fd)
+                    if owned and not state.get('close_failed'):
+                        state['close_failed'] = True
+                        raise OSError('synthetic original close uncertainty')
+                patch.setattr(lifecycle.os, 'close', uncertain_close)
+            real_service = transaction._NativePorts.service
+            def service(ports, selected_channel):
+                value = real_service(ports, selected_channel)
+                state['service'] = value
+                state['events'].append('service')
+                return value
+            patch.setattr(transaction._NativePorts, 'service', service)
+            original_prepare = transaction._NativePorts.prepare
+            def prepare(ports, *args, **kwargs):
+                try:
+                    return original_prepare(ports, *args, **kwargs)
+                except Exception as failure:
+                    state['prepare_failure'] = (type(failure).__name__, getattr(failure, 'reason', None),
+                        [(Path(frame.filename).name, frame.name, frame.lineno)
+                         for frame in traceback.extract_tb(failure.__traceback__)[-6:]])
+                    raise
+            patch.setattr(transaction._NativePorts, 'prepare', prepare)
+            state['old_source'] = old_source.read_bytes()
+            state['old_launcher'] = public_launcher.read_bytes()
         else:
             lifecycle.FixedBwsService = Service
 
@@ -230,6 +279,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         # stay real and independently reject drift.
         def supervisor_rpc(selected_channel, selected):
             assert selected_channel == channel and selected["action"] == "source-installation-profile"
+            if fault == 'path-partial' and 'start' in state['events']:
+                raise RuntimeError('synthetic external profile unavailable')
             profile = transaction.loaded_source_profile(
                 SimpleNamespace(channel=channel, root=checkout), operation_id=request["operation_id"],
                 candidate_sha=revision, image_digest=request["image_digest"],
@@ -240,6 +291,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             profile["profile_sha256"] = transaction._sha(json.dumps(
                 canonical, sort_keys=True, separators=(",", ":"),
             ).encode("ascii"))
+            state['last_profile'] = profile
             return {"source_installation_profile": profile, "supervisor_idle": True,
                     "exec_stop_post_no_write": True}
         linux._rpc_via_supervisor = supervisor_rpc
@@ -405,6 +457,26 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                                              else "descriptor_capacity_unknown")
         assert not {"service", "stop", "start"} & set(state["events"])
         assert list(state["backups"].iterdir()) == []
+    elif fault.startswith('path-'):
+        service = state['service']
+        assert result['status'] == ('compensated_stopped' if fault == 'path-partial' else 'installed'), (result, state.get('prepare_failure'))
+        assert service.runtime_close_completed and service.control_path_binding.closed
+        assert not service.control_path_binding.fds
+        assert state['path_properties']['Service', 'Environment'] == state['path_environment']
+        assert service.contract[2] == tuple(state['path_environment'])
+        assert (state['control_root'] / 'unrelated.txt').read_bytes() == b'preserved synthetic non-executable data'
+        assert not (state['control_root'] / 'app').exists() and not (state['control_root'] / 'scripts').exists()
+        manifest = json.loads((state['backups'] / 'assembled/manifest.json').read_text())
+        assert all(row['root'] != 'control' for row in manifest)
+        if fault == 'path-partial':
+            assert (state['installed'] / 'app/ops/bws_control_installation.py').read_bytes() == state['old_source']
+            assert (base / 'launcher/yggdrasil-bws-deploy').read_bytes() == state['old_launcher']
+            assert state['events'].count('start') == 1
+            assert service.phase == 'new_stopped_checked'
+        else:
+            assert result['new_generation_sha256'] == state['transaction']._generation_sha(
+                state['last_profile'], service.new_token, service.contract,
+            )
     else:
         assert result["status"] == ("compensated_stopped" if fault == "partial" else "installed"), result
         assert state["events"].index("service") < state["events"].index("stop")
@@ -457,6 +529,31 @@ def test_root_control_leaf_diagnostics_cross_verified_source_rpc(secure_tmp_path
     assert result['total_cases'] >= (40 if mode in {'empty', 'anchored'} else 1)
     assert 1 <= result['cases'] <= 15
     assert result['case_indices'] == list(range(batch, result['total_cases'], _ROOT_RPC_BATCHES[mode]))
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('slot', ['root', 'descendant', 'absent'])
+def test_control_path_slots_complete_real_source_transaction(secure_tmp_path, channel, slot):
+    exercise_control_path_transaction(secure_tmp_path, channel, slot)
+
+
+def exercise_control_path_transaction(base, channel, slot):
+    with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
+        completed = subprocess.run(
+            [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(base),
+             str(Path(__file__).resolve().parents[2]), channel, 'path-' + slot, str(Path(directory).resolve())],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
+        )
+    if slot == 'close':
+        assert completed.returncode == 78 and completed.stdout == '', completed.stderr
+        owner = json.loads((base / 'receipts' / (channel + '.source-installation.lock')).read_text())
+        assert owner['operation_id']
+        assert not list((base / 'receipts').glob('*.receipt.json'))
+        return {'status': 'unknown'}
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result['restored'] and result['source_only']
+    return result
 
 
 if __name__ == "__main__":

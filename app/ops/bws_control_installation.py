@@ -352,7 +352,8 @@ class _SourceDescriptorEnvelope:
 
 def _source_descriptor_peak(roots: Mapping[str, Root], changes: tuple[Change, ...],
                             backup_root: Root, source_inventory_fd_peak: int = 0, *,
-                            runtime_fd_already_open: bool = False) -> int:
+                            runtime_fd_already_open: bool = False,
+                            control_path_fds_already_open: int = 0) -> int:
     """Bound handles, lifecycle transients, and held-handle readers."""
     root_descriptors = sum(
         1 + len(_path(root.path, absolute=True)) for root in (*roots.values(), backup_root)
@@ -372,31 +373,39 @@ def _source_descriptor_peak(roots: Mapping[str, Root], changes: tuple[Change, ..
     if type(runtime_fd_already_open) is not bool:
         _refuse("descriptor_capacity_unknown")
     try:
-        from app.ops.bws_installation_lifecycle import _control_projection_descriptor_bound
+        from app.ops.bws_installation_lifecycle import (
+            _control_projection_descriptor_bound, _CONTROL_PATH_MAX_DIRECTORIES,
+        )
         control_projection_fd_peak = _control_projection_descriptor_bound()
     except Exception:
         _refuse("descriptor_capacity_unknown")
     if type(control_projection_fd_peak) is not int or control_projection_fd_peak < 0:
         _refuse("descriptor_capacity_unknown")
+    if (type(control_path_fds_already_open) is not int
+            or not 0 <= control_path_fds_already_open <= _CONTROL_PATH_MAX_DIRECTORIES
+            or (control_path_fds_already_open and not runtime_fd_already_open)):
+        _refuse("descriptor_capacity_unknown")
     runtime_fd = 0 if runtime_fd_already_open else 1
     lifecycle_transients = _SOURCE_DESCRIPTOR_TRANSIENT_RESERVE - runtime_fd
     handle_peak = max(prepared, applied, compensated)
     return max(
-        handle_peak + lifecycle_transients,
-        handle_peak + runtime_fd + source_inventory_fd_peak,
+        handle_peak + lifecycle_transients + _CONTROL_PATH_MAX_DIRECTORIES,
+        handle_peak + runtime_fd + source_inventory_fd_peak + _CONTROL_PATH_MAX_DIRECTORIES,
         # FixedBwsService._config retains this bounded source-only projection
         # while the prepared handle and runtime reader remain held.
         handle_peak + runtime_fd + control_projection_fd_peak,
-    )
+    ) - control_path_fds_already_open
 
 
 def _require_source_descriptor_capacity(roots: Mapping[str, Root], changes: tuple[Change, ...],
                                         backup_root: Root, source_inventory_fd_peak: int = 0, *,
-                                        runtime_fd_already_open: bool = False) -> None:
+                                        runtime_fd_already_open: bool = False,
+                                        control_path_fds_already_open: int = 0) -> None:
     open_descriptors, soft_limit, _hard_limit = _source_descriptor_accounting()
     required_peak = _source_descriptor_peak(
         roots, changes, backup_root, source_inventory_fd_peak,
         runtime_fd_already_open=runtime_fd_already_open,
+        control_path_fds_already_open=control_path_fds_already_open,
     )
     if open_descriptors + required_peak > soft_limit:
         _refuse("descriptor_capacity_insufficient")
@@ -639,7 +648,8 @@ def _prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, .
                           payloads: Mapping[tuple[str, str], bytes], backup_root: Root,
                           bundle_name: str, full_source_manifest: bool,
                           source_inventory_fd_peak: int = 0,
-                          runtime_fd_already_open: bool = False) -> Installation:
+                          runtime_fd_already_open: bool = False,
+                          control_path_fds_already_open: int = 0) -> Installation:
     """Validate and durably back up a finite manifest without replacing targets.
 
     The returned handle retains the exact root, target, backup and flock identities
@@ -656,6 +666,7 @@ def _prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, .
         _require_source_descriptor_capacity(
             roots, changes, backup_root, source_inventory_fd_peak,
             runtime_fd_already_open=runtime_fd_already_open,
+        control_path_fds_already_open=control_path_fds_already_open,
         )
     handle = Installation(backup_root.path + "/" + bundle_name)
     try:
@@ -710,13 +721,15 @@ def prepare_public_files(*, roots: Mapping[str, Root], changes: tuple[Change, ..
 def _prepare_full_source_files(*, roots: Mapping[str, Root], changes: tuple[Change, ...],
                                payloads: Mapping[tuple[str, str], bytes], backup_root: Root,
                                bundle_name: str, source_inventory_fd_peak: int = 0,
-                               runtime_fd_already_open: bool = False) -> Installation:
+                               runtime_fd_already_open: bool = False,
+                          control_path_fds_already_open: int = 0) -> Installation:
     """Prepare the internal full-source path with its derived source manifest budget."""
     return _prepare_public_files(roots=roots, changes=changes, payloads=payloads,
                                   backup_root=backup_root, bundle_name=bundle_name,
                                   full_source_manifest=True,
                                   source_inventory_fd_peak=source_inventory_fd_peak,
-                                  runtime_fd_already_open=runtime_fd_already_open)
+                                  runtime_fd_already_open=runtime_fd_already_open,
+                                  control_path_fds_already_open=control_path_fds_already_open)
 
 
 def apply_public_files(

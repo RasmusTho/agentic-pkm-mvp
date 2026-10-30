@@ -936,3 +936,46 @@ def test_all_matching_invalid_backup_is_transaction_refusal(case, fault):
         assert handle.compensation == []  # No per-target row can carry this failure.
         assert snapshot(paths) == before
         assert bundle.exists()
+
+
+def test_control_path_slot_descriptor_envelope_and_close_uncertainty(monkeypatch, secure_tmp_path):
+    from tests.ops.test_bws_installation_lifecycle import control_path_fixture
+    from app.ops import bws_installation_lifecycle as lifecycle
+    module = importlib.import_module('app.ops.bws_control_installation')
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    owned = set()
+    original_open, original_close = lifecycle.os.open, lifecycle.os.close
+    close_calls = []
+    failed_fd = None
+    def tracked_open(*args, **kwargs):
+        fd = original_open(*args, **kwargs)
+        owned.add(fd)
+        return fd
+    def tracked_close(fd):
+        close_calls.append(fd)
+        owned.discard(fd)
+        original_close(fd)
+        if fd == failed_fd:
+            raise OSError('synthetic close uncertainty')
+    monkeypatch.setattr(lifecycle.os, 'open', tracked_open)
+    monkeypatch.setattr(lifecycle.os, 'close', tracked_close)
+    with pytest.raises(RuntimeError):
+        with fixture.service.retained_runtime():
+            fixture.service.qualify_old(**fixture.arguments)
+            count = len(fixture.service.control_path_binding.fds)
+            assert 0 < count <= lifecycle._CONTROL_PATH_MAX_DIRECTORIES
+            roots = {'application': _root(module, fixture.roots['application'])}
+            backup = _root(module, fixture.roots['backup'])
+            changes, _ = _manifest_changes(module, 1)
+            peak = module._source_descriptor_peak(roots, changes, backup, 1)
+            remaining = module._source_descriptor_peak(roots, changes, backup, 1,
+                runtime_fd_already_open=True, control_path_fds_already_open=count)
+            assert peak - remaining == count + 1
+            monkeypatch.setattr(module, '_source_descriptor_capacity_snapshot', lambda: (0, peak - 1, peak - 1))
+            with pytest.raises(module.InstallationRefused, match='descriptor_capacity_insufficient'):
+                module._require_source_descriptor_capacity(roots, changes, backup, 1)
+            failed_fd = next(iter(fixture.service.control_path_binding.fds.values()))[0]
+            close_calls.clear()
+    assert not owned and not fixture.service.runtime_close_completed
+    assert close_calls.count(failed_fd) == 1
+    assert not fixture.service.control_path_binding.fds

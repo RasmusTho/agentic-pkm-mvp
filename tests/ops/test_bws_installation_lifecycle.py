@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -1302,3 +1303,206 @@ def root_control_golden_trace(control, *, anchored):
         walk()
         trace.append(('fstat', root))
     return trace
+
+
+def configure_control_path_service(module, patch, state, control, application, runtime,
+                                   public_launcher, channel, environment):
+    """Real typed producer/lifecycle; replace only external kernel/service metadata."""
+    import copy
+    import json
+    import time
+    from types import SimpleNamespace
+    patch.setattr(module, 'CONTROL_DIRECTORY', str(control))
+    patch.setattr(module, '_CONTROL_OWNER_UID', os.geteuid())
+    patch.setattr(module, '_CONTROL_OWNER_GID', os.getegid())
+    patch.setattr(module, 'RUNTIME', str(runtime))
+    patch.setattr(module, 'LAUNCHER', str(public_launcher))
+    patch.setattr(module, 'PROC', application / 'absent-proc')
+    real_os = module.os
+    runtime_inode = runtime.stat().st_ino
+    def observed(info):
+        if info.st_ino != runtime_inode:
+            return info
+        return SimpleNamespace(**{**{name: getattr(info, name) for name in dir(info)
+                                     if name.startswith('st_')}, 'st_uid': 0, 'st_gid': 0})
+    patch.setattr(module, 'os', SimpleNamespace(**{
+        **vars(real_os), 'fstat': lambda fd: observed(real_os.fstat(fd)),
+        'stat': lambda *a, **kw: observed(real_os.stat(*a, **kw)),
+    }))
+    if sys.platform != 'linux':
+        # macOS has no Linux statx. Replace only that OS metadata port; Linux CI
+        # exercises the actual syscall, including mount IDs on held directories.
+        patch.setattr(module, '_control_path_mount', lambda fd: real_os.fstat(fd).st_dev)
+    properties = {
+        ('Unit', 'Id'): f'yggdrasil-bws-deploy@{channel}.service',
+        ('Unit', 'LoadState'): 'loaded', ('Service', 'Type'): 'simple',
+        ('Service', 'User'): 'root', ('Service', 'Group'): 'root',
+        ('Service', 'KillMode'): 'control-group', ('Service', 'Restart'): 'on-failure',
+        ('Unit', 'ActiveState'): 'active', ('Unit', 'SubState'): 'running',
+        ('Unit', 'Job'): [0, '/'], ('Service', 'ControlPID'): 0, ('Service', 'MainPID'): 123,
+        ('Service', 'Environment'): list(environment), ('Service', 'EnvironmentFiles'): [],
+        ('Service', 'Result'): 'success',
+    }
+    for name in ('OnFailure', 'OnSuccess', 'TriggeredBy', 'DropInPaths', 'JoinsNamespaceOf'):
+        properties['Unit', name] = []
+    for name in ('ExecCondition', 'ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecReload',
+                 'BindPaths', 'BindReadOnlyPaths', 'TemporaryFileSystem', 'ReadOnlyPaths',
+                 'ReadWritePaths', 'InaccessiblePaths', 'PassEnvironment', 'UnsetEnvironment', 'ExecSearchPath',
+                 'ExtensionDirectories', 'MountImages', 'ExtensionImages'):
+        properties['Service', name] = []
+    for name in ('RootDirectory', 'RootImage', 'WorkingDirectory', 'PAMName'):
+        properties['Service', name] = ''
+    for name in ('PrivateMounts', 'PrivateTmp', 'PrivateDevices', 'PrivateUsers', 'DynamicUser'):
+        properties['Service', name] = False
+    for name in ('ProtectHome', 'ProtectSystem'):
+        properties['Service', name] = 'no'
+    for name, action in (('ExecStart', 'serve'), ('ExecStopPost', 'cleanup')):
+        properties['Service', name] = [[module.LAUNCHER, [module.LAUNCHER, action, channel],
+                                        False, 1, 2, 3, 4, 5, 1, 0]]
+    def transport(argv):
+        if argv[0] == 'systemctl':
+            action = argv[-2]
+            state['events'].append(action)
+            if action == 'stop':
+                properties['Unit', 'ActiveState'], properties['Unit', 'SubState'] = 'inactive', 'dead'
+                properties['Service', 'MainPID'] = 0
+                now = time.monotonic_ns() // 1000
+                row = properties['Service', 'ExecStopPost'][0]
+                row[3:] = [1, now, 2, now, 900, 1, 0]
+            else:
+                properties['Unit', 'ActiveState'], properties['Unit', 'SubState'] = 'active', 'running'
+                properties['Service', 'MainPID'] = 456
+                if state.get('consume_start'):
+                    state['consume_start']()
+            return b''
+        if argv[7] == 'call':
+            method = argv[11]
+            signature = 'o' if method == 'GetUnit' else 'a(sus)'
+            pid = properties['Service', 'MainPID']
+            data = ['/org/freedesktop/systemd1/unit/synthetic'] if method == 'GetUnit' else [
+                [['synthetic', pid, 'synthetic']] if pid else [],
+            ]
+        else:
+            interface, name = argv[-2].rsplit('.', 1)[-1], argv[-1]
+            value = properties[interface, name]
+            signature = (module.EXEC_TYPE if name.startswith('Exec') and name != 'ExecSearchPath' else
+                         'a(sb)' if name == 'EnvironmentFiles' else 'a(ssbt)' if name in {'BindPaths', 'BindReadOnlyPaths'} else
+                         'a(ss)' if name == 'TemporaryFileSystem' else
+                         'a(ssba(ss))' if name == 'MountImages' else
+                         'a(sba(ss))' if name == 'ExtensionImages' else '(uo)' if name == 'Job' else
+                         'b' if type(value) is bool else 'u' if type(value) is int else
+                         'as' if type(value) is list else 's')
+            data = copy.deepcopy(value)
+        return json.dumps(dict(type=signature, data=data)).encode()
+    patch.setattr(module, '_run', transport)
+    patch.setattr(module, '_pid_token', lambda _u, _c, pid, _a, _r: ('5' if pid == 123 else '6') * 64)
+    return properties
+
+
+def control_path_fixture(monkeypatch, secure_tmp_path, *, channel='dev', slot='descendant'):
+    from types import SimpleNamespace
+    base = secure_tmp_path.resolve()
+    roots = {}
+    for name in ('control', 'application', 'launcher', 'backup'):
+        path = base / name
+        path.mkdir(mode=0o755)
+        roots[name] = path
+    runtime = base / 'runtime'
+    runtime.write_bytes(b'runtime')
+    runtime.chmod(0o755)
+    launcher = roots['launcher'] / 'yggdrasil-bws-deploy'
+    launcher.write_bytes(b'old launcher')
+    launcher.chmod(0o755)
+    control = roots['control']
+    if slot == 'descendant':
+        (control / 'lookup').mkdir(mode=0o755)
+    path = control if slot == 'root' else control / ('lookup' if slot == 'descendant' else 'absent/deeper')
+    environment = ['LLM_PROVIDER=mock', f'PATH=/usr/bin:{path}:/bin', 'UNCHANGED=exact value']
+    state = {'events': []}
+    properties = configure_control_path_service(lifecycle, monkeypatch, state, control,
+        roots['application'], runtime, launcher, channel, environment)
+    monkeypatch.setattr(lifecycle, '_public_launcher_bytes', launcher.read_bytes)
+    def identity(path):
+        info = path.stat()
+        return dict(path=str(path), device=info.st_dev, inode=info.st_ino,
+                    uid=info.st_uid, gid=info.st_gid, mode=info.st_mode & 0o777)
+    service = lifecycle.FixedBwsService(unit=f'yggdrasil-bws-deploy@{channel}.service', channel=channel)
+    payload = launcher.read_bytes()
+    arguments = dict(application_root=identity(roots['application']), control_root=identity(control),
+                     control_inventory_empty=True, installation_footprint=tuple(identity(roots[n])
+                         for n in ('application', 'launcher', 'backup')),
+                     launcher_content=dict(sha256=hashlib.sha256(payload).hexdigest(),
+                                           base64=base64.b64encode(payload).decode()))
+    return SimpleNamespace(service=service, arguments=arguments, properties=properties,
+                           state=state, roots=roots, slot=path, environment=environment)
+
+
+@pytest.mark.parametrize('slot', ['root', 'descendant', 'absent'])
+def test_control_path_projection_preserves_typed_environment(monkeypatch, secure_tmp_path, slot):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path, slot=slot)
+    with fixture.service.retained_runtime():
+        fixture.service.qualify_old(**fixture.arguments)
+        contract = fixture.service.contract
+        assert contract[2] == tuple(fixture.environment)
+        assert fixture.service._config() == contract
+        fixture.service.revalidate_empty_control_configuration()
+        assert fixture.service.control_path_binding.fds
+    assert fixture.service.runtime_close_completed
+    assert not fixture.service.control_path_binding.fds
+    assert not fixture.state['events']
+
+
+@pytest.mark.parametrize('fault', ['executable', 'symlink', 'fifo', 'hardlink', 'writable',
+    'foreign', 'relative', 'duplicate', 'empty', 'unknown_hint', 'environment_file', 'loader',
+    'namespace', 'changed_environment', 'changed_lookup', 'changed_mount', 'overlap'])
+def test_control_path_slot_refusal_matrix(monkeypatch, secure_tmp_path, fault):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    slot, properties = fixture.slot, fixture.properties
+    if fault in {'executable', 'hardlink', 'writable'}:
+        item = slot / 'candidate'
+        item.write_bytes(b'unread PRIVATE_CANARY')
+        item.chmod(0o755 if fault == 'executable' else 0o666 if fault == 'writable' else 0o644)
+        if fault == 'hardlink':
+            os.link(item, slot / 'second')
+    if fault == 'symlink':
+        (slot / 'candidate').symlink_to('/outside/PRIVATE_CANARY')
+    if fault == 'fifo':
+        os.mkfifo(slot / 'candidate')
+    if fault == 'foreign':
+        monkeypatch.setattr(lifecycle, '_CONTROL_OWNER_UID', os.geteuid() + 1)
+    if fault == 'relative':
+        properties['Service', 'Environment'][1] += ':relative'
+    if fault == 'duplicate':
+        properties['Service', 'Environment'].append('PATH=/usr/bin')
+    if fault == 'empty':
+        properties['Service', 'Environment'][1] += ':'
+    if fault == 'unknown_hint':
+        properties['Service', 'Environment'].append('PYTHONPATH=' + str(slot))
+    if fault == 'environment_file':
+        properties['Service', 'EnvironmentFiles'] = [['/private/PRIVATE_CANARY', False]]
+    if fault == 'loader':
+        (fixture.roots['control'] / 'app').mkdir()
+    if fault == 'namespace':
+        properties['Service', 'RootDirectory'] = '/private/PRIVATE_CANARY'
+    if fault == 'overlap':
+        fixture.arguments['installation_footprint'] = (fixture.arguments['control_root'],) * 3
+    with fixture.service.retained_runtime():
+        if fault.startswith('changed_'):
+            fixture.service.qualify_old(**fixture.arguments)
+            if fault == 'changed_environment':
+                properties['Service', 'Environment'].reverse()
+            elif fault == 'changed_lookup':
+                slot.rename(slot.with_name('old'))
+                slot.mkdir(mode=0o755)
+            else:
+                original = lifecycle._control_path_mount
+                monkeypatch.setattr(lifecycle, '_control_path_mount', lambda fd: original(fd) + 1)
+            with pytest.raises(RuntimeError):
+                fixture.service.revalidate_empty_control_configuration()
+        else:
+            with pytest.raises(RuntimeError):
+                fixture.service.qualify_old(**fixture.arguments)
+    assert not fixture.state['events']
+    assert fixture.service.runtime_close_completed
+    if fixture.service.control_path_binding:
+        assert not fixture.service.control_path_binding.fds

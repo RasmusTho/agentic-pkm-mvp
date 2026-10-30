@@ -1265,12 +1265,42 @@ inventory is empty; a changed root or a newly appearing control source refuses.
 After caller-source validation and immediately before backup, old-kernel lifecycle
 qualification also accepts this shape only when the fixed control-root identity
 still matches and both loader packages remain absent at every repeated configuration
-check, and the fixed launcher, unit environment, and EnvironmentFiles paths contain
-no control-root reference. This matches the installed unit/launcher topology; any
-hint is refused until its format is explicitly supported. Existing anchored roots keep
-their strict anchor checks. This support-topology proof does not establish
-loaded-code provenance or operation ownership, and the application inventory remains
-required and non-empty. It does not establish DEV or TEST acceptance.
+check. With no control hint, the existing checks are unchanged. The additional
+supported format is exactly one byte-preserved typed `PATH=` assignment with at
+most 16 distinct canonical absolute components (at most 32 components per path),
+including the fixed control root or its descendants. Empty, relative, traversing,
+duplicate or unsupported hints refuse. EnvironmentFiles, ambient environment
+imports, unit drop-ins and unsupported mount/root/namespace overrides must be
+absent. Both OLD and proposed launchers remain free of control hints; the absolute
+launcher/interpreter, loaded-source provenance and writer/quiescence gates remain
+independently mandatory. Complete Environment bytes and ordering are bound into
+the private lifecycle/generation projection; child runtime-bin prepending is unchanged.
+
+The production `FixedBwsService._config` qualifies each selected control PATH slot
+using retained no-follow directory handles and metadata only. An absent slot needs
+an unchanged existing ancestor and absent edge. An existing directory admits at
+most 128 direct entries: protected same-owner regular files must be non-executable
+and singly linked; protected direct subdirectories are not commands and their
+contents are not read. Links, special entries, writable/foreign entries, mount
+crossings (including same-device bind mounts), changed current lookup roots or
+ancestor bindings, and unprovable metadata refuse. No executable search, content
+inspection, recursive census or PATH/unit rewriting occurs. Linux mount identities
+come from `statx` on held directories; unavailable mount metadata refuses.
+
+The actual candidate manifest binds the control projection to application,
+launcher and backup roots and requires zero control writes. These disjoint roots
+contain every admitted target, random staging/restore file and backup-bundle effect;
+retained and current namespace bindings are checked together. Qualification repeats
+before backup, before stop, after apply/start, at closing boundaries and after
+same-handle compensation. The descriptor envelope includes retained directories,
+fresh verification walks and bounded enumeration alongside the installation handle;
+prepare charges only remaining demand. Every owned close is attempted once and
+uncertainty overrides a successful/refusal receipt. Compensation restores exact OLD
+bytes and rechecks configuration/slots, retaining `compensated_stopped` when legacy
+OLD loaded-source provenance cannot authorize restart. Drift retains failure/UNKNOWN
+and never permits replay. Existing anchored roots keep their strict anchor checks.
+This source support does not qualify the actual private PATH slot, authorize native
+installation or establish DEV-heavy, DEV/TEST or parent acceptance.
 
 OLD-kernel refusals retain the coarse `old_kernel_qualification` fallback. Supported
 new refusals use `old_kernel_initial_<family>` for service setup, retained-runtime

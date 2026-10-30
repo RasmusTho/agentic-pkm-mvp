@@ -1682,8 +1682,21 @@ def candidate_manifest(
         if not changed_roots <= set(roots):
             _refuse()
         candidate_files.sort(key=lambda row: (str(row["root"]), str(row["path"])))
+        control_path_footprint: tuple[dict[str, Any], ...] = ()
+        if _captured_control_inventory_is_empty(profile):
+            # Every lower effect (including random staging/restore names and the
+            # entire backup bundle) stays inside these roots. No control write
+            # may be introduced by the actual manifest in this topology.
+            if changed_roots != {"application", "launcher"}:
+                _refuse()
+            control_path_footprint = tuple(
+                {"path": root.path, "device": root.device, "inode": root.inode,
+                 "uid": root.uid, "gid": root.gid, "mode": root.mode}
+                for root in (roots["application"], roots["launcher"], backup_root)
+            )
         return tuple(changes), payloads, {
             "backup_root": backup_root,
+            "control_path_footprint": control_path_footprint,
             "changed_roots": sorted(changed_roots),
             "candidate_files": candidate_files,
             "candidate_modules": [],
@@ -2218,6 +2231,9 @@ def _restore_from_handle(
         except Exception as exc:
             raise _HandleCloseUncertain("installation handle close failed") from exc
         return "unknown", None
+    binding = getattr(service, "control_path_binding", None)
+    if binding is not None:
+        service.revalidate_restored_control_configuration()
     # The legacy service supplied no loaded-source profile, so its runtime
     # cannot be qualified for restart even after its disk bytes are restored.
     try:
@@ -2335,7 +2351,8 @@ class _NativePorts:
     def prepare(self, roots: dict[str, Any], changes: tuple[Any, ...],
                 payloads: dict[tuple[str, str], bytes], backup_root: Any, bundle_name: str, *,
                 source_inventory_fd_peak: int = 0,
-                runtime_fd_already_open: bool = False) -> Any:
+                runtime_fd_already_open: bool = False,
+                control_path_fds_already_open: int = 0) -> Any:
         from app.ops.bws_control_installation import InstallationRefused, _prepare_full_source_files
         self._descriptor_prepare_uncertain = True
         try:
@@ -2344,6 +2361,7 @@ class _NativePorts:
                 backup_root=backup_root, bundle_name=bundle_name,
                 source_inventory_fd_peak=source_inventory_fd_peak,
                 runtime_fd_already_open=runtime_fd_already_open,
+                control_path_fds_already_open=control_path_fds_already_open,
             )
             self._descriptor_prepare_uncertain = False
             return self._descriptor_handle
@@ -2635,6 +2653,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                             control_root={"path": str(_CONTROL_DIRECTORY), **control_identity},
                             launcher_content=launcher_content,
                             control_inventory_empty=_captured_control_inventory_is_empty(old_state),
+                            installation_footprint=manifest_proof.get("control_path_footprint", ()),
                         )
                         prebackup_gate = "qualified_writer_snapshot"
                         current = _require_writer_snapshot(ports.preflight(effects, request), request)
@@ -2658,6 +2677,9 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                                 roots, changes, payloads, backup_root, request["bundle_name"],
                                 source_inventory_fd_peak=source_inventory_fd_peak,
                                 runtime_fd_already_open=True,
+                                control_path_fds_already_open=len(getattr(
+                                    getattr(service, "control_path_binding", None), "fds", {},
+                                )),
                             )
                         except Exception as exc:
                             handle = getattr(exc, "installation", None)
