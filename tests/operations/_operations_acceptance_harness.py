@@ -18,6 +18,7 @@ from app.api.native_operations_acceptance import prepare_native_context, source_
 from app.api.routes import active_context_selection, capture
 from app.instance.local_operator_principal import AuthPosture
 from app.instance.runtime import open_default_vault_service
+from app.instance.vault_registry import AppLocalSettingsStore
 from app.ops.operations_acceptance import PROFILE, SELECTION_HASH, file_hash
 from tests._mvr_default_vault_harness import new_runtime, activate
 from tests._mvr03_principal_harness import run_principal_cutover
@@ -71,6 +72,13 @@ def host(tmp_path, monkeypatch, *, channel="test", freeze=True, prepare=True):
     open_default_vault_service(runtime.registry.path).set(registration.vault_binding_id)
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
     monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    # The initializer deliberately uses remember=False. A fresh API/SDK
+    # process must restore the same selection from actual registry history,
+    # so use the ordinary authority-aware picker producer before admission.
+    manager.app_local_store = AppLocalSettingsStore()
+    selected_context = manager.select_vault(root, remember=True)
+    assert selected_context.status == "selected"
+    assert runtime.registry.load().last_active_vault_ref == current.ref
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
     monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "false")
     monkeypatch.setattr(capture, "_offer_question_registration_proposal", lambda **_: None)
