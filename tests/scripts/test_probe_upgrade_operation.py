@@ -11,9 +11,10 @@ from pathlib import Path
 import shutil
 import signal
 import stat
+import subprocess
 import sys
 import time
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -56,8 +57,12 @@ class OfflineHost:
         self.on_phase = self.after_start = None
         self.journal_rows = None
         self.starts, self.reuse_invocation = 0, False
+        self.normal_launches = 0
         self.supervisor = None
+        self.predecessor_supervisor = None
+        self.original_pins = {}
         self.supervisor_starts = 0
+        self.supervisor_launches = 0
         for relative, data in self.old.files.items():
             self.write(self.package / relative, data, 0o664)
         for parent in [self.package, *self.script.parents]:
@@ -111,8 +116,17 @@ class OfflineHost:
             "ENGINE_SHA256": sha(b"offline-qualified-engine"),
             "_safe_command": self.command,
             "_open_directory": self.open_directory,
+            **self.original_pins,
         }.items():
-            setattr(module, name, value)
+            self.monkeypatch.setattr(module, name, value, raising=False)
+
+        def native_port(argv, **kwargs):
+            try:
+                return self.command(argv, **kwargs)
+            except operation.OperationFailure as error:
+                raise module.OperationFailure(error.reason, unknown=error.unknown) from None
+
+        self.monkeypatch.setattr(module, "_safe_command", native_port)
 
     def open_directory(self, path):
         # The substituted trust root is private pytest storage. Descendants and
@@ -272,7 +286,14 @@ class OfflineHost:
         if argv[:2] == ["/usr/bin/systemctl", "list-units"]:
             return operation.UNIT + " loaded active running probe\n"
         if argv[:2] == ["/usr/bin/systemctl", "show"]:
-            fields = self.fields if argv[2] == operation.UNIT else self.supervisor
+            fields = (
+                self.fields
+                if argv[2] == operation.UNIT
+                else self.predecessor_supervisor
+                if argv[2] == operation._operation_name(operation.ORIGINAL_OPERATION)
+                and self.predecessor_supervisor is not None
+                else self.supervisor
+            )
             if fields is None:
                 return (
                     "LoadState=not-found\nActiveState=inactive\nSubState=dead\nMainPID=0\nJob=0\n"
@@ -296,8 +317,11 @@ class OfflineHost:
         if argv[:3] == ["/usr/bin/systemctl", "start", operation.UNIT]:
             self.events.append("start")
             self.starts += 1
-            invocation = "c" * 32 if self.reuse_invocation else format(12 + self.starts, "x") * 32
-            self.set_active(invocation, 100 + self.starts * 100)
+            self.normal_launches += 1
+            invocation = (
+                "c" * 32 if self.reuse_invocation else format(12 + self.normal_launches, "032x")
+            )
+            self.set_active(invocation, 100 + self.normal_launches * 100)
             if self.after_start:
                 self.after_start(self.starts)
             return ""
@@ -305,6 +329,7 @@ class OfflineHost:
             assert "_SYSTEMD_INVOCATION_ID=" + self.fields["InvocationID"] in argv
             return self.journal_rows if self.journal_rows is not None else self.records()
         if argv[0] == "/usr/bin/systemd-run":
+            self.supervisor_launches += 1
             name = next(arg.removeprefix("--unit=") for arg in argv if arg.startswith("--unit="))
             value = name.removeprefix("yggdrasil-probe-upgrade-6457-").removesuffix(".service")
             worker_root = self.operation_root / value
@@ -338,7 +363,7 @@ class OfflineHost:
             self.process(
                 os.getpid(),
                 1,
-                1234,
+                1234 + self.supervisor_launches * 100,
                 cgroup,
                 [sys.executable, "-I", "-B", worker_root / "worker.py", value],
                 cwd=worker_root,
@@ -405,6 +430,795 @@ def host(tmp_path, monkeypatch):
     yield fixture
     signal.alarm(0)
     signal.signal(signal.SIGALRM, original_alarm)
+
+
+def rendering_authority():
+    return {
+        "issue": operation.RENDERING_INSTALLATION_ISSUE,
+        "body_sha256": operation.RENDERING_INSTALLATION_BODY_SHA256,
+        "holder": "11111111-1111-4111-8111-111111111111",
+        "session": "11111111-1111-4111-8111-111111111111",
+        "branch": "codex/issue-6476-probe-rendering-install",
+        "worktree": str(ROOT),
+        "source_head": carrier._git("rev-parse", "HEAD"),
+        "registration_generation": "6" * 32,
+        "scope": "install-0172-to-17c2-on-ygg-prod-under-4076",
+    }
+
+
+@pytest.fixture
+def successor_host(host, monkeypatch):
+    """Produce honest legacy UNKNOWN via the real helper, then pin synthetic metadata.
+
+    Only filesystem/host identities and their immutable hashes are substituted.
+    Original production hashes remain independently asserted below. No observation
+    marker or stubbed admission verdict participates in successor qualification.
+    """
+    original = operation.ORIGINAL_OPERATION
+    request = carrier._request(
+        original, "lease-c186483a", host.old, host.new, lease_expires_at="2099-01-01T00:00:00Z"
+    )
+    prepared = operation.remote_entry("prepare", request, programs=carrier._programs())
+    operation.remote_entry("authorize", request, expected_handle=prepared["handle"])
+
+    def unqualified_start(_count):
+        link = host.proc / host.fields["MainPID"] / "exe"
+        link.unlink()
+        link.symlink_to("/usr/bin/false")
+
+    host.after_start = unqualified_start
+    monkeypatch.setenv("INVOCATION_ID", "b" * 32)
+    operation.worker_main(original)
+    host.finish_supervisor()
+    status = operation.remote_entry("status", request)
+    assert status["status"] == "unknown" and status["phase"] == "start_intent"
+    assert status["failure"] == "main_process_boundary" and status["supervisor"]["reaped"]
+    host.after_start = None
+    link = host.proc / host.fields["MainPID"] / "exe"
+    link.unlink()
+    link.symlink_to(Path(sys.executable).resolve())
+    original_root = host.operation_root / original
+    host.original_pins = {
+        "ORIGINAL_REQUEST_SHA256": sha((original_root / "request.json").read_bytes()),
+        "ORIGINAL_FILE_SHA256": {
+            name: sha((original_root / name).read_bytes())
+            for name in operation.ORIGINAL_FILE_SHA256
+        },
+    }
+    host.bind(operation)
+    host.predecessor_supervisor = dict(host.supervisor)
+    host.supervisor = None
+    host.old, host.new, _ = carrier._rendering_source_pair()
+    host.legacy_request = request
+    host.legacy_handle = prepared["handle"]
+    host.original_bytes = {
+        path: path.read_bytes()
+        for path in [host.operation_root / "active.json", *original_root.iterdir()]
+        if path.is_file()
+    }
+    host.events.clear()
+    host.phases.clear()
+    host.starts = 0
+    return host
+
+
+def successor_request(host, value="a" * 32):
+    return carrier._request(
+        value,
+        "lease-abcdef",
+        host.old,
+        host.new,
+        lease_expires_at="2099-01-01T00:00:00Z",
+        installation_authority=rendering_authority(),
+    )
+
+
+class AssembledSuccessorTransport:
+    """Execute the real serialized carrier program and its finite worker."""
+
+    def __init__(self, host, monkeypatch, *, lose_authorization=False, phase_hook=None):
+        self.host, self.monkeypatch = host, monkeypatch
+        self.lose_authorization, self.phase_hook = lose_authorization, phase_hook
+        self.calls = []
+        self.module = None
+
+    def __call__(self, payload):
+        source = payload.decode()
+        action = next(
+            name
+            for name in ("prepare", "authorize", "status", "reconcile")
+            if f"remote_entry({name!r}," in source
+        )
+        self.calls.append(action)
+        if (
+            action == "status"
+            and self.host.supervisor
+            and self.host.supervisor["ActiveState"] == "active"
+        ):
+            self.monkeypatch.setenv("INVOCATION_ID", self.host.supervisor["InvocationID"])
+            self.module.worker_main(self.host.supervisor["WorkingDirectory"].split("/")[-1])
+            self.host.finish_supervisor()
+        source = source.replace(
+            "try:\n    _result=", "_test_transport.bind(_op)\ntry:\n    _result=", 1
+        )
+        namespace = {"_test_transport": self}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exec(compile(source, "<assembled-successor-carrier>", "exec"), namespace)
+        self.module = namespace["_op"]
+        receipt = json.loads(output.getvalue())
+        if action == "authorize" and self.lose_authorization:
+            self.lose_authorization = False
+            raise carrier.CarrierUnknown("lost original successor authorization response")
+        return receipt
+
+    def bind(self, module):
+        self.host.bind(module)
+        if self.phase_hook:
+            write = module._metadata_write
+
+            def after_durable_write(path, value, **kwargs):
+                write(path, value, **kwargs)
+                if path.name in {"phase.json", "reconcile-1-phase.json"}:
+                    self.phase_hook(value["phase"], module)
+
+            module._metadata_write = after_durable_write
+
+
+def bind_successor_carrier(host, monkeypatch, **kwargs):
+    transport = AssembledSuccessorTransport(host, monkeypatch, **kwargs)
+    monkeypatch.setattr(carrier, "_ssh", transport)
+    monkeypatch.setattr(
+        carrier,
+        "_lease_readback",
+        lambda *_args, **_kwargs: {
+            "lease_expires_at": "2099-01-01T00:00:00Z",
+            "installation_authority": rendering_authority(),
+        },
+    )
+    return transport
+
+
+def assert_original_preserved(host):
+    assert all(path.read_bytes() == raw for path, raw in host.original_bytes.items())
+    # Execute the unchanged pre-successor follow reader, not a rewritten legacy
+    # request or a successor-owned interpretation of its terminal result.
+    pinned = ModuleType("pinned_original_operation")
+    source = carrier._git_bytes(
+        "show", "e0b5a1b0d3226247fc4f5469b1285844da13427e:scripts/probe_upgrade_operation.py"
+    )
+    exec(compile(source, "<pinned-original-follow>", "exec"), pinned.__dict__)
+    host.bind(pinned)
+    status = pinned.remote_entry("status", host.legacy_request)
+    assert status["status"] == "unknown" and status["handle"] == host.legacy_handle
+    assert status["failure"] == "main_process_boundary" and status["supervisor"]["reaped"]
+
+
+def test_verified_rendering_successor_admission(successor_host, monkeypatch):
+    host = successor_host
+    before = host.incident.read_bytes()
+    transport = bind_successor_carrier(host, monkeypatch)
+    result = carrier.run("lease-abcdef", "a" * 32, rendering_successor=True)
+    assert result["status"] == "committed", {
+        key: result.get(key)
+        for key in ("status", "failure", "phase", "recovery_failure", "recovery")
+    }
+    assert transport.calls == ["prepare", "authorize", "status"]
+    assert host.events == ["stop", "start"]
+    assert sha(host.script.read_bytes()) == operation.RENDERING_SCRIPT_SHA256
+    assert result["source_manifest_sha256"] == operation.RENDERING_MANIFEST_SHA256
+    assert host.incident.read_bytes() == before
+    assert result["normal_cycles"]["completed_cycles"] == 2
+    assert result["supervisor"]["reaped"]
+    assert not list(host.script.parent.glob(".prod_probe.*.stage"))
+    assert_original_preserved(host)
+
+
+def test_successor_preserves_original_unknown_and_fence(successor_host, monkeypatch):
+    host = successor_host
+    transport = bind_successor_carrier(host, monkeypatch, lose_authorization=True)
+    lost = carrier.run("lease-abcdef", "a" * 32, rendering_successor=True)
+    assert lost["status"] == "unknown" and lost["handle"]
+    followed = carrier.run("lease-abcdef", "a" * 32, "follow")
+    assert followed["status"] == "committed" and followed["handle"] == lost["handle"]
+    assert transport.calls.count("prepare") == transport.calls.count("authorize") == 1
+    legacy = dict(host.legacy_request)
+    legacy["packet"] = {**legacy["packet"], "operation": "d" * 32}
+    with pytest.raises(
+        operation.OperationFailure, match="original_operation_unresolved_or_committed"
+    ):
+        operation.remote_entry("prepare", legacy, programs=carrier._programs())
+    with pytest.raises(
+        operation.OperationFailure, match="original_operation_unresolved_or_committed"
+    ):
+        operation.remote_entry(
+            "prepare", successor_request(host, "e" * 32), programs=carrier._programs()
+        )
+    assert host.events == ["stop", "start"]
+    assert_original_preserved(host)
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "active_helper",
+        "foreign_fence",
+        "partial_original",
+        "changed_result",
+        "continuation",
+        "source",
+        "retained",
+        "config",
+        "unit",
+        "normal_invocation",
+        "malformed_incident",
+        "writer",
+        "held_lock",
+    ],
+)
+def test_successor_refuses_unqualified_current_state(successor_host, monkeypatch, drift):
+    host = successor_host
+    request = successor_request(host)
+    root = host.operation_root / operation.ORIGINAL_OPERATION
+    lock = None
+    if drift == "active_helper":
+        host.predecessor_supervisor.update(ActiveState="active", SubState="running", MainPID="999")
+    elif drift == "foreign_fence":
+        operation._metadata_write(
+            host.operation_root / "active.json", {"operation": "9" * 32, "request_sha256": "9" * 64}
+        )
+    elif drift == "partial_original":
+        (root / "handle.json").unlink()
+    elif drift == "changed_result":
+        operation._metadata_write(
+            root / "result.json", {"status": "verified_observed_postconditions"}
+        )
+    elif drift == "continuation":
+        operation._metadata_write(root / "reconcile-1.json", {"unqualified": True}, exclusive=True)
+    elif drift == "source":
+        host.script.write_bytes(b"foreign script")
+    elif drift == "retained":
+        (host.package / "ops/host-setup/mac-mini/notification_channels.py").write_bytes(b"foreign")
+    elif drift == "config":
+        host.config.write_bytes(b"foreign config")
+    elif drift == "unit":
+        host.fields["ExecStart"] += " foreign-command"
+        host.fields["DropInPaths"] = "/foreign.service"
+    elif drift == "normal_invocation":
+        host.fields["InvocationID"] = "0" * 32
+    elif drift == "malformed_incident":
+        host.incident.write_bytes(b'{"status":"down"}')
+    elif drift == "writer":
+        monkeypatch.setattr(
+            operation.pwd,
+            "getpwall",
+            lambda: [SimpleNamespace(pw_gid=os.getegid(), pw_uid=os.geteuid() + 1)],
+        )
+    else:
+        lock = operation._resource_lock()
+    try:
+        with pytest.raises((operation.OperationFailure, FileNotFoundError)):
+            operation.remote_entry("prepare", request, programs=carrier._programs())
+        assert host.events == [] and host.supervisor is None
+        assert not (host.operation_root / ("a" * 32)).exists()
+        assert not (host.operation_root / "rendering-successor.json").exists()
+    finally:
+        if lock is not None:
+            os.close(lock)
+
+
+@pytest.mark.parametrize(
+    "failure", ["interrupt_after_replace", "latest_ack_then_failed_cycles", "lost_start_ack"]
+)
+def test_successor_unknown_and_recovery_preserve_latest_incident(
+    successor_host, monkeypatch, failure
+):
+    host = successor_host
+    interrupted = False
+    latest = {"bytes": host.incident.read_bytes()}
+
+    def phase_hook(phase, _module):
+        nonlocal interrupted
+        if phase == "replaced" and failure == "interrupt_after_replace" and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt("finite helper interrupted after durable replacement")
+
+    transport = bind_successor_carrier(host, monkeypatch, phase_hook=phase_hook)
+    if failure == "latest_ack_then_failed_cycles":
+
+        def latest_ack(count):
+            if count == 1:
+                host.set_incident("33333333-3333-4333-8333-333333333333")
+                latest["bytes"] = host.incident.read_bytes()
+
+        host.after_start = latest_ack
+        host.journal_rows = "malformed final-cycle evidence"
+    if failure == "lost_start_ack":
+        command = host.command
+
+        def lose_ack(argv, **kwargs):
+            result = command(argv, **kwargs)
+            if argv[:3] == ["/usr/bin/systemctl", "start", operation.UNIT]:
+                raise operation.OperationFailure("lost_successor_start_ack", unknown=True)
+            return result
+
+        host.command = lose_ack
+        host.bind(operation)
+    result = carrier.run("lease-abcdef", "a" * 32, rendering_successor=True)
+    if failure == "interrupt_after_replace":
+        assert result["status"] == "unknown" and host.events == ["stop"]
+        host.set_incident("44444444-4444-4444-8444-444444444444")
+        latest["bytes"] = host.incident.read_bytes()
+        result = carrier.run("lease-abcdef", "a" * 32, "reconcile")
+        assert result["status"] == "rolled_back", result
+        assert host.events == ["stop", "start"]
+        assert transport.calls.count("prepare") == transport.calls.count("authorize") == 1
+    elif failure == "latest_ack_then_failed_cycles":
+        assert result["status"] == "rolled_back", result
+        assert host.events == ["stop", "start", "stop", "start"]
+    else:
+        assert result["status"] == "unknown", result
+        assert result["failure"] == "lost_successor_start_ack"
+        assert result["phase"] == "start_intent"
+        assert result["recovery_failure"] == "original_start_ownership_unproven"
+        previous = host.events[:]
+        again = carrier.run("lease-abcdef", "a" * 32, "reconcile")
+        assert again["status"] == "unknown" and host.events == previous
+    assert host.incident.read_bytes() == latest["bytes"]
+    assert sha(host.script.read_bytes()) == (
+        operation.RENDERING_SCRIPT_SHA256
+        if failure == "lost_start_ack"
+        else operation.NEW_SCRIPT_SHA256
+    )
+    assert_original_preserved(host)
+
+
+def test_successor_and_pinned_legacy_paths_share_the_physical_lock(successor_host, monkeypatch):
+    host = successor_host
+    pinned = ModuleType("pinned_legacy_writer")
+    source = carrier._git_bytes(
+        "show", "e0b5a1b0d3226247fc4f5469b1285844da13427e:scripts/probe_upgrade_operation.py"
+    )
+    exec(compile(source, "<pinned-legacy-writer>", "exec"), pinned.__dict__)
+    host.bind(pinned)
+    attempts = []
+
+    def queued_writers(phase, _module):
+        if phase != "quiescent":
+            return
+        legacy = {
+            **host.legacy_request,
+            "packet": {**host.legacy_request["packet"], "operation": "d" * 32},
+        }
+        for module, request in ((pinned, legacy), (operation, successor_request(host, "e" * 32))):
+            with pytest.raises(
+                module.OperationFailure, match="probe_resource_owned_by_original_operation"
+            ):
+                module.remote_entry("prepare", request, programs=carrier._programs())
+            attempts.append(request["packet"]["operation"])
+        assert not (host.operation_root / ("d" * 32)).exists()
+        assert not (host.operation_root / ("e" * 32)).exists()
+
+    bind_successor_carrier(host, monkeypatch, phase_hook=queued_writers)
+    result = carrier.run("lease-abcdef", "a" * 32, rendering_successor=True)
+    assert result["status"] == "committed", result
+    assert attempts == ["d" * 32, "e" * 32] and host.events == ["stop", "start"]
+    assert_original_preserved(host)
+
+
+@pytest.mark.parametrize(
+    "corruption", ["partial_admission", "selector_digest", "normal_replaced", "lock_replaced"]
+)
+def test_successor_authorization_requalifies_persisted_admission(
+    successor_host, monkeypatch, corruption
+):
+    host = successor_host
+    request = successor_request(host)
+    prepared = operation.remote_entry("prepare", request, programs=carrier._programs())
+    root = host.operation_root / ("a" * 32)
+    if corruption == "partial_admission":
+        admission = operation._metadata_read(root / "admission.json")
+        del admission["current_state"]["identity"]
+        operation._metadata_write(root / "admission.json", admission)
+    elif corruption == "selector_digest":
+        pointer = operation._metadata_read(host.operation_root / "rendering-successor.json")
+        pointer["admission_sha256"] = "0" * 64
+        operation._metadata_write(host.operation_root / "rendering-successor.json", pointer)
+    elif corruption == "normal_replaced":
+        host.set_active("8" * 32, 800)
+    else:
+        lock = host.operation_root / "resource.lock"
+        lock.rename(host.operation_root / "retained-resource.lock")
+        host.write(lock, b"")
+    with pytest.raises(operation.OperationFailure):
+        operation.remote_entry("authorize", request, expected_handle=prepared["handle"])
+    assert not (root / "go.json").exists() and host.events == []
+    # A lost parent handle does not replay prepare or affect the probe. The
+    # finite helper republishes its exact handle and expires without go.json.
+    (root / "handle.json").unlink()
+    clock = {"value": time.monotonic()}
+
+    def bounded_clock():
+        clock["value"] += 31.0
+        return clock["value"]
+
+    monkeypatch.setattr(
+        operation, "time", SimpleNamespace(monotonic=bounded_clock, sleep=lambda _: None)
+    )
+    monkeypatch.setenv("INVOCATION_ID", host.supervisor["InvocationID"])
+    assert operation.worker_main("a" * 32) == 78
+    host.finish_supervisor()
+    result = operation.remote_entry("status", request)
+    assert result["status"] == "refused" and result["failure"] == "authorization_not_received"
+    assert result["supervisor"]["reaped"] and host.events == []
+    assert_original_preserved(host)
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "live_issue",
+        "source_issue",
+        "live_body",
+        "target_source",
+        "before_manifest",
+        "after_bytes",
+        "owner_session",
+        "packet_holder",
+    ],
+)
+def test_successor_rejects_alternate_authority_or_source_before_host_contact(
+    successor_host, monkeypatch, changed
+):
+    request = successor_request(successor_host)
+    if changed in {"live_issue", "source_issue"}:
+        request["packet"]["installation_authority"]["issue"] = (
+            9000 if changed == "live_issue" else 6475
+        )
+    elif changed == "live_body":
+        request["packet"]["installation_authority"]["body_sha256"] = "0" * 64
+    elif changed == "target_source":
+        request["packet"]["source_merge"] = operation.SOURCE_MERGE
+    elif changed == "before_manifest":
+        request["before_manifest"][operation.SCRIPT_REL]["sha256"] = operation.OLD_SCRIPT_SHA256
+    elif changed == "owner_session":
+        request["packet"]["installation_authority"]["session"] = "2" * 36
+    elif changed == "packet_holder":
+        request["packet"]["claim_holder"] = "foreign-claimant"
+    else:
+        request["new_base64"] = request["old_base64"]
+    monkeypatch.setattr(
+        operation,
+        "_safe_command",
+        lambda *_args, **_kwargs: pytest.fail("host contact before fixed binding"),
+    )
+    with pytest.raises(operation.OperationFailure):
+        operation.remote_entry("prepare", request, programs=carrier._programs())
+    assert not (successor_host.operation_root / "rendering-successor.json").exists()
+    assert successor_host.events == []
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        None,
+        "source_lease",
+        "foreign_holder",
+        "expired",
+        "released",
+        "blocked",
+        "body",
+        "session",
+        "registration",
+        "duplicate_worktree",
+        "dirty",
+        "program",
+        "coherent_foreign_claim",
+        "runtime_cwd",
+        "record_path",
+    ],
+)
+def test_successor_carrier_authenticates_fixed_live_claim_and_actual_session(
+    monkeypatch, tmp_path, drift
+):
+    from scripts import agent_worktree
+
+    body = "synthetic exact installation contract for the one fixed transition"
+    body_sha = sha(body.encode())
+    monkeypatch.setattr(operation, "RENDERING_INSTALLATION_BODY_SHA256", body_sha)
+    monkeypatch.setattr(carrier, "RENDERING_INSTALLATION_BODY_SHA256", body_sha)
+    session = "11111111-1111-4111-8111-111111111111"
+    branch = "codex/issue-6476-probe-rendering-install"
+    monkeypatch.setenv("CODEX_THREAD_ID", "2" * 36 if drift == "session" else session)
+    monkeypatch.setenv("CODEX_SESSION_ID", "inherited-root-is-not-the-owner")
+    if drift == "runtime_cwd":
+        monkeypatch.chdir(tmp_path)
+    registry = {
+        str(ROOT): {
+            "path": str(ROOT),
+            "owner": session,
+            "branch": branch,
+            "status": "active",
+            "expires_at": time.time() + 3600,
+            "generation": "6" * 32,
+        }
+    }
+    if drift == "registration":
+        registry[str(ROOT)]["branch"] = "codex/foreign"
+    if drift == "record_path":
+        registry[str(ROOT)]["path"] = "/synthetic/other-worktree"
+    if drift == "duplicate_worktree":
+        registry["/synthetic/other-worktree"] = dict(registry[str(ROOT)])
+    monkeypatch.setattr(agent_worktree, "load_lifecycle_records", lambda _: registry)
+    monkeypatch.setattr(
+        agent_worktree, "load_lifecycle_authority", lambda *_args, **_kwargs: registry
+    )
+    head = "8" * 40
+
+    def git_port(*args):
+        return {
+            ("branch", "--show-current"): branch,
+            ("status", "--porcelain"): "M script" if drift == "dirty" else "",
+            ("rev-parse", "HEAD"): head,
+            ("rev-parse", "--show-toplevel"): str(ROOT),
+        }[args]
+
+    monkeypatch.setattr(carrier, "_git", git_port)
+
+    def committed_port(_show, ref):
+        path = ROOT / ref.partition(":")[2]
+        return b"foreign committed program" if drift == "program" else path.read_bytes()
+
+    monkeypatch.setattr(carrier, "_git_bytes", committed_port)
+    task = {
+        "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-6476",
+        "repo": "RasmusTho/agentic-pkm-mvp",
+        "issue_number": 6476,
+        "status": "claimed",
+        "claimed_by": session,
+        "lease_id": "lease-abcdef",
+    }
+    lease = {
+        "lease_id": "lease-abcdef",
+        "resource": "issue:6476",
+        "holder": task["claimed_by"],
+        "expires_at": "2099-01-01T00:00:00Z",
+        "released_at": None,
+    }
+    issue = {
+        "body": body,
+        "state": "OPEN",
+        "labels": [{"name": name} for name in ("type:task", "prio:high", "agent:in-progress")],
+    }
+    if drift == "source_lease":
+        task.update(issue_number=6475, task_id="github-RasmusTho--agentic-pkm-mvp-issue-6475")
+        lease["resource"] = "issue:6475"
+    elif drift == "foreign_holder":
+        lease["holder"] = "foreign"
+    elif drift == "coherent_foreign_claim":
+        task["claimed_by"] = lease["holder"] = "foreign-current-holder"
+    elif drift == "expired":
+        lease["expires_at"] = "2000-01-01T00:00:00Z"
+    elif drift == "released":
+        lease["released_at"] = "2026-01-01T00:00:00Z"
+    elif drift == "blocked":
+        issue["labels"][-1] = {"name": "agent:blocked"}
+    elif drift == "body":
+        issue["body"] += " changed"
+    calls = []
+
+    def claim_port(argv, **_kwargs):
+        calls.append(argv)
+        value = (
+            {"ok": True, "task": task, "lease": lease}
+            if argv[1:3] == ["-m", "app.dispatcher"]
+            else issue
+        )
+        return SimpleNamespace(returncode=0, stderr=b"", stdout=json.dumps(value).encode())
+
+    monkeypatch.setattr(carrier, "_bounded_process", claim_port)
+    if drift:
+        with pytest.raises((carrier.CarrierRefusal, operation.OperationFailure)):
+            carrier._lease_readback("lease-abcdef", rendering_successor=True)
+    else:
+        result = carrier._lease_readback("lease-abcdef", rendering_successor=True)
+        authority = result["installation_authority"]
+        assert authority["issue"] == 6476 and authority["holder"] == task["claimed_by"]
+        assert authority["session"] == session and authority["source_head"] == head
+        assert authority["branch"] == branch and authority["worktree"] == str(ROOT)
+        assert authority["body_sha256"] == body_sha
+    assert all("issue-6475" not in arg for argv in calls for arg in argv)
+
+
+@pytest.mark.parametrize("window", ["post_entry", "durable_stop_intent"])
+def test_successor_cannot_adopt_invocation_after_worker_entry(successor_host, monkeypatch, window):
+    host = successor_host
+    native = host.command
+    reads = 0
+
+    def change_after_entry(argv, **kwargs):
+        nonlocal reads
+        if argv[0] == "/usr/bin/docker":
+            reads += 1
+            if reads == 4 and window == "post_entry":
+                host.set_active("9" * 32, 900)
+        return native(argv, **kwargs)
+
+    host.command = change_after_entry
+
+    def replace_at_stop_intent(phase, _module):
+        if phase == "stop_intent" and window == "durable_stop_intent":
+            host.set_active("9" * 32, 900)
+
+    bind_successor_carrier(host, monkeypatch, phase_hook=replace_at_stop_intent)
+    result = carrier.run("lease-abcdef", "a" * 32, rendering_successor=True)
+    assert result["status"] in {"refused", "unknown"}, result
+    assert host.events == [] and host.fields["InvocationID"] == "9" * 32
+    assert sha(host.script.read_bytes()) == operation.NEW_SCRIPT_SHA256
+    assert_original_preserved(host)
+
+
+@pytest.mark.parametrize("selector", [{}, {"operation": "a" * 32}, None])
+def test_successor_unknown_predecessor_cannot_lose_its_selector(
+    successor_host, monkeypatch, selector
+):
+    host = successor_host
+    request = successor_request(host)
+    operation.remote_entry("prepare", request, programs=carrier._programs())
+    host.finish_supervisor()
+    before = operation.remote_entry("status", request)
+    assert before["status"] == "unknown" and before["failure"] == "missing_terminal_result"
+    pointer = host.operation_root / "rendering-successor.json"
+    if selector is None:
+        pointer.unlink()
+    else:
+        operation._metadata_write(pointer, selector)
+    bind_successor_carrier(host, monkeypatch)
+    result = carrier.run("lease-abcdef", "e" * 32, rendering_successor=True)
+    assert result["status"] in {"refused", "unknown"}, result
+    assert host.events == [] and not (host.operation_root / ("e" * 32)).exists()
+    assert operation.remote_entry("status", request)["status"] == "unknown"
+    assert_original_preserved(host)
+
+
+@pytest.mark.parametrize(
+    "phase,events,new_script",
+    [
+        ("stop_intent", [], False),
+        ("replace_intent", ["stop"], False),
+        ("start_intent", ["stop"], True),
+        ("recovery_stop_intent", ["stop", "start"], True),
+        ("rollback_replace_intent", ["stop", "start", "stop"], True),
+        ("recovery_start_intent", ["stop", "start", "stop"], False),
+    ],
+)
+def test_successor_rechecks_resource_custody_at_each_effect(
+    successor_host, monkeypatch, phase, events, new_script
+):
+    host = successor_host
+    if "recovery" in phase or phase == "rollback_replace_intent":
+        host.journal_rows = "injected unqualified cycle proof"
+
+    def lose_selection(observed, module):
+        if observed == phase:
+            pointer = host.operation_root / "rendering-successor.json"
+            value = module._metadata_read(pointer)
+            value["request_sha256"] = "9" * 64
+            module._metadata_write(pointer, value)
+
+    bind_successor_carrier(host, monkeypatch, phase_hook=lose_selection)
+    result = carrier.run("lease-abcdef", "a" * 32, rendering_successor=True)
+    assert result["status"] == "unknown", result
+    assert host.events == events
+    assert sha(host.script.read_bytes()) == (
+        operation.RENDERING_SCRIPT_SHA256 if new_script else operation.NEW_SCRIPT_SHA256
+    )
+    assert_original_preserved(host)
+
+
+@pytest.mark.parametrize(
+    "drift", [None, "runtime_cwd", "owned_other", "duplicate_owner", "generation"]
+)
+def test_successor_claim_binds_supported_runtime_worktree(tmp_path, monkeypatch, drift):
+    """Real local Git registration/generation APIs; only hub read ports vary."""
+    from scripts import agent_worktree
+
+    seed, worktree, other = tmp_path / "seed", tmp_path / "runtime", tmp_path / "other"
+    seed.mkdir()
+
+    def git(*args, cwd=seed):
+        return subprocess.check_output(
+            ["git", "-c", "core.hooksPath=/dev/null", *args],
+            cwd=cwd,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+
+    git("init", "--initial-branch=main")
+    for name in (
+        "probe_script_swap_core.py",
+        "probe_upgrade_operation.py",
+        "upgrade_host_probe.py",
+    ):
+        target = seed / "scripts" / name
+        target.parent.mkdir(exist_ok=True)
+        target.write_bytes((ROOT / "scripts" / name).read_bytes())
+    git("add", "scripts")
+    git(
+        "-c",
+        "user.name=synthetic",
+        "-c",
+        "user.email=synthetic@example.invalid",
+        "commit",
+        "-qm",
+        "synthetic source",
+    )
+    git("worktree", "add", "-b", "codex/claim-6476-fixture", str(worktree), "HEAD")
+    session = "11111111-1111-4111-8111-111111111111"
+    agent_worktree.register_worktree(seed, worktree=worktree, owner=session)
+    if drift in {"owned_other", "duplicate_owner"}:
+        git("worktree", "add", "-b", "codex/other-6476-fixture", str(other), "HEAD")
+        agent_worktree.register_worktree(seed, worktree=other, owner=session)
+        if drift == "owned_other":
+            agent_worktree.release_worktree(seed, worktree=worktree, owner=session)
+    if drift == "generation":
+        marker = Path(
+            git("rev-parse", "--git-path", agent_worktree.GENERATION_MARKER, cwd=worktree)
+        )
+        marker.write_text("f" * 32)
+    monkeypatch.chdir(seed if drift == "runtime_cwd" else worktree)
+    monkeypatch.syspath_prepend(str(worktree))
+    monkeypatch.setenv("CODEX_THREAD_ID", session)
+    monkeypatch.setenv("CODEX_SESSION_ID", "foreign-inherited-root")
+    for name, value in {
+        "REPOSITORY_ROOT": worktree.resolve(),
+        "CORE_PATH": worktree / "scripts/probe_script_swap_core.py",
+        "OPERATION_PATH": worktree / "scripts/probe_upgrade_operation.py",
+        "__file__": str(worktree / "scripts/upgrade_host_probe.py"),
+    }.items():
+        monkeypatch.setattr(carrier, name, value)
+    body = "synthetic current fixed installation contract"
+    monkeypatch.setattr(carrier, "RENDERING_INSTALLATION_BODY_SHA256", sha(body.encode()))
+    monkeypatch.setattr(operation, "RENDERING_INSTALLATION_BODY_SHA256", sha(body.encode()))
+    task = {
+        "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-6476",
+        "repo": "RasmusTho/agentic-pkm-mvp",
+        "issue_number": 6476,
+        "status": "claimed",
+        "claimed_by": session,
+        "lease_id": "lease-abcdef",
+    }
+    lease = {
+        "lease_id": "lease-abcdef",
+        "resource": "issue:6476",
+        "holder": session,
+        "expires_at": "2099-01-01T00:00:00Z",
+        "released_at": None,
+    }
+    issue = {
+        "body": body,
+        "state": "OPEN",
+        "labels": [{"name": name} for name in ("type:task", "prio:high", "agent:in-progress")],
+    }
+
+    def hub_read(argv, **_kwargs):
+        value = (
+            {"ok": True, "task": task, "lease": lease}
+            if argv[1:3] == ["-m", "app.dispatcher"]
+            else issue
+        )
+        return SimpleNamespace(returncode=0, stderr=b"", stdout=json.dumps(value).encode())
+
+    monkeypatch.setattr(carrier, "_bounded_process", hub_read)
+    if drift:
+        with pytest.raises(carrier.CarrierRefusal):
+            carrier._lease_readback("lease-abcdef", rendering_successor=True)
+    else:
+        result = carrier._lease_readback("lease-abcdef", rendering_successor=True)
+        authority = result["installation_authority"]
+        assert authority["holder"] == authority["session"] == session
+        assert authority["worktree"] == str(worktree.resolve())
+        assert authority["source_head"] == git("rev-parse", "HEAD", cwd=worktree)
 
 
 def test_real_operation_keeps_incident_source_closure_and_new_incarnation(host):

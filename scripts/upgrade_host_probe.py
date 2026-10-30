@@ -25,7 +25,18 @@ import time
 from io import BytesIO
 from typing import Any
 
-from probe_upgrade_operation import BODY_SHA256, OperationFailure, _bounded_process
+from probe_upgrade_operation import (
+    BODY_SHA256,
+    RENDERING_INSTALLATION_BODY_SHA256,
+    RENDERING_INSTALLATION_ISSUE,
+    RENDERING_MANIFEST_SHA256,
+    RENDERING_SCRIPT_SHA256,
+    RENDERING_SOURCE_MERGE,
+    OperationFailure,
+    _bounded_process,
+    _manifest_digest,
+    _rendering_authority,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -173,13 +184,54 @@ def _source_pair() -> tuple[Archive, Archive, str]:
     return old, new, head
 
 
-def _lease_readback(lease_id: str) -> dict[str, Any]:
+def _rendering_source_pair() -> tuple[Archive, Archive, str]:
+    """Retain the original 59 files and replace only the verified 0172 script."""
+    _, before, head = _source_pair()
+    _git("merge-base", "--is-ancestor", RENDERING_SOURCE_MERGE, head)
+    script = _git_bytes("show", f"{RENDERING_SOURCE_MERGE}:ops/host-setup/mac-mini/prod_probe.py")
+    if len(script) != 28_710 or hashlib.sha256(script).hexdigest() != RENDERING_SCRIPT_SHA256:
+        raise CarrierRefusal("verified rendering script binding mismatch")
+    manifest = dict(before.manifest)
+    files = dict(before.files)
+    files["ops/host-setup/mac-mini/prod_probe.py"] = script
+    manifest["ops/host-setup/mac-mini/prod_probe.py"] = {
+        "mode": 0o664,
+        "size": len(script),
+        "sha256": RENDERING_SCRIPT_SHA256,
+    }
+    if _manifest_digest(manifest) != RENDERING_MANIFEST_SHA256:
+        raise CarrierRefusal("verified rendering manifest binding mismatch")
+    return before, Archive(manifest, files, ""), head
+
+
+def _lease_readback(lease_id: str, *, rendering_successor: bool = False) -> dict[str, Any]:
+    issue_number, holder, session, branch, body_sha = (
+        ISSUE,
+        HOLDER,
+        SESSION,
+        EXPECTED_BRANCH,
+        BODY_SHA256,
+    )
+    if rendering_successor:
+        issue_number, body_sha = RENDERING_INSTALLATION_ISSUE, RENDERING_INSTALLATION_BODY_SHA256
+        session = os.environ.get("CODEX_THREAD_ID", "")
+        holder = session  # This fixed live pickup uses --agent "$CODEX_THREAD_ID".
+        if not session or Path.cwd().resolve() != REPOSITORY_ROOT:
+            raise CarrierRefusal(
+                "rendering installation requires its actual owner runtime worktree"
+            )
+        if _git("rev-parse", "--show-toplevel") != str(REPOSITORY_ROOT):
+            raise CarrierRefusal("rendering installation Git worktree differs from its runtime")
+        branch = _git("branch", "--show-current")
+        if _git("status", "--porcelain"):
+            raise CarrierRefusal("rendering installation requires a clean source checkout")
+    task_id = f"github-RasmusTho--agentic-pkm-mvp-issue-{issue_number}"
     if not lease_id.startswith("lease-"):
         raise CarrierRefusal("lease id is malformed")
-    if _git("branch", "--show-current") != EXPECTED_BRANCH:
+    if _git("branch", "--show-current") != branch:
         raise CarrierRefusal("actual worktree branch differs from its sole-owner receipt")
     result = _bounded_process(
-        [sys.executable, "-m", "app.dispatcher", "show", TASK_ID, "--events", "--json"],
+        [sys.executable, "-m", "app.dispatcher", "show", task_id, "--events", "--json"],
         timeout=15,
         limit=262_144,
         environment=dict(os.environ),
@@ -192,13 +244,13 @@ def _lease_readback(lease_id: str) -> dict[str, Any]:
         expiry = datetime.fromisoformat(lease["expires_at"].replace("Z", "+00:00"))
         valid = (
             payload["ok"] is True
-            and task["task_id"] == TASK_ID
+            and task["task_id"] == task_id
             and task["repo"] == "RasmusTho/agentic-pkm-mvp"
-            and task["issue_number"] == ISSUE
+            and task["issue_number"] == issue_number
             and task["status"] == "claimed"
-            and task["claimed_by"] == lease["holder"] == HOLDER
+            and task["claimed_by"] == lease["holder"] == holder
             and task["lease_id"] == lease["lease_id"] == lease_id
-            and lease["resource"] == "issue:6457"
+            and lease["resource"] == f"issue:{issue_number}"
             and lease["released_at"] is None
             and expiry > datetime.now(timezone.utc)
         )
@@ -208,23 +260,49 @@ def _lease_readback(lease_id: str) -> dict[str, Any]:
         raise CarrierRefusal("dispatcher lease is not owned by this operation")
     if str(REPOSITORY_ROOT) not in sys.path:
         sys.path.insert(0, str(REPOSITORY_ROOT))
-    from scripts.agent_worktree import load_lifecycle_records
+    from scripts.agent_worktree import (
+        WorktreeLifecycleError,
+        load_lifecycle_authority,
+        load_lifecycle_records,
+    )
 
-    record = load_lifecycle_records(REPOSITORY_ROOT).get(str(REPOSITORY_ROOT))
+    records = load_lifecycle_records(REPOSITORY_ROOT)
+    record = records.get(str(REPOSITORY_ROOT))
+    if rendering_successor:
+        try:
+            record = load_lifecycle_authority(REPOSITORY_ROOT, candidate_branch=branch).get(
+                str(REPOSITORY_ROOT)
+            )
+        except (WorktreeLifecycleError, OSError, RuntimeError, subprocess.SubprocessError):
+            raise CarrierRefusal(
+                "rendering installation worktree authority is unqualified"
+            ) from None
     if (
         not record
-        or record.get("owner") != SESSION
-        or record.get("branch") != EXPECTED_BRANCH
+        or record.get("owner") != session
+        or record.get("branch") != branch
         or record.get("status") != "active"
         or record.get("expires_at", 0) <= time.time()
+        or (rendering_successor and record.get("path") != str(REPOSITORY_ROOT))
     ):
         raise CarrierRefusal("sole registered worktree is not owned by the successor")
+    if (
+        rendering_successor
+        and sum(
+            item.get("owner") == session
+            and item.get("status") == "active"
+            and item.get("expires_at", 0) > time.time()
+            for item in records.values()
+        )
+        != 1
+    ):
+        raise CarrierRefusal("rendering installation has more than one active owner worktree")
     github = _bounded_process(
         [
             "gh",
             "issue",
             "view",
-            "6457",
+            str(issue_number),
             "--repo",
             "RasmusTho/agentic-pkm-mvp",
             "--json",
@@ -242,17 +320,39 @@ def _lease_readback(lease_id: str) -> dict[str, Any]:
             and issue["state"] == "OPEN"
             and {x["name"] for x in issue["labels"]}
             == {"type:task", "prio:high", "agent:in-progress"}
-            and hashlib.sha256(issue["body"].encode()).hexdigest() == BODY_SHA256
+            and hashlib.sha256(issue["body"].encode()).hexdigest() == body_sha
         )
     except (ValueError, TypeError, KeyError):
         valid = False
     if not valid:
         raise CarrierRefusal("governing Issue body or sole active claim changed")
-    return {
+    result = {
         **task,
         "lease_expires_at": lease["expires_at"],
         "registration_generation": record["generation"],
     }
+    if rendering_successor:
+        head = _git("rev-parse", "HEAD")
+        for path in (CORE_PATH, OPERATION_PATH, Path(__file__).resolve()):
+            committed = _git_bytes("show", f"{head}:{path.relative_to(REPOSITORY_ROOT)}")
+            if path.read_bytes() != committed:
+                raise CarrierRefusal(
+                    "rendering operation programs differ from the claimed source head"
+                )
+        result["installation_authority"] = _rendering_authority(
+            {
+                "issue": issue_number,
+                "body_sha256": body_sha,
+                "holder": holder,
+                "session": session,
+                "branch": branch,
+                "worktree": str(REPOSITORY_ROOT),
+                "source_head": head,
+                "registration_generation": record["generation"],
+                "scope": "install-0172-to-17c2-on-ygg-prod-under-4076",
+            }
+        )
+    return result
 
 
 def _worker_source() -> bytes:
@@ -273,10 +373,16 @@ def _programs() -> dict[str, bytes]:
 
 
 def _request(
-    operation: str, lease_id: str, old: Archive, new: Archive, *, lease_expires_at: str
+    operation: str,
+    lease_id: str,
+    old: Archive,
+    new: Archive,
+    *,
+    lease_expires_at: str,
+    installation_authority: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     programs = _programs()
-    return {
+    request = {
         "packet": {
             "issue": ISSUE,
             "parent_issue": PARENT_ISSUE,
@@ -295,6 +401,16 @@ def _request(
         "contract_body_sha256": BODY_SHA256,
         "lease_expires_at": lease_expires_at,
     }
+    if installation_authority is not None:
+        authority = _rendering_authority(installation_authority)
+        request["packet"].update(
+            issue=authority["issue"],
+            source_merge=RENDERING_SOURCE_MERGE,
+            claim_holder=authority["holder"],
+            installation_authority=authority,
+        )
+        request["contract_body_sha256"] = authority["body_sha256"]
+    return request
 
 
 def _remote_payload(
@@ -488,16 +604,33 @@ def _save_record(operation: str, value: dict[str, Any], *, create: bool = False)
         os.close(parent)
 
 
-def run(lease_id: str, operation: str, action: str = "apply") -> dict[str, Any]:
+def run(
+    lease_id: str, operation: str, action: str = "apply", *, rendering_successor: bool = False
+) -> dict[str, Any]:
     record: dict[str, Any]
+
+    def claim_readback(rendering: bool) -> dict[str, Any]:
+        return (
+            _lease_readback(lease_id, rendering_successor=True)
+            if rendering
+            else _lease_readback(lease_id)
+        )
+
     if action == "apply":
-        task = _lease_readback(lease_id)
-        old, new, head = _source_pair()
+        task = claim_readback(rendering_successor)
+        old, new, head = _rendering_source_pair() if rendering_successor else _source_pair()
+        if rendering_successor and task["installation_authority"]["source_head"] != head:
+            raise CarrierRefusal("rendering installation source head changed")
         if _record_path(operation).exists():
             raise CarrierRefusal("original operation already exists; follow or reconcile it")
         record = {
             "request": _request(
-                operation, lease_id, old, new, lease_expires_at=task["lease_expires_at"]
+                operation,
+                lease_id,
+                old,
+                new,
+                lease_expires_at=task["lease_expires_at"],
+                installation_authority=task.get("installation_authority"),
             ),
             "source_head": head,
             "old_archive_sha256": old.archive_sha256,
@@ -508,8 +641,12 @@ def run(lease_id: str, operation: str, action: str = "apply") -> dict[str, Any]:
         remote_action = "prepare"
     else:
         record = _read_record(operation)
+        actual_rendering = "installation_authority" in record["request"]["packet"]
+        if rendering_successor and not actual_rendering:
+            raise CarrierRefusal("rendering follow requires its original successor request")
+        rendering_successor = actual_rendering
         try:
-            task = _lease_readback(lease_id)
+            task = claim_readback(rendering_successor)
         except Exception:
             if action == "reconcile":
                 return {
@@ -535,6 +672,10 @@ def run(lease_id: str, operation: str, action: str = "apply") -> dict[str, Any]:
             record["handle"] = receipt["handle"]
             _save_record(operation, record)
         if action == "apply" and receipt.get("status") == "pending" and record["handle"]:
+            if rendering_successor:
+                current = claim_readback(True)
+                if current["installation_authority"] != request["packet"]["installation_authority"]:
+                    raise CarrierRefusal("rendering installation claim identity changed")
             # Persist send intent first. A lost authorization response is followed,
             # never replayed as another apply or start.
             record["authorization_sent"] = True
@@ -583,6 +724,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lease-id", required=True)
     parser.add_argument("--operation", required=True)
+    parser.add_argument("--rendering-successor", action="store_true")
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--apply", action="store_true")
     modes.add_argument("--follow", action="store_true")
@@ -593,6 +735,7 @@ def main(argv: list[str] | None = None) -> int:
             args.lease_id,
             args.operation,
             "apply" if args.apply else "reconcile" if args.reconcile else "follow",
+            rendering_successor=args.rendering_successor,
         )
     except (CarrierUnknown, OperationFailure, CarrierRefusal, OSError) as error:
         prior_request = args.follow or args.reconcile

@@ -91,6 +91,28 @@ and running postconditions without adopting lifecycle ownership or rewriting tha
 request/program/result/handle bytes and pinned follow tooling remain preserved; the original resource
 guard still fences later #6457 apply requests. No guard clearance or further compensation was needed.
 
+[Source prerequisite #6475](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6475) adds one
+fixed successor admission for the verified Swedish rendering from source
+`7436ca29b863fca98faeb8e729d00e9832a71c22`: script SHA-256
+`17c2dced67a7830e453f4bf5d18e1e330086dab186501b80b259f569936c8e90`, retaining the same 59 files,
+with after-manifest `317f99b147d23dcf20c3e59be2d542cd9f3f74aeca98d519ba2393a9eab3a635`.
+This is source/protocol support; the last verified installation remains `0172…` and the 43-cycle
+receipt above. [Installation Issue #6476](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6476)
+owns any later actual installation and receipt. Its fixed contract and fresh normal claim must bind
+the lease holder to the actual native owner UUID and the same runtime/registered worktree;
+the closing #6475 source lease cannot authorize installation.
+
+The successor reads and pins the original request, programs, authorization, phase, handle and
+UNKNOWN result, freshly proves helper/cgroup quiescence, and qualifies the current source,
+configuration, unit, normal invocation and latest incident. It preserves the original `active.json`
+fence and uses a separate fixed successor selector under the same physical `resource.lock` as
+the legacy protocol. The admitted normal identity remains bound through the first stop, and an
+empty or missing prior selector cannot open another operation. Admission and source custody are rechecked before probe effects; lost
+responses follow the same new handle, with finite, code-only recovery preserving the latest
+incident. Missing, changed, foreign or incomplete proof refuses admission. See
+[the operator prerequisites](../OPERATIONS.md#prod-probe-and-push-alert-scheduled-backstop).
+This source delivery neither performs a host operation nor adds a gate to #4076's accepted TEST drill.
+
 The existing shared webhook import is committed under #6347, catalog standing is owner-accepted
 under #5506, and the declared consuming-host BWS launch succeeded. No credential was created or
 rotated. After fresh verified Linux activity, the exact legacy `com.yggdrasil.prod-probe` job was
