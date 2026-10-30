@@ -965,7 +965,7 @@ def run_marr_server_without_provider_key(
 def _require_linux_probe_scope(*, channel: str, consumer: str) -> None:
     if (
         sys.platform != "linux"
-        or channel not in {"test", "prod"}
+        or channel not in {"dev", "test", "prod"}
         or consumer != "heimdal-external-alerts"
     ):
         raise HostSecretBootstrapError("BWS probe launch is outside its declared scope")

@@ -1140,7 +1140,7 @@ down alert on the first outage transition and one recovery signal on the first h
 messages carry the same correlation ID. Alerts include source system, environment, severity, UTC
 timestamp, and remediation URL.
 
-The source template leads with `PROD hälsoproblem` (or `TEST hälsoproblem`), not a
+The source template leads with `DEV hälsoproblem`, `TEST hälsoproblem`, or `PROD hälsoproblem`, not a
 claim of total outage. It names failed required checks from the finite health-producer mapping
 and mandatory runtime database, worker and model components. Optional failures are excluded;
 watcher requirement is producer-local and is not inferred from a failed watcher observation.
@@ -1164,6 +1164,14 @@ incident continued suppressing duplicate alerts; controlled TEST acceptance rema
 The Linux service uses the `heimdal-external-alerts` BWS consumer and the `discord.webhook`
 binding. The BWS token is read through systemd credentials and is removed from the probe child's
 environment; only a short-lived mode-0600 runtime file carries the declared webhook binding.
+The fixed Linux launcher and shared probe source accept explicit `dev`, `test`, and `prod`;
+DEV and TEST bind this consumer to `non-prod` and `shared/discord.webhook`, while PROD uses `prod`.
+Endpoint, heartbeat, state, and alert-channel inputs remain explicit. The existing
+`scripts/install_host_probe.py` installer remains TEST/PROD-only; its shared
+`/opt/yggdrasil/host-probe` package is not a DEV installation plan. Native DEV configuration,
+installation, baseline, and drill qualification remain pending with the Product keeper. DEV
+source support does not upgrade the dated production installation below or satisfy #4076's
+pending live TEST AC4.
 The service has no Docker startup dependency and reads the worker heartbeat from the host volume.
 The prior Mac LaunchAgent and plist remain legacy templates. The installer
 `scripts/install_host_probe.py` prints a plan by default; host writes require `--apply` from a clean

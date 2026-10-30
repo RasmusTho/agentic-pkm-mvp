@@ -2605,7 +2605,8 @@ def test_first_use_parent_fsync_failure_prevents_admission(tmp_path, monkeypatch
             pytest.fail("no effect may precede durable directory creation")
 
 
-def test_bws_probe_launch_is_narrowly_scoped(monkeypatch, capsys):
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+def test_bws_probe_launch_is_narrowly_scoped(monkeypatch, capsys, channel):
     monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "linux")
     launched: list[dict[str, str]] = []
     monkeypatch.setattr(
@@ -2619,7 +2620,7 @@ def test_bws_probe_launch_is_narrowly_scoped(monkeypatch, capsys):
             "--provider",
             "bws",
             "--channel",
-            "prod",
+            channel,
             "--consumer",
             "heimdal-external-alerts",
             "--run-probe",
@@ -2627,14 +2628,14 @@ def test_bws_probe_launch_is_narrowly_scoped(monkeypatch, capsys):
     )
 
     assert result == 0
-    assert launched == [{"channel": "prod", "consumer": "heimdal-external-alerts"}]
+    assert launched == [{"channel": channel, "consumer": "heimdal-external-alerts"}]
     assert capsys.readouterr().out == ""
 
 
 @pytest.mark.parametrize(
     "arguments",
     [
-        ["--provider", "bws", "--channel", "dev", "--consumer", "heimdal-external-alerts", "--run-probe"],
+        ["--provider", "bws", "--channel", "staging", "--consumer", "heimdal-external-alerts", "--run-probe"],
         ["--provider", "bws", "--channel", "prod", "--consumer", "heimdal-api-ingress", "--run-probe"],
         ["--provider", "keychain", "--channel", "prod", "--consumer", "heimdal-external-alerts", "--run-probe"],
         ["--provider", "bws", "--channel", "prod", "--consumer", "heimdal-external-alerts", "--run-probe", "--", "arbitrary-command"],
@@ -2646,6 +2647,103 @@ def test_bws_probe_launch_rejects_other_scopes_and_commands(arguments, monkeypat
     assert host_secret_bootstrap.main(arguments) == 78
     error = capsys.readouterr().err.lower()
     assert "host secret" in error or "bws" in error
+
+
+def _probe_cli_fixture(tmp_path, monkeypatch, *, channel="dev"):
+    """Keep CLI/config/contract/reader/controller real; fake only SDK and child ports."""
+    project = "prod" if channel == "prod" else "non-prod"
+    webhook = "https://discord.com/api/webhooks/123456789/fixtureWebhookToken_123456"
+    reader, client, controller = _bws_fixture(
+        tmp_path, project=project, identity="shared/discord.webhook", value=webhook
+    )
+    environment = {
+        "PROBE_ENVIRONMENT": channel,
+        "PROBE_ALERT_CHANNEL": "discord",
+        "BWS_READER_PROJECT": project,
+        "BWS_PROJECT_ID": _BWS_PROJECT_IDS[project],
+        "BWS_ORGANIZATION_ID": _BWS_ORG,
+        "BWS_ACCESS_TOKEN": "ambient-token-must-not-reach-child",
+        "BWS_ACCESS_TOKEN_FILE": str(reader.config.token_file),
+        "CREDENTIALS_DIRECTORY": str(reader.config.credentials_directory),
+        "HOST_SECRET_RUNTIME_DIRECTORY": str(tmp_path),
+    }
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "linux")
+    monkeypatch.setattr(host_secret_bootstrap.os, "environ", environment)
+    monkeypatch.setattr(
+        host_secret_bootstrap, "BwsSecretReader",
+        lambda config: BwsSecretReader(config, client_factory=lambda: client),
+    )
+    monkeypatch.setattr(host_secret_bootstrap, "HostSecretController", lambda: controller)
+    launched = []
+
+    def popen(command, *, env):
+        assert command == [sys.executable, str(_REPO_ROOT / "ops/host-setup/mac-mini/prod_probe.py"), "--loop"]
+        secret_file = Path(env[HOST_SECRET_RUNTIME_ENV_FILE])
+        assert stat.S_IMODE(secret_file.stat().st_mode) == 0o600
+        assert secret_file.read_text() == f"DISCORD_WEBHOOK={webhook}\n"
+        assert env[HOST_SECRET_BOOTSTRAP_CHANNEL] == channel
+        assert env[HOST_SECRET_BOOTSTRAP_CONSUMER] == "heimdal-external-alerts"
+        for name in ("BWS_ACCESS_TOKEN", "BWS_ACCESS_TOKEN_FILE", "CREDENTIALS_DIRECTORY",
+                     "BWS_READER_PROJECT", "BWS_PROJECT_ID", "BWS_ORGANIZATION_ID", "DISCORD_WEBHOOK"):
+            assert name not in env
+        assert "fixture-machine-token" not in repr(env)
+        assert "ambient-token-must-not-reach-child" not in repr(env)
+        launched.append(secret_file)
+        return SimpleNamespace(wait=lambda timeout: 0)
+
+    monkeypatch.setattr(host_secret_bootstrap.subprocess, "Popen", popen)
+    return environment, client, launched
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+def test_dev_bws_probe_uses_non_prod_temporary_webhook_only(tmp_path, monkeypatch, capsys, channel):
+    _, client, launched = _probe_cli_fixture(tmp_path, monkeypatch, channel=channel)
+    assert host_secret_bootstrap.main([
+        "--provider", "bws", "--channel", channel,
+        "--consumer", "heimdal-external-alerts", "--run-probe",
+    ]) == 0
+    assert client.project == ("prod" if channel == "prod" else "non-prod")
+    assert client.calls == [("login", None), ("projects", _BWS_ORG),
+                            ("list", _BWS_ORG), ("get", _BWS_ITEM)]
+    assert len(launched) == 1 and not launched[0].exists()
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("fault", [
+    "environment", "alert-channel", "project-name", "project-id", "platform",
+    "consumer", "provider", "command", "unsupported-environment",
+])
+def test_dev_bws_probe_refuses_scope_mismatch_before_child_launch(tmp_path, monkeypatch, capsys, fault):
+    environment, _client, launched = _probe_cli_fixture(tmp_path, monkeypatch)
+    channel, consumer, provider, command = "dev", "heimdal-external-alerts", "bws", []
+    if fault == "environment":
+        environment["PROBE_ENVIRONMENT"] = "test"
+    elif fault == "alert-channel":
+        environment["PROBE_ALERT_CHANNEL"] = "none"
+    elif fault == "project-name":
+        environment["BWS_READER_PROJECT"] = "prod"
+    elif fault == "project-id":
+        environment["BWS_PROJECT_ID"] = _BWS_PROD_PROJECT
+    elif fault == "platform":
+        monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
+    elif fault == "consumer":
+        consumer = "heimdal-api-ingress"
+    elif fault == "provider":
+        provider = "keychain"
+    elif fault == "command":
+        command = ["--", "arbitrary-command"]
+    else:
+        channel = environment["PROBE_ENVIRONMENT"] = "staging"
+    assert host_secret_bootstrap.main([
+        "--provider", provider, "--channel", channel, "--consumer", consumer,
+        "--run-probe", *command,
+    ]) == 78
+    assert launched == []
+    assert list(tmp_path.glob("*.env")) == []
+    output = capsys.readouterr()
+    assert output.out == "" and output.err
+    assert "fixture-machine-token" not in output.err
+    assert "fixtureWebhookToken" not in output.err
 
 
 def test_bws_probe_child_receives_only_temporary_webhook_binding(tmp_path, monkeypatch):

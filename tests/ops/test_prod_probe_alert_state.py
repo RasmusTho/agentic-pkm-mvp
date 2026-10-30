@@ -320,8 +320,9 @@ def test_alert_state_from_other_environment_does_not_suppress_down_alert(
     assert "PROD hälsoproblem" in channel.send.call_args.args[0]
 
 
+@pytest.mark.parametrize("environment", ["dev", "test", "prod"])
 def test_probe_uses_explicit_environment_and_correlates_recovery(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, environment: str
 ) -> None:
     state_file = tmp_path / "test-probe.state"
     monkeypatch.setattr(prod_probe, "ALERT_STATE_FILE", state_file)
@@ -332,27 +333,107 @@ def test_probe_uses_explicit_environment_and_correlates_recovery(
         "heartbeat_path": str(heartbeat),
         "heartbeat_stale_seconds": 300.0,
         "channel": channel,
-        "environment": "test",
+        "environment": environment,
     }
 
     assert prod_probe.run_probe(**common, http_get=_down_http_get) is False
     down_subject, down_body = channel.send.call_args.args
-    assert down_subject == "TEST hälsoproblem - Yggdrasil"
-    assert "environment: test" in down_body
-    assert "severity: warning" in down_body
+    assert down_subject == f"{environment.upper()} hälsoproblem - Yggdrasil"
+    assert f"environment: {environment}" in down_body
+    assert f"severity: {prod_probe._alert_severity(environment)}" in down_body
     assert "transition: down" in down_body
     assert "timestamp_utc:" in down_body
     assert "source_system: yggdrasil-host-probe" in down_body
     assert "remediation: https://github.com/" in down_body
-    correlation_id = json.loads(state_file.read_text())["correlation_id"]
+    state = json.loads(state_file.read_text())
+    assert state["environment"] == environment
+    correlation_id = str(prod_probe.UUID(state["correlation_id"]))
     assert correlation_id in down_body
+
+    assert prod_probe.run_probe(**common, http_get=_down_http_get) is False
+    assert channel.send.call_count == 1
+    assert json.loads(state_file.read_text()) == state
 
     assert prod_probe.run_probe(**common, http_get=_healthy_http_get) is True
     recovery_subject, recovery_body = channel.send.call_args_list[-1].args
-    assert recovery_subject == "TEST övervakade kontroller återställda - Yggdrasil"
+    assert recovery_subject == f"{environment.upper()} övervakade kontroller återställda - Yggdrasil"
+    assert f"environment: {environment}" in recovery_body
     assert "transition: recovered" in recovery_body
     assert "severity: info" in recovery_body
     assert correlation_id in recovery_body
+    assert not state_file.exists()
+    assert prod_probe.run_probe(**common, http_get=_healthy_http_get) is True
+    assert channel.send.call_count == 2
+
+
+@pytest.mark.parametrize("saved_environment", ["test", "prod"])
+@pytest.mark.parametrize("healthy", [False, True])
+def test_dev_probe_isolates_saved_incident_environment(tmp_path, monkeypatch, saved_environment, healthy):
+    state_file = tmp_path / "dev.state"
+    monkeypatch.setattr(prod_probe, "ALERT_STATE_FILE", state_file)
+    old_correlation = str(prod_probe.uuid4())
+    prod_probe._record_outage_state(["prior outage"], environment=saved_environment,
+                                   correlation_id=old_correlation)
+    channel = _make_spy_channel()
+    assert prod_probe.run_probe(
+        base_url="http://synthetic", environment="dev", channel=channel,
+        heartbeat_path=str(_write_fresh_heartbeat(tmp_path)),
+        http_get=_healthy_http_get if healthy else _down_http_get,
+    ) is healthy
+    if healthy:
+        channel.send.assert_not_called()
+        assert not state_file.exists()
+    else:
+        channel.send.assert_called_once()
+        subject, body = channel.send.call_args.args
+        assert subject == "DEV hälsoproblem - Yggdrasil"
+        assert old_correlation not in body
+        state = json.loads(state_file.read_text())
+        assert state["environment"] == "dev"
+        assert state["correlation_id"] != old_correlation
+
+
+@pytest.mark.parametrize("override", [
+    {}, {"PROBE_ENVIRONMENT": ""}, {"PROBE_ENVIRONMENT": "staging"},
+    {"PROBE_BASE_URL": ""}, {"PROBE_BASE_URL": "https://user:pass@synthetic"},
+    {"WORKER_HEARTBEAT_PATH": ""}, {"WORKER_HEARTBEAT_PATH": "relative.json"},
+    {"PROBE_STATE_FILE": None}, {"PROBE_STATE_FILE": "relative.state"},
+    {"PROBE_ALERT_CHANNEL": ""}, {"PROBE_ALERT_CHANNEL": "invalid"},
+])
+def test_dev_probe_main_requires_explicit_target_and_state(tmp_path, monkeypatch, override):
+    import importlib.util
+
+    configuration = {
+        "PROBE_ENVIRONMENT": "dev", "PROBE_BASE_URL": "http://synthetic",
+        "WORKER_HEARTBEAT_PATH": str(_write_fresh_heartbeat(tmp_path)),
+        "PROBE_STATE_FILE": str(tmp_path / "dev.state"), "PROBE_ALERT_CHANNEL": "discord",
+    }
+    configuration.update(override)
+    for name in ("PROD_PROBE_STATE_FILE", "PROD_PROBE_CHANNEL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in configuration.items():
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    # Fresh import binds the real run_probe defaults exactly as the installed CLI does.
+    spec = importlib.util.spec_from_file_location("dev_probe", PROBE_MODULE_DIR / "prod_probe.py")
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    http_get = MagicMock(side_effect=_healthy_http_get)
+    build_channel = MagicMock(return_value=_make_spy_channel())
+    monkeypatch.setattr(probe, "_http_get", http_get)
+    monkeypatch.setattr(probe, "build_channel", build_channel)
+    assert probe.main([]) == (78 if override else 0)
+    if override:
+        http_get.assert_not_called()
+        build_channel.assert_not_called()
+    else:
+        assert [call.args[0] for call in http_get.call_args_list] == [
+            "http://synthetic/readyz", "http://synthetic/api/health",
+        ]
+        build_channel.assert_called_once_with("discord")
 
 
 def test_probe_runtime_refuses_missing_environment_and_target_config(
@@ -366,7 +447,7 @@ def test_probe_runtime_refuses_missing_environment_and_target_config(
     monkeypatch.delenv("PROD_PROBE_STATE_FILE", raising=False)
 
     assert prod_probe.main([]) == 78
-    assert "PROBE_ENVIRONMENT must be test or prod" in caplog.text
+    assert "PROBE_ENVIRONMENT must be dev, test or prod" in caplog.text
 
 
 @pytest.mark.parametrize("timestamp", [float("nan"), float("inf"), float("-inf"), "NaN", "Infinity"])

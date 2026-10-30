@@ -84,7 +84,7 @@ def _load_alert_state() -> dict[str, Any] | None:
         return None
     if (
         payload.get("status") != "down"
-        or payload.get("environment") not in {"test", "prod"}
+        or payload.get("environment") not in {"dev", "test", "prod"}
         or not isinstance(payload.get("ts"), int)
         or isinstance(payload.get("ts"), bool)
         or payload["ts"] <= 0
@@ -233,7 +233,7 @@ def _alert_body(
         local_time = local.strftime("%Y-%m-%d kl. %H:%M:%S %Z (%z)")
     except (ZoneInfoNotFoundError, OSError, ValueError):
         local_time = instant.strftime("%Y-%m-%d kl. %H:%M:%S UTC (lokal tidszon saknas)")
-    environment = environment if environment in {"test", "prod"} else "unknown"
+    environment = environment if environment in {"dev", "test", "prod"} else "unknown"
     try:
         correlation_id = str(UUID(correlation_id))
     except (ValueError, TypeError, AttributeError):
@@ -268,7 +268,7 @@ def _send_down_alert(
     environment: str,
     correlation_id: str,
 ) -> bool:
-    subject = f"{environment.upper() if environment in {'prod', 'test'} else 'Okänd miljö'} hälsoproblem - Yggdrasil"
+    subject = f"{environment.upper() if environment in {'dev', 'test', 'prod'} else 'Okänd miljö'} hälsoproblem - Yggdrasil"
     body = _alert_body(
         environment=environment,
         severity=_alert_severity(environment),
@@ -297,7 +297,7 @@ def _send_recovery_alert(
     correlation_id = state.get("correlation_id")
     if not isinstance(correlation_id, str) or not correlation_id:
         correlation_id = str(uuid4())
-    subject = f"{environment.upper() if environment in {'prod', 'test'} else 'Okänd miljö'} övervakade kontroller återställda - Yggdrasil"
+    subject = f"{environment.upper() if environment in {'dev', 'test', 'prod'} else 'Okänd miljö'} övervakade kontroller återställda - Yggdrasil"
     body = _alert_body(
         environment=environment,
         severity="info",
@@ -645,8 +645,8 @@ def run_probe(
 # ---------------------------------------------------------------------------
 def _runtime_config() -> tuple[str, int, float]:
     environment = PROBE_ENVIRONMENT.strip().lower()
-    if environment not in {"test", "prod"}:
-        raise ValueError("PROBE_ENVIRONMENT must be test or prod")
+    if environment not in {"dev", "test", "prod"}:
+        raise ValueError("PROBE_ENVIRONMENT must be dev, test or prod")
     base_url = PROBE_BASE_URL.strip().rstrip("/")
     parsed_url = urlsplit(base_url)
     if (

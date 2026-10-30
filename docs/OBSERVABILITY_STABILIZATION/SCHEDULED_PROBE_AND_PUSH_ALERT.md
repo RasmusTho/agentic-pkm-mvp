@@ -157,7 +157,14 @@ notification through Discord after resolving its declared BWS binding, then clea
 after the first healthy run so a later distinct outage can alert again. Each alert identifies the
 source system, environment, severity, transition, UTC timestamp, correlation ID, and remediation
 URL. A sustained outage and its recovery share the same correlation ID.
-The source template leads with `PROD hälsoproblem` (or `TEST hälsoproblem`), not a
+The fixed Linux `heimdal-external-alerts` consumer source supports explicit DEV, TEST, and PROD.
+DEV and TEST resolve only `non-prod` / `shared/discord.webhook`; PROD uses the existing `prod`
+binding. Endpoint, heartbeat, state, and alert-channel configuration remain explicit. The existing
+installer remains TEST/PROD-only, and its shared `/opt/yggdrasil/host-probe` package is not a DEV
+installation plan. Native DEV configuration, installation, healthy baseline, effect window, drill,
+and restoration remain separately qualified with the Product keeper. No live DEV proof is claimed,
+and #4076's controlled live TEST AC4 remains pending.
+The source template leads with `DEV hälsoproblem`, `TEST hälsoproblem`, or `PROD hälsoproblem`, not a
 claim of total outage. It names failed required checks from the finite health-producer mapping
 and mandatory runtime database, worker and model components. Optional failures are excluded;
 watcher requirement is producer-local and is not inferred from a failed watcher observation.
@@ -217,12 +224,15 @@ changing callers.
 - [ ] The probe evaluates `/api/health` `required_ok`, not the top-level `ok`
       field.
   - Verify: `tests/ops/test_prod_probe_alert_state.py::test_probe_reads_required_ok`
-- [ ] The host installer renders the correct endpoint and heartbeat path for each channel, and
+- [ ] The host installer renders the correct endpoint and heartbeat path for TEST and PROD, and
       the service has no dependency on Docker startup.
   - Verify: `tests/ops/test_linux_host_probe.py`
-- [ ] BWS launch is limited to Linux TEST/PROD and the `heimdal-external-alerts` consumer; the
-      child receives only the temporary Discord binding.
+- [ ] BWS launch is limited to Linux DEV/TEST/PROD and the fixed `heimdal-external-alerts` consumer;
+      DEV/TEST use `non-prod` / `shared/discord.webhook`, and the child receives only the temporary
+      Discord binding with reader credential/project environment bindings removed. Source support
+      does not establish native DEV qualification or the pending live TEST acceptance.
   - Verify: `tests/ops/test_host_secret_bootstrap.py::test_bws_probe_launch_is_narrowly_scoped`
+  - Verify: `tests/ops/test_host_secret_bootstrap.py::test_dev_bws_probe_uses_non_prod_temporary_webhook_only`
 - [ ] `verify-prod-channel` and `verify-test-channel` are relabelled (e.g.
       `check-prod-channel` / `check-test-channel`) and a distinct
       `live-prod-probe` target exists in the Makefile.

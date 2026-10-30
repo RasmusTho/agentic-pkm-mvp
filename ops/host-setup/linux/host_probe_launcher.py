@@ -13,7 +13,7 @@ import sys
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DEPLOY_CONFIG_ROOT = Path("/etc/yggdrasil/bws-deploy")
-CHANNEL_PROJECT = {"test": "non-prod", "prod": "prod"}
+CHANNEL_PROJECT = {"dev": "non-prod", "test": "non-prod", "prod": "prod"}
 
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
