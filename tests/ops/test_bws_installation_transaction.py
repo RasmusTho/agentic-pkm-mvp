@@ -3675,10 +3675,10 @@ def test_root_control_defensive_projection_rows_have_real_producer_invariants(mo
     })) == {'operation_id', 'candidate_sha', 'image_digest', 'bundle_name'}
 
 
-@pytest.mark.parametrize('mode', ['manifest', 'effect-alias'])
+@pytest.mark.parametrize('mode', ['manifest', 'effect-alias', 'process-cwd'])
 def test_control_path_slots_bind_complete_effect_footprint(monkeypatch, secure_tmp_path, mode):
     import base64
-    if mode == 'effect-alias':
+    if mode in {'effect-alias', 'process-cwd'}:
         from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
         assert exercise_control_path_transaction(secure_tmp_path, 'dev', mode)['status'] == 'refused_before_backup'
         return

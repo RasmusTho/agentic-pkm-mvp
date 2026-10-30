@@ -236,6 +236,10 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 lifecycle, patch, state, control_root, installed, runtime, public_launcher, channel, environment,
             )
             state['path_environment'] = list(environment)
+            if fault == 'path-process-cwd':
+                process_cwd = lifecycle.PROC / '123/cwd'
+                process_cwd.unlink()
+                process_cwd.symlink_to(control_root)
             def consume_start():
                 permit = receipts / admission._start_authorization_name(channel)
                 assert json.loads(permit.read_text())['operation_id'] == request['operation_id']
@@ -249,7 +253,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                         (fault == 'path-close' and binding.closed and any(
                             record[0] == fd for record in binding.fds.values()))
                         or (fault == 'path-transient-initial' and binding.snapshot is None)
-                        or (fault == 'path-transient-prebackup' and binding.snapshot is not None and not binding.closed)
+                        or (fault == 'path-transient-prebackup' and binding.snapshot is not None and not binding.closed
+                            and state['service'].phase == 'qualified')
                     )
                     original_close(fd)
                     if owned and not state.get('close_failed'):
@@ -469,9 +474,10 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                                              else "descriptor_capacity_unknown")
         assert not {"service", "stop", "start"} & set(state["events"])
         assert list(state["backups"].iterdir()) == []
-    elif fault == 'path-effect-alias':
+    elif fault in {'path-effect-alias', 'path-process-cwd'}:
         assert result['status'] == 'refused_before_backup'
-        assert result['prebackup_gate'] == 'old_kernel_initial_root_control'
+        assert result['prebackup_gate'] == ('old_kernel_initial_root_control' if fault == 'path-effect-alias'
+                                            else 'old_kernel_initial_service_process')
         assert state['events'].count('stop') == state['events'].count('start') == 0
         assert not list(state['backups'].iterdir())
         assert state['service'].runtime_close_completed

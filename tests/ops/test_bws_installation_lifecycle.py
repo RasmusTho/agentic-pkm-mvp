@@ -14,6 +14,7 @@ from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
 _REAL_LIFECYCLE_RUN = lifecycle._run
 _REAL_LIFECYCLE_PID_TOKEN = lifecycle._pid_token
+_REAL_LIFECYCLE_PUBLIC_LAUNCHER = lifecycle._public_launcher_bytes
 
 
 def _root(path: str, inode: int) -> dict[str, int | str]:
@@ -1311,17 +1312,40 @@ def configure_control_path_service(module, patch, state, control, application, r
     import copy
     import json
     import time
+    import shutil
     from types import SimpleNamespace
     patch.setattr(module, 'CONTROL_DIRECTORY', str(control))
     patch.setattr(module, '_CONTROL_OWNER_UID', os.geteuid())
     patch.setattr(module, '_CONTROL_OWNER_GID', os.getegid())
     patch.setattr(module, 'RUNTIME', str(runtime))
     patch.setattr(module, 'LAUNCHER', str(public_launcher))
-    patch.setattr(module, 'PROC', application / 'absent-proc')
+    proc = runtime.parent / 'synthetic-proc'
+    proc.mkdir(mode=0o755, exist_ok=True)
+    patch.setattr(module, 'PROC', proc)
+    patch.setattr(module, '_pid_token', _REAL_LIFECYCLE_PID_TOKEN)
+    patch.setattr(module, '_public_launcher_bytes', _REAL_LIFECYCLE_PUBLIC_LAUNCHER)
+    process_inodes = set()
+    def create_process(pid):
+        process = proc / str(pid)
+        process.mkdir(mode=0o755)
+        (process / 'stat').write_text(f'{pid} (synthetic) S ' + '0 ' * 18 + str(pid * 10) + '\n')
+        (process / 'status').write_bytes(b'Uid:\t0\t0\t0\t0\n')
+        (process / 'cmdline').write_bytes(b'\0'.join(os.fsencode(value) for value in (
+            str(runtime), str(public_launcher), 'serve', channel)) + b'\0')
+        (process / 'cwd').symlink_to(application)
+        (process / 'exe').symlink_to(runtime)
+        (process / 'task').mkdir(mode=0o755)
+        (process / 'task' / str(pid)).mkdir(mode=0o755)
+        for path in (process, process / 'stat', process / 'status', process / 'cmdline', process / 'task'):
+            info = path.stat()
+            process_inodes.add((info.st_dev, info.st_ino))
+    create_process(123)
     real_os = module.os
-    runtime_inode = runtime.stat().st_ino
     def observed(info):
-        if info.st_ino != runtime_inode:
+        public_identities = {(value.st_dev, value.st_ino) for value in (
+            real_os.stat(runtime), real_os.stat(public_launcher),
+        )}
+        if (info.st_dev, info.st_ino) not in public_identities | process_inodes:
             return info
         return SimpleNamespace(**{**{name: getattr(info, name) for name in dir(info)
                                      if name.startswith('st_')}, 'st_uid': 0, 'st_gid': 0})
@@ -1364,12 +1388,14 @@ def configure_control_path_service(module, patch, state, control, application, r
             action = argv[-2]
             state['events'].append(action)
             if action == 'stop':
+                shutil.rmtree(proc / str(properties['Service', 'MainPID']))
                 properties['Unit', 'ActiveState'], properties['Unit', 'SubState'] = 'inactive', 'dead'
                 properties['Service', 'MainPID'] = 0
                 now = time.monotonic_ns() // 1000
                 row = properties['Service', 'ExecStopPost'][0]
                 row[3:] = [1, now, 2, now, 900, 1, 0]
             else:
+                create_process(456)
                 properties['Unit', 'ActiveState'], properties['Unit', 'SubState'] = 'active', 'running'
                 properties['Service', 'MainPID'] = 456
                 if state.get('consume_start'):
@@ -1395,7 +1421,6 @@ def configure_control_path_service(module, patch, state, control, application, r
             data = copy.deepcopy(value)
         return json.dumps(dict(type=signature, data=data)).encode()
     patch.setattr(module, '_run', transport)
-    patch.setattr(module, '_pid_token', lambda _u, _c, pid, _a, _r: ('5' if pid == 123 else '6') * 64)
     return properties
 
 
@@ -1421,7 +1446,6 @@ def control_path_fixture(monkeypatch, secure_tmp_path, *, channel='dev', slot='d
     state = {'events': []}
     properties = configure_control_path_service(lifecycle, monkeypatch, state, control,
         roots['application'], runtime, launcher, channel, environment)
-    monkeypatch.setattr(lifecycle, '_public_launcher_bytes', launcher.read_bytes)
     def identity(path):
         info = path.stat()
         return dict(path=str(path), device=info.st_dev, inode=info.st_ino,
