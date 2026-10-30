@@ -28,13 +28,24 @@ acceptance evidence. No Builder System behavior is changed.
 - No generic third-party MCP server receives direct vault-write access.
 - No reuse of `app/mcp/vault_tools.py` as an external transport; it remains internal orchestrator
   plumbing.
-- No separate receipt read-back endpoint or tool.
+- The unchanged v1 profile has no separate receipt read-back endpoint or tool.
 - No new semantic authority, hidden durable store, retrieval engine, or client-local source of
   truth.
 - No Direction A connector configuration and no Direction C external-signal consumption.
 - No claim of support for a client or runtime deployment that lacks its own acceptance evidence.
 - No Streamable HTTP listener or per-device authentication in v1; B2 + C2 are separately gated
   follow-ons and cannot be enabled implicitly.
+
+## Bounded v2 implementation profile
+
+[ADR-0069](../adr/ADR-0069-mcp-v2-authority-profile.md) admits the separately selected
+`--profile v2` mapping over the shared authenticated operations API. Its exact request carrier
+mapping is recorded in [the client contract](../contracts/MIMER_CLIENT_CONTRACT.md#v2-request-carrier-mapping).
+The v1 profile and its five-tool acceptance record above remain unchanged. V2 implementation,
+current-candidate external-client/Companion conformance and deployed acceptance belong to
+[the terminal autonomous-operations task](../YGGDRASIL_AUTONOMOUS_OPERATIONS/EXPOSE_AND_PROVE_MCP_V2_PARITY.md)
+and parent #5329. This section records the bounded implementation contract; it does not promote
+current-state v2 support or general third-party/deployment compatibility before that acceptance.
 
 ## Task List
 

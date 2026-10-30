@@ -67,6 +67,30 @@ This is the proof that agent autonomy is first-class without creating a privileg
 - [ ] Current-state owner docs and this capability directory are promoted only after the parent accepts that receipt.
   Verify: doc writeback at `docs/YGGDRASIL_AUTONOMOUS_OPERATIONS/README.md :: Owner-Doc Promotion`
 
+## V2 implementation and verification boundary
+
+The opt-in stdio profile is `mimer-mcp --profile v2`; the default profile remains v1. The v2
+`mimer.v2.*` tools and capabilities resource project the live authenticated runtime's supported
+operations, schemas, operation version, authority/side-effect class, precondition/preview support
+and runtime maturity. The existing HTTP route validators and native `OperationOutcome` definition
+are the schema source. A missing required schema produces a typed discovery-contract refusal.
+The finite ADR-0069 profile fence cannot admit separately governed Panel, settings or memory actions.
+
+The exact request-local WSP carrier mapping is owned by
+[Mimer Client Contract — V2 request carrier mapping](../contracts/MIMER_CLIENT_CONTRACT.md#v2-request-carrier-mapping).
+The adapter forwards no other authentication or identity inputs. Native outcomes and original
+source/GOV receipts remain structured MCP results. A lost effect reply is unacknowledged with
+unknown source effect and no blind retry; observation uses the existing operation receipt and
+frozen-batch inspect/execute/cancel API, whose owners retain recovery and cancellation authority.
+
+The conformance corpus uses actual production host composition and native owners through direct
+calls, HTTP, the real Companion gateway and an external MCP SDK stdio process. It covers positive
+qualified capture/edit/move/rename and finite-batch effects, explicit unavailable-family dispositions,
+negative authority, conflicts, partial completion, independent projection lag, lost replies and
+restart readback. These local proofs are pre-merge verification. Deployed TEST acceptance and the
+short DEV smoke still require the same observed candidate SHA/digest, isolated actor/source and
+all required passing journeys before parent acceptance and the single owner-doc promotion.
+
 ## How to Verify (Pre-Merge)
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/mcp/test_mimer_server.py tests/mcp/test_mimer_v2_parity.py tests/operations/test_cross_surface_conformance.py tests/operations/test_operations_failure_matrix.py`

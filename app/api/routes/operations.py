@@ -6,9 +6,11 @@ neither surface gains an alternate execution or receipt authority here.
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.operation_runtime import build_production_operation_runtime
+from app.api.operation_schemas import (
+    BatchConfirmation, BatchPreviewCommand, OperationCommand,
+)
 from app.api.batch_operation_runtime import build_production_batch_runtime
 from app.operations.batch_operations import BatchStateUnavailable
 from app.api.request_governed_write import governed_context_write
@@ -24,43 +26,6 @@ from app.vault.active_context_v1 import ActiveContextError
 
 router = APIRouter(prefix="/operations", tags=["operations"],
                    dependencies=[Depends(require_loopback_or_api_key)])
-
-
-class OperationTarget(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    artifact_id: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_.:-]+$")
-    artifact_class: str | None = None
-
-
-class OperationCommand(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    operation_id: str = Field(min_length=1, max_length=128)
-    request_id: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_.:-]+$")
-    active_context_ref: str = Field(min_length=1)
-    vault_generation: str = Field(min_length=1)
-    target_binding_id: str | None = None
-    targets: list[OperationTarget] = Field(default_factory=list, max_length=1)
-    arguments: dict[str, Any] = Field(default_factory=dict)
-    expected_version: str | int | None = None
-
-    @field_validator("arguments")
-    @classmethod
-    def reject_authority(cls, value: dict[str, Any]) -> dict[str, Any]:
-        forbidden = {"path", "vault_root", "root", "key", "reader", "service_reader", "policy", "policy_decision",
-                     "decision_token", "receipt", "receipt_store", "delegation", "active_context", "target_binding_id"}
-
-        def check(item: Any) -> None:
-            if isinstance(item, dict):
-                if forbidden.intersection(item):
-                    raise ValueError("operation arguments cannot supply host authority")
-                for child in item.values():
-                    check(child)
-            elif isinstance(item, list):
-                for child in item:
-                    check(child)
-
-        check(value)
-        return value
 
 
 def _runtime(request: Request, api_key: str | None, session: str | None,
@@ -133,33 +98,6 @@ def preconditions(command: OperationCommand, request: Request,
     except (ContextSelectionError, ActiveContextServiceError, ContextBoundReadError,
             GovernedWriteProtocolError, BindingAuthorizationError, ActiveContextError, WritesBlockedError) as exc:
         raise HTTPException(403, "operation_authority_unavailable") from exc
-
-
-class BatchOperationItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    request_id: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_.:-]+$")
-    artifact_id: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_.:-]+$")
-    expected_version: str = Field(min_length=1, max_length=256)
-    arguments: dict[str, Any] = Field(default_factory=dict)
-
-    _arguments_guard = field_validator("arguments")(OperationCommand.reject_authority.__func__)
-
-
-class BatchPreviewCommand(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    batch_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.:-]+$")
-    operation_id: str = Field(min_length=1, max_length=128)
-    active_context_ref: str = Field(min_length=1)
-    vault_generation: str = Field(min_length=1)
-    target_binding_id: str = Field(min_length=1)
-    items: list[BatchOperationItem] = Field(min_length=1, max_length=100)
-    limit: int = Field(default=100, ge=1, le=100, strict=True)
-    partial_success_policy: str = "independent"
-
-
-class BatchConfirmation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    expected_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 def _batch_call(call: Any) -> dict[str, Any]:
