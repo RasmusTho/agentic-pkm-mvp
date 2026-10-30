@@ -26,7 +26,7 @@ def _batch(journey, roles, identity):
 @contextmanager
 def drop_one_acknowledgement(upstream, expected_command):
     observed = {"post_count": 0, "original_response": None}
-    with httpx.Client(base_url=upstream, timeout=60, follow_redirects=False) as client:
+    with httpx.Client(base_url=upstream, timeout=60, follow_redirects=False, trust_env=False) as client:
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_):
                 pass

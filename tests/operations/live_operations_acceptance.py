@@ -102,7 +102,7 @@ class OperationsJourney:
         self.channel = native.channel
         api_port, ui_port = ((18001, 8111) if self.channel == "dev" else (18002, 8112))
         self.api_url, self.ui_url = f"http://127.0.0.1:{api_port}", f"http://127.0.0.1:{ui_port}"
-        self.http = client or httpx.Client(base_url=self.api_url, timeout=180, follow_redirects=False)
+        self.http = client or httpx.Client(base_url=self.api_url, timeout=180, follow_redirects=False, trust_env=False)
         self.observations: dict[str, dict[str, Any]] = {}
         self.bearer = ""
         self.expired_bearer = ""
@@ -382,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--test-receipt", type=Path)
     args = parser.parse_args(argv)
     try:
-        if Path(sys.executable).resolve() != SDK_PYTHON.resolve():
+        if Path(sys.executable).absolute() != SDK_PYTHON.absolute():
             raise OperationsAcceptanceRefusal("qualified_external_runtime_required")
         if (args.channel == "dev") != (args.test_receipt is not None):
             raise OperationsAcceptanceRefusal("dev_requires_original_test_receipt")

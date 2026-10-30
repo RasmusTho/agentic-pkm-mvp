@@ -160,6 +160,20 @@ class NativeChannel:
     def _git(self, root: Path, *args: str) -> str:
         return command(["git", "--no-replace-objects", "-C", str(root), *args])
 
+    def _qualified_running(self, root: Path, revision: str, image_digest: str,
+                           receipt: dict[str, Any]) -> dict[str, Any]:
+        """Same actual startup qualification for fresh and retained processes."""
+        running = self._running(revision, image_digest)
+        import yaml
+        compose = yaml.safe_load(self._git(root, "show", revision + ":docker-compose.yaml"))
+        expected_command = [item.replace("$$", "$") for item in compose["services"]["api"]["command"]]
+        if (running["api"]["Config"].get("Cmd") != expected_command
+            or running["api"]["Config"].get("WorkingDir") != "/app"
+            or running["companion-ui"]["Config"].get("WorkingDir") != "/app/companion-ui/companion-app"
+            or running["api"]["Image"] != receipt["pg_acceptance"]["app_image_id"]):
+            raise OperationsAcceptanceRefusal("actual_native_program_or_image_mismatch")
+        return running
+
     def _package(self, root: Path, revision: str) -> dict[str, Any]:
         package = json.loads(command([str(SDK_PYTHON), "-I", "-c", PACKAGE_PROBE]))
         files = {}
@@ -215,17 +229,9 @@ class NativeChannel:
             return self._retained_admission(config)
         root, receipt, plan = self._native()
         revision, image_digest = plan["revision"], plan["image_digest"]
-        running = self._running(revision, image_digest)
+        running = self._qualified_running(root, revision, image_digest, receipt)
         package = self._package(root, revision)
         resources, producers = self._resources(root, revision)
-        import yaml
-        compose = yaml.safe_load(self._git(root, "show", revision + ":docker-compose.yaml"))
-        expected_command = [item.replace("$$", "$") for item in compose["services"]["api"]["command"]]
-        if (running["api"]["Config"].get("Cmd") != expected_command
-            or running["api"]["Config"].get("WorkingDir") != "/app"
-            or running["companion-ui"]["Config"].get("WorkingDir") != "/app/companion-ui/companion-app"
-            or running["api"]["Image"] != receipt["pg_acceptance"]["app_image_id"]):
-            raise OperationsAcceptanceRefusal("actual_native_program_or_image_mismatch")
         identity = {"profile": PROFILE, "selection_hash": SELECTION_HASH, "channel": self.channel,
             "operation_id": self.operation_id, "source_sha": revision, "image_digest": image_digest,
             "restart_operation_id": str(uuid5(UUID(self.operation_id), PROFILE + ":backend-wsp-restart")),
@@ -260,9 +266,7 @@ class NativeChannel:
         if (plan["revision"] != original_plan["revision"] or plan["image_digest"] != original_plan["image_digest"]
             or "api" not in plan["services"]):
             raise OperationsAcceptanceRefusal("separate_native_restart_receipt_unqualified")
-        running = self._running(plan["revision"], plan["image_digest"])
-        if running["api"]["Image"] != current["pg_acceptance"]["app_image_id"]:
-            raise OperationsAcceptanceRefusal("actual_native_program_or_image_mismatch")
+        running = self._qualified_running(root, plan["revision"], plan["image_digest"], current)
         probe = json.loads(command(["docker", "exec", running["api"]["Id"],
             "python", "-m", "app.api.native_operations_acceptance", "probe"]))
         binding = probe["binding"]
@@ -303,7 +307,7 @@ class NativeChannel:
             or any(file_hash(root / name) != expected for name, expected in self.identity["producer_hashes"].items())
             or self._package(root, plan["revision"]) != self.identity["sidecar"]):
             raise OperationsAcceptanceRefusal("current_native_candidate_changed")
-        running = self._running(plan["revision"], plan["image_digest"])
+        running = self._qualified_running(root, plan["revision"], plan["image_digest"], receipt)
         process_binding = self.restart_binding or self.identity
         if any(running[service]["Id"] != process_binding[key] for service, key in
                (("api", "api_container_id"), ("companion-ui", "ui_container_id"))):
@@ -334,7 +338,7 @@ class NativeChannel:
             or plan["revision"] != self.identity["source_sha"] or plan["image_digest"] != self.identity["image_digest"]
             or "api" not in plan["services"] or self._package(root, plan["revision"]) != self.identity["sidecar"]):
             raise OperationsAcceptanceRefusal("separate_native_restart_receipt_unqualified")
-        running = self._running(plan["revision"], plan["image_digest"])
+        running = self._qualified_running(root, plan["revision"], plan["image_digest"], receipt)
         if (running["api"]["Image"] != receipt["pg_acceptance"]["app_image_id"]
             or running["api"]["Image"] != self.identity["api_image_id"]
             or running["companion-ui"]["Image"] != self.identity["ui_image_id"]

@@ -21,7 +21,7 @@ pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 
 @pytest.mark.parametrize("channel", ["test", "dev"])
-def test_channel_entrypoints_enforce_native_operations_admission(tmp_path, monkeypatch, channel):
+def test_channel_entrypoints_enforce_native_operations_admission(tmp_path, monkeypatch, capsys, channel):
     from tests.operations.live_operations_acceptance import main
     from app.api.native_operations_acceptance import prepare_native_context
     instance = host(tmp_path, monkeypatch, channel=channel, freeze=False)
@@ -85,6 +85,15 @@ def test_channel_entrypoints_enforce_native_operations_admission(tmp_path, monke
         argv = [channel, OPERATION]
     assert main(argv) == 1
     assert journal.read() is None
+    capsys.readouterr()
+    alias = tmp_path / "other-sdk-runtime" / "bin" / "python"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(sys.executable)
+    assert alias.resolve() == Path(sys.executable).resolve()
+    monkeypatch.setattr(caller, "SDK_PYTHON", alias)
+    monkeypatch.setattr(LinuxConfig, "load", lambda *args, **kwargs: pytest.fail("wrong SDK runtime reached native facts"))
+    assert main(argv) == 1
+    assert '"reason": "qualified_external_runtime_required"' in capsys.readouterr().out
     assert before == {str(path): file_hash(path) for path in instance.root.rglob("*.md")}
     # A declared synthetic label cannot create a missing native principal.
     from app.instance.runtime import local_operator_principal_path
@@ -97,6 +106,10 @@ def test_channel_entrypoints_enforce_native_operations_admission(tmp_path, monke
 
 def test_real_sdk_profiles_and_operation_parity_are_observed(tmp_path, monkeypatch):
     instance = host(tmp_path, monkeypatch)
+    # Ambient proxies must not receive fixed loopback requests or carriers.
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.setenv(name, "http://127.0.0.1:1")
+    monkeypatch.setenv("NO_PROXY", "")
     import os
     from app.operations.execution_kernel import JsonReceiptStore
     original_link = os.link
@@ -338,6 +351,16 @@ def test_qualified_channel_commands_cover_test_and_dev(tmp_path, monkeypatch, ch
         assert ports.prepares == prepares and len(calls) == observed_calls
         assert native_context == file_hash(instance.runtime.registry.path.parent / CONTEXT_FILE)
         assert source_hashes == {str(path): file_hash(path) for path in instance.root.rglob("*.md")}
+        for attribute, invalid in (("api_command", ["python", "-c", "import time;time.sleep(3600)"]),
+                                   ("api_workdir", "/tmp"), ("ui_workdir", "/app")):
+            original_value = getattr(ports, attribute)
+            setattr(ports, attribute, invalid)
+            with pytest.raises(OperationsAcceptanceRefusal, match="actual_native_program_or_image_mismatch"):
+                native.observe_restart()
+            with pytest.raises(OperationsAcceptanceRefusal, match="actual_native_program_or_image_mismatch"):
+                caller.NativeChannel(channel, OPERATION).admit()
+            setattr(ports, attribute, original_value)
+            assert ports.prepares == prepares and len(calls) == observed_calls
         from uuid import uuid4
         ports.commit(str(uuid4()))
         with pytest.raises(OperationsAcceptanceRefusal, match="current_committed_full_native_operation_required"):

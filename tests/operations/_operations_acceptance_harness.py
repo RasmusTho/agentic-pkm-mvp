@@ -188,9 +188,9 @@ class LocalNative:
 
 
 def journey(host, directory, api_url, ui_url=None, *, native=None):
-    import httpx
     from tests.operations.live_operations_acceptance import OperationsJourney
-    result = OperationsJourney(native or LocalNative(host), directory, client=httpx.Client(base_url=api_url, timeout=60))
+    result = OperationsJourney(native or LocalNative(host), directory)
+    result.http.base_url = api_url
     result.api_url = api_url
     if ui_url is not None:
         result.ui_url = ui_url
@@ -221,6 +221,8 @@ class NativeFixturePorts:
                                image_digest=DIGEST, automatic=True)
         self.result = _result
         self.api_id, self.ui_id = "1" * 64, "2" * 64
+        self.api_command = None
+        self.api_workdir, self.ui_workdir = "/app", "/app/companion-ui/companion-app"
         self.prepares = 0
         self.compose = yaml.safe_load((ROOT / "docker-compose.yaml").read_text())
         self.commit(OPERATION)
@@ -274,9 +276,11 @@ class NativeFixturePorts:
         inner, outer = (8000, api_port) if api else (ui_port, ui_port)
         command = ([value.replace("$$", "$") for value in self.compose["services"]["api"]["command"]]
                    if api else ["/bin/bash", "-c", 'python -m "${COMPANION_UI_SERVE_MODULE:-companion_ui.workspace.serve_dev_page}"'])
+        if api and self.api_command is not None:
+            command = self.api_command
         return {"Id": self.api_id if api else self.ui_id, "Image": self.image_id, "State": {"Running": True}, "Mounts": [],
             "Config": {"Env": env, "Entrypoint": None, "Cmd": command,
-                "WorkingDir": "/app" if api else "/app/companion-ui/companion-app",
+                "WorkingDir": self.api_workdir if api else self.ui_workdir,
                 "Labels": {"org.opencontainers.image.revision": self.sha, "com.docker.compose.project": "pkm-" + self.channel,
                            "com.docker.compose.service": service, "io.yggdrasil.acceptance-kind": "premerge"}},
             "NetworkSettings": {"Ports": {str(inner) + "/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(outer)}]},
