@@ -123,6 +123,33 @@ _ROOT_CONTROL_REFINEMENT_GATES = frozenset(
     "old_kernel_" + stage + "_root_control__" + "__".join(context)
     for stage in ("initial", "empty_control") for context in _ROOT_CONTROL_REFINEMENTS
 )
+# Source symbols only. Value cases are existing unit-property predicates;
+# launcher/process/cleanup/root semantic refusals retain their own families.
+_UNIT_PROPERTY_VALUE_SITES = frozenset(
+    ('Unit_Id Unit_LoadState Unit_OnFailure Unit_OnSuccess Unit_TriggeredBy '
+     'Service_Type Service_User Service_Group Service_KillMode Service_Restart '
+     'Service_RootDirectory Service_RootImage Service_WorkingDirectory Service_BindPaths '
+     'Service_BindReadOnlyPaths Service_TemporaryFileSystem Service_ReadOnlyPaths '
+     'Service_ReadWritePaths Service_InaccessiblePaths Service_PassEnvironment '
+     'Service_ExtensionDirectories Service_MountImages Service_ExtensionImages Service_PAMName '
+     'Service_UnsetEnvironment Service_ExecSearchPath Service_PrivateMounts Service_PrivateTmp '
+     'Service_PrivateDevices Service_PrivateUsers Service_DynamicUser Service_ProtectHome '
+     'Service_ProtectSystem Unit_DropInPaths Unit_JoinsNamespaceOf').split()
+)
+_UNIT_PROPERTY_READ_SITES = _UNIT_PROPERTY_VALUE_SITES | frozenset(
+    ('Manager_GetUnit Manager_GetUnitProcesses Service_ExecCondition Service_ExecStartPre '
+     'Service_ExecStartPost Service_ExecStop Service_ExecReload Service_ExecStart '
+     'Service_ExecStopPost Service_ExecStopPost_final Service_Environment Service_EnvironmentFiles '
+     'Unit_ActiveState Unit_SubState Unit_Job Service_ControlPID Service_MainPID').split()
+)
+_UNIT_PROPERTY_REFINEMENTS = frozenset(
+    (site, kind) for site in _UNIT_PROPERTY_READ_SITES
+    for kind in ('backend', 'decode', 'signature', 'shape')
+) | frozenset((site, 'value') for site in _UNIT_PROPERTY_VALUE_SITES)
+_UNIT_PROPERTY_REFINEMENT_GATES = frozenset(
+    'old_kernel_initial_unit_properties__' + '__'.join(context)
+    for context in _UNIT_PROPERTY_REFINEMENTS
+)
 _PREBACKUP_REFUSAL_GATES = frozenset({
     "channel_lock_entry",
     "channel_owner_check",
@@ -155,7 +182,7 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "old_kernel_empty_control_cleanup_contract",
     "qualified_writer_snapshot",
     "generation_qualification",
-}) | _ROOT_CONTROL_REFINEMENT_GATES
+}) | _ROOT_CONTROL_REFINEMENT_GATES | _UNIT_PROPERTY_REFINEMENT_GATES
 _ADMISSION_TERMINAL_STATUSES = frozenset({
     "installed", "compensated_restored", "refused_before_backup", "refused_before_stop",
 })
