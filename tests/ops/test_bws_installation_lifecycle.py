@@ -1801,3 +1801,42 @@ def test_initial_unit_property_sites_and_failure_kinds(monkeypatch, secure_tmp_p
     assert fixture.state['unit_fault_fired'] and not fixture.state['events']
     assert fixture.service.runtime_close_completed
     assert 'PRIVATE_CANARY' not in str(caught.value) + repr(capsys.readouterr())
+
+
+def test_preserved_dropin_descriptor_saturation_refuses_before_file_open(monkeypatch, secure_tmp_path):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    selected = configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(),
+                                         fixture.properties, 'dev')
+    # Independent finite fixture topology: qualification opens these root and
+    # effect-parent ancestors before selecting the file. Leave exactly no slot.
+    directories = set()
+    for path in (*fixture.roots.values(), selected.parent):
+        directories.update((path, *path.parents))
+    limit = len(directories)
+    monkeypatch.setattr(lifecycle, '_control_path_descriptor_bound', lambda: limit)
+    real_open, real_close = lifecycle.os.open, lifecycle.os.close
+    owned = set()
+    selected_opens = []
+    maximum = 0
+    def open_fd(path, flags, *args, **kwargs):
+        nonlocal maximum
+        if str(path) == selected.name:
+            selected_opens.append(path)
+        fd = real_open(path, flags, *args, **kwargs)
+        assert fd not in owned
+        owned.add(fd)
+        maximum = max(maximum, len(owned))
+        return fd
+    def close_fd(fd):
+        assert fd in owned  # exactly one close per original open, including reuse
+        owned.remove(fd)
+        real_close(fd)
+    monkeypatch.setattr(lifecycle.os, 'open', open_fd)
+    monkeypatch.setattr(lifecycle.os, 'close', close_fd)
+    with pytest.raises(RuntimeError, match='bws_lifecycle_unproven'):
+        with fixture.service.retained_runtime():
+            fixture.service.qualify_old(**fixture.arguments)
+    assert selected_opens == []
+    assert not owned and not fixture.service.control_path_binding.fds
+    assert maximum <= limit + 1  # existing separately budgeted runtime reader
+    assert fixture.state['events'] == []

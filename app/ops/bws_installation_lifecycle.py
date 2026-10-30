@@ -212,7 +212,7 @@ def _control_path_slots(environment: list[str]) -> tuple[str, ...]:
 
 
 class _ControlPathBinding:
-    """Retained, metadata-only proof for the immutable control PATH slots.
+    """Retained control-slot metadata and optional preserved PATH-file proof.
 
     All forward/restore/staging effects are below disjoint application, launcher
     and backup roots. The control tree receives no writes. Reject all mount
@@ -352,6 +352,8 @@ class _ControlPathBinding:
                     _refuse('root_control')
                 parent_fd = directory(parent)
                 if any(opened[parent][1][:2] == opened[root['path']][1][:2] for root in roots):
+                    _refuse('root_control')
+                if len(opened) >= _control_path_descriptor_bound():
                     _refuse('root_control')
                 fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
                 try:
