@@ -230,15 +230,6 @@ with psycopg.connect(dsn, autocommit=True) as conn:
 PY
 fi
 
-# MVR-05D runtime precondition: refuse to activate any runtime while pending
-# live-binding outbox rows predate the binding/context envelope (an MVR-05D
-# worker would never dispatch them). Read-only; every Compose runtime service
-# depends on this one-shot, and migration-bearing deploys reach it after all
-# runtime writers were stopped.
-if [[ -n "${DATABASE_URL:-${DB_DSN:-}}" ]]; then
-  python -m app.services.outbox_envelope_preflight
-fi
-
 # Ordinary production startup runs this gate after extension setup and
 # immediately before the first upgrade.
 if [[ "${MIGRATION_PRODUCTION_GATE:-0}" == "1" || "${PKM_ENVIRONMENT:-}" == "prod" ]]; then

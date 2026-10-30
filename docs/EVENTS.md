@@ -271,12 +271,18 @@ Current consumer expectations:
   fail-closed treatment: it stays pending and unacknowledged, counts toward
   `blocked_pending_mvr06`, and never blocks later `explicitly-global` work. Pre-MVR-05D rows that
   carry only the MVR-05A binding stamp are in this class. Rollout precondition (fail-loud):
-  `app/services/outbox_envelope_preflight.py` runs in `scripts/run_migrations.sh` before
-  `alembic upgrade head`, i.e. in the one-shot `migrate` service every runtime service depends on,
-  and exits 79 (refusing activation) while any undelivered live-binding row lacks the envelope.
-  Migration-bearing deploys reach it after every runtime writer was stopped. The remedy is to run
-  the previous image until its worker drains those rows, then redeploy; the preflight never rewrites
-  or acknowledges a row. Scalar-era rows migrated to
+  before its first poll, the worker (`app/workers/outbox_worker.py::run`) calls
+  `app/services/outbox_envelope_preflight.py::require_upgrade_drained` with its live binding stamp
+  and refuses to start while any pending row on that binding still matches the live 05A stamp but
+  lacks the envelope, i.e. work the previous image could deliver and this one never will. Rows the
+  previous worker could not deliver either (stale or foreign stamps), compatibility, global, and
+  quarantined rows are not counted, so they never wedge activation. The remedy is to run the
+  previous image until its worker drains those rows, then redeploy; the check is read-only and never
+  rewrites or acknowledges a row. Residual window: deploys without a migration do not stop old
+  producers before the new worker starts, so a row an old producer writes after that check stays
+  pending (fail-closed) and the next worker start refuses until it is drained (KD-A42F26A9AD87).
+  `python -m app.services.outbox_envelope_preflight` evaluates the same gate as an operator probe.
+  Scalar-era rows migrated to
   `legacy-compatibility-binding` keep their MVR-05A consume-time translation.
 - Worker handlers propagate `trace_id` from the event envelope or payload into downstream spans and
   emitted retry events.

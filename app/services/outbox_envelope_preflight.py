@@ -1,123 +1,134 @@
-"""MVR-05D rollout preflight: refuse runtime activation over pre-envelope work.
+"""MVR-05D rollout preflight: refuse worker activation over upgrade-stranded rows.
 
 An MVR-05D worker dispatches a live-binding outbox row only when it carries the
-complete ``mvr05.outbox-envelope.v1`` envelope. Rows written by an MVR-05A..05C
-runtime carry only the 05A binding stamp, so after an upgrade they would stay
-pending forever (fail-closed, ``blocked_pending_mvr06``). This preflight is the
-fail-loud runtime precondition for that contract: it counts undelivered
-live-binding rows without the envelope and refuses activation while any exist.
+complete ``mvr05.outbox-envelope.v1`` envelope. A row that an MVR-05A..05C
+worker could still have dispatched -- pending, on the worker's live binding,
+with the matching 05A binding stamp -- but that lacks the envelope would stay
+pending forever after an upgrade. This preflight is the fail-loud runtime
+precondition for that contract.
 
-It runs in ``scripts/run_migrations.sh``, the one-shot ``migrate`` authority
-that every Compose runtime service depends on, so no MVR-05D API/worker/watcher
-starts over incompatible pending work. Migration-bearing deploys run it after
-``scripts/deploy_channel.sh :: apply_changed_migrations`` has stopped every
-runtime writer, i.e. under producer quiescence. The check is read-only; the
-remedy is to let the previous image's worker drain the rows (roll back, drain,
-redeploy), never to rewrite or acknowledge them here.
+``app/workers/outbox_worker.py::run`` calls :func:`require_upgrade_drained`
+after bootstrap and before its first poll, with the worker's own live binding
+stamp. Any such row makes the worker refuse to start (the process exits loud and
+its readiness never reports healthy), so the deploy cannot activate an MVR-05D
+worker over work only the previous image can deliver. The remedy is to run the
+previous image until its worker drains those rows, then redeploy.
 
-Explicitly global, scalar-era compatibility, and quarantined rows are outside
-the check: global and compatibility rows keep their MVR-05A treatment, and the
-quarantine marker never dispatches.
+The count is deliberately narrow: rows with a stale or foreign binding stamp,
+explicitly global, scalar-era compatibility, and quarantined rows are not
+counted. The previous image could not deliver those either (or they keep their
+MVR-05A treatment), so they never wedge activation. The check is read-only.
 """
 
 from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Mapping
 from typing import Any
 
-from app.instance.binding_ids import (
-    COMPATIBILITY_BINDING_ID,
-    OUTBOX_GLOBAL_BINDING_ID,
-    OUTBOX_QUARANTINE_BINDING_ID,
-)
 from app.services.outbox_producers import OUTBOX_ENVELOPE_VERSION
 
 PREFLIGHT_SCHEMA = "mvr05d-outbox-envelope-preflight.v1"
 BLOCKED_EXIT_CODE = 79
 
-_INCOMPATIBLE_PENDING_SQL = (
+_UPGRADE_STRANDED_SQL = (
     "select count(*) from outbox where delivered_at is null "
-    "and vault_binding_id not in (%s, %s, %s) "
+    "and vault_binding_id = %s "
+    "and payload #>> '{meta,vault_binding_id}' = %s "
+    "and payload #>> '{meta,binding_authority}' = %s "
+    "and payload #>> '{meta,binding_authorization_epoch}' = %s "
+    "and payload #>> '{meta,binding_revision}' = %s "
+    "and payload #>> '{meta,vault_root}' = %s "
     "and coalesce(payload #>> '{meta,outbox_envelope}', '') <> %s"
 )
 
 
-def _fetch_one(conn: Any, sql: str, params: tuple = ()) -> Any:
-    cur = conn.execute(sql, params)
-    return cur.fetchone()
+class OutboxEnvelopeUpgradeBlocked(RuntimeError):
+    """Pending live-binding work predates the envelope and only the old image can drain it."""
 
-
-def _first(row: Any) -> Any:
-    if row is None:
-        return None
-    if isinstance(row, dict):
-        return next(iter(row.values()), None)
-    return row[0]
-
-
-def evaluate(conn: Any) -> dict[str, Any]:
-    """Return the preflight receipt for one database connection (read-only)."""
-
-    oid = _first(_fetch_one(conn, "select to_regclass('outbox')::oid"))
-    if not oid:
-        return {"schema": PREFLIGHT_SCHEMA, "status": "skipped", "reason": "outbox_absent"}
-    column = _fetch_one(
-        conn,
-        "select 1 from pg_attribute where attrelid = %s and attname = 'vault_binding_id' "
-        "and attnum > 0 and not attisdropped",
-        (oid,),
-    )
-    if column is None:
-        # Pre-MVR-05A schema: every row is scalar-era and the migration
-        # classifies it as compatibility work, which keeps 05A treatment.
-        return {"schema": PREFLIGHT_SCHEMA, "status": "skipped", "reason": "pre_binding_schema"}
-    count = int(
-        _first(
-            _fetch_one(
-                conn,
-                _INCOMPATIBLE_PENDING_SQL,
-                (
-                    COMPATIBILITY_BINDING_ID,
-                    OUTBOX_GLOBAL_BINDING_ID,
-                    OUTBOX_QUARANTINE_BINDING_ID,
-                    OUTBOX_ENVELOPE_VERSION,
-                ),
-            )
+    def __init__(self, count: int) -> None:
+        self.count = count
+        super().__init__(
+            "MVR-05D outbox envelope preflight refused worker activation: "
+            f"{count} pending live-binding outbox row(s) predate the "
+            f"{OUTBOX_ENVELOPE_VERSION} envelope and would never be dispatched. Run the "
+            "previous image until its worker drains them, then redeploy "
+            "(docs/EVENTS.md :: Outbox consumer contract)."
         )
-        or 0
+
+
+def count_upgrade_stranded_rows(conn: Any, required_binding_stamp: Mapping[str, object]) -> int:
+    """Count pending rows the previous worker could dispatch but this one never will."""
+
+    binding_id = str(required_binding_stamp["vault_binding_id"])
+    cur = conn.execute(
+        _UPGRADE_STRANDED_SQL,
+        (
+            binding_id,
+            binding_id,
+            str(required_binding_stamp["binding_authority"]),
+            str(required_binding_stamp["binding_authorization_epoch"]),
+            str(required_binding_stamp["binding_revision"]),
+            str(required_binding_stamp["vault_root"]),
+            OUTBOX_ENVELOPE_VERSION,
+        ),
     )
+    row = cur.fetchone()
+    if row is None:
+        return 0
+    value = next(iter(row.values()), 0) if isinstance(row, dict) else row[0]
+    return int(value or 0)
+
+
+def evaluate(conn: Any, required_binding_stamp: Mapping[str, object] | None) -> dict[str, Any]:
+    if required_binding_stamp is None:
+        return {"schema": PREFLIGHT_SCHEMA, "status": "skipped", "reason": "no_binding_runtime"}
+    count = count_upgrade_stranded_rows(conn, required_binding_stamp)
     return {
         "schema": PREFLIGHT_SCHEMA,
         "status": "blocked" if count else "ok",
-        "incompatible_pending_count": count,
+        "upgrade_stranded_pending_count": count,
     }
 
 
-def main() -> int:
-    import psycopg
+def require_upgrade_drained(
+    required_binding_stamp: Mapping[str, object] | None, *, conn: Any = None
+) -> dict[str, Any]:
+    """Fail loud before the worker's first poll when upgrade-stranded rows exist."""
 
-    from app.db.dsn import resolve_dsn
+    if required_binding_stamp is None:
+        return evaluate(conn, None)
+    from app.services.outbox import _use_conn
 
-    dsn = resolve_dsn()
-    if not dsn:
-        print(json.dumps({"schema": PREFLIGHT_SCHEMA, "status": "skipped", "reason": "no_database"}))
-        return 0
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        receipt = evaluate(conn)
-    print(json.dumps(receipt, sort_keys=True))
+    conn, close = _use_conn(conn)
+    try:
+        receipt = evaluate(conn, required_binding_stamp)
+    finally:
+        if close:
+            conn.close()
     if receipt["status"] == "blocked":
-        print(
-            "ERROR: MVR-05D outbox envelope preflight blocked runtime activation: "
-            f"{receipt['incompatible_pending_count']} pending live-binding outbox row(s) "
-            "predate the mvr05.outbox-envelope.v1 envelope and would never be dispatched. "
-            "Run the previous image until its worker drains them, then redeploy "
-            "(docs/EVENTS.md :: Outbox consumer contract).",
-            file=sys.stderr,
-        )
+        raise OutboxEnvelopeUpgradeBlocked(int(receipt["upgrade_stranded_pending_count"]))
+    return receipt
+
+
+def main() -> int:
+    """Operator probe: evaluate this process's live binding without starting a worker."""
+
+    from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
+    from app.workers.outbox_binding_gate import required_worker_binding_stamp
+
+    stamp = required_worker_binding_stamp(resolve_scalar_binding_runtime())
+    try:
+        receipt = require_upgrade_drained(stamp)
+    except OutboxEnvelopeUpgradeBlocked as exc:
+        print(json.dumps({"schema": PREFLIGHT_SCHEMA, "status": "blocked",
+                          "upgrade_stranded_pending_count": exc.count}, sort_keys=True))
+        print(f"ERROR: {exc}", file=sys.stderr)
         return BLOCKED_EXIT_CODE
+    print(json.dumps(receipt, sort_keys=True))
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover - exercised through run_migrations.sh
+if __name__ == "__main__":  # pragma: no cover - operator entry point
     raise SystemExit(main())
