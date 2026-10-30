@@ -378,6 +378,79 @@ meaningful `Verify:` targets; the parent stays a validation hub. Existing infras
 release/deployment authority, normal non-production migration policy and production/operator gates
 continue to govern the effects. A generic "live/operator acceptance" stop adds no authority gate.
 
+The fixed autonomous-operations runner is
+`tests/operations/live_operations_acceptance.py`. On the qualified native Linux host, use its
+separately installed runtime (the core Docker image does **not** install the MCP SDK/sidecar):
+
+```sh
+/opt/yggdrasil/bws-deploy-runtime/bin/python -m tests.operations.live_operations_acceptance test NATIVE_OPERATION_UUID
+/opt/yggdrasil/bws-deploy-runtime/bin/python -m tests.operations.live_operations_acceptance dev DEV_NATIVE_OPERATION_UUID --test-receipt /var/lib/yggdrasil/bws-deploy/operations-acceptance-results/test-NATIVE_OPERATION_UUID/receipt.json
+```
+
+These are observations and bounded Product journeys, not deployment or restoration commands.
+Before any client contact, the native producer reads the current committed **full** channel
+operation, original private native request/PG acceptance, actual running API/UI containers and
+immutable image, baked Git resources and exact executing producer bytes. It separately checks the
+installed sidecar, official SDK, Python runtime, Playwright and browser resource hashes against
+that candidate. Core-flow capture activation or web resource inventory alone cannot qualify it.
+
+The existing instance registry must already contain one initialized, isolated binding whose
+`native-operations-acceptance.v1` extension declares only its native `operation_id`. This declaration
+is fixture data; it grants no authority. The configured native local-operator principal, instance,
+binding, restore/rollback/lock state and exact known synthetic Markdown seeds must already qualify.
+`app/api/native_operations_acceptance.py::source_templates` defines those stable UUIDs and seeds;
+the existing configured capture path is used. There may be no extra human notes, links or symlinked
+sources. TEST also needs its known encrypted raw fixture, active consent bound to the same existing
+principal/instance/binding, retention policy, qualified archive volume and fixed restore reader/key.
+An unavailable archive environment blocks qualification; it is not an unsupported operation family.
+Neither the producer nor the runner initializes a vault, provisions a principal, grants consent,
+changes configuration or repairs projections.
+
+The empty-body authenticated admission endpoint derives versions from the existing native owners
+under their normal selection/GOV/read windows. It freezes the selection, source/configuration
+hashes and exact intents. The actual owner boundary rechecks them and durably reserves at most
+15 TEST source effects (capture, update, move, rename, two-item batches, conflict/concurrency and
+lost-ack fixtures, archive and restore), or one DEV update, in the existing operation journal.
+Admission only narrows existing native authority. Caller manifests, `approved`, forged headers,
+pilot grants and a fresh selection cannot enlarge or replenish it. UNKNOWN or consumed slots stay
+consumed; rerunning a retained invocation reads original evidence without replay or reissuing it.
+
+The complete TEST inventory is `native_admission`, `sdk_profiles`, `qualified_families`,
+`operation_receipt_parity`, `browser_discovery`, `browser_selected_preflight`,
+`browser_confirmation_progress`, `browser_cancel`, `browser_receipt_recovery`, `browser_conflict`,
+`authority_refusals`, `hostile_collision_cas`, `concurrent_refusal`, `partial_batch`,
+`dropped_acknowledgement`, `client_restart`, `backend_wsp_restart`, `projection_lag`, `native_doctor`,
+`native_invariants`, and `source_store_index_links`. The official SDK uses stdio, the exact v1 five
+tools and explicit v2 runtime-derived schemas. Qualified reads and writes require successful native
+receipts; only genuinely unsupported/uninstalled families use typed `not_supported`.
+The TEST run waits for a real old selection to expire before freezing its fresh effect selection;
+its fixed total budget is one hour. It does not alter native clocks or selection TTLs.
+
+The seven-scenario DEV smoke is `native_admission`, `sdk_profiles`, `qualified_reads`,
+`dev_operation_receipt`, `native_doctor`, `native_invariants`, and `source_store_index_links`.
+It revalidates the original complete TEST receipt **and its artifacts**, requires the same
+SHA/image/resource/producer/sidecar identity, and admits one synthetic update plus receipt reads.
+Doctor, invariant and source/Store/index/link probes are independent, read-only observations;
+committed source effects never imply projection convergence. Lag or any missing, blocked, failed,
+skipped, xfailed or excluded required scenario prevents aggregate PASS.
+
+Backend/WSP restart remains a separate native authority. The runner never dispatches it. Its
+fixed successor identity is derived from the original operation UUID and the profile's
+`backend-wsp-restart` namespace; that identity is a correlation fact, never permission. Only an
+already committed same-candidate native successor, retained original native receipt, actual API
+replacement, changed WSP epoch, invalid old carrier and unchanged original receipts can satisfy
+the read-only restart observation. Otherwise that required scenario stays explicitly blocked.
+
+Original observations, private action traces and receipt hashes live outside the vault under
+`/var/lib/yggdrasil/bws-deploy/operations-acceptance-results`; files are owner-only and carriers
+remain in client memory. The producer emits `yggdrasil-autonomous-operations-acceptance.v1` only
+for a complete bound inventory. Canonical temporary Product fixtures prove guards and orchestration
+before merge and are labeled `PREMERGE_PASS`, never deployed `PASS`. Blocking browser CI executes
+the exact served journey and substantive human/agent authority-and-recovery targets with a
+zero-skip JUnit inventory. Automation delivery in #6479 leaves the real qualified TEST/short DEV
+run, all remaining #5340/#5329 criteria and their single post-acceptance owner-doc/State promotion
+pending on those existing contracts.
+
 Use `agent:needs-human` / `action:human-acceptance` only for a **human acceptance exception** that
 names the observable choice or observation, why it cannot be automated, the owner, and an exact
 `unblocks_when`. Put these facts in the self-sufficient **Issue body**, which readiness callers

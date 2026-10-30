@@ -934,6 +934,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "operations",
         (
             "app/operations/",
+            "app/api/native_operations_acceptance.py",
+            "app/ops/operations_acceptance.py",
+            "app/ops/native_operations_acceptance_runner.py",
+            "app/ops/native_channel_probe.py",
             "tests/operations/",
             "tests/architecture/test_autonomous_operations_boundaries.py",
         ),
