@@ -270,8 +270,13 @@ Current consumer expectations:
   shared binding lease. A legacy-shaped, corrupt, mismatched, or ambiguous row keeps the MVR-05A
   fail-closed treatment: it stays pending and unacknowledged, counts toward
   `blocked_pending_mvr06`, and never blocks later `explicitly-global` work. Pre-MVR-05D rows that
-  carry only the MVR-05A binding stamp are in this class. Drain them before rolling out an MVR-05D
-  worker, or they stay pending for MVR-06 recovery. Scalar-era rows migrated to
+  carry only the MVR-05A binding stamp are in this class. Rollout precondition (fail-loud):
+  `app/services/outbox_envelope_preflight.py` runs in `scripts/run_migrations.sh` before
+  `alembic upgrade head`, i.e. in the one-shot `migrate` service every runtime service depends on,
+  and exits 79 (refusing activation) while any undelivered live-binding row lacks the envelope.
+  Migration-bearing deploys reach it after every runtime writer was stopped. The remedy is to run
+  the previous image until its worker drains those rows, then redeploy; the preflight never rewrites
+  or acknowledges a row. Scalar-era rows migrated to
   `legacy-compatibility-binding` keep their MVR-05A consume-time translation.
 - Worker handlers propagate `trace_id` from the event envelope or payload into downstream spans and
   emitted retry events.
