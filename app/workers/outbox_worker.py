@@ -51,7 +51,10 @@ from app.workers.metrics import (
     WORKER_PROCESSED,
     maybe_start_worker_metrics_server,
 )
-from app.services.outbox_envelope_preflight import require_upgrade_drained
+from app.services.outbox_envelope_preflight import (
+    OutboxEnvelopeUpgradeBlocked,
+    require_upgrade_drained,
+)
 from app.workers.outbox_binding_gate import (
     eligible_worker_bindings,
     required_worker_binding_stamp,
@@ -2215,13 +2218,19 @@ def run(
 
     # MVR-05D rollout precondition: refuse to activate over live-binding rows the
     # previous image could still dispatch but this worker never will (fail loud).
+    # A transient registry/ownership/DB error here is not a refusal: the poll
+    # loop below re-resolves the binding and degrades/retries as before.
     startup_root = _resolve_optional_vault_root(None)
     if startup_root is not None:
-        require_upgrade_drained(
-            required_worker_binding_stamp(
+        try:
+            startup_stamp = required_worker_binding_stamp(
                 resolve_scalar_binding_runtime(vault_root=startup_root)
             )
-        )
+            require_upgrade_drained(startup_stamp)
+        except OutboxEnvelopeUpgradeBlocked:
+            raise
+        except Exception as exc:
+            logger.warning("worker envelope preflight could not run at startup: %s", exc)
 
     # Resolve vault-authored settings at worker startup (SETTINGS-01 / F1): without
     # this the worker's LLM routing / embeddings run on pydantic code defaults.

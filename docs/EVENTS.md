@@ -280,7 +280,9 @@ Current consumer expectations:
   previous image until its worker drains those rows, then redeploy; the check is read-only and never
   rewrites or acknowledges a row. Residual window: deploys without a migration do not stop old
   producers before the new worker starts, so a row an old producer writes after that check stays
-  pending (fail-closed) and the next worker start refuses until it is drained (KD-A42F26A9AD87).
+  pending (fail-closed) and the next worker start refuses until it is drained, which also holds
+  `explicitly-global` delivery until rollback-drain-redeploy (KD-A42F26A9AD87). A transient failure to
+  evaluate the gate is logged and does not refuse activation.
   `python -m app.services.outbox_envelope_preflight` evaluates the same gate as an operator probe.
   Scalar-era rows migrated to
   `legacy-compatibility-binding` keep their MVR-05A consume-time translation.

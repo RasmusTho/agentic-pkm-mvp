@@ -73,6 +73,22 @@ def test_worker_refuses_activation_over_upgrade_stranded_rows(tmp_path, monkeypa
         outbox_worker.run(stop_after_ticks=1, startup_retries=1)
     assert seen == [{**STAMP, "vault_root": str(root)}]
 
+    # A transient failure to evaluate the gate is not a refusal: the worker
+    # proceeds to its loop, which re-resolves and degrades as before.
+    def transient(_stamp):
+        raise RuntimeError("registry briefly unavailable")
+
+    class _PastTheGate(Exception):
+        pass
+
+    def past_gate():
+        raise _PastTheGate
+
+    monkeypatch.setattr(outbox_worker, "require_upgrade_drained", transient)
+    monkeypatch.setattr(outbox_worker, "resolve_worker_heartbeat_path", past_gate)
+    with pytest.raises(_PastTheGate):
+        outbox_worker.run(stop_after_ticks=1, startup_retries=1)
+
 
 @pytest.mark.pg
 def test_preflight_counts_only_rows_the_previous_worker_could_dispatch(monkeypatch) -> None:
