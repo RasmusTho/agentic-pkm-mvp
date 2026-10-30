@@ -308,6 +308,18 @@ whose OCI revision is C; changed diagnostic bytes require a newly matched C/D
 before any separately authorized native decision.
 
 
+##### Planned retained PATH-input vector
+
+The [selected target contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#planned-retained-path-input-vector)
+extends the existing PATH-only profile to at most four ordered, fully retained
+inputs with identical decoded loaded PATH and one aggregate content budget. It is
+**not implemented or natively qualified**; current empty/singleton support remains
+unchanged. Source proof must cover the whole vector, all three descriptor-admission
+branches, generation/restoration and sticky original-close uncertainty. Existing
+value-free diagnostic and provenance rules remain mandatory. Actual native fit is
+unknown, and neither this contract nor diagnostic-only delivery authorizes an
+observer, configuration change, installation or DEV/TEST acceptance.
+
 ### #6300 fixed-selection reconciliation (historical, count-only)
 
 The accepted V7 summary is the fixed selection of 651 items: 12 persisted, 544 missing, 95 invalid,
