@@ -679,7 +679,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         assert state['events'].count('early_source_binding') == (0 if fault.startswith('unit-candidate:') else 1)
         assert 'caller_source_binding' not in state['events']
         from tests.ops.test_bws_installation_lifecycle import _UNIT_INITIAL_TRACE
-        assert state['unit_trace'] == _UNIT_INITIAL_TRACE[:_UNIT_INITIAL_TRACE.index(site) + 1]
+        stop_site = 'Service_EnvironmentFiles' if (site, kind) == ('Service_Environment', 'value') else site
+        assert state['unit_trace'] == _UNIT_INITIAL_TRACE[:_UNIT_INITIAL_TRACE.index(stop_site) + 1]
         assert all(result[key] is None for key in (
             'old_generation_sha256', 'new_generation_sha256', 'backup_manifest_sha256'))
         assert not {'prepare', 'stop', 'start'} & set(state['events'])
