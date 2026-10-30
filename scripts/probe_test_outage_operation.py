@@ -4384,7 +4384,7 @@ def supervisor_command(scope: FrozenNativeScope) -> tuple[str, ...]:
         "ProtectControlGroups": "yes",
         "ProtectKernelTunables": "yes",
         "ProtectKernelModules": "yes",
-        "ReadWritePaths": scope.root + " /run/systemd/system /etc/yggdrasil/host-probe",
+        "ReadWritePaths": scope.root + " /run/systemd/system -/etc/yggdrasil/host-probe",
         "RestrictAddressFamilies": "AF_UNIX AF_INET AF_INET6",
     }
     # AF_INET is necessary for the held fault socket and independent health.
@@ -4433,7 +4433,7 @@ def watchdog_command(scope: FrozenNativeScope) -> tuple[str, ...]:
         "--property=ProtectSystem=strict",
         "--property=ReadWritePaths="
         + scope.root
-        + " /run/systemd/system /etc/yggdrasil/host-probe",
+        + " /run/systemd/system -/etc/yggdrasil/host-probe",
         "--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
         "--property=WorkingDirectory=" + scope.root,
         "--",
@@ -6452,7 +6452,9 @@ def remote_launch(envelope: dict[str, Any], dependencies: LinuxDependencies) -> 
         "ProtectKernelTunables": "yes",
         "ProtectKernelModules": "yes",
         "RestrictAddressFamilies": "AF_UNIX AF_INET AF_INET6",
-        "ReadWritePaths": root_path + " /run/systemd/system /etc/yggdrasil/host-probe",
+        # A temporary TEST instance keeps its config inside root_path/source;
+        # the canonical existing-instance directory need not exist at startup.
+        "ReadWritePaths": root_path + " /run/systemd/system -/etc/yggdrasil/host-probe",
     }
     argv = [
         "/usr/bin/systemd-run",

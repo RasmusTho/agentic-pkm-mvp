@@ -2196,6 +2196,17 @@ def test_fixed_supervisor_transport_and_actual_dispatcher_claim_shape(self):
     command = target.supervisor_command(kernel.scope)
     self.assertIn("--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6", command)
     self.assertFalse(any("ReadWritePaths=" in arg and " /var/lib " in arg for arg in command))
+    for managed_command in (command, target.watchdog_command(kernel.scope)):
+        paths = next(
+            arg.removeprefix("--property=ReadWritePaths=")
+            for arg in managed_command
+            if arg.startswith("--property=ReadWritePaths=")
+        ).split()
+        # Both producers must work when an absent canonical instance uses its
+        # private staged config. Required scope/systemd parents stay mandatory.
+        self.assertEqual(
+            [kernel.scope.root, "/run/systemd/system", "-/etc/yggdrasil/host-probe"], paths
+        )
     self.assertNotIn("-B", command)
     transport = target.strict_test_transport(kernel.scope)
     self.assertIn("StrictHostKeyChecking=yes", transport)
@@ -2974,6 +2985,69 @@ def test_actual_supervised_preflight_retains_authored_refusal_and_original_handl
             for stream in (process.stdin, process.stdout, process.stderr)
         )
     )
+
+
+def test_actual_first_preflight_does_not_require_an_unused_canonical_config_parent(self):
+    for config_parent_present, systemd_parent_present in (
+        (False, True),
+        (True, True),
+        (False, False),
+    ):
+        with self.subTest(
+            config_parent_present=config_parent_present,
+            systemd_parent_present=systemd_parent_present,
+        ):
+            kernel, dependencies, envelope, root = _remote_boundary("preflight_refused")
+            if systemd_parent_present:
+                kernel.os.add("/run/systemd/system", directory=True, mode=0o755)
+            if config_parent_present:
+                kernel.os.add("/etc/yggdrasil/host-probe", directory=True, mode=0o755)
+            response, mounted = kernel.response, []
+
+            def manager_namespace(argv, payload):
+                if argv[0] == "/usr/bin/systemd-run":
+                    configured = next(
+                        arg.removeprefix("--property=ReadWritePaths=")
+                        for arg in argv
+                        if arg.startswith("--property=ReadWritePaths=")
+                    ).split()
+                    for entry in configured:
+                        path = entry.removeprefix("-")
+                        if path not in kernel.os.meta:
+                            if entry.startswith("-"):
+                                continue
+                            # Real systemd refuses a missing mandatory mount
+                            # before execve and cannot write a preflight record.
+                            kernel.forced_returncodes[argv] = 226
+                            return b""
+                        mounted.append(path)
+                return response(argv, payload)
+
+            kernel.response = manager_namespace
+            if systemd_parent_present:
+                result = target.remote_launch(envelope, dependencies)
+                self.assertEqual(
+                    ("REFUSED", "first_preflight"), (result["status"], result["phase"])
+                )
+                self.assertEqual(
+                    "normal_test_api_producer_candidates_unqualified", result["reason"]
+                )
+                self.assertIn(root + "/supervisor-start.json", kernel.os.files)
+                self.assertIn(root + "/failure.json", kernel.os.files)
+                self.assertEqual(
+                    [root, "/run/systemd/system"]
+                    + (["/etc/yggdrasil/host-probe"] if config_parent_present else []),
+                    mounted,
+                )
+            else:
+                with self.assertRaisesRegex(
+                    target.Unknown, "original_supervisor_start_evidence_missing"
+                ):
+                    target.remote_launch(envelope, dependencies)
+                self.assertNotIn(root + "/supervisor-start.json", kernel.os.files)
+                self.assertNotIn(root + "/failure.json", kernel.os.files)
+            self.assertEqual(config_parent_present, "/etc/yggdrasil/host-probe" in kernel.os.meta)
+            self.assertNotIn(root + "/result.json", kernel.os.files)
 
 
 def test_temporary_first_start_is_contained_before_lost_ack_or_admission(self):
