@@ -462,9 +462,16 @@ mode is rejected whenever the current branch already has an open PR. Before an e
 updated, the local candidate must either strictly descend from the authenticated live PR head or be
 a rebased candidate with the same stable patch identity and changed-path blob identities relative to
 the canonical publication base. The candidate must contain the current canonical publication base
-before either proof can authorize it, and must still differ from the live head. `continue_unchanged`
-permits only governing-contract blockers and PR-introduced regressions. Every `split` receipt must
-name a positive, non-governing `follow_up_issue`; the executable gate fetches it and requires an
+before either proof can authorize it. An identical authenticated live/candidate head is also
+admissible for metadata-only publication when the index, worktree, and untracked-file status are
+clean. This does not waive current-base containment, live PR/Issue/review authentication, or the
+publication plan's exact expected-head and expected-body readback. It requires no new commit or
+intended head change; the existing adapter retains its ordinary non-force same-SHA push before
+metadata PATCH, including its existing pre-effect/readback concurrency limitations. It grants no
+executor body-fence change or acceptance/closure transition. Body-dependent checks must be
+refreshed through `pr-integration`. A dirty or unavailable Git status refuses the unchanged-head
+route. `continue_unchanged` permits only governing-contract blockers and PR-introduced regressions.
+Every `split` receipt must name a positive, non-governing `follow_up_issue`; the executable gate fetches it and requires an
 existing, bounded canonical Issue contract before it routes affected work there. `expanded_contract`
 requires the current live governing-Issue digest to differ from at least one rejected round and an
 exact `expanded_from_rounds` lineage entry (round, reviewed head, prior contract digest) for every

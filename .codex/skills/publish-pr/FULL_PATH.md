@@ -35,8 +35,10 @@ promotion remain with their named skills.
    affected focused checks and `scripts/review_before_ci_gate.py`; a high-risk mechanism receipt must
    name the current local publishable SHA. A failed or stale gate blocks publication.
 4. Run `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` immediately before commit and again
-   immediately before push. Stage only the bound paths and make an additive commit. Do not rebase,
-   amend, reset, delete a ref, force-push, or rewrite unrelated history unless a separate explicit
+   immediately before push. Stage only the bound paths and make an additive commit when content
+   changes. A clean unchanged-head metadata-only update under the scope gate skips commit; the
+   existing adapter retains its ordinary non-force same-SHA push and exact readback.
+   Do not rebase, amend, reset, delete a ref, force-push, or rewrite unrelated history unless a separate explicit
    authority contract requires that exact action.
 5. Immediately before a new PR effect, refresh the target base, effective fetch/push identities,
    remote head, and all-state PR history again. New-PR creation requires no conflicting history and

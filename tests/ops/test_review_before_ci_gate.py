@@ -2037,6 +2037,164 @@ def test_pre_push_accepts_byte_identical_rebased_candidate(
     assert not _git_allows_pr_update(live, divergent, canonical_base)
 
 
+@pytest.mark.parametrize("state", ["clean", "unstaged", "staged", "untracked", "stale-base", "status-error", "rejected-reviews", "foreign-pr", "body-drift"])
+def test_metadata_publication_uses_real_adapter_gate_and_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    """Keep the publication adapter, gate and Git real; fake only GitHub reads."""
+    import contextlib
+    import io
+
+    from app.builderops.publication import (
+        CommandResult, PublicationCommandError, _run_review_gate,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "Test")
+    git("remote", "add", "origin", "https://github.com/octo/repo.git")
+    (repo / "base.txt").write_text("base\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", base)
+    git("checkout", "-qb", "codex/issue-4028")
+    (repo / "docs").mkdir()
+    target = repo / "docs/recovery.md"
+    target.write_text("Bounded governance contract.\n")
+    git("add", ".")
+    git("commit", "-qm", "bounded candidate")
+    head = git("rev-parse", "HEAD")
+    if state in {"unstaged", "staged"}:
+        target.write_text("Unpublished change.\n")
+        if state == "staged":
+            git("add", ".")
+    elif state == "untracked":
+        (repo / "unexpected.txt").write_text("unplanned\n")
+    elif state == "stale-base":
+        git("checkout", "-qb", "advanced-main", base)
+        (repo / "new-base.txt").write_text("new base\n")
+        git("add", ".")
+        git("commit", "-qm", "advance main")
+        git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"))
+        git("checkout", "-q", "codex/issue-4028")
+
+    responses, _ = _live_pr_review_api(head_sha=head)
+    if state != "rejected-reviews":
+        responses["repos/octo/repo/pulls/4029/reviews?per_page=100"] = []
+        responses["repos/octo/repo/pulls/4029/comments?per_page=100"] = []
+    pr = responses["repos/octo/repo/pulls/4029"]
+    if state == "foreign-pr":
+        pr["head"]["repo"]["full_name"] = "foreign/repo"
+    reads: dict[str, int] = {}
+
+    def api(path: str, paginate: bool) -> object:
+        reads[path] = reads.get(path, 0) + 1
+        if path.startswith("repos/octo/repo/pulls?state=open"):
+            return [pr]
+        value = responses[path]
+        if state == "body-drift" and path == "repos/octo/repo/pulls/4029" and reads[path] > 1:
+            return {**value, "body": value["body"] + "Changed authority.\n"}
+        return value
+
+    monkeypatch.setattr("scripts.review_before_ci_gate._github_api", api)
+    monkeypatch.chdir(repo)
+    if state == "status-error":
+        real_run = subprocess.run
+
+        def fail_status(args, *a, **kw):
+            if args[:2] == ["git", "status"]:
+                return subprocess.CompletedProcess(args, 128, b"", b"unavailable")
+            return real_run(args, *a, **kw)
+
+        monkeypatch.setattr("scripts.review_before_ci_gate.subprocess.run", fail_status)
+
+    class GateExecutor:
+        def run(self, argv, *, cwd, input_text=None):
+            assert cwd == repo
+            assert argv[1].endswith("scripts/review_before_ci_gate.py")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = review_before_ci_main(argv[2:])
+            return CommandResult(tuple(argv), code, out.getvalue(), err.getvalue())
+
+    plan = {
+        "lane": "governance", "review_gate_complete": True,
+        "risk_assessment_complete": True, "risk_surfaces": [],
+        "git": {"intended_paths": ["docs/recovery.md"]},
+        "pr": {"existing": {"number": 4029}}, "repository": "octo/repo",
+        "governing_issue": {"number": 4028},
+    }
+    if state == "clean":
+        _run_review_gate(GateExecutor(), repo, plan)
+        assert reads["repos/octo/repo/pulls/4029"] == 2
+        assert reads["repos/octo/repo/issues/4028"] == 2
+    else:
+        with pytest.raises(PublicationCommandError):
+            _run_review_gate(GateExecutor(), repo, plan)
+    assert git("rev-parse", "HEAD") == head
+
+
+@pytest.mark.parametrize("failure", [None, "push", "body-drift", "remote-drift"])
+def test_metadata_apply_retains_existing_effect_and_readback_contract(
+    tmp_path: Path, failure: str | None
+) -> None:
+    """Complement the real gate proof with complete apply effects via its existing fixture."""
+    import importlib.util
+    from dataclasses import replace
+
+    spec = importlib.util.spec_from_file_location(
+        "publication_test_fixture", REPO_ROOT / "tests/scripts/test_publication.py"
+    )
+    assert spec and spec.loader
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    (tmp_path / "feature.txt").write_text("unchanged content\n")
+    runner = fixture.FakeExecutor(tmp_path)
+    runner.phase = "clean"
+    runner.head_sha = "b" * 40
+    runner.remote_head = runner.head_sha
+    pr = runner._exact_pr()
+    pr["head"]["sha"] = runner.head_sha
+    pr["body"] = fixture.generate_pr_body_from_mapping(
+        {**fixture.BODY_INPUTS, "notes": "Earlier publication metadata."}
+    )
+    runner.prs = [pr]
+    request = replace(fixture._request(tmp_path), existing_pr_number=6000)
+    plan = fixture.build_publication_plan(request, executor=runner)
+    assert plan["git"]["dirty_paths"] == []
+    original_head = runner.head_sha
+    if failure == "push":
+        runner.failures["push"] = 1
+    elif failure == "body-drift":
+        pr["body"] += "Unplanned body change."
+    elif failure == "remote-drift":
+        runner.remote_head = "d" * 40
+    if failure:
+        expected_error = fixture.PublicationCommandError if failure == "push" else fixture.PublicationRefusal
+        with pytest.raises(expected_error):
+            fixture.apply_publication_plan(
+                plan, expected_plan_sha256=plan["plan_sha256"], executor=runner
+            )
+    else:
+        receipt = fixture.apply_publication_plan(
+            plan, expected_plan_sha256=plan["plan_sha256"], executor=runner
+        )
+        assert receipt["commit_sha"] == runner.remote_head == original_head
+        assert runner.prs[0]["body"] == plan["pr"]["body"]
+    assert not any(call[:2] in {("git", "add"), ("git", "commit")} for call in runner.calls)
+    pushes = [call for call in runner.calls if call[:2] == ("git", "push")]
+    expected_push = ("git", "push", "origin", f"{original_head}:refs/heads/{fixture.BRANCH}")
+    assert pushes == ([expected_push] if failure in {None, "push"} else [])
+    assert sum(fixture._is_gh_api_call(call, "PATCH") for call in runner.calls) == (0 if failure else 1)
+
+
 def test_duplicate_key_durable_receipt_is_rejected() -> None:
     responses, api = _live_pr_review_api()
     comments = responses["repos/octo/repo/issues/4029/comments?per_page=100"]
