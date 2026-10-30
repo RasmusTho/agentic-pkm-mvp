@@ -3188,6 +3188,114 @@ def _actual_watch(kernel):
     return target.watch_test_operation(kernel.scope.root, kernel.dependencies)
 
 
+def test_actual_watchdog_cancels_owned_preexec_and_same_pid_exec_transitions(self):
+    cases = (
+        "activating_systemd",
+        "active_systemd",
+        "activating_executor",
+        "active_executor",
+        "active_other_preexec",
+        "mixed_argv_exe",
+        "same_pid_image_changes",
+    )
+    for index, case in enumerate(cases):
+        with self.subTest(case=case):
+            if index:
+                self.fresh()
+            kernel, assembly, guard = _armed_native_fault(self)
+            base = "/proc/" + kernel.unit["MainPID"]
+            final_argv = kernel.os.files[base + "/cmdline"]
+            final_environment = kernel.os.files[base + "/environ"]
+            saved_incident = (self.root / "native-incident.json").read_bytes()
+            if case != "same_pid_image_changes":
+                executable = {
+                    "activating_systemd": "/usr/lib/systemd/systemd",
+                    "active_systemd": "/usr/lib/systemd/systemd",
+                    "activating_executor": "/usr/lib/systemd/systemd-executor",
+                    "active_executor": "/usr/lib/systemd/systemd-executor",
+                }.get(case, "/usr/lib/future-pre-exec-helper")
+                kernel.os.files[base + "/cmdline"] = executable.encode() + b"\0"
+                kernel.os.links[base + "/exe"] = executable
+                kernel.os.links[base + "/cwd"] = "/"
+            kernel.os.files[base + "/environ"] = b"CREDENTIALS_DIRECTORY=/run/credentials/test\0"
+            activating = case.startswith("activating_")
+            kernel.unit.update(
+                ActiveState="activating" if activating else "active",
+                SubState="start" if activating else "running",
+                Job="41 /org/freedesktop/systemd1/job/41" if activating else "",
+            )
+            if case in {"mixed_argv_exe", "same_pid_image_changes"}:
+                readlink, transitions = kernel.os.readlink, []
+                trigger = "/exe" if case == "mixed_argv_exe" else "/cwd"
+
+                def exec_during_read(path, *, dir_fd=None):
+                    if path == base + trigger and not transitions:
+                        transitions.append(case)
+                        # execve keeps the PID/start time, but replaces the
+                        # image and environment between separate proc reads.
+                        kernel.os.files[base + "/cmdline"] = final_argv
+                        kernel.os.files[base + "/environ"] = final_environment
+                        kernel.os.links[base + "/exe"] = kernel.scope.binding.sdk_realpath
+                        kernel.os.links[base + "/cwd"] = kernel.scope.binding.package
+                    return readlink(path, dir_fd=dir_fd)
+
+                kernel.os.readlink = exec_during_read
+            helper_stat = "/proc/999/stat"
+            kernel.os.files.pop(helper_stat)
+            kernel.os.meta.pop(helper_stat)
+            kernel.supervisor["MainPID"] = "0"
+            before = len(kernel.processes)
+            result = _actual_watch(kernel)
+            effects = [process.argv for process in kernel.processes[before:]]
+            self.assertEqual(1, effects.count(target.supervisor_stop(kernel.scope)))
+            self.assertEqual(1, effects.count(target.systemd("stop")))
+            self.assertNotIn(target.systemd("start"), effects)
+            self.assertEqual("unknown", result["status"])
+            self.assertTrue(result["healthy_config_restored"])
+            self.assertFalse(result["history_rewound"])
+            self.assertEqual("inactive", kernel.unit["ActiveState"])
+            self.assertEqual(saved_incident, (self.root / "native-incident.json").read_bytes())
+            self.assertNotIn(
+                "http://127.0.0.1:", kernel.os.files[kernel.scope.binding.config].decode()
+            )
+            self.assertEqual(
+                result, json.loads(kernel.os.files[kernel.scope.root + "/watchdog-result.json"])
+            )
+            if case in {"mixed_argv_exe", "same_pid_image_changes"}:
+                self.assertEqual([case], transitions)
+
+
+def test_actual_watchdog_preserves_the_coherent_finalized_foreign_launcher_veto(self):
+    for index, change in enumerate(("marker", "missing_marker", "uid", "cwd", "cgroup")):
+        with self.subTest(change=change):
+            if index:
+                self.fresh()
+            kernel, assembly, guard = _armed_native_fault(self)
+            base = "/proc/" + kernel.unit["MainPID"]
+            fault = kernel.os.files[kernel.scope.binding.config]
+            if change == "marker":
+                kernel.os.files[base + "/environ"] = b"YGG_TEST_OPERATION=foreign\0"
+            elif change == "missing_marker":
+                kernel.os.files[base + "/environ"] = (
+                    b"CREDENTIALS_DIRECTORY=/run/credentials/test\0"
+                )
+            elif change == "uid":
+                kernel.os.meta[base].st_uid = 1234
+            elif change == "cwd":
+                kernel.os.links[base + "/cwd"] = "/foreign"
+            else:
+                kernel.os.files[base + "/cgroup"] = b"0::/system.slice/foreign.service\n"
+            before = len(kernel.processes)
+            with self.assertRaisesRegex(target.Unknown, "guard_refuses_foreign_"):
+                _actual_watch(kernel)
+            effects = [process.argv for process in kernel.processes[before:]]
+            self.assertEqual(1, effects.count(target.supervisor_stop(kernel.scope)))
+            self.assertNotIn(target.systemd("stop"), effects)
+            self.assertNotIn(target.systemd("start"), effects)
+            self.assertEqual(fault, kernel.os.files[kernel.scope.binding.config])
+            self.assertNotIn(kernel.scope.root + "/watchdog-result.json", kernel.os.files)
+
+
 def test_watchdog_initialization_ack_requires_pidfd_recheck_and_registered_selector(self):
     for index, failure in enumerate(
         (

@@ -3160,15 +3160,19 @@ class LinuxIO:
             return None
         return sha((boot + ":" + pid + ":" + fields[19]).encode()), fields[0]
 
-    def guard_creator(self, pid: str, boot: str) -> dict[str, Any] | None:
-        """A complete stable snapshot can veto slot custody as foreign.
+    def guard_creator(self, pid: str, binding: Binding) -> dict[str, Any] | None:
+        """Only a coherent finalized normal launcher can veto slot custody.
 
-        An exiting/zombie/pre-exec process is not proof of a foreign writer.
+        PID/start identity survives execve. Read the complete launcher evidence
+        twice; a mixed image or a generic pre-exec process is not foreign proof.
+        Manager state and pre-exec executable names do not identify completion.
         Emergency cancellation needs neither journal FDs nor a live netns.
         The stricter process() reader remains the admission boundary.
         """
-        try:
-            before = self.guard_process_identity(pid, boot)
+        expected_argv = (binding.sdk, binding.package + "/" + LAUNCHER, "--channel", "test")
+
+        def snapshot() -> dict[str, Any] | None:
+            before = self.guard_process_identity(pid, binding.boot_id)
             if before is None or before[1] in {"Z", "X", "x"}:
                 return None
             base = "/proc/" + pid
@@ -3176,6 +3180,9 @@ class LinuxIO:
             if not raw or not raw.endswith(b"\0"):
                 return None
             argv = tuple(item.decode("utf-8") for item in raw[:-1].split(b"\0"))
+            executable = self.link(base + "/exe")
+            if argv != expected_argv or executable != binding.sdk_realpath:
+                return None
             names, environment = self.environment(pid)
             if not names:
                 return None
@@ -3190,13 +3197,17 @@ class LinuxIO:
                 "environment": environment,
                 "cgroup": groups[0][3:],
                 "uid": self.os.stat(base, follow_symlinks=False).st_uid,
-                "exe": self.link(base + "/exe"),
+                "exe": executable,
                 "cwd": self.link(base + "/cwd"),
             }
-            after = self.guard_process_identity(pid, boot)
+            after = self.guard_process_identity(pid, binding.boot_id)
             if after is None or after[0] != before[0] or after[1] in {"Z", "X", "x"}:
                 return None
             return value
+
+        try:
+            first = snapshot()
+            return first if first is not None and snapshot() == first else None
         except (FileNotFoundError, ProcessLookupError):
             return None
 
@@ -4925,32 +4936,22 @@ def cleanup_owned_test_fault(assembly: NativeAssembly, record: dict[str, Any]) -
     # Slot authority survives an ordinary exit or pre-exec observation. A
     # complete stable foreign launcher is a veto, not an absence requirement.
     unit = observe()
-    producer = (
-        io_port.guard_creator(unit["MainPID"], binding.boot_id) if unit["MainPID"] != "0" else None
-    )
+    producer = io_port.guard_creator(unit["MainPID"], binding) if unit["MainPID"] != "0" else None
     again = observe()
     if producer is not None and all(again[key] == unit[key] for key in keys):
-        preexec = unit["ActiveState"] == "activating" and producer["exe"] in {
-            "/usr/lib/systemd/systemd",
-            "/lib/systemd/systemd",
-        }
-        if not preexec:
-            actual = [unit[key] for key in keys]
-            marker_value = producer["environment"].get("YGG_TEST_OPERATION")
-            if (
-                marker_value != assembly.scope.handle.operation
-                and actual != record["preexisting_identity"]
-            ):
-                raise Unknown("guard_refuses_foreign_incarnation")
-            if (
-                producer["uid"] != 0
-                or producer["exe"] != binding.sdk_realpath
-                or producer["cwd"] != binding.package
-                or producer["argv"]
-                != (binding.sdk, binding.package + "/" + LAUNCHER, "--channel", "test")
-                or producer["cgroup"] != unit["ControlGroup"]
-            ):
-                raise Unknown("guard_refuses_foreign_creator")
+        actual = [unit[key] for key in keys]
+        marker_value = producer["environment"].get("YGG_TEST_OPERATION")
+        if (
+            marker_value != assembly.scope.handle.operation
+            and actual != record["preexisting_identity"]
+        ):
+            raise Unknown("guard_refuses_foreign_incarnation")
+        if (
+            producer["uid"] != 0
+            or producer["cwd"] != binding.package
+            or producer["cgroup"] != unit["ControlGroup"]
+        ):
+            raise Unknown("guard_refuses_foreign_creator")
     retained_groups = {
         value
         for value in (guarded["ControlGroup"], unit["ControlGroup"], again["ControlGroup"])
