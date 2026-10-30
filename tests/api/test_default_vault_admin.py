@@ -58,8 +58,11 @@ def captured_events(monkeypatch) -> list[tuple[object, str]]:
         idempotency_key: str,
         vault_binding_id: str | None = None,
         required_db: bool = False,
+        producer: str | None = None,
     ):
         from app.instance.binding_ids import OUTBOX_GLOBAL_BINDING_ID
+
+        assert producer == "shared.instance.default_vault"
 
         assert vault_binding_id == OUTBOX_GLOBAL_BINDING_ID
         emitted.append((event, idempotency_key))

@@ -14,7 +14,7 @@ def test_emit_index_embedding_requested_writes_db_outbox_and_audit(tmp_path, mon
     monkeypatch.setattr(
         events,
         "write_outbox_event",
-        lambda evt, idempotency_key=None, required_db=False: (
+        lambda evt, idempotency_key=None, required_db=False, producer=None: (
             db_writes.append((evt, idempotency_key, required_db)) or "1"
         ),
     )
@@ -44,7 +44,7 @@ def test_emit_index_embedding_requested_tolerates_audit_append_failure(tmp_path,
     monkeypatch.setattr(
         events,
         "write_outbox_event",
-        lambda evt, idempotency_key=None, required_db=False: (
+        lambda evt, idempotency_key=None, required_db=False, producer=None: (
             db_writes.append((evt, idempotency_key, required_db)) or "1"
         ),
     )
