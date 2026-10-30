@@ -145,12 +145,15 @@ _UNIT_PROPERTY_READ_SITES = _UNIT_PROPERTY_VALUE_SITES | frozenset(
      'Service_ExecStopPost Service_ExecStopPost_final Service_Environment Service_EnvironmentFiles '
      'Unit_ActiveState Unit_SubState Unit_Job Service_ControlPID Service_MainPID').split()
 )
+_DROPIN_SELECTOR_CATEGORIES = frozenset({
+    'cardinality', 'allowed_parent', 'basename_length', 'basename_grammar',
+})
 _UNIT_PROPERTY_REFINEMENTS = frozenset(
     (site, kind) for site in _UNIT_PROPERTY_READ_SITES
     for kind in ('backend', 'decode', 'signature', 'shape')
 ) | frozenset((site, 'value') for site in _UNIT_PROPERTY_VALUE_SITES) | frozenset({
     ('Unit_DropInPaths', 'selection'), ('Unit_DropInPaths', 'unsupported'),
-})
+}) | frozenset(('Unit_DropInPaths', kind) for kind in _DROPIN_SELECTOR_CATEGORIES)
 _UNIT_PROPERTY_REFINEMENT_GATES = frozenset(
     'old_kernel_initial_unit_properties__' + '__'.join(context)
     for context in _UNIT_PROPERTY_REFINEMENTS

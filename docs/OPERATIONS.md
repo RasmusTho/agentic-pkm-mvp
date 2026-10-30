@@ -157,6 +157,18 @@ coarse gate remain readable and immutable. A classified refusal still has null o
 new and backup hashes and cannot reach prepare, backup, stop or apply. All original
 guards, their invocation order and retained-runtime cleanup remain binding.
 
+At the initial `Unit_DropInPaths` selector, the finite first-failed categories are
+`cardinality`, `allowed_parent`, `basename_length`, and `basename_grammar`. The
+selector uses the already-read property and checks cardinality before element shape,
+then allowed parent, basename length, and basename grammar. Empty selection and a
+valid singleton retain their existing behavior. The public diagnostic contains only
+the category; it does not disclose a count, path, property value, exception, digest,
+or other private input. Accepted selections and prebackup refusal/effect boundaries
+remain unchanged. Legacy absent, coarse, value, and `selection` receipts remain
+valid. Source26's public result identifies the selector family but leaves its actual
+failed predicate unknown; it establishes neither a source defect nor native
+acceptance.
+
 The captured-empty control-PATH configuration supports the finite preserved PATH-only
 drop-in profile documented in [Native source preflight and recovery](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery):
 one protected selected `.conf` file in the fixed instance/template `/etc` unit
