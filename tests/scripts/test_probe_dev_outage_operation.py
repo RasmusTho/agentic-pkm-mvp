@@ -1350,6 +1350,8 @@ class MemoryLinuxOS:
             )
         )
         self.current_directory = target.LOCAL_DEV_WORKTREE
+        self.writable_paths = None
+        self.mount_writes = []
         self.environ = {"HOME": "/synthetic-local-home"}
         for key in (
             "O_RDONLY",
@@ -1367,6 +1369,16 @@ class MemoryLinuxOS:
 
     def getcwd(self):
         return self.current_directory
+
+    def require_write(self, action, path, *, parent=False):
+        if self.writable_paths is None:
+            return
+        permission = str(Path(path).parent) if parent else path
+        if not any(
+            permission == root or permission.startswith(root + "/") for root in self.writable_paths
+        ):
+            raise OSError(30, "Read-only file system", path)
+        self.mount_writes.append((action, path, permission))
 
     def add(self, path, data=b"", *, mode=0o600, directory=False, inode=None, uid=0):
         if path != "/":
@@ -1410,9 +1422,12 @@ class MemoryLinuxOS:
         ) or path.endswith("/secret-runtime.env"):
             raise AssertionError("credential content read forbidden")
         if flags & self.O_CREAT:
+            self.require_write("create", path, parent=True)
             if path in self.meta and flags & self.O_EXCL:
                 raise FileExistsError(path)
             self.add(path, mode=mode)
+        elif flags & self.O_WRONLY:
+            self.require_write("open-write", path)
         if path not in self.meta:
             raise FileNotFoundError(path)
         if flags & self.O_DIRECTORY and not stat.S_ISDIR(self.meta[path].st_mode):
@@ -1462,6 +1477,7 @@ class MemoryLinuxOS:
         if fd in self.pipes:
             return self.pipes[fd].write(data)
         path, position = self.fds[fd]
+        self.require_write("write", path)
         raw = self.files[path]
         self.files[path] = raw[:position] + bytes(data) + raw[position + len(data) :]
         self.fds[fd][1] += len(data)
@@ -1481,13 +1497,17 @@ class MemoryLinuxOS:
         pass
 
     def fchmod(self, fd, mode):
+        self.require_write("chmod", self.fds[fd][0])
         self.meta[self.fds[fd][0]].st_mode = stat.S_IFREG | mode
 
     def utime(self, fd, *, ns):
+        self.require_write("utime", self.fds[fd][0])
         self.meta[self.fds[fd][0]].st_mtime_ns = ns[1]
 
     def replace(self, source, destination, *, src_dir_fd, dst_dir_fd):
         a, b = self.full(source, src_dir_fd), self.full(destination, dst_dir_fd)
+        self.require_write("replace-source", a, parent=True)
+        self.require_write("replace-destination", b, parent=True)
         self.files[b], self.meta[b] = self.files.pop(a), self.meta.pop(a)
 
     def killpg(self, pid, sig):
@@ -1504,6 +1524,7 @@ class MemoryLinuxOS:
 
     def mkdir(self, path, mode=0o777, *, dir_fd=None):
         path = self.full(path, dir_fd)
+        self.require_write("mkdir", path, parent=True)
         if path in self.meta:
             raise FileExistsError(path)
         self.add(path, mode=mode, directory=True)
@@ -1518,6 +1539,7 @@ class MemoryLinuxOS:
 
     def unlink(self, path, *, dir_fd=None):
         path = self.full(path, dir_fd)
+        self.require_write("unlink", path, parent=True)
         if self.meta[path].st_nlink > 1:
             self.meta[path].st_nlink -= 1
         self.files.pop(path)
@@ -1525,6 +1547,7 @@ class MemoryLinuxOS:
 
     def link(self, source, destination, *, src_dir_fd, dst_dir_fd, follow_symlinks=False):
         a, b = self.full(source, src_dir_fd), self.full(destination, dst_dir_fd)
+        self.require_write("link", b, parent=True)
         if b in self.meta:
             raise FileExistsError(b)
         self.files[b], self.meta[b] = self.files[a], self.meta[a]
@@ -1532,6 +1555,7 @@ class MemoryLinuxOS:
 
     def rmdir(self, path, *, dir_fd=None):
         path = self.full(path, dir_fd)
+        self.require_write("rmdir", path, parent=True)
         if any(item.startswith(path + "/") for item in self.meta):
             raise OSError("directory not empty")
         self.meta.pop(path)
@@ -1985,6 +2009,7 @@ class NativeKernel:
             stderr=552,
         )
         if creator != "0":
+            package = self.unit["WorkingDirectory"]
             marker = (
                 {"YGG_DEV_OPERATION": self.scope.handle.operation}
                 if "YGG_DEV_OPERATION=" + self.scope.handle.operation in self.unit["Environment"]
@@ -1993,7 +2018,7 @@ class NativeKernel:
             self._proc(
                 creator,
                 "1",
-                (binding.sdk, binding.package + "/" + target.LAUNCHER, "--channel", "dev"),
+                (binding.sdk, package + "/" + target.LAUNCHER, "--channel", "dev"),
                 {"CREDENTIALS_DIRECTORY": "/run/credentials/dev", **marker},
                 int(creator),
                 group,
@@ -2001,7 +2026,7 @@ class NativeKernel:
             self._proc(
                 child,
                 creator,
-                (binding.sdk, binding.package + "/" + target.PROBE, "--loop"),
+                (binding.sdk, package + "/" + target.PROBE, "--loop"),
                 {
                     "HOST_SECRET_RUNTIME_ENV_FILE": "/run/yggdrasil-host-probe-dev/secret-runtime.env",
                     "HOST_SECRET_BOOTSTRAP_CHANNEL": "dev",
@@ -2010,6 +2035,8 @@ class NativeKernel:
                 int(child),
                 group,
             )
+            self.os.links["/proc/" + creator + "/cwd"] = package
+            self.os.links["/proc/" + child + "/cwd"] = package
         members = "" if creator == "0" else creator + "\n" + child + "\n"
         self.os.add("/sys/fs/cgroup" + group + "/cgroup.procs", members.encode(), mode=0o444)
 
@@ -4240,6 +4267,7 @@ def whole_native_call(
     temporary_install=False,
     foreign_state_after_guard=False,
     original_state_directory_present=False,
+    original_service_inactive=False,
 ):
     """Current local entry -> serialized program -> first preflight -> real drill."""
     import contextlib, io
@@ -4270,26 +4298,29 @@ def whole_native_call(
     runtime_parent = "/run/yggdrasil-host-probe-dev"
     original_state_identity = kernel.os.meta[state_parent]
     if temporary:
-        kernel.os.files.pop(config_path)
-        kernel.os.meta.pop(config_path)
+        if not original_service_inactive:
+            kernel.os.files.pop(config_path)
+            kernel.os.meta.pop(config_path)
+            kernel.unit.update(
+                LoadState="not-found",
+                UnitFileState="",
+                FragmentPath="",
+                DropInPaths="",
+                WorkingDirectory="",
+                EnvironmentFiles="",
+                ExecStart="",
+                ExecStop="",
+                ExecStopPost="",
+                Type="",
+                Environment="",
+            )
         kernel.unit.update(
-            LoadState="not-found",
             ActiveState="inactive",
             SubState="dead",
             MainPID="0",
-            UnitFileState="",
-            FragmentPath="",
-            DropInPaths="",
             Job="",
             InvocationID="",
             ControlGroup="",
-            WorkingDirectory="",
-            EnvironmentFiles="",
-            ExecStart="",
-            ExecStop="",
-            ExecStopPost="",
-            Type="",
-            Environment="",
         )
         kernel._processes()
         for path in list(kernel.os.meta):
@@ -4432,6 +4463,19 @@ def whole_native_call(
                 kernel.forced_returncodes[argv] = 255
             return result
         if argv[0] == "/usr/bin/systemd-run" and "--supervised-first-preflight" in argv:
+            properties = dict(
+                value.removeprefix("--property=").split("=", 1)
+                for value in argv
+                if value.startswith("--property=")
+            )
+            case.assertEqual("strict", properties["ProtectSystem"])
+            requested = properties["ReadWritePaths"].split()
+            case.assertEqual([root, "/run/systemd/system", "-/etc/yggdrasil/host-probe"], requested)
+            writable = tuple(
+                value.removeprefix("-")
+                for value in requested
+                if not value.startswith("-") or value[1:] in kernel.os.meta
+            )
             case.assertEqual(
                 {
                     root + "/" + name
@@ -4449,7 +4493,13 @@ def whole_native_call(
             with (
                 patch.object(module, "__file__", root + "/program.py"),
                 patch.object(module, "Path", side_effect=namespace_path),
+                patch.object(kernel.os, "writable_paths", writable),
             ):
+                # A leaf allow-list cannot grant creation/removal on /var/lib.
+                # The former production mkdir must fail under this actual policy.
+                with case.assertRaises(OSError) as denied:
+                    kernel.os.require_write("mkdir", state_parent, parent=True)
+                case.assertEqual(30, denied.exception.errno)
                 try:
                     module.main(["--supervised-first-preflight", packet["operation"]])
                 except SDKExited as exit_status:
@@ -4466,10 +4516,19 @@ def whole_native_call(
             return docker(argv)
         if temporary_install and argv == target.systemd("reload_for_temporary_dev"):
             unit_path = "/run/systemd/system/" + target.UNIT
-            if unit_path not in kernel.os.files:
+            temporary_dropins = sorted(
+                path for path in kernel.os.files if path.startswith(unit_path + ".d/99-dev-probe-")
+            )
+            if unit_path not in kernel.os.files and not temporary_dropins:
                 kernel.unit = dict(original_unit)
                 return b""
-            unit_bytes = kernel.os.files[unit_path].decode()
+            unit_bytes = (
+                kernel.os.files[original_unit["FragmentPath"]]
+                + b"\n"
+                + kernel.os.files[temporary_dropins[0]]
+                if original_service_inactive
+                else kernel.os.files[unit_path]
+            ).decode()
             values = {}
             for line in unit_bytes.splitlines():
                 if "=" in line and not line.startswith("#"):
@@ -4485,26 +4544,47 @@ def whole_native_call(
                 projected[key] = kernel.unit[key]
             projected.update(
                 LoadState="loaded",
-                UnitFileState="disabled",
+                UnitFileState=original_unit["UnitFileState"]
+                if original_service_inactive
+                else "disabled",
                 Job="",
-                FragmentPath=unit_path,
+                FragmentPath=original_unit["FragmentPath"]
+                if original_service_inactive
+                else unit_path,
                 LoadCredentialEncrypted="bws-machine-account-token:"
                 + kernel.scope.credential_source,
                 ReadWritePaths=kernel.scope.controller_directory,
                 DropInPaths="",
                 Environment="PYTHONPATH=" + selected.package,
+                StateDirectory=values["StateDirectory"],
             )
             markers = [path for path in kernel.os.files if "/99-ygg-dev-owner-" in path]
-            projected["DropInPaths"] = " ".join(markers)
+            projected["DropInPaths"] = " ".join([*temporary_dropins, *markers])
             if markers:
                 projected["Environment"] += " YGG_DEV_OPERATION=" + packet["operation"]
             kernel.unit = projected
             return b""
         if foreign_state_after_guard and argv == target.watchdog_command(kernel.scope):
             result = original_response(argv, payload)
-            kernel.os.add(state_parent, directory=True, mode=0o700, inode=98765)
+            kernel.os.add(
+                state_parent
+                if foreign_state_after_guard == "canonical"
+                else str(Path(kernel.scope.binding.state_file).parent),
+                directory=True,
+                mode=0o700,
+                inode=98765,
+            )
             return result
         if temporary_install and argv == target.systemd("start"):
+            state = "/var/lib/" + kernel.unit["StateDirectory"]
+            case.assertEqual(root + "/probe-state", state)
+            case.assertEqual(state + "/alert-state.json", kernel.scope.binding.state_file)
+            configured = kernel.unit["EnvironmentFiles"].split("(ignore_errors=no)")[0].strip()
+            case.assertEqual(
+                kernel.scope.binding.state_file,
+                target.parse_config(kernel.os.files[configured])["PROBE_STATE_FILE"],
+            )
+            case.assertTrue(stat.S_ISDIR(kernel.os.meta[state].st_mode))
             kernel.os.add(runtime_parent, directory=True, mode=0o700)
             kernel.os.add(runtime_parent + "/secret-runtime.env", b"DO_NOT_READ_WEBHOOK")
             kernel.unit["ControlGroup"] = (
@@ -4565,7 +4645,7 @@ def whole_native_call(
         result = {"status": "UNKNOWN", "live_acceptance": False}
     finally:
         sys.modules.pop("fixed_dev_program", None)
-    if temporary:
+    if temporary and not original_service_inactive:
         case.assertNotIn(config_path, kernel.os.files)
     else:
         case.assertEqual(config, kernel.os.files[config_path])
@@ -4594,6 +4674,7 @@ def whole_native_call(
         0 if unhealthy_before_install or foreign_state_after_guard else 2, len(case.h.deliveries)
     )
     if unhealthy_before_install:
+        case.assertNotIn(root + "/probe-state", kernel.os.meta)
         case.assertFalse(
             any(
                 path == root + "/source" or path.startswith(root + "/source/")
@@ -4620,6 +4701,9 @@ def whole_native_call(
         else:
             case.assertNotIn(state_parent, kernel.os.meta)
         case.assertNotIn(runtime_parent, kernel.os.meta)
+        case.assertNotIn(root + "/probe-state", kernel.os.meta)
+        case.assertIn(("mkdir", root + "/probe-state", root), kernel.os.mount_writes)
+        case.assertIn(("rmdir", root + "/probe-state", root), kernel.os.mount_writes)
         case.assertFalse(
             any(
                 path == root + "/source" or path.startswith(root + "/source/")
@@ -4628,9 +4712,18 @@ def whole_native_call(
         )
         case.assertFalse(any(path.startswith("/run/systemd/system/") for path in kernel.os.meta))
     if foreign_state_after_guard:
-        case.assertEqual(98765, kernel.os.meta[state_parent].st_ino)
+        changed_state = (
+            state_parent if foreign_state_after_guard == "canonical" else root + "/probe-state"
+        )
+        case.assertEqual(98765, kernel.os.meta[changed_state].st_ino)
         case.assertFalse(any(argv == target.systemd("start") for argv in calls))
     case.assertIsNone(kernel.os.files.get(kernel.scope.binding.state_file))
+    case.assertFalse(
+        any(
+            path == state_parent or path.startswith(state_parent + "/")
+            for _, path, _ in kernel.os.mount_writes
+        )
+    )
     case.assertFalse(any("--channel" in argv and "test" in argv for argv in calls))
     return result, kernel
 
@@ -4691,7 +4784,12 @@ def test_actual_temporary_dev_installation_restores_original_directory_absence()
         case.assertEqual("absent", result["original_service"])
         case.assertTrue(result["original_lifecycle_and_artifacts_restored"])
         case.assertEqual(
-            {"original_state": "absent", "state_restored": True, "runtime_restored": True},
+            {
+                "original_state": "absent",
+                "state_restored": True,
+                "runtime_restored": True,
+                "operation_state_removed": True,
+            },
             result["temporary_directories"],
         )
     finally:
@@ -4721,9 +4819,47 @@ def test_actual_temporary_dev_installation_preserves_original_empty_directory():
         )
         case.assertEqual("PASS", result["status"])
         case.assertEqual(
-            {"original_state": "present", "state_restored": True, "runtime_restored": True},
+            {
+                "original_state": "present",
+                "state_restored": True,
+                "runtime_restored": True,
+                "operation_state_removed": True,
+            },
             result["temporary_directories"],
         )
+    finally:
+        case.doCleanups()
+        case.tearDown()
+
+
+def test_actual_temporary_dev_state_is_confined_for_inactive_original_service():
+    case = NativeBindingTests()
+    case.setUp()
+    try:
+        result, _ = whole_native_call(
+            case,
+            temporary_install=True,
+            original_service_inactive=True,
+            original_state_directory_present=True,
+        )
+        case.assertEqual("PASS", result["status"])
+        case.assertEqual("inactive", result["original_service"])
+        case.assertTrue(result["temporary_directories"]["operation_state_removed"])
+    finally:
+        case.doCleanups()
+        case.tearDown()
+
+
+def test_actual_temporary_dev_preserves_foreign_canonical_state_directory():
+    case = NativeBindingTests()
+    case.setUp()
+    try:
+        result, _ = whole_native_call(
+            case, temporary_install=True, foreign_state_after_guard="canonical"
+        )
+        case.assertEqual("UNKNOWN", result["status"])
+        case.assertFalse(result["live_acceptance"])
+        case.assertEqual("canonical_probe_state_directory_changed", result["reason"])
     finally:
         case.doCleanups()
         case.tearDown()

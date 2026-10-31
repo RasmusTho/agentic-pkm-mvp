@@ -941,6 +941,19 @@ def parse_unit(
     return fields
 
 
+def normal_state_directory(binding: Binding) -> str:
+    temporary = re.fullmatch(
+        r"(/var/lib/ygg-dev-probe-[0-9a-f]{32})/probe-state/alert-state\.json",
+        binding.state_file,
+    )
+    if temporary is None:
+        return "yggdrasil-host-probe-dev"
+    root = temporary[1]
+    if binding.package != root + "/source" or binding.config != root + "/source/dev-private.env":
+        raise Refusal("temporary_state_not_bound_to_owned_source_configuration")
+    return root.removeprefix("/var/lib/") + "/probe-state"
+
+
 def normal_unit(unit: dict[str, str], binding: Binding) -> None:
     expected_exec = binding.sdk + " " + binding.package + "/" + LAUNCHER + " --channel dev"
     commands = configured_exec(unit["ExecStart"])
@@ -972,7 +985,7 @@ def normal_unit(unit: dict[str, str], binding: Binding) -> None:
         "PrivateDevices": "yes",
         "NoNewPrivileges": "yes",
         "RuntimeDirectory": "yggdrasil-host-probe-dev",
-        "StateDirectory": "yggdrasil-host-probe-dev",
+        "StateDirectory": normal_state_directory(binding),
         "UMask": "0077",
     }.items():
         if unit[key] != value:
@@ -2379,6 +2392,8 @@ class TemporaryDevInstallation:
             + native_source
             + "\nEnvironmentFile=\nEnvironmentFile="
             + self.selected.config
+            + "\nStateDirectory=\nStateDirectory="
+            + normal_state_directory(self.selected)
             + "\nExecStart=\nExecStart="
             + self.binding.sdk
             + " "
@@ -4105,32 +4120,44 @@ class NativeInstallation(TemporaryDevInstallation):
         finally:
             self.caller.close("temporary_probe_directory", lambda: self.ops.close(descriptor))
 
-    def _temporary_directories_unchanged(self) -> None:
-        if self._probe_directory("/run/yggdrasil-host-probe-dev") is not None:
-            raise Unknown("foreign_or_unreaped_temporary_runtime_directory")
-        if self._probe_directory(self.probe_state_directory) != self.probe_state_identity:
-            raise Unknown("temporary_probe_state_directory_owner_changed")
+    def _temporary_directories_unchanged(self, *, operation_state_removed: bool = False) -> None:
+        try:
+            if self._probe_directory("/run/yggdrasil-host-probe-dev") is not None:
+                raise Unknown("foreign_or_unreaped_temporary_runtime_directory")
+            if (
+                self._probe_directory("/var/lib/yggdrasil-host-probe-dev")
+                != self.canonical_state_identity
+            ):
+                raise Unknown("canonical_probe_state_directory_changed")
+            expected_state = None if operation_state_removed else self.probe_state_identity
+            if self._probe_directory(self.probe_state_directory) != expected_state:
+                raise Unknown("temporary_probe_state_directory_owner_changed")
+        except Refusal:
+            raise Unknown("temporary_probe_directory_custody_changed") from None
 
     @fs_guard
     def prepare(self, archive: bytes, manifest: bytes, healthy_config: bytes) -> Binding:
         self.probe_state_directory = str(PurePosixPath(self.binding.state_file).parent)
-        if self.probe_state_directory != "/var/lib/yggdrasil-host-probe-dev":
+        if (
+            self.probe_state_directory != self.scope.root + "/probe-state"
+            or self.binding.state_file != self.probe_state_directory + "/alert-state.json"
+        ):
             raise Refusal("temporary_probe_state_directory_outside_fixed_dev_owner")
         if self._probe_directory("/run/yggdrasil-host-probe-dev") is not None:
             raise Refusal("preexisting_temporary_runtime_directory_unsupported")
-        self.probe_state_identity = self._probe_directory(self.probe_state_directory)
-        self.created_probe_state_directory = self.probe_state_identity is None
+        self.canonical_state_identity = self._probe_directory("/var/lib/yggdrasil-host-probe-dev")
+        if self._probe_directory(self.probe_state_directory) is not None:
+            raise Refusal("temporary_probe_state_directory_exists_no_adoption")
         # The base path proves independent health before its first source,
         # config or unit write. Directory creation belongs after that proof.
         selected = super().prepare(archive, manifest, healthy_config)
-        if self.created_probe_state_directory:
-            parent = self.io.directory("/var/lib")
-            try:
-                self.ops.mkdir(PurePosixPath(self.probe_state_directory).name, 0o700, dir_fd=parent)
-                self.ops.fsync(parent)
-            finally:
-                self.caller.close("new_probe_state_parent", lambda: self.ops.close(parent))
-            self.probe_state_identity = self._probe_directory(self.probe_state_directory)
+        parent = self.io.directory(self.scope.root, private=True)
+        try:
+            self.ops.mkdir("probe-state", 0o700, dir_fd=parent)
+            self.ops.fsync(parent)
+        finally:
+            self.caller.close("new_probe_state_parent", lambda: self.ops.close(parent))
+        self.probe_state_identity = self._probe_directory(self.probe_state_directory)
         self._temporary_directories_unchanged()
         return selected
 
@@ -4153,24 +4180,21 @@ class NativeInstallation(TemporaryDevInstallation):
         self._temporary_directories_unchanged()
         result = super().restore_and_cleanup(already_stopped=already_stopped)
         self._temporary_directories_unchanged()
-        if self.created_probe_state_directory:
-            parent = self.io.directory("/var/lib")
-            try:
-                self._temporary_directories_unchanged()
-                self.ops.rmdir(PurePosixPath(self.probe_state_directory).name, dir_fd=parent)
-                self.ops.fsync(parent)
-            finally:
-                self.caller.close(
-                    "restore_original_probe_state_parent", lambda: self.ops.close(parent)
-                )
-            if self._probe_directory(self.probe_state_directory) is not None:
-                raise Unknown("original_probe_state_directory_absence_not_restored")
+        parent = self.io.directory(self.scope.root, private=True)
+        try:
+            self._temporary_directories_unchanged()
+            self.ops.rmdir("probe-state", dir_fd=parent)
+            self.ops.fsync(parent)
+        finally:
+            self.caller.close("restore_original_probe_state_parent", lambda: self.ops.close(parent))
+        self._temporary_directories_unchanged(operation_state_removed=True)
         result.update(
             original_probe_state_directory="absent"
-            if self.created_probe_state_directory
+            if self.canonical_state_identity is None
             else "present",
             probe_state_directory_restored=True,
             runtime_directory_restored=True,
+            operation_state_directory_removed=True,
         )
         return result
 
@@ -6034,6 +6058,10 @@ def scope_from_first_preflight(
                     original.mode,
                 )
             )
+    if unit["ActiveState"] != "active":
+        # Temporary probe state stays inside this operation's existing writable
+        # namespace. Canonical DEV state remains untouched under read-only /var/lib.
+        state_file = root + "/probe-state/alert-state.json"
     binding = Binding(
         "ygg-dev",
         "ygg-dev",
@@ -6860,6 +6888,7 @@ def native_completion_receipt(result: dict[str, Any], packet: dict[str, Any]) ->
         or temporary.get("original_probe_state_directory") not in {"absent", "present"}
         or temporary.get("probe_state_directory_restored") is not True
         or temporary.get("runtime_directory_restored") is not True
+        or temporary.get("operation_state_directory_removed") is not True
     ):
         raise Unknown("native_temporary_restoration_unqualified")
     return {
@@ -6893,6 +6922,7 @@ def native_completion_receipt(result: dict[str, Any], packet: dict[str, Any]) ->
             "original_state": temporary["original_probe_state_directory"],
             "state_restored": True,
             "runtime_restored": True,
+            "operation_state_removed": True,
         }
         if temporary
         else None,
