@@ -2737,7 +2737,9 @@ class LinuxDependencies:
         import subprocess, selectors, signal, time, socket, fcntl, grp, pwd
         import importlib.util
 
-        return cls(os, subprocess, selectors, signal, time, socket, fcntl, grp, pwd, importlib.util, sys)
+        return cls(
+            os, subprocess, selectors, signal, time, socket, fcntl, grp, pwd, importlib.util, sys
+        )
 
 
 class NativeClock:
@@ -3751,12 +3753,10 @@ class LinuxRuntimeReader:
         first = parse_unit(self.caller.run(systemd("show")), allow_absent=True)
         if allow_uninstalled_source and (first["ActiveState"] == "active" or not require_health):
             raise Refusal("preinstallation_health_requires_inactive_probe")
-        preinstallation = (
-            first["ActiveState"] != "active"
-            and (
-                allow_uninstalled_source
-                or not require_health and binding.package not in self.qualified_packages
-            )
+        preinstallation = first["ActiveState"] != "active" and (
+            allow_uninstalled_source
+            or not require_health
+            and binding.package not in self.qualified_packages
         )
         sources = () if preinstallation else self._sources(binding)
         if sources:
@@ -4135,7 +4135,9 @@ class NativeInstallation(TemporaryDevInstallation):
         return selected
 
     @fs_guard
-    def activate(self, *, before_start: Callable[[DevProbeAdapter], None] | None = None) -> DevProbeAdapter:
+    def activate(
+        self, *, before_start: Callable[[DevProbeAdapter], None] | None = None
+    ) -> DevProbeAdapter:
         if before_start is None:
             raise Refusal("native_first_start_requires_independent_containment")
 
@@ -4158,11 +4160,15 @@ class NativeInstallation(TemporaryDevInstallation):
                 self.ops.rmdir(PurePosixPath(self.probe_state_directory).name, dir_fd=parent)
                 self.ops.fsync(parent)
             finally:
-                self.caller.close("restore_original_probe_state_parent", lambda: self.ops.close(parent))
+                self.caller.close(
+                    "restore_original_probe_state_parent", lambda: self.ops.close(parent)
+                )
             if self._probe_directory(self.probe_state_directory) is not None:
                 raise Unknown("original_probe_state_directory_absence_not_restored")
         result.update(
-            original_probe_state_directory="absent" if self.created_probe_state_directory else "present",
+            original_probe_state_directory="absent"
+            if self.created_probe_state_directory
+            else "present",
             probe_state_directory_restored=True,
             runtime_directory_restored=True,
         )
@@ -4824,8 +4830,7 @@ class NativeFaultGuard:
         self.caller.run(systemd("reload_for_temporary_dev"), effect=True)
         guarded = parse_unit(self.caller.run(systemd("show")))
         if (
-            "YGG_DEV_OPERATION=" + self.scope.handle.operation
-            not in guarded["Environment"].split()
+            "YGG_DEV_OPERATION=" + self.scope.handle.operation not in guarded["Environment"].split()
             or self.parent_path + "/" + self.marker not in guarded["DropInPaths"].split()
         ):
             raise Unknown("effective_owned_marker_not_loaded")
@@ -5366,9 +5371,7 @@ def discover_fixed_dev_producer(
     apis = []
     for container in candidates:
         data = json.loads(
-            command(
-                ("/usr/bin/docker", "inspect", "--format", DOCKER_DEV_API_METADATA, container)
-            ),
+            command(("/usr/bin/docker", "inspect", "--format", DOCKER_DEV_API_METADATA, container)),
             object_pairs_hook=unique,
         )
         if data.get("channel") == "dev" and data.get("service") == "api":
@@ -5770,7 +5773,9 @@ LOCAL_DEV_TASK = "github-RasmusTho--agentic-pkm-mvp-issue-6505"
 LOCAL_DEV_PROGRAM = LOCAL_DEV_WORKTREE + "/scripts/probe_dev_outage_operation.py"
 
 
-def actual_local_entry(packet: dict[str, Any], dependencies: LinuxDependencies) -> bytes:
+def actual_local_entry(
+    packet: dict[str, Any], dependencies: LinuxDependencies
+) -> tuple[bytes, tuple[Any, ...]]:
     """Bind the executing entry, cwd and interpreter before using its claim.
 
     The registry's logical Issue session remains the ownership authority. An
@@ -5780,11 +5785,22 @@ def actual_local_entry(packet: dict[str, Any], dependencies: LinuxDependencies) 
     if (
         api.getcwd() != LOCAL_DEV_WORKTREE
         or api.path.realpath(__file__) != LOCAL_DEV_PROGRAM
+        or api.path.realpath(LOCAL_DEV_PROGRAM) != LOCAL_DEV_PROGRAM
+        or not absolute(dependencies.process.executable)
         or api.path.realpath(dependencies.process.executable)
         != api.path.realpath(packet["caller_interpreter"])
         or run_claimed_local_caller.__code__.co_filename != __file__
     ):
         raise Refusal("actual_local_caller_entry_cwd_or_interpreter_unbound")
+    executable = api.path.realpath(dependencies.process.executable)
+    interpreter = api.stat(executable, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(interpreter.st_mode)
+        or interpreter.st_mode & 0o022
+        or not interpreter.st_mode & 0o111
+        or interpreter.st_uid not in {0, api.geteuid()}
+    ):
+        raise Refusal("actual_local_caller_interpreter_metadata_unqualified")
     descriptor = api.open(
         LOCAL_DEV_PROGRAM, api.O_RDONLY | api.O_NOFOLLOW | api.O_NONBLOCK | api.O_CLOEXEC
     )
@@ -5792,7 +5808,7 @@ def actual_local_entry(packet: dict[str, Any], dependencies: LinuxDependencies) 
         info = api.fstat(descriptor)
         if (
             not stat.S_ISREG(info.st_mode)
-            or info.st_size > 1048576
+            or not 0 < info.st_size <= 1048576
             or info.st_nlink != 1
             or info.st_uid != api.geteuid()
             or info.st_mode & 0o022
@@ -5800,6 +5816,8 @@ def actual_local_entry(packet: dict[str, Any], dependencies: LinuxDependencies) 
             raise Refusal("actual_local_caller_program_metadata_unqualified")
         content = bytearray()
         while True:
+            if packet["_end_epoch"] - dependencies.time.time() <= 2.1:
+                raise Unknown("whole_local_caller_entry_budget")
             chunk = api.read(descriptor, min(65536, 1048577 - len(content)))
             if not chunk:
                 break
@@ -5807,8 +5825,22 @@ def actual_local_entry(packet: dict[str, Any], dependencies: LinuxDependencies) 
             if len(content) > 1048576:
                 raise Refusal("actual_local_caller_program_bound")
         current = api.stat(LOCAL_DEV_PROGRAM, follow_symlinks=False)
-        fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
-        if any(getattr(info, key) != getattr(current, key) for key in fields):
+        after = api.fstat(descriptor)
+        fields = (
+            "st_dev",
+            "st_ino",
+            "st_mode",
+            "st_uid",
+            "st_gid",
+            "st_nlink",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+        if len(content) != info.st_size or any(
+            getattr(info, key) != getattr(current, key) or getattr(info, key) != getattr(after, key)
+            for key in fields
+        ):
             raise Refusal("actual_local_caller_program_changed_during_read")
         if sha(bytes(content)) != packet["program_sha256"]:
             raise Refusal("actual_local_caller_program_not_reviewed_bytes")
@@ -5817,12 +5849,15 @@ def actual_local_entry(packet: dict[str, Any], dependencies: LinuxDependencies) 
             candidates = [
                 value
                 for value in compiled.co_consts
-                if isinstance(value, type(function.__code__))
-                and value.co_name == function.__name__
+                if isinstance(value, type(function.__code__)) and value.co_name == function.__name__
             ]
             if len(candidates) != 1 or candidates[0] != function.__code__:
                 raise Refusal("executing_local_entry_differs_from_reviewed_program")
-        return bytes(content)
+        return bytes(content), (
+            *(getattr(info, key) for key in fields),
+            executable,
+            *(getattr(interpreter, key) for key in fields),
+        )
     finally:
         api.close(descriptor)
 
@@ -6069,7 +6104,7 @@ def run_claimed_local_caller(
     import base64
 
     packet = carrier_packet(packet_raw)
-    local_program = actual_local_entry(packet, dependencies)
+    local_program, original_entry = actual_local_entry(packet, dependencies)
     if sha(archive) != ARCHIVE_SHA256 or sha(manifest) != MANIFEST_SHA256:
         raise Refusal("caller_live_archive_identity")
     # Reuse exact accepted primitives with no PROD resource imports/globals.
@@ -6281,7 +6316,7 @@ def run_claimed_local_caller(
         if key in dependencies.os.environ:
             environment[key] = dependencies.os.environ[key]
     if (
-        actual_local_entry(packet, dependencies) != program
+        actual_local_entry(packet, dependencies) != (program, original_entry)
         or git("rev-parse", "HEAD") != head
         or git("status", "--porcelain").strip()
         or dependencies.time.time() >= min(expiry, owner["expires_at"])
@@ -6858,7 +6893,9 @@ def native_completion_receipt(result: dict[str, Any], packet: dict[str, Any]) ->
             "original_state": temporary["original_probe_state_directory"],
             "state_restored": True,
             "runtime_restored": True,
-        } if temporary else None,
+        }
+        if temporary
+        else None,
         "incident_history_rewound": False,
         "independent_guard_disarmed": True,
         "supervisor": supervisor,

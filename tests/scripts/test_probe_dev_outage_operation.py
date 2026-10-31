@@ -6,6 +6,7 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import tempfile
@@ -150,7 +151,17 @@ def execute_serialized_program(payload, dependencies):
     actual_import = builtins.__import__
     ports = {
         name: getattr(dependencies, name)
-        for name in ("os", "subprocess", "selectors", "signal", "time", "socket", "fcntl", "grp", "pwd")
+        for name in (
+            "os",
+            "subprocess",
+            "selectors",
+            "signal",
+            "time",
+            "socket",
+            "fcntl",
+            "grp",
+            "pwd",
+        )
     }
     ports["sys"] = dependencies.process
 
@@ -160,7 +171,10 @@ def execute_serialized_program(payload, dependencies):
         return actual_import(name, globals, locals, fromlist, level)
 
     output = io.StringIO()
-    with patch("builtins.__import__", side_effect=platform_import), contextlib.redirect_stdout(output):
+    with (
+        patch("builtins.__import__", side_effect=platform_import),
+        contextlib.redirect_stdout(output),
+    ):
         exec(compile(payload, "actual-fixed-dev-carrier", "exec"), {})
     return output.getvalue().encode()
 
@@ -1615,6 +1629,97 @@ def manager_show(argv, fields):
     ).encode()
 
 
+class DockerDiscoveryProducer:
+    """External Docker port: apply argv filters and the actual Go projection.
+
+    The fixed template subset follows docker/cli's inspector/templates and
+    formatter/container contracts. Inputs have Docker's raw inspect shape;
+    no parser-facing dictionary or preselected container is returned.
+    """
+
+    def __init__(self):
+        self.containers = [
+            {
+                "Id": identity * 64,
+                "Image": "sha256:" + "c" * 64,
+                "State": {"Pid": pid, "Running": True},
+                "Config": {
+                    "Labels": {
+                        "org.opencontainers.image.revision": "f" * 40,
+                        "com.docker.compose.project": "observed-dev-project",
+                        "com.docker.compose.service": service,
+                    },
+                    "Env": ["PKM_ENVIRONMENT=dev"]
+                    + (
+                        ["WORKER_HEARTBEAT_PATH=/runtime/producer.json"]
+                        if service == "worker"
+                        else []
+                    ),
+                },
+                "NetworkSettings": {
+                    "Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "47777"}]}
+                    if service == "api"
+                    else {},
+                },
+                "Mounts": [{"Source": "/var/lib/actual-backing", "Destination": "/runtime"}]
+                if service == "worker"
+                else [],
+            }
+            for identity, service, pid in (("a", "api", 808), ("b", "worker", 707))
+        ]
+        self.calls = []
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+        if argv[:2] == ("/usr/bin/docker", "ps"):
+            assert argv[-2:] == ("--format", "{{.ID}}")
+            assert len(argv[2:-2]) % 2 == 0
+            filters = []
+            for option, value in zip(argv[2:-2:2], argv[3:-2:2], strict=True):
+                assert option == "--filter" and value.startswith("label=")
+                filters.append(value.removeprefix("label=").split("=", 1))
+            return "".join(
+                row["Id"][:12] + "\n"
+                for row in self.containers
+                if row["State"]["Running"]
+                and all(row["Config"]["Labels"].get(key) == value for key, value in filters)
+            ).encode()
+        assert argv[:3] == ("/usr/bin/docker", "inspect", "--format") and len(argv) == 5
+        rows = [row for row in self.containers if row["Id"].startswith(argv[-1])]
+        assert len(rows) == 1
+        row = rows[0]
+
+        def field(path):
+            value = row
+            for part in path.split("."):
+                value = value[part]
+            return value
+
+        # Go's range emits nothing for a missing env key and concatenates all
+        # matching entries; either can make this caller's JSON invalid.
+        output = re.sub(
+            r'{{range \.Config.Env}}{{if eq \(index \(split \. "="\) 0\) "([^"]+)"}}'
+            r'{{json \(index \(split \. "="\) 1\)}}{{end}}{{end}}',
+            lambda match: "".join(
+                json.dumps(value.split("=")[1])
+                for value in row["Config"]["Env"]
+                if value.split("=")[0] == match[1]
+            ),
+            argv[3],
+        )
+        output = re.sub(
+            r'{{json \(index \.Config.Labels "([^"]+)"\)}}',
+            lambda match: json.dumps(row["Config"]["Labels"].get(match[1])),
+            output,
+        )
+        output = re.sub(
+            r"{{json \.([A-Za-z.]+)}}", lambda match: json.dumps(field(match[1])), output
+        )
+        output = output.replace("{{.State.Pid}}", str(row["State"]["Pid"]))
+        assert "{{" not in output and "}}" not in output
+        return (output + "\n").encode()
+
+
 class NativeKernel:
     def __init__(self, h):
         self.h, self.clock, self.processes, self.reaped, self.killed, self.selectors = (
@@ -2166,9 +2271,7 @@ def test_actual_linux_reader_computes_fixed_child_stream_source_worker_health(se
 def test_actual_native_assembly_runs_real_source_finite_pair_without_real_effects(self):
     kernel, assembly = _native(self)
     original = kernel.os.files[kernel.scope.binding.config]
-    result = target.run_fixed_dev_worker(
-        assembly, b"not-used-for-existing-active-dev", b"not-used"
-    )
+    result = target.run_fixed_dev_worker(assembly, b"not-used-for-existing-active-dev", b"not-used")
     self.assertEqual((1, 1), (result["down"], result["recovery"]))
     self.assertGreaterEqual(result["completed_later_suppressions"], 2)
     self.assertEqual(original, kernel.os.files[kernel.scope.binding.config])
@@ -2319,37 +2422,11 @@ def test_fixed_supervisor_transport_and_actual_dispatcher_claim_shape(self):
 def test_first_accepted_preflight_derives_actual_compose_mapping_not_defaults(self):
     kernel, assembly = _native(self)
     original = kernel.response
-    api = {
-        "id": "a" * 64,
-        "image_id": "sha256:" + "c" * 64,
-        "revision": "f" * 40,
-        "pid": 808,
-        "project": "observed-dev-project",
-        "service": "api",
-        "channel": "dev",
-        "ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "47777"}]},
-        "mounts": [],
-    }
-    worker = {
-        "id": "b" * 64,
-        "image_id": "sha256:" + "c" * 64,
-        "revision": "f" * 40,
-        "pid": 707,
-        "project": "observed-dev-project",
-        "service": "worker",
-        "channel": "dev",
-        "heartbeat": "/runtime/producer.json",
-        "ports": {},
-        "mounts": [{"Source": "/var/lib/actual-backing", "Destination": "/runtime"}],
-    }
+    docker = DockerDiscoveryProducer()
 
     def response(argv, payload):
-        if argv[0:2] == ("/usr/bin/docker", "ps"):
-            return (
-                "b" * 12 if "label=com.docker.compose.service=worker" in argv else "a" * 12
-            ).encode() + b"\n"
-        if argv[0:2] == ("/usr/bin/docker", "inspect"):
-            return json.dumps(worker if argv[-1].startswith("b") else api).encode()
+        if argv[0] == "/usr/bin/docker":
+            return docker(argv)
         return original(argv, payload)
 
     kernel.response = response
@@ -2367,13 +2444,131 @@ def test_first_accepted_preflight_derives_actual_compose_mapping_not_defaults(se
     self.assertEqual("9:223", facts["heartbeat_backing"])
     self.assertEqual("observed-dev-project", facts["producer_route"].split(":", 1)[1])
     self.assertIsNone(facts["actual_vm_id"], "inventory VM100 is only a proposal")
-    worker["channel"] = "prod"
+    docker.containers[1]["Config"]["Env"][0] = "PKM_ENVIRONMENT=prod"
     with self.assertRaises(target.Refusal):
         target.discover_fixed_dev_producer(
             kernel.dependencies,
             (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
             deadline=1100,
         )
+
+
+def test_discovery_uses_actual_docker_projection_and_refuses_unsupported_bindings(self):
+    cases = (
+        "normal_with_unrelated_containers",
+        "revision_label_absent",
+        "worker_stopped",
+        "worker_foreign_project",
+        "two_matching_workers",
+        "malformed_worker_list_id",
+        "short_inspect_id",
+        "heartbeat_setting_absent",
+        "heartbeat_setting_duplicated",
+        "worker_wrong_channel",
+        "different_candidate_image",
+        "dual_stack_publication",
+        "unpublished_api",
+        "ambiguous_heartbeat_mount",
+    )
+    for index, case in enumerate(cases):
+        with self.subTest(case=case):
+            if index:
+                self.fresh()
+            kernel, assembly = _native(self)
+            docker = DockerDiscoveryProducer()
+            api, worker = docker.containers
+            expected = target.Refusal
+            if case == "normal_with_unrelated_containers":
+                foreign = json.loads(json.dumps(worker))
+                foreign["Id"] = "d" * 64
+                foreign["Config"]["Labels"]["com.docker.compose.project"] = "another-project"
+                stopped = json.loads(json.dumps(worker))
+                stopped["Id"], stopped["State"]["Running"] = "e" * 64, False
+                docker.containers.extend((foreign, stopped))
+                expected = None
+            elif case == "revision_label_absent":
+                for row in docker.containers:
+                    del row["Config"]["Labels"]["org.opencontainers.image.revision"]
+                expected = None
+            elif case == "worker_stopped":
+                worker["State"]["Running"] = False
+            elif case == "worker_foreign_project":
+                worker["Config"]["Labels"]["com.docker.compose.project"] = "another-project"
+            elif case == "two_matching_workers":
+                second = json.loads(json.dumps(worker))
+                second["Id"] = "d" * 64
+                docker.containers.append(second)
+            elif case == "malformed_worker_list_id":
+                worker["Id"] = "z" * 64
+            elif case == "short_inspect_id":
+                worker["Id"] = "b" * 12
+            elif case == "heartbeat_setting_absent":
+                worker["Config"]["Env"] = ["PKM_ENVIRONMENT=dev"]
+                expected = json.JSONDecodeError
+            elif case == "heartbeat_setting_duplicated":
+                worker["Config"]["Env"].append("WORKER_HEARTBEAT_PATH=/runtime/producer.json")
+                expected = json.JSONDecodeError
+            elif case == "worker_wrong_channel":
+                worker["Config"]["Env"][0] = "PKM_ENVIRONMENT=prod"
+            elif case == "different_candidate_image":
+                worker["Image"] = "sha256:" + "d" * 64
+            elif case == "dual_stack_publication":
+                api["NetworkSettings"]["Ports"]["8000/tcp"].append(
+                    {"HostIp": "::", "HostPort": "47777"}
+                )
+            elif case == "unpublished_api":
+                api["NetworkSettings"]["Ports"]["8000/tcp"] = None
+            elif case == "ambiguous_heartbeat_mount":
+                worker["Mounts"].append(
+                    {"Source": "/var/lib/another-backing", "Destination": "/runtime"}
+                )
+            response, before = kernel.response, dict(kernel.os.files)
+
+            def ports(argv, payload):
+                return docker(argv) if argv[0] == "/usr/bin/docker" else response(argv, payload)
+
+            def discover():
+                return target.discover_fixed_dev_producer(
+                    kernel.dependencies,
+                    (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
+                    deadline=1100,
+                )
+
+            kernel.response = ports
+            if expected is None:
+                facts = discover()
+                self.assertEqual("http://127.0.0.1:47777", facts["api_base"])
+                self.assertEqual(
+                    ["a" * 64, "b" * 64], [r[1] for r in facts["candidate_references"]]
+                )
+                self.assertEqual(
+                    ["a" * 12, "b" * 12],
+                    [argv[-1] for argv in docker.calls if argv[1] == "inspect"],
+                )
+            else:
+                with self.assertRaises(expected):
+                    discover()
+            self.assertIn(
+                (
+                    "/usr/bin/docker",
+                    "ps",
+                    "--filter",
+                    "label=com.docker.compose.service=worker",
+                    "--filter",
+                    "label=com.docker.compose.project=observed-dev-project",
+                    "--format",
+                    "{{.ID}}",
+                ),
+                docker.calls,
+            )
+            self.assertEqual(before, kernel.os.files)
+            self.assertFalse(any(p.argv[0] == "/usr/bin/systemd-run" for p in kernel.processes))
+            self.assertFalse(
+                any(
+                    p.argv in {target.systemd("start"), target.systemd("stop")}
+                    for p in kernel.processes
+                )
+            )
 
 
 class MappedNativeOS:
@@ -2580,6 +2775,7 @@ def test_guard_refuses_foreign_incarnation_and_retains_original_fault_handle(sel
 def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
     self,
 ):
+    import contextlib, io
     from datetime import datetime, timezone
 
     kernel, assembly = _native(self)
@@ -2678,17 +2874,45 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
 
     kernel.response = response
     archive, manifest, _ = fixture_source()
-    result = target.run_claimed_local_caller(
-        json.dumps(packet).encode(),
-        kernel.dependencies,
-        (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
-        archive,
-        manifest,
-    )
+    inputs = target.LOCAL_DEV_WORKTREE + "/.codex-tmp/portable-caller"
+    for name, content in (
+        ("source.tar", archive),
+        ("manifest.json", manifest),
+        ("custody.py", (PUBLIC / "scripts/probe_upgrade_operation.py").read_bytes()),
+    ):
+        kernel.os.add(inputs + "/" + name, content)
+
+    def invoke(selected=None):
+        kernel.os.add(inputs + "/request.json", json.dumps(selected or packet).encode())
+        output = io.StringIO()
+        with (
+            patch.object(
+                target.LinuxDependencies, "standard_library", return_value=kernel.dependencies
+            ),
+            contextlib.redirect_stdout(output),
+        ):
+            result = target.main(
+                [
+                    "--request",
+                    inputs + "/request.json",
+                    "--archive",
+                    inputs + "/source.tar",
+                    "--manifest",
+                    inputs + "/manifest.json",
+                    "--custody-source",
+                    inputs + "/custody.py",
+                ]
+            )
+        self.assertEqual(78, result)
+        return output.getvalue().encode()
+
+    result = invoke()
     value = json.loads(result)
     self.assertEqual("fixed_dev_probe.outcome.v1", value["schema"])
     self.assertEqual(packet["operation"], value["operation"])
-    self.assertEqual(("REFUSED", "bootstrap_guest_not_fixed_dev"), (value["status"], value["reason"]))
+    self.assertEqual(
+        ("REFUSED", "bootstrap_guest_not_fixed_dev"), (value["status"], value["reason"])
+    )
     self.assertEqual(1, len(executed))
     gh = [process for process in kernel.processes if process.argv[0] == packet["gh_executable"]]
     self.assertEqual(kernel.os.environ["HOME"], gh[0].environment["HOME"])
@@ -2710,13 +2934,7 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
         with self.subTest(authority_key=key, value=value):
             previous, surface[key] = surface[key], value
             with self.assertRaises(target.Refusal):
-                target.run_claimed_local_caller(
-                    json.dumps(packet).encode(),
-                    kernel.dependencies,
-                    (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
-                    archive,
-                    manifest,
-                )
+                invoke()
             surface[key] = previous
             self.assertEqual(
                 1,
@@ -2726,28 +2944,105 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
         ({"schema": "fixed_test_probe.carrier.v1"}, "carrier_packet_shape"),
         ({"issue": 6493}, "carrier_packet_shape"),
         ({"namespace": "../foreign"}, "carrier_reviewed_identity_unbound"),
-        ({"caller_interpreter": "/foreign/python3"}, "actual_local_caller_entry_cwd_or_interpreter_unbound"),
+        (
+            {"caller_interpreter": "/foreign/python3"},
+            "actual_local_caller_entry_cwd_or_interpreter_unbound",
+        ),
     ):
         with self.subTest(packet=changed):
             with self.assertRaisesRegex(target.Refusal, expected):
-                target.run_claimed_local_caller(
-                    json.dumps(dict(packet, **changed)).encode(), kernel.dependencies,
-                    (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(), archive, manifest,
-                )
+                invoke(dict(packet, **changed))
     for foreign in ("cwd", "module", "program"):
         with self.subTest(actual_entry=foreign):
             original_program = kernel.os.files[target.LOCAL_DEV_PROGRAM]
-            kernel.os.current_directory = "/foreign" if foreign == "cwd" else target.LOCAL_DEV_WORKTREE
+            kernel.os.current_directory = (
+                "/foreign" if foreign == "cwd" else target.LOCAL_DEV_WORKTREE
+            )
             if foreign == "program":
                 kernel.os.files[target.LOCAL_DEV_PROGRAM] += b"# unreviewed change\n"
-            with patch.object(target, "__file__", "/foreign/program.py" if foreign == "module" else target.LOCAL_DEV_PROGRAM):
+            before = len(kernel.processes)
+            with patch.object(
+                target,
+                "__file__",
+                "/foreign/program.py" if foreign == "module" else target.LOCAL_DEV_PROGRAM,
+            ):
                 with self.assertRaises(target.Refusal):
-                    target.run_claimed_local_caller(
-                        json.dumps(packet).encode(), kernel.dependencies,
-                        (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(), archive, manifest,
-                    )
+                    invoke()
+            self.assertEqual(before, len(kernel.processes))
             kernel.os.files[target.LOCAL_DEV_PROGRAM] = original_program
             kernel.os.current_directory = target.LOCAL_DEV_WORKTREE
+    for path, key, value in (
+        (target.LOCAL_DEV_PROGRAM, "st_uid", 12345),
+        (target.LOCAL_DEV_PROGRAM, "st_mode", stat.S_IFREG | 0o664),
+        (packet["caller_interpreter"], "st_mode", stat.S_IFREG | 0o775),
+    ):
+        with self.subTest(entry_metadata=key, path=path):
+            metadata = kernel.os.meta[path]
+            previous = getattr(metadata, key)
+            setattr(metadata, key, value)
+            before = len(kernel.processes)
+            with self.assertRaisesRegex(target.Refusal, "actual_local_caller_.*metadata"):
+                invoke()
+            self.assertEqual(before, len(kernel.processes))
+            setattr(metadata, key, previous)
+    for change in ("source", "same_bytes_replacement", "interpreter_replacement", "cwd"):
+        with self.subTest(after_authority=change):
+            script_inode = kernel.os.meta[target.LOCAL_DEV_PROGRAM].st_ino
+            tool_inode = kernel.os.meta[packet["caller_interpreter"]].st_ino
+
+            def replace_after_authority(argv, payload):
+                result = response(argv, payload)
+                if (
+                    argv[0] == packet["caller_interpreter"]
+                    and "load_lifecycle_authority" in argv[2]
+                ):
+                    if change == "source":
+                        kernel.os.files[target.LOCAL_DEV_PROGRAM] = b"changed after local admission"
+                    elif change == "same_bytes_replacement":
+                        kernel.os.meta[target.LOCAL_DEV_PROGRAM].st_ino += 1
+                    elif change == "interpreter_replacement":
+                        kernel.os.meta[packet["caller_interpreter"]].st_ino += 1
+                    else:
+                        kernel.os.current_directory = "/changed-after-authority"
+                return result
+
+            kernel.response = replace_after_authority
+            with self.assertRaises(target.Refusal):
+                invoke()
+            self.assertEqual(1, len([p for p in kernel.processes if p.argv[0] == "/usr/bin/ssh"]))
+            kernel.os.files[target.LOCAL_DEV_PROGRAM] = program
+            kernel.os.meta[target.LOCAL_DEV_PROGRAM].st_ino = script_inode
+            kernel.os.meta[packet["caller_interpreter"]].st_ino = tool_inode
+            kernel.os.current_directory = target.LOCAL_DEV_WORKTREE
+    kernel.response = response
+    close = kernel.os.close
+
+    def lost_entry_close(descriptor):
+        path = kernel.os.fds[descriptor][0]
+        close(descriptor)
+        if path == target.LOCAL_DEV_PROGRAM:
+            raise OSError("synthetic caller descriptor close loss")
+
+    before = len(kernel.processes)
+    kernel.os.close = lost_entry_close
+    with self.assertRaises(OSError):
+        invoke()
+    self.assertEqual(before, len(kernel.processes))
+    kernel.os.close = close
+    read, epoch, monotonic = kernel.os.read, kernel.clock.epoch, kernel.clock.value
+
+    def exhaust_entry_budget(descriptor, count):
+        value = read(descriptor, count)
+        if kernel.os.fds[descriptor][0] == target.LOCAL_DEV_PROGRAM:
+            kernel.clock.advance(1800)
+        return value
+
+    kernel.os.read = exhaust_entry_budget
+    with self.assertRaisesRegex(target.Unknown, "whole_local_caller_entry_budget"):
+        invoke()
+    self.assertEqual(before, len(kernel.processes))
+    kernel.os.read = read
+    kernel.clock.epoch, kernel.clock.value = epoch, monotonic
     self.assertEqual(1, len([p for p in kernel.processes if p.argv[0] == "/usr/bin/ssh"]))
     assembly.files.close()
     self.assertFalse(kernel.os.fds)
@@ -3128,9 +3423,7 @@ def test_actual_first_preflight_does_not_require_an_unused_canonical_config_pare
                 self.assertEqual(
                     ("REFUSED", "first_preflight"), (result["status"], result["phase"])
                 )
-                self.assertEqual(
-                    "normal_dev_api_producer_candidates_unqualified", result["reason"]
-                )
+                self.assertEqual("normal_dev_api_producer_candidates_unqualified", result["reason"])
                 self.assertIn(root + "/supervisor-start.json", kernel.os.files)
                 self.assertIn(root + "/failure.json", kernel.os.files)
                 self.assertEqual(
@@ -3198,26 +3491,7 @@ def test_cold_four_file_bootstrap_reaches_observed_sdk_without_preseeded_source(
     kernel.os.path.realpath = lambda path: (
         kernel.scope.binding.sdk_realpath if path == kernel.scope.binding.sdk else path
     )
-    api = {
-        "id": "a" * 64,
-        "image_id": "sha256:" + "c" * 64,
-        "revision": "f" * 40,
-        "pid": 808,
-        "project": "observed-dev-project",
-        "service": "api",
-        "channel": "dev",
-        "ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "47777"}]},
-        "mounts": [],
-    }
-    worker = dict(
-        api,
-        id="b" * 64,
-        pid=707,
-        service="worker",
-        ports={},
-        heartbeat="/runtime/producer.json",
-        mounts=[{"Source": "/var/lib/actual-backing", "Destination": "/runtime"}],
-    )
+    docker = DockerDiscoveryProducer()
     response, actual_path, calls, handoffs = kernel.response, Path, [], []
 
     def namespace_path(value):
@@ -3293,12 +3567,8 @@ def test_cold_four_file_bootstrap_reaches_observed_sdk_without_preseeded_source(
             ):
                 target.main(["--supervised-first-preflight", packet["operation"]])
             raise AssertionError("first preflight must exec the qualified SDK")
-        if argv[:2] == ("/usr/bin/docker", "ps"):
-            return (
-                "b" * 12 if "label=com.docker.compose.service=worker" in argv else "a" * 12
-            ).encode() + b"\n"
-        if argv[:2] == ("/usr/bin/docker", "inspect"):
-            return json.dumps(worker if argv[-1].startswith("b") else api).encode()
+        if argv[0] == "/usr/bin/docker":
+            return docker(argv)
         return response(argv, payload)
 
     kernel.response, kernel.os.execve = ports, execve
@@ -3685,9 +3955,7 @@ def test_actual_watchdog_preserves_the_coherent_finalized_foreign_launcher_veto(
             if change == "marker":
                 kernel.os.files[base + "/environ"] = b"YGG_DEV_OPERATION=foreign\0"
             elif change == "missing_marker":
-                kernel.os.files[base + "/environ"] = (
-                    b"CREDENTIALS_DIRECTORY=/run/credentials/dev\0"
-                )
+                kernel.os.files[base + "/environ"] = b"CREDENTIALS_DIRECTORY=/run/credentials/dev\0"
             elif change == "uid":
                 kernel.os.meta[base].st_uid = 1234
             elif change == "cwd":
@@ -3964,7 +4232,15 @@ for _name, _value in list(globals().items()):
         del globals()[_name]
 
 
-def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_install=False, temporary_install=False, foreign_state_after_guard=False, original_state_directory_present=False):
+def whole_native_call(
+    case,
+    *,
+    lost_transport_ack=False,
+    unhealthy_before_install=False,
+    temporary_install=False,
+    foreign_state_after_guard=False,
+    original_state_directory_present=False,
+):
     """Current local entry -> serialized program -> first preflight -> real drill."""
     import contextlib, io
     from datetime import datetime, timezone
@@ -3997,16 +4273,32 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
         kernel.os.files.pop(config_path)
         kernel.os.meta.pop(config_path)
         kernel.unit.update(
-            LoadState="not-found", ActiveState="inactive", SubState="dead", MainPID="0",
-            UnitFileState="", FragmentPath="", DropInPaths="", Job="", InvocationID="",
-            ControlGroup="", WorkingDirectory="", EnvironmentFiles="", ExecStart="",
-            ExecStop="", ExecStopPost="", Type="", Environment="",
+            LoadState="not-found",
+            ActiveState="inactive",
+            SubState="dead",
+            MainPID="0",
+            UnitFileState="",
+            FragmentPath="",
+            DropInPaths="",
+            Job="",
+            InvocationID="",
+            ControlGroup="",
+            WorkingDirectory="",
+            EnvironmentFiles="",
+            ExecStart="",
+            ExecStop="",
+            ExecStopPost="",
+            Type="",
+            Environment="",
         )
         kernel._processes()
         for path in list(kernel.os.meta):
             if path == state_parent and original_state_directory_present:
                 continue
-            if any(path == parent or path.startswith(parent + "/") for parent in (state_parent, runtime_parent)):
+            if any(
+                path == parent or path.startswith(parent + "/")
+                for parent in (state_parent, runtime_parent)
+            ):
                 kernel.os.meta.pop(path)
                 kernel.os.files.pop(path, None)
     original_unit = dict(kernel.unit)
@@ -4015,29 +4307,32 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
             kernel.os.meta.pop(path)
             kernel.os.files.pop(path, None)
     packet = {
-        "schema": "fixed_dev_probe.carrier.v1", "issue": 6505,
-        "operation": kernel.scope.handle.operation, "namespace": kernel.scope.namespace,
-        "reviewed_head": "f" * 40, "program_sha256": target.sha(program),
-        "issue_body_sha256": target.sha(contract), "lease_id": "portable-dev-lease",
+        "schema": "fixed_dev_probe.carrier.v1",
+        "issue": 6505,
+        "operation": kernel.scope.handle.operation,
+        "namespace": kernel.scope.namespace,
+        "reviewed_head": "f" * 40,
+        "program_sha256": target.sha(program),
+        "issue_body_sha256": target.sha(contract),
+        "lease_id": "portable-dev-lease",
         "keeper_standing_reference": "portable-reviewed-dev-window",
-        "window_start_utc": datetime.fromtimestamp(kernel.clock.epoch - 1, timezone.utc).isoformat(),
-        "window_end_utc": datetime.fromtimestamp(kernel.clock.epoch + 1799, timezone.utc).isoformat(),
+        "window_start_utc": datetime.fromtimestamp(
+            kernel.clock.epoch - 1, timezone.utc
+        ).isoformat(),
+        "window_end_utc": datetime.fromtimestamp(
+            kernel.clock.epoch + 1799, timezone.utc
+        ).isoformat(),
         "bootstrap_interpreter": "/usr/bin/python3",
         "local_fence_references": list(kernel.scope.local_fence_references),
-        "normal_interval_seconds": 61, "heartbeat_stale_seconds": 601,
-        "gh_executable": "/opt/homebrew/bin/gh", "caller_interpreter": sys.executable,
+        "normal_interval_seconds": 61,
+        "heartbeat_stale_seconds": 601,
+        "gh_executable": "/opt/homebrew/bin/gh",
+        "caller_interpreter": sys.executable,
     }
     kernel.os.add(target.LOCAL_DEV_PROGRAM, program, mode=0o644)
     for path in (packet["gh_executable"], packet["caller_interpreter"]):
         kernel.os.add(path, b"existing qualified local executable", mode=0o755)
-    api = {
-        "id": "a" * 64, "image_id": "sha256:" + "c" * 64, "revision": "f" * 40,
-        "pid": 808, "project": "observed-dev-project", "service": "api", "channel": "dev",
-        "ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "47777"}]}, "mounts": [],
-    }
-    worker = dict(api, id="b" * 64, pid=707, service="worker", ports={},
-                  heartbeat="/runtime/producer.json",
-                  mounts=[{"Source": "/var/lib/actual-backing", "Destination": "/runtime"}])
+    docker = DockerDiscoveryProducer()
     original_response, calls, stages = kernel.response, [], []
     original_path = Path
 
@@ -4050,7 +4345,10 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
         module = sys.modules["fixed_dev_program"]
         scope, _, _ = module._decode_scope(kernel.os.files[root + "/native-input.json"])
         case.assertEqual(scope.binding.sdk, executable)
-        case.assertEqual([executable, "-I", root + "/program.py", "--qualified-dev-worker", packet["operation"]], argv)
+        case.assertEqual(
+            [executable, "-I", root + "/program.py", "--qualified-dev-worker", packet["operation"]],
+            argv,
+        )
         case.assertEqual({"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}, environment)
         kernel.scope = scope
         stages.append("qualified-sdk-exec")
@@ -4073,27 +4371,56 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
         calls.append(argv)
         if argv[:3] == ("/usr/bin/git", "-C", target.LOCAL_DEV_WORKTREE):
             return {
-                ("rev-parse", "HEAD"): b"f" * 40 + b"\n", ("status", "--porcelain"): b"",
+                ("rev-parse", "HEAD"): b"f" * 40 + b"\n",
+                ("status", "--porcelain"): b"",
                 ("branch", "--show-current"): target.LOCAL_DEV_BRANCH.encode() + b"\n",
                 ("rev-parse", "--show-toplevel"): target.LOCAL_DEV_WORKTREE.encode() + b"\n",
                 ("show", "HEAD:scripts/probe_dev_outage_operation.py"): program,
             }[argv[3:]]
         if argv[0] == packet["gh_executable"]:
-            return json.dumps({"number": 6505, "state": "open", "labels": [{"name": "agent:in-progress"}], "body": contract.decode()}).encode()
+            return json.dumps(
+                {
+                    "number": 6505,
+                    "state": "open",
+                    "labels": [{"name": "agent:in-progress"}],
+                    "body": contract.decode(),
+                }
+            ).encode()
         if argv[0] == packet["caller_interpreter"]:
             if "load_lifecycle_authority" in argv[2]:
-                return json.dumps({target.LOCAL_DEV_WORKTREE: {
-                    "status": "active", "path": target.LOCAL_DEV_WORKTREE,
-                    "branch": target.LOCAL_DEV_BRANCH, "owner": target.LOCAL_DEV_SESSION,
-                    "generation": "7" * 32, "expires_at": kernel.clock.epoch + 7200,
-                }}).encode()
-            return json.dumps({"ok": True, "task": {
-                "task_id": target.LOCAL_DEV_TASK, "repo": "RasmusTho/agentic-pkm-mvp",
-                "issue_number": 6505, "status": "claimed", "claimed_by": target.LOCAL_DEV_HOLDER,
-                "lease_id": packet["lease_id"], "lease_expires_at": "2100-01-01T00:00:00Z",
-            }, "lease": {"lease_id": packet["lease_id"], "resource": "issue:6505",
-                         "holder": target.LOCAL_DEV_HOLDER, "expires_at": "2100-01-01T00:00:00Z",
-                         "released_at": None}}).encode()
+                return json.dumps(
+                    {
+                        target.LOCAL_DEV_WORKTREE: {
+                            "status": "active",
+                            "path": target.LOCAL_DEV_WORKTREE,
+                            "branch": target.LOCAL_DEV_BRANCH,
+                            "owner": target.LOCAL_DEV_SESSION,
+                            "generation": "7" * 32,
+                            "expires_at": kernel.clock.epoch + 7200,
+                        }
+                    }
+                ).encode()
+            return json.dumps(
+                {
+                    "ok": True,
+                    "task": {
+                        "task_id": target.LOCAL_DEV_TASK,
+                        "repo": "RasmusTho/agentic-pkm-mvp",
+                        "issue_number": 6505,
+                        "status": "claimed",
+                        "claimed_by": target.LOCAL_DEV_HOLDER,
+                        "lease_id": packet["lease_id"],
+                        "lease_expires_at": "2100-01-01T00:00:00Z",
+                    },
+                    "lease": {
+                        "lease_id": packet["lease_id"],
+                        "resource": "issue:6505",
+                        "holder": target.LOCAL_DEV_HOLDER,
+                        "expires_at": "2100-01-01T00:00:00Z",
+                        "released_at": None,
+                    },
+                }
+            ).encode()
         if argv[0] == "/usr/bin/ssh":
             stages.append("serialized-remote-entry")
             try:
@@ -4106,12 +4433,23 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
             return result
         if argv[0] == "/usr/bin/systemd-run" and "--supervised-first-preflight" in argv:
             case.assertEqual(
-                {root + "/" + name for name in ("program.py", "source.tar", "manifest.json", "carrier-envelope.json")},
+                {
+                    root + "/" + name
+                    for name in (
+                        "program.py",
+                        "source.tar",
+                        "manifest.json",
+                        "carrier-envelope.json",
+                    )
+                },
                 {path for path in kernel.os.files if path.startswith(root + "/")},
             )
             module = sys.modules["fixed_dev_program"]
             stages.append("cold-first-preflight")
-            with patch.object(module, "__file__", root + "/program.py"), patch.object(module, "Path", side_effect=namespace_path):
+            with (
+                patch.object(module, "__file__", root + "/program.py"),
+                patch.object(module, "Path", side_effect=namespace_path),
+            ):
                 try:
                     module.main(["--supervised-first-preflight", packet["operation"]])
                 except SDKExited as exit_status:
@@ -4120,12 +4458,12 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
                 else:
                     raise AssertionError("SDK exec must replace the bootstrap")
             kernel.supervisor.update(ActiveState="inactive", SubState="dead", MainPID="0", Job="")
-            kernel.os.files["/sys/fs/cgroup" + kernel.supervisor["ControlGroup"] + "/cgroup.procs"] = b""
+            kernel.os.files[
+                "/sys/fs/cgroup" + kernel.supervisor["ControlGroup"] + "/cgroup.procs"
+            ] = b""
             return b""
-        if argv[:2] == ("/usr/bin/docker", "ps"):
-            return ("b" * 12 if "label=com.docker.compose.service=worker" in argv else "a" * 12).encode() + b"\n"
-        if argv[:2] == ("/usr/bin/docker", "inspect"):
-            return json.dumps(worker if argv[-1].startswith("b") else api).encode()
+        if argv[0] == "/usr/bin/docker":
+            return docker(argv)
         if temporary_install and argv == target.systemd("reload_for_temporary_dev"):
             unit_path = "/run/systemd/system/" + target.UNIT
             if unit_path not in kernel.os.files:
@@ -4137,14 +4475,23 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
                 if "=" in line and not line.startswith("#"):
                     key, value = line.split("=", 1)
                     values[key] = value
-            selected = replace(kernel.scope.binding, package=values["WorkingDirectory"], config=values["EnvironmentFile"])
+            selected = replace(
+                kernel.scope.binding,
+                package=values["WorkingDirectory"],
+                config=values["EnvironmentFile"],
+            )
             projected = unit_metadata(selected, kernel.clock)
             for key in target.VOLATILE:
                 projected[key] = kernel.unit[key]
             projected.update(
-                LoadState="loaded", UnitFileState="disabled", Job="", FragmentPath=unit_path,
-                LoadCredentialEncrypted="bws-machine-account-token:" + kernel.scope.credential_source,
-                ReadWritePaths=kernel.scope.controller_directory, DropInPaths="",
+                LoadState="loaded",
+                UnitFileState="disabled",
+                Job="",
+                FragmentPath=unit_path,
+                LoadCredentialEncrypted="bws-machine-account-token:"
+                + kernel.scope.credential_source,
+                ReadWritePaths=kernel.scope.controller_directory,
+                DropInPaths="",
                 Environment="PYTHONPATH=" + selected.package,
             )
             markers = [path for path in kernel.os.files if "/99-ygg-dev-owner-" in path]
@@ -4160,7 +4507,9 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
         if temporary_install and argv == target.systemd("start"):
             kernel.os.add(runtime_parent, directory=True, mode=0o700)
             kernel.os.add(runtime_parent + "/secret-runtime.env", b"DO_NOT_READ_WEBHOOK")
-            kernel.unit["ControlGroup"] = "/system.slice/system-yggdrasil\\x2dhost\\x2dprobe.slice/" + target.UNIT
+            kernel.unit["ControlGroup"] = (
+                "/system.slice/system-yggdrasil\\x2dhost\\x2dprobe.slice/" + target.UNIT
+            )
             return original_response(argv, payload)
         if temporary_install and argv == target.systemd("stop"):
             result = original_response(argv, payload)
@@ -4169,25 +4518,43 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
                     kernel.os.meta.pop(path)
                     kernel.os.files.pop(path, None)
             return result
-        if unhealthy_before_install and argv[0] == kernel.scope.binding.sdk and argv[1:3] == ("-I", "-c"):
+        if (
+            unhealthy_before_install
+            and argv[0] == kernel.scope.binding.sdk
+            and argv[1:3] == ("-I", "-c")
+        ):
             return b'{"status":200,"body":{"required_ok":false}}'
         return original_response(argv, payload)
 
     kernel.response, kernel.os.execve = response, execve
     local_inputs = target.LOCAL_DEV_WORKTREE + "/.codex-tmp/portable-dev-entry/"
     for name, content in (
-        ("request.json", json.dumps(packet).encode()), ("source.tar", archive),
+        ("request.json", json.dumps(packet).encode()),
+        ("source.tar", archive),
         ("manifest.json", manifest),
         ("custody.py", (PUBLIC / "scripts/probe_upgrade_operation.py").read_bytes()),
     ):
         kernel.os.add(local_inputs + name, content)
     output = io.StringIO()
     try:
-        with patch.object(target.LinuxDependencies, "standard_library", return_value=kernel.dependencies), contextlib.redirect_stdout(output):
-            code = target.main([
-                "--request", local_inputs + "request.json", "--archive", local_inputs + "source.tar",
-                "--manifest", local_inputs + "manifest.json", "--custody-source", local_inputs + "custody.py",
-            ])
+        with (
+            patch.object(
+                target.LinuxDependencies, "standard_library", return_value=kernel.dependencies
+            ),
+            contextlib.redirect_stdout(output),
+        ):
+            code = target.main(
+                [
+                    "--request",
+                    local_inputs + "request.json",
+                    "--archive",
+                    local_inputs + "source.tar",
+                    "--manifest",
+                    local_inputs + "manifest.json",
+                    "--custody-source",
+                    local_inputs + "custody.py",
+                ]
+            )
         case.assertEqual(78 if unhealthy_before_install or foreign_state_after_guard else 0, code)
         result = json.loads(output.getvalue())
     except target.Unknown:
@@ -4204,15 +4571,47 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
         case.assertEqual(config, kernel.os.files[config_path])
     case.assertFalse(kernel.os.fds)
     case.assertTrue(all(selector.closed for selector in kernel.selectors))
-    case.assertTrue(all(stream.closed for process in kernel.processes for stream in (process.stdin, process.stdout, process.stderr)))
+    case.assertTrue(
+        all(
+            stream.closed
+            for process in kernel.processes
+            for stream in (process.stdin, process.stdout, process.stderr)
+        )
+    )
     case.assertEqual(1, sum(argv[0] == "/usr/bin/ssh" for argv in calls))
-    completed_stage = "unhealthy-before-installation" if unhealthy_before_install else "foreign-state-before-first-start" if foreign_state_after_guard else "qualified-worker-complete"
-    case.assertEqual(["serialized-remote-entry", "cold-first-preflight", "qualified-sdk-exec", completed_stage], stages)
-    case.assertEqual(0 if unhealthy_before_install or foreign_state_after_guard else 2, len(case.h.deliveries))
+    completed_stage = (
+        "unhealthy-before-installation"
+        if unhealthy_before_install
+        else "foreign-state-before-first-start"
+        if foreign_state_after_guard
+        else "qualified-worker-complete"
+    )
+    case.assertEqual(
+        ["serialized-remote-entry", "cold-first-preflight", "qualified-sdk-exec", completed_stage],
+        stages,
+    )
+    case.assertEqual(
+        0 if unhealthy_before_install or foreign_state_after_guard else 2, len(case.h.deliveries)
+    )
     if unhealthy_before_install:
-        case.assertFalse(any(path == root + "/source" or path.startswith(root + "/source/") for path in kernel.os.meta))
+        case.assertFalse(
+            any(
+                path == root + "/source" or path.startswith(root + "/source/")
+                for path in kernel.os.meta
+            )
+        )
         case.assertFalse(any(path.startswith("/run/systemd/system/") for path in kernel.os.meta))
-        case.assertFalse(any(argv in {target.systemd("start"), target.systemd("stop"), target.systemd("reload_for_temporary_dev")} for argv in calls))
+        case.assertFalse(
+            any(
+                argv
+                in {
+                    target.systemd("start"),
+                    target.systemd("stop"),
+                    target.systemd("reload_for_temporary_dev"),
+                }
+                for argv in calls
+            )
+        )
         case.assertEqual("not-found", kernel.unit["LoadState"])
     if temporary_install and not foreign_state_after_guard:
         case.assertEqual(target.unit_profile(original_unit), target.unit_profile(kernel.unit))
@@ -4221,7 +4620,12 @@ def whole_native_call(case, *, lost_transport_ack=False, unhealthy_before_instal
         else:
             case.assertNotIn(state_parent, kernel.os.meta)
         case.assertNotIn(runtime_parent, kernel.os.meta)
-        case.assertFalse(any(path == root + "/source" or path.startswith(root + "/source/") for path in kernel.os.meta))
+        case.assertFalse(
+            any(
+                path == root + "/source" or path.startswith(root + "/source/")
+                for path in kernel.os.meta
+            )
+        )
         case.assertFalse(any(path.startswith("/run/systemd/system/") for path in kernel.os.meta))
     if foreign_state_after_guard:
         case.assertEqual(98765, kernel.os.meta[state_parent].st_ino)
@@ -4237,8 +4641,12 @@ def test_actual_dev_invocation_enforces_bindings_and_custody():
     try:
         result, kernel = whole_native_call(case)
         case.assertEqual("probe_dev_outage_recovery.v1", result["schema"])
-        case.assertEqual(("PASS", "dev", "ygg-dev"), (result["status"], result["environment"], result["target"]))
-        case.assertEqual((1, 1, True), (result["down"], result["recovery"], result["same_correlation"]))
+        case.assertEqual(
+            ("PASS", "dev", "ygg-dev"), (result["status"], result["environment"], result["target"])
+        )
+        case.assertEqual(
+            (1, 1, True), (result["down"], result["recovery"], result["same_correlation"])
+        )
         case.assertGreaterEqual(result["completed_later_suppressions"], 2)
         case.assertTrue(result["config_restored"] and result["independent_guard_disarmed"])
         case.assertTrue(result["supervisor"]["reaped"] and result["supervisor"]["cgroup_empty"])
@@ -4282,7 +4690,10 @@ def test_actual_temporary_dev_installation_restores_original_directory_absence()
         case.assertEqual("PASS", result["status"])
         case.assertEqual("absent", result["original_service"])
         case.assertTrue(result["original_lifecycle_and_artifacts_restored"])
-        case.assertEqual({"original_state": "absent", "state_restored": True, "runtime_restored": True}, result["temporary_directories"])
+        case.assertEqual(
+            {"original_state": "absent", "state_restored": True, "runtime_restored": True},
+            result["temporary_directories"],
+        )
     finally:
         case.doCleanups()
         case.tearDown()
@@ -4305,9 +4716,14 @@ def test_actual_temporary_dev_installation_preserves_original_empty_directory():
     case = NativeBindingTests()
     case.setUp()
     try:
-        result, _ = whole_native_call(case, temporary_install=True, original_state_directory_present=True)
+        result, _ = whole_native_call(
+            case, temporary_install=True, original_state_directory_present=True
+        )
         case.assertEqual("PASS", result["status"])
-        case.assertEqual({"original_state": "present", "state_restored": True, "runtime_restored": True}, result["temporary_directories"])
+        case.assertEqual(
+            {"original_state": "present", "state_restored": True, "runtime_restored": True},
+            result["temporary_directories"],
+        )
     finally:
         case.doCleanups()
         case.tearDown()

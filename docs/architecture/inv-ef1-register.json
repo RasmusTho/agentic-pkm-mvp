@@ -697,7 +697,7 @@
     {
       "artifact": "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/PARENT_FEATURE_ISSUE.md",
       "category": "iv",
-      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midg\u00e5rd as the authorized production vault so disposable validation cannot be rebound to another data authority.",
+      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midgård as the authorized production vault so disposable validation cannot be rebound to another data authority.",
       "disposition": "stay",
       "issue": "#4749"
     },
@@ -711,7 +711,7 @@
     {
       "artifact": "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md",
       "category": "iv",
-      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midg\u00e5rd as the authorized production vault so disposable validation cannot be rebound to another data authority.",
+      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midgård as the authorized production vault so disposable validation cannot be rebound to another data authority.",
       "disposition": "stay",
       "issue": "#4749"
     },
@@ -725,7 +725,7 @@
     {
       "artifact": "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RUN_READ_ONLY_OWNER_PILOT.md",
       "category": "iv",
-      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midg\u00e5rd as the authorized production vault so disposable validation cannot be rebound to another data authority.",
+      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midgård as the authorized production vault so disposable validation cannot be rebound to another data authority.",
       "disposition": "stay",
       "issue": "#4749"
     },
