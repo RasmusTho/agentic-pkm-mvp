@@ -547,11 +547,11 @@ def test_dropin_selector_diagnostics_are_allowlisted_and_legacy_compatible(monke
 
 
 def test_initial_control_path_diagnostics_preserve_closed_stage_parity(monkeypatch, tmp_path):
-    from tests.ops.bws_control_path_diagnostic_cases import PATH_CASES
+    from tests.ops.bws_control_path_diagnostic_cases import PATH_CASES, PATH_TOPOLOGY_CASES, ROLE_CASES
     assert admission._INITIAL_PATH_CONTEXTS == transaction._INITIAL_PATH_CONTEXTS
     assert admission._INITIAL_PATH_REFINEMENTS == transaction._INITIAL_PATH_REFINEMENTS
     assert admission._PREBACKUP_REFUSAL_GATES == transaction._PREBACKUP_REFUSAL_GATES
-    assert {tuple(row[1:]) for row in PATH_CASES} <= admission._INITIAL_PATH_REFINEMENTS
+    assert {tuple(row[1:]) for row in PATH_CASES + PATH_TOPOLOGY_CASES + ROLE_CASES} <= admission._INITIAL_PATH_REFINEMENTS
     _patch_directories(monkeypatch, tmp_path)
     request = _request()
     legacy = _receipt(request, status='refused_before_backup')

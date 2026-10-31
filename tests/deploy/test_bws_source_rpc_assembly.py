@@ -409,12 +409,44 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                     mount = original_mount(fd, **context)
                     return mount + 1 if (info.st_dev, info.st_ino) == (target_info.st_dev, target_info.st_ino) else mount
                 patch.setattr(lifecycle, '_control_path_mount', mounted_target)
-            if slot_kind.startswith('diagnostic'):
+            if slot_kind.startswith('diagnostic') and ':' in slot_kind:
                 from tests.ops.bws_control_path_diagnostic_cases import prepare_path_case
                 state['path_diagnostic'] = prepare_path_case(
                     lifecycle, patch, state, state['path_properties'], control_root,
                     state['path_properties']['Unit', 'DropInPaths'], slot_kind.split(':')[1],
                 )
+            state['path_case_setup'] = (lifecycle, control_root)
+            if slot_kind.startswith('diagnostic:') and slot_kind.endswith('-close'):
+                original_envelope_close = control._SourceDescriptorEnvelope.close
+                def diagnostic_envelope_close(envelope, *, owned_resources_closed):
+                    try:
+                        from collections import Counter
+                        evidence = state['path_diagnostic']
+                        opened = Counter((path, fd) for path, fds in evidence['opened'].items() for fd in fds)
+                        closed = Counter(evidence['closed'])
+                        selected_paths = state['path_properties']['Unit', 'DropInPaths']
+                        selected_reads = [row for row in evidence['reads'] if row[0] in selected_paths]
+                        trace = evidence['trace']
+                        # Durable synthetic witness BEFORE the original fatal exit.
+                        # No assertion after namespace.run() is relied on here.
+                        proof = dict(
+                            fault_reached=evidence['fired'],
+                            all_original_closes_once=opened == closed,
+                            no_owned_fds=not evidence['owned'],
+                            failed_closes=len(evidence.get('failed_closes', [])),
+                            uncertain=state['service'].control_path_binding.close_uncertain,
+                            resources_closed=owned_resources_closed,
+                            initial=state['service'].phase == 'qualifying',
+                            selected_reads=len(selected_reads),
+                            loader_reached=any(operation == 'stat' and path in {
+                                str(control_root / 'app'), str(control_root / 'scripts')
+                            } for operation, path in trace),
+                            actions=[event for event in state['events'] if event in {'prepare', 'stop', 'start'}],
+                        )
+                        (base / 'diagnostic-close-proof.json').write_text(json.dumps(proof))
+                    finally:
+                        original_envelope_close(envelope, owned_resources_closed=owned_resources_closed)
+                patch.setattr(control._SourceDescriptorEnvelope, 'close', diagnostic_envelope_close)
             original_manifest = transaction._NativePorts.source_manifest
             def observed_manifest(ports, profile, config, request, roots, backup_root):
                 manifest = original_manifest(ports, profile, config, request, roots, backup_root)
@@ -604,6 +636,54 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     sys.argv = [str(script), "rpc", channel]
     sys.stdin, output = io.StringIO(json.dumps(request)), io.StringIO()
     sys.stdout = output
+    if fault == 'path-diagnostic-role-matrix':
+        import uuid
+        sys.path.insert(0, str(checkout))
+        sys.dont_write_bytecode = True
+        sys.pycache_prefix = '/dev/null'
+        bootstrap_finder = guarded_bind_effects(checkout)
+        sys.meta_path.remove(bootstrap_finder)
+        from tests.ops.bws_control_path_diagnostic_cases import ROLE_CASES, ROLE_BATCHES, prepare_path_case
+        module, control_root = state['path_case_setup']
+        groups = [list(range(i, len(ROLE_CASES), ROLE_BATCHES)) for i in range(ROLE_BATCHES)]
+        assert set().union(*map(set, groups)) == set(range(len(ROLE_CASES)))
+        assert sum(map(len, groups)) == len(ROLE_CASES)
+        assert batch is not None and 0 <= batch < ROLE_BATCHES
+        indices = groups[batch]
+        assert 1 <= len(indices) <= 8
+        original_selected = list(state['path_properties']['Unit', 'DropInPaths'])
+        for index in indices:
+            case = ROLE_CASES[index]
+            request['operation_id'] = str(uuid.uuid4())
+            state['path_properties']['Unit', 'DropInPaths'] = original_selected if case[1] == 'path_selected' else []
+            with pytest.MonkeyPatch.context() as case_patch:
+                evidence = prepare_path_case(module, case_patch, state, state['path_properties'],
+                    control_root, state['path_properties']['Unit', 'DropInPaths'], case[0])
+                sys.stdin, output = io.StringIO(json.dumps(request)), io.StringIO()
+                sys.stdout = output
+                status = namespace['run']()
+                assert status == 0, (index, case, status, output.getvalue())
+                result = json.loads(output.getvalue())['source_installation']
+                expected = 'old_kernel_initial_root_control__' + '__'.join(case[1:])
+                assert result['status'] == 'refused_before_backup' and result['prebackup_gate'] == expected, (case, result)
+                assert all(result[key] is None for key in (
+                    'old_generation_sha256', 'new_generation_sha256', 'backup_manifest_sha256'))
+                assert evidence['fired'] and not evidence['owned'], case
+                if case[1] == 'path_absent':
+                    assert not any(path in original_selected for path, _requested, _returned in evidence['reads'])
+                assert state['service'].runtime_close_completed
+                assert not state['service'].control_path_binding.fds
+                assert state['early_sources_bound'] is True
+                assert not {'prepare', 'stop', 'start'} & set(state['events'])
+                assert not list(state['backups'].iterdir())
+                receipt_name = 'bws-source-installation-' + request['operation_id'] + '.receipt.json'
+                assert json.loads((state['receipts'] / receipt_name).read_text()) == result
+                assert 'PRIVATE_CANARY' not in output.getvalue()
+                assert resource.getrlimit(resource.RLIMIT_NOFILE) == state['original_limits']
+        sys.stdout = sys.__stdout__
+        print(json.dumps(dict(status='role-matrix', total_cases=len(ROLE_CASES), case_indices=indices,
+                              source_only=True, restored=True)))
+        return
     if fault.startswith('root-matrix'):
         import uuid
         # Bootstrap binds ports once, retaining every original source reader.
@@ -698,14 +778,6 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                               source_only=sys.pycache_prefix == '/dev/null')))
         return
     status = namespace["run"]()
-    if fault.startswith('path-diagnostic:') and fault.endswith('-close'):
-        evidence = state['path_diagnostic']
-        assert status == 78 and output.getvalue() == ''
-        assert evidence['failed_closes'] and not evidence['owned']
-        assert sum(map(len, evidence['opened'].values())) == len(evidence['closed'])
-        assert not list(state['receipts'].glob('*.receipt.json'))
-        assert not {'prepare', 'stop', 'start'} & set(state['events'])
-        raise SystemExit(status)
     if fault in {'path-preserved-prestop', 'path-preserved-after-start',
                  'path-preserved-closing', 'path-preserved-restored-drift'}:
         # Existing RPC semantics preserve unresolved ownership without a public
@@ -937,8 +1009,17 @@ def exercise_control_path_transaction(base, channel, slot, *, input_count=1, inp
                 'preserved-after-start', 'preserved-closing', 'preserved-restored-drift'}:
         assert completed.returncode == 78 and completed.stdout == '', completed.stderr
         owner = json.loads((base / 'receipts' / (channel + '.source-installation.lock')).read_text())
-        assert owner['operation_id']
+        assert owner['operation_id'] == '65752d22-1a9b-48df-a0cc-5e1087595b22'
         assert not list((base / 'receipts').glob('*.receipt.json'))
+        if slot.startswith('diagnostic:'):
+            case = slot.split(':')[1]
+            assert json.loads((base / 'diagnostic-close-proof.json').read_text()) == dict(
+                fault_reached=True, all_original_closes_once=True, no_owned_fds=True,
+                failed_closes=4 if case == 'grammar-multiple-close' else 1,
+                uncertain=True, resources_closed=False, initial=True,
+                selected_reads=0 if case == 'dir-fstat-close' else 4,
+                loader_reached=case == 'fresh-version-close', actions=[],
+            )
         if slot in {'preserved-prestop', 'preserved-after-start', 'preserved-closing', 'preserved-restored-drift'}:
             assert json.loads((base / 'preserved-drift-proof.json').read_text()) == {
                 'mode': 'path-' + slot, 'drifted': True,
@@ -1096,9 +1177,26 @@ if __name__ == "__main__":
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
 @pytest.mark.parametrize('case', __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['PATH_CASES']).PATH_CASES
-                         + __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['PATH_TOPOLOGY_CASES']).PATH_TOPOLOGY_CASES,
+                         + __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['PATH_TOPOLOGY_CASES']).PATH_TOPOLOGY_CASES
+                         + [(f'role-batch-{i}',) for i in range(__import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['ROLE_BATCHES']).ROLE_BATCHES)],
                          ids=lambda row: row[0])
 def test_initial_control_path_diagnostics_cross_verified_source_rpc(secure_tmp_path, channel, case):
+    if case[0].startswith('role-batch-'):
+        from tests.ops.bws_control_path_diagnostic_cases import ROLE_CASES, ROLE_BATCHES
+        batch = int(case[0].removeprefix('role-batch-'))
+        with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
+            completed = subprocess.run(
+                [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(secure_tmp_path),
+                 str(Path(__file__).resolve().parents[2]), channel, 'path-diagnostic-role-matrix',
+                 str(Path(directory).resolve()), str(batch), '4', '3'],
+                cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
+            )
+        assert completed.returncode == 0, completed.stderr
+        proof = json.loads(completed.stdout)
+        assert proof == dict(status='role-matrix', total_cases=len(ROLE_CASES),
+            case_indices=list(range(batch, len(ROLE_CASES), ROLE_BATCHES)), source_only=True, restored=True)
+        assert 'PRIVATE_CANARY' not in completed.stdout + completed.stderr
+        return
     result = exercise_control_path_transaction(secure_tmp_path, channel, 'diagnostic:' + case[0],
                                                input_count=4, input_index=3)
     assert result['prebackup_gate'] == 'old_kernel_initial_root_control__' + '__'.join(case[1:])

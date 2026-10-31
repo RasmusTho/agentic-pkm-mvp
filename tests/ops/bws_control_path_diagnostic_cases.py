@@ -94,8 +94,47 @@ PATH_TOPOLOGY_CASES = [
 ]
 
 
+# Independent role/operation matrix. The identity readers have no role/mode
+# branches: every original atom is exercised at every reachable initial caller.
+# retained_* requires a preexisting binding; slot_census's directory is always
+# cached by root/descent; absent selection cannot visit selected-parent/file.
+# Platform is process-constant, so unsupported platform fails first at ancestor.
+DIRECTORY_ROLE_FAULTS = (
+    ('dir-fstat', 'directory_fstat_unknown'), ('dir-type', 'directory_type'),
+    ('dir-mode', 'directory_mode'), ('dir-owner', 'directory_owner'),
+    ('dir-inherit-query', 'directory_inheritable_unknown'), ('dir-inherit', 'directory_inheritable'),
+)
+FILE_ROLE_FAULTS = (
+    ('file-fstat', 'file_fstat_unknown'), ('file-type', 'file_type'), ('file-link', 'file_link'),
+    ('file-owner', 'file_owner'), ('file-mode', 'file_mode'), ('file-zero', 'file_size_positive'),
+    ('file-large', 'file_size_bound'), ('file-inherit-query', 'file_inheritable_unknown'),
+    ('file-inherit', 'file_inheritable'), ('file-access-query', 'file_access_unknown'),
+    ('file-access', 'file_access'),
+)
+MOUNT_ROLE_FAULTS = (
+    ('mount-libc', 'mount_libc_unknown'), ('mount-buffer', 'mount_buffer_unknown'),
+    ('mount-call', 'mount_statx_unknown'), ('mount-result', 'mount_statx'),
+    ('mount-unpack', 'mount_unpack_unknown'), ('mount-mask', 'mount_mask'), ('mount-zero', 'mount_identity'),
+)
+ROLE_CASES = [
+    (f'role:{mode}:{role}:{fault}', mode, 'unknown', role, guard)
+    for mode in ('path_absent', 'path_selected')
+    for role in ('ancestor', 'control_root', 'application_root', 'launcher_root', 'backup_root',
+                 'effect_parent', 'slot_descent', 'current_directory', 'fresh_directory')
+    for fault, guard in DIRECTORY_ROLE_FAULTS + MOUNT_ROLE_FAULTS
+] + [
+    (f'role:path_selected:selected_parent:{fault}', 'path_selected', 'unknown', 'selected_parent', guard)
+    for fault, guard in DIRECTORY_ROLE_FAULTS + MOUNT_ROLE_FAULTS
+] + [
+    (f'role:path_selected:{role}:{fault}', 'path_selected', 'unknown', role, guard)
+    for role in ('selected_input', 'content_input', 'current_input', 'fresh_input')
+    for fault, guard in FILE_ROLE_FAULTS + MOUNT_ROLE_FAULTS
+] + [('role:path_absent:ancestor:mount-platform', 'path_absent', 'unknown', 'ancestor', 'mount_platform')]
+ROLE_BATCHES = (len(ROLE_CASES) + 7) // 8
+
+
 def expected_context(name):
-    return next(row[1:] for row in PATH_CASES + PATH_TOPOLOGY_CASES if row[0] == name)
+    return next(row[1:] for row in PATH_CASES + PATH_TOPOLOGY_CASES + ROLE_CASES if row[0] == name)
 
 
 def prepare_path_case(module, patch, state, properties, control, selected, case):
@@ -103,6 +142,9 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
     uncertain = case.endswith('-close')
     multiple = case == 'grammar-multiple-close'
     name = case.removesuffix('-close').removesuffix('-multiple')
+    role_case = case.split(':') if case.startswith('role:') else None
+    if role_case:
+        name = role_case[3]
     selected = tuple(Path(p) for p in selected)
     target = selected[-1] if selected else control / 'unselected-placeholder'
     environment = properties['Service', 'Environment']
@@ -167,6 +209,24 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
             path.write_bytes(('[Service]\nEnvironment=' + properties['Service', 'Environment'][1] + '\n').encode())
 
     original_os, original_fcntl = module.os, module.fcntl
+    scope_path = control
+    scope_read = 1
+    if role_case:
+        role = role_case[2]
+        scope_path = {
+            'ancestor': Path('/'), 'control_root': control,
+            'application_root': state['installed'], 'launcher_root': Path(module.LAUNCHER).parent,
+            'backup_root': state['backups'], 'effect_parent': state['installed'] / 'app/ops',
+            'selected_parent': target.parent, 'slot_descent': slot,
+            'current_directory': Path('/'), 'fresh_directory': Path('/'),
+            'selected_input': target, 'content_input': target,
+            'current_input': target, 'fresh_input': target,
+        }[role]
+        scope_read = {'content_input': 2, 'current_directory': 2, 'fresh_directory': 3,
+                      'current_input': 3, 'fresh_input': 4}.get(role, 1)
+    latest_identity = [None, 0]
+    def at_scope(path, occurrence):
+        return path == scope_path and occurrence == scope_read
     owned, counts = {}, {}
     def fail():
         evidence['fired'] = True
@@ -197,21 +257,24 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
         return fd
     def close_fd(fd):
         path = owned.pop(fd, None)
+        assert path is not None, 'unowned or repeated original close'
         called('close', path)
         if path is not None:
             evidence['closed'].append((str(path), fd))
         original_os.close(fd)
         close_target = control if name == 'dir-fstat' else Path('/') if name == 'fresh-version' else target
-        if uncertain and (path == close_target or multiple and path in selected):
+        fresh_original = name != 'fresh-version' or path != Path('/') or fd == evidence['opened']['/'][-1]
+        if uncertain and (path == close_target and fresh_original or multiple and path in selected):
             evidence.setdefault('failed_closes', []).append((str(path), fd))
             raise OSError('PRIVATE_CANARY uncertain original close')
     def fstat(fd):
         info = original_os.fstat(fd)
         path = owned.get(fd)
         occurrence = called('fstat', path)
+        latest_identity[:] = path, occurrence
         # Metadata changes happen only at the original lifecycle reads, never
         # at the real transaction/manifest/snapshot readers.
-        if path == target and occurrence == 1:
+        if (at_scope(path, occurrence) if role_case else path == target and occurrence == 1):
             fields = {
                 'file-type': dict(st_mode=stat.S_IFDIR | 0o755), 'file-link': dict(st_nlink=2),
                 'file-owner': dict(st_uid=777), 'file-mode': dict(st_mode=stat.S_IFREG | 0o644 | 0o100),
@@ -221,7 +284,7 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
                 return change(info, **fields)
             if name == 'file-fstat':
                 fail()
-        if path == control and occurrence == 1:
+        if (at_scope(path, occurrence) if role_case else path == control and occurrence == 1):
             fields = {
                 'dir-type': dict(st_mode=stat.S_IFREG | 0o644), 'dir-mode': dict(st_mode=stat.S_IFDIR | 0o777),
                 'dir-owner': dict(st_uid=777),
@@ -254,12 +317,12 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
     def inheritable(fd):
         path = owned.get(fd)
         called('inheritable', path)
-        if path == target and name in {'file-inherit', 'file-inherit-query'}:
+        if (at_scope(*latest_identity) if role_case else path == target) and name in {'file-inherit', 'file-inherit-query'}:
             if name.endswith('query'):
                 fail()
             evidence['fired'] = True
             return True
-        if path == control and name in {'dir-inherit', 'dir-inherit-query'}:
+        if (at_scope(*latest_identity) if role_case else path == control) and name in {'dir-inherit', 'dir-inherit-query'}:
             if name.endswith('query'):
                 fail()
             evidence['fired'] = True
@@ -267,7 +330,7 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
         return original_os.get_inheritable(fd)
     def access(fd, command):
         called('fcntl', owned.get(fd))
-        if owned.get(fd) == target and name in {'file-access', 'file-access-query'}:
+        if (at_scope(*latest_identity) if role_case else owned.get(fd) == target) and name in {'file-access', 'file-access-query'}:
             if name.endswith('query'):
                 fail()
             evidence['fired'] = True
@@ -364,33 +427,34 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
             assert (path, flags, mask) == (b'', 0x1900, 0x1000)
             target_path = owned.get(fd)
             called('statx', target_path)
-            if target_path == control and name == 'mount-call':
+            in_scope = at_scope(*latest_identity) if role_case else target_path == control
+            if in_scope and name == 'mount-call':
                 fail()
-            if target_path == control and name == 'mount-result':
+            if in_scope and name == 'mount-result':
                 evidence['fired'] = True
                 return -1
             mount = 1
             if name == 'file-mount' and target_path == target or name == 'parent-mount' and target_path == target.parent:
                 evidence['fired'] = True
                 mount = 2
-            if target_path == control and name == 'mount-zero':
+            if in_scope and name == 'mount-zero':
                 evidence['fired'] = True
                 mount = 0
-            mask = 0 if target_path == control and name == 'mount-mask' else 0x1000
+            mask = 0 if in_scope and name == 'mount-mask' else 0x1000
             if not mask:
                 evidence['fired'] = True
             result.raw = struct.pack('=I', mask) + b'\0' * 140 + struct.pack('=Q', mount) + b'\0' * 104
             return 0
     def libc(*_args, **_kwargs):
-        if name == 'mount-libc' and control in owned.values():
+        if name == 'mount-libc' and (at_scope(*latest_identity) if role_case else control in owned.values()):
             fail()
         return Libc()
     def buffer(*args):
-        if name == 'mount-buffer' and control in owned.values():
+        if name == 'mount-buffer' and (at_scope(*latest_identity) if role_case else control in owned.values()):
             fail()
         return real_buffer(*args)
     def unpack(*args):
-        if name == 'mount-unpack' and control in owned.values():
+        if name == 'mount-unpack' and (at_scope(*latest_identity) if role_case else control in owned.values()):
             fail()
         return real_unpack(*args)
     patch.setattr(ctypes, 'CDLL', libc)

@@ -2378,6 +2378,9 @@ def test_initial_control_path_walk_has_independent_complete_os_trace(monkeypatch
     selected = fixture.properties['Unit', 'DropInPaths']
     evidence = prepare_path_case(lifecycle, monkeypatch, fixture.state, fixture.properties,
                                  fixture.roots['control'], selected, 'valid')
+    effect_parent = fixture.roots['application'] / 'separate/effect'
+    effect_parent.mkdir(mode=0o755, parents=True)
+    fixture.arguments['installation_effect_parents'] += (str(effect_parent),)
     arguments = fixture.arguments
     binding = lifecycle._ControlPathBinding(arguments['control_root'], (str(fixture.slot),),
         arguments['installation_footprint'], arguments['installation_effect_parents'], tuple(selected))
@@ -2402,6 +2405,8 @@ def test_initial_control_path_walk_has_independent_complete_os_trace(monkeypatch
         opened.append(path)
     for name in ('control', 'application', 'launcher', 'backup'):
         directory(fixture.roots[name])
+    for path in arguments['installation_effect_parents']:
+        directory(Path(path))
     for path in selected:
         directory(Path(path).parent)
         event('open', path)
@@ -2436,3 +2441,51 @@ def test_initial_control_path_walk_has_independent_complete_os_trace(monkeypatch
                keys == (('dir_fd', True), ('follow_symlinks', False))
                for path, keys in evidence['stat_arguments'])
     assert not evidence['owned'] and not binding.fds
+
+
+def test_initial_control_path_role_exclusions_have_direct_guard_proof(monkeypatch, secure_tmp_path):
+    from types import SimpleNamespace
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(), fixture.properties, 'dev')
+    with fixture.service.retained_runtime():
+        fixture.service.qualify_old(**fixture.arguments)
+        binding = fixture.service.control_path_binding
+        # Retained reads require the successful previous walk; initial service
+        # construction is binding=None (also asserted by the actual RPC factory).
+        for path, role, guard in ((str(fixture.roots['control']), 'retained_directory', 'directory_fstat_unknown'),
+            (fixture.properties['Unit', 'DropInPaths'][0], 'retained_input', 'file_fstat_unknown')):
+            original = lifecycle.os.fstat
+            target = binding.fds[path][0]
+            fired = False
+            def unavailable(fd):
+                nonlocal fired
+                if fd == target and not fired:
+                    fired = True
+                    raise OSError('PRIVATE_CANARY')
+                return original(fd)
+            with monkeypatch.context() as patch:
+                patch.setattr(lifecycle.os, 'fstat', unavailable)
+                with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                    binding.revalidate()
+            assert fired
+            assert caught.value.root_control == ('path_selected', 'unknown', role, guard)
+        # A slot census only requests directory(current) after the root walk or
+        # each present descent already cached it; absent descent skips census.
+        # Exercise that exact real identity guard directly, without inventing a
+        # new initial producer state or replacing directory/cache logic.
+        fd = binding.fds[str(fixture.slot)][0]
+        with monkeypatch.context() as patch:
+            patch.setattr(lifecycle.os, 'fstat', lambda _fd: (_ for _ in ()).throw(OSError('PRIVATE_CANARY')))
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                binding._identity(fd, mode='path_selected', role='slot_census')
+        assert caught.value.root_control == ('path_selected', 'unknown', 'slot_census', 'directory_fstat_unknown')
+        # Unsupported process-constant platform first fails at ancestor in a
+        # complete walk. This direct later-role negative proves the same real
+        # mount guard without fabricating a mid-call platform transition.
+        with monkeypatch.context() as patch:
+            patch.setattr(lifecycle, 'sys', SimpleNamespace(platform='unsupported'))
+            from tests.ops.bws_control_path_diagnostic_cases import REAL_MOUNT
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                REAL_MOUNT(fd, mode='path_selected', role='slot_census')
+        assert caught.value.root_control == ('path_selected', 'unknown', 'slot_census', 'mount_platform')
+    assert not binding.fds and not binding.close_uncertain
