@@ -2431,6 +2431,146 @@ def test_idle_watcher_is_not_rearmed_onto_a_policy_disabled_configured_root(
     assert runtime.open_settings_rebind_store().read() == prepared
 
 
+def test_refused_first_tick_after_clear_keeps_old_root_idle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#6510: a genuine foreign prepare cannot resurrect an enabled boot config."""
+    from app.instance.default_vault import InstanceDefaultVaultService
+    from app.instance.settings_rebind import SettingsRebindActivation
+    from app.vault.manager import VaultManager
+    from tests.integration.test_multi_vault_picker_context import _running_watcher
+
+    runtime, vault_a, vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, prepare=False
+    )
+    monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "10")
+    reloads: list[Path] = []
+    monkeypatch.setattr("app.settings.ingestion.ingest_settings", _record_reload(reloads))
+    defaults = InstanceDefaultVaultService(
+        runtime.registry,
+        capability=STORAGE_MUTATION_CAPABILITY,
+        emit_event=lambda _receipt: None,
+    )
+    with _running_watcher(config_path) as initial_errors:
+        defaults.set("binding-a")
+        assert defaults.clear().vault_binding_id is None
+    assert not initial_errors
+    cleared = runtime.open_settings_rebind_store().read()
+    clear_receipt = load_settings_rebind_watcher_receipt(
+        _revision_receipt_path(tmp_path, cleared.desired_revision)
+    )
+    assert cleared.phase == "committed"
+    assert cleared.candidate_binding_id is None
+    assert clear_receipt.stage == "completed"
+    assert clear_receipt.candidate_binding_id is None
+    before = runtime.registry.load()
+
+    note = vault_a / "refused-first-tick.md"
+    note.write_text("must remain unobserved until own-root adoption\n", encoding="utf-8")
+    source_before = {root: _vault_file_bytes(root) for root in (vault_a, vault_b)}
+    events_before = _event_paths(tmp_path)
+    reloads.clear()
+    first_tick_gate = threading.Event()
+    first_tick_done = threading.Event()
+    decisions: list[tuple[str, bool, bool]] = []
+    summaries: list[dict[str, dict[str, object]]] = []
+    source_calls: list[str] = []
+    original_begin = DormantSettingsRebindReconciler.begin_cycle
+    original_tick = registry.run_registry_once.__wrapped__
+    original_wait = SettingsRebindActivation._wait_for_stage
+
+    def observe_begin(reconciler, cfg):
+        enabled_before = cfg.enable
+        cycle = original_begin(reconciler, cfg)
+        decisions.append((cycle.mode, enabled_before, cfg.enable))
+        return cycle
+
+    def observe_tick(*args, **kwargs):
+        result = original_tick(*args, **kwargs)
+        summaries.append(result)
+        return result
+
+    def release_prepared_tick(activation, record, *, required_stage):
+        if (
+            required_stage == "acknowledged"
+            and record.candidate_binding_id == "binding-b"
+        ):
+            # The real picker has prepared, and has released the ingress fence.
+            # Only then allow the enabled, preloaded watcher into its first tick.
+            assert record.phase == "prepared"
+            assert record.prior_binding_id is None
+            assert record.desired_revision == cleared.desired_revision + 1
+            assert not first_tick_done.is_set()
+            prepared_bytes = runtime.registry.path.read_bytes()
+            first_tick_gate.set()
+            assert first_tick_done.wait(timeout=5)
+            assert runtime.registry.path.read_bytes() == prepared_bytes
+        original_wait(activation, record, required_stage=required_stage)
+
+    def observe_source_call(name, original):
+        def call(*args, **kwargs):
+            source_calls.append(name)
+            return original(*args, **kwargs)
+
+        return call
+
+    monkeypatch.setattr(DormantSettingsRebindReconciler, "begin_cycle", observe_begin)
+    monkeypatch.setattr(registry.run_registry_once, "__wrapped__", observe_tick)
+    monkeypatch.setattr(SettingsRebindActivation, "_wait_for_stage", release_prepared_tick)
+    for name in (
+        "registry_scan_roots",
+        "scheduled_briefing_tick",
+        "process_journal_reviews_tick",
+    ):
+        monkeypatch.setattr(registry, name, observe_source_call(name, getattr(registry, name)))
+    import app.knowledge_acquisition.sync_runtime as sync_runtime
+
+    monkeypatch.setattr(
+        sync_runtime,
+        "run_scheduled_sync_tick",
+        observe_source_call("youtube_sync", sync_runtime.run_scheduled_sync_tick),
+    )
+
+    with _running_watcher(
+        config_path,
+        long_lived=True,
+        first_tick_gate=first_tick_gate,
+        first_tick_done=first_tick_done,
+    ) as watcher_errors:
+        monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "0.2")
+        with pytest.raises(RegistryError, match="did not reach acknowledged"):
+            VaultManager().select_vault(vault_b)
+        assert _event_paths(tmp_path) == events_before
+        assert decisions[0] == ("refused", True, False)
+        assert all(summary["ingest"]["disabled"] for summary in summaries)
+        assert all(summary["ingest"]["scanned_files"] == 0 for summary in summaries)
+        assert source_calls == reloads == []
+        assert {root: _vault_file_bytes(root) for root in (vault_a, vault_b)} == source_before
+        refused = runtime.open_settings_rebind_store().read()
+        assert refused.phase == "cancelled"
+        assert refused.prior_binding_id == "binding-a"
+        assert refused.candidate_binding_id is None
+        assert not _revision_receipt_path(tmp_path, refused.desired_revision).exists()
+        after = runtime.registry.load()
+        assert after.default_vault_binding_id == before.default_vault_binding_id is None
+        assert after.last_active_vault_ref == before.last_active_vault_ref
+
+        # The same running watcher can still re-adopt its configured root.
+        monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "10")
+        assert VaultManager().select_vault(vault_a).active_vault_path == str(vault_a)
+        readopted = runtime.open_settings_rebind_store().read()
+        receipt = load_settings_rebind_watcher_receipt(
+            _revision_receipt_path(tmp_path, readopted.desired_revision)
+        )
+        assert readopted.phase == "committed"
+        assert readopted.prior_binding_id is None
+        assert receipt.stage == "completed"
+        assert receipt.candidate_binding_id == "binding-a"
+        assert str(note) in _event_paths(tmp_path)
+    assert not watcher_errors
+
+
 def test_restart_during_post_clear_selection_keeps_cleared_root_idle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
