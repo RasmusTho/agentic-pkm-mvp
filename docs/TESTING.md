@@ -424,6 +424,11 @@ source effects. This fact projection grants no read or write permission.
 An unavailable archive environment blocks qualification; it is not an unsupported operation family.
 Neither the producer nor the runner initializes a vault, provisions a principal, grants consent,
 changes configuration or repairs projections.
+Selected-source Store, vector and relation observations are read through the existing
+`app.index.doctor.inspect_source_projections` diagnostic service, with the same explicit binding
+on all PostgreSQL providers. Missing or divergent projections remain visible, and provider failures
+propagate rather than becoming a healthy or empty result. The independent configured-backend
+doctor still runs uncached; neither read path initializes, embeds or repairs data.
 
 The empty-body authenticated admission endpoint derives versions from the existing native owners
 under their normal selection/GOV/read windows. It freezes the selection, source/configuration

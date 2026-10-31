@@ -7,7 +7,6 @@ selection and derives all versions from the same production owners as clients.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
 import hashlib
 import json
 import os
@@ -335,19 +334,13 @@ def native_probe(registry_path: Path) -> dict[str, Any]:
     context = load_context(registry_path, required=True, observation_only=True)
     assert context is not None
     require_native_fixture(context, VaultRegistryStore(registry_path))
-    from app.index.doctor import diagnose_index
-    from app.index.artifact_metadata import canonicalize_indexable_text, compute_payload_content_hash
-    from app.stores import get_object_store, get_relation_index, get_vector_index, resolve_store_backend
+    from app.index.doctor import diagnose_index, inspect_source_projections
     from app.operations.execution_kernel import JsonReceiptStore
     root = Path(context["fixture"]["root"])
-    if resolve_store_backend() == "pg":
-        from app.stores.pg import PgObjectStore, PgVectorIndex, PgRelationIndex
-        binding_id = context["fixture"]["binding_id"]
-        objects, vectors, links = (PgObjectStore(vault_binding_id=binding_id), PgVectorIndex(vault_binding_id=binding_id),
-                                   PgRelationIndex(vault_binding_id=binding_id))
-    else:
-        objects, vectors, links = get_object_store(), get_vector_index(), get_relation_index()
-    vector_rows = {str(row["object_id"]): row for row in vectors.all_rows()}
+    projections = inspect_source_projections(
+        tuple(UUID(source["artifact_id"]) for source in context["fixture"]["sources"].values()),
+        vault_binding_id=context["fixture"]["binding_id"],
+    )
     sources = {}
     def locator(value: Any) -> str | None:
         if not isinstance(value, str):
@@ -374,25 +367,19 @@ def native_probe(registry_path: Path) -> dict[str, Any]:
         if len(matches) != 1:
             raise OperationsAcceptanceRefusal("native_identity_path_drift")
         path = matches[0]
-        obj = objects.get(UUID(source["artifact_id"]))
-        payload = obj.get("payload", {}) if obj is not None else {}
-        vector = vector_rows.get(source["artifact_id"], {})
-        vector_payload = vector.get("payload", {})
+        projection = projections[source["artifact_id"]]
         source_text = path.read_text().split("---", 2)[-1].strip()
-        object_text = canonicalize_indexable_text(payload)
-        object_hash = compute_payload_content_hash(payload) if obj is not None else None
-        index_hash = vector_payload.get("provenance", {}).get("content_hash")
-        memberships = links.memberships(UUID(source["artifact_id"]))
-        neighbors = {kind: sorted(str(value) for value in links.neighbors(UUID(source["artifact_id"]), rel=kind, k=100))
-                     for kind in ("supports", "extends", "contradicts", "derived_from")}
+        object_hash = projection["store_content_hash"]
+        index_hash = projection["index_content_hash"]
+        neighbors = projection["neighbors"]
         sources[role] = {"artifact_id": source["artifact_id"], "path": path.relative_to(root).as_posix(),
             "source_sha256": file_hash(path), "store_sha256": object_hash, "index_sha256": index_hash,
-            "links_sha256": digest({"memberships": [asdict(row) | {"object_id": str(row.object_id)} for row in memberships],
-                                    "neighbors": neighbors}), "link_neighbors": neighbors,
-            "source_store_match": bool(source_text) and source_text in object_text,
+            "links_sha256": digest({"memberships": projection["memberships"], "neighbors": neighbors}),
+            "link_neighbors": neighbors,
+            "source_store_match": bool(source_text) and source_text in projection["object_text"],
             "store_index_match": object_hash is not None and object_hash == index_hash,
-            "store_locator_match": obj is not None and locator(obj.get("source_ref")) == path.relative_to(root).as_posix(),
-            "index_locator_match": locator(vector.get("source_ref")) == path.relative_to(root).as_posix(),
+            "store_locator_match": locator(projection["store_source_ref"]) == path.relative_to(root).as_posix(),
+            "index_locator_match": locator(projection["index_source_ref"]) == path.relative_to(root).as_posix(),
             "link_read_checked": not any(neighbors.values()) and "[[" not in source_text}
     store = JsonReceiptStore(registry_path.parent / "operation-receipts.json")
     receipts = {}

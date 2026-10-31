@@ -76,6 +76,53 @@ def test_native_probe_preserves_unknown_original_without_receipt_or_replay(tmp_p
     run.http.close()
 
 
+@pytest.mark.parametrize("projection", ["object", "vector", "relation", "unavailable"])
+def test_native_probe_reads_actual_projection_drift_without_repair(tmp_path, monkeypatch, projection):
+    from uuid import UUID, uuid4
+    from app.objects import resolve_object_store_port
+    from app.stores import get_relation_index, get_vector_index
+
+    instance = host(tmp_path, monkeypatch)
+    registry = instance.runtime.registry.path
+    context = load_context(registry, required=True, observation_only=True)
+    role, source = next(iter(context["fixture"]["sources"].items()))
+    object_id = UUID(source["artifact_id"])
+    objects = resolve_object_store_port(vault_binding_id=instance.binding_id).store
+    vectors, links = get_vector_index(), get_relation_index()
+    assert native_probe(registry)["source_store_index_links"]["status"] == "healthy"
+    source_bytes = {path: path.read_bytes() for path in instance.root.rglob("*.md")}
+    if projection == "object":
+        row = objects.get(object_id)
+        objects.put(object_id, kind=row["kind"], source_ref=row["source_ref"],
+                    payload={"text": "unprojected change", "content": "unprojected change"})
+    elif projection == "vector":
+        assert vectors.purge_vectors(object_id, view="default") == 1
+    elif projection == "relation":
+        links.link(object_id, uuid4(), rel="supports")
+    else:
+        def unavailable(*args, **kwargs):
+            raise RuntimeError("projection provider unavailable")
+        monkeypatch.setattr(objects, "get", unavailable)
+        with pytest.raises(RuntimeError, match="projection provider unavailable"):
+            native_probe(registry)
+        assert source_bytes == {path: path.read_bytes() for path in instance.root.rglob("*.md")}
+        return
+    original_object = deepcopy(objects.get(object_id))
+    original_vectors = deepcopy(list(vectors.all_rows()))
+    original_links = list(links.neighbors(object_id, rel="supports", k=100))
+    observed = native_probe(registry)
+    assert observed["source_store_index_links"]["status"] == "pending"
+    row = observed["sources"][role]
+    assert not row[{"object": "source_store_match", "vector": "store_index_match",
+                    "relation": "link_read_checked"}[projection]]
+    # The real diagnostic service must observe the committed drift, not fix it
+    # or substitute the canonical contract shims for these actual providers.
+    assert objects.get(object_id) == original_object
+    assert list(vectors.all_rows()) == original_vectors
+    assert links.neighbors(object_id, rel="supports", k=100) == original_links
+    assert source_bytes == {path: path.read_bytes() for path in instance.root.rglob("*.md")}
+
+
 @pytest.mark.parametrize("case", ["instance", "unknown-extension", "binding-extension", "principal", "body", "formatting", "lease-malformed", "transaction", "fingerprint-missing"])
 def test_frozen_native_authority_drift_refuses_real_effect_without_rebasing(tmp_path, monkeypatch, case):
     import json
