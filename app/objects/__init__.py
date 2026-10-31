@@ -156,6 +156,15 @@ class ObjectStore:
                 source="object_store",
                 observation=payload_fingerprint(obj.payload),
                 required_db=True,
+                # MVR-05D: a store opened for one explicit binding emits under
+                # that same stable binding; the compatibility store keeps the
+                # choke-point translation of the live scalar binding.
+                vault_binding_id=(
+                    None
+                    if self.vault_binding_id == COMPATIBILITY_BINDING_ID
+                    else self.vault_binding_id
+                ),
+                producer="ingest.object_store.save",
             )
         # Do not mirror durable state in-process: transactional producers can
         # commit through another connection, so a process-local cache cannot be

@@ -746,6 +746,7 @@ def _emit_watcher_delete_event(
             else None
         ),
         required_db=required_db,
+        producer="watcher.vault.delete_tombstone",
     )
     return "not_queued" if would_skip else "emitted"
 

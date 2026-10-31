@@ -73,5 +73,6 @@ async def ingest(req: IngestRequest, request: Request):
             trace_id,
             object_id=req.uuid,
             required_db=True,
+            producer="api.ingest.object_created",
         )
     return {"trace_id": trace_id}

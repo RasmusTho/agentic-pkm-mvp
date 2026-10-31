@@ -244,9 +244,10 @@ class _RecConn:
 def _install(monkeypatch: pytest.MonkeyPatch, conn: _RecConn, enqueue) -> dict:
     captured: dict = {}
 
-    def _spy(payload, topic, trace_id=None, *, conn=None, observation=None):  # type: ignore[no-untyped-def]
+    def _spy(payload, topic, trace_id=None, *, conn=None, observation=None, producer=None):  # type: ignore[no-untyped-def]
         captured["conn"] = conn
         captured["topic"] = topic
+        captured["producer"] = producer
         return enqueue(payload, topic, trace_id, conn=conn, observation=observation)
 
     monkeypatch.setattr(vault_sync, "_conn", lambda: conn)

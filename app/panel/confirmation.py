@@ -788,6 +788,7 @@ def _emit_projection_event(
                     idempotency_key=derive_idempotency_key(
                         outbox_evt.event, outbox_evt.event_id, EVENT_ID_FINGERPRINT
                     ),
+                    producer="shared.panel.confirmation",
                 )
                 emitted = emitted or bool(stored_id)
             except Exception as exc:

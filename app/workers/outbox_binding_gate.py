@@ -1,4 +1,8 @@
-"""MVR-05A8 binding authorization and shared-effect window for the scalar worker."""
+"""MVR-05A8 binding authorization and shared-effect window for the scalar worker.
+
+MVR-05D: a current-binding row must also carry the complete versioned
+binding/context envelope before dispatch.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ from app.instance.scalar_binding_runtime import (
     validate_frozen_binding_runtime,
 )
 from app.instance.vault_registry import RegistryError
+from app.services.outbox import binding_envelope_is_dispatchable
 
 
 class OutboxBindingDeferred(RegistryError):
@@ -73,6 +78,13 @@ def _require_current_stamp(
     if any(meta.get(key) != value for key, value in expected.items()):
         raise OutboxBindingDeferred(
             "outbox row binding authority/revision/root is stale; leaving it pending"
+        )
+    # MVR-05D: every vault-bound producer now writes the versioned
+    # binding/context envelope, so a current-binding row without a complete
+    # envelope is corrupt or ambiguous and stays pending (05A fail-closed).
+    if not binding_envelope_is_dispatchable(message):
+        raise OutboxBindingDeferred(
+            "outbox row lacks a complete MVR-05D binding/context envelope; leaving it pending"
         )
 
 

@@ -468,3 +468,223 @@ def test_blank_carrier_fails_closed_instead_of_legacy_fallback(instance, client,
     assert "notes" not in notes.json()
     assert queue.status_code in (400, 401, 409), queue.text
     assert "candidates" not in queue.json()
+
+
+def test_parent_request_context_acceptance(tmp_path, monkeypatch) -> None:
+    """MVR-05D aggregate: the parent #2143 request contract on the production seam.
+
+    One provisioned two-binding instance composes, through real API requests:
+    two-session isolation, override-over-session resolution precedence,
+    projection separation for a duplicate artifact identity, retrieval
+    provenance, governed writes with a binding/context outbox envelope, and
+    fail-closed stale selection after a restart.
+    """
+    import json
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from app.api.routes import ask as ask_routes
+    from app.api.routes import capture as capture_routes
+    from app.instance.runtime import open_default_vault_service
+    from app.retrieval import hybrid
+    from app.retrieval.capability import RetrievalRequest, retrieve
+    from app.services import outbox as outbox_service
+    from app.services.outbox_producers import OUTBOX_ENVELOPE_VERSION
+    from tests.helpers.vault_settings import initialize_test_vault
+    from tests.retrieval.test_retrieval_capability import _patch_embeddings
+
+    runtime, first, extra, _record = provisioned_instance(tmp_path, extra_roots=("two",))
+    second = extra[0]
+    for registration in (first, second):
+        initialize_test_vault(Path(registration.path))
+        runtime.complete_initialization(
+            registration.vault_binding_id,
+            vault_id="vault-" + registration.vault_binding_id,
+            local_instance_id=registration.local_instance_id,
+        )
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
+    selection_routes.reset_selection_store_for_tests()
+    client = TestClient(app)
+    first_root = Path(first.path).resolve()
+    second_root = Path(second.path).resolve()
+
+    # 1. Two-session isolation: concurrent scoped reads stay in their own vault.
+    (first_root / "only-first.md").write_text("# First\n", encoding="utf-8")
+    (second_root / "only-second.md").write_text("# Second\n", encoding="utf-8")
+    session_a = _create(client, first.vault_binding_id)
+    session_b = _create(client, second.vault_binding_id)
+    headers_a = {"X-Active-Context-Session": session_a["context_selection_id"]}
+    headers_b = {"X-Active-Context-Session": session_b["context_selection_id"]}
+
+    def scoped_notes(headers: dict) -> list[tuple[str, str]]:
+        response = client.get("/api/companion/vault/notes/scoped", headers=headers)
+        assert response.status_code == 200, response.text
+        return sorted(
+            (note["vault_binding_id"], note["path"])
+            for note in response.json()["notes"]
+            if note["path"].startswith("only-")
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        isolated = list(pool.map(scoped_notes, (headers_a, headers_b)))
+    assert isolated == [
+        [(first.vault_binding_id, "only-first.md")],
+        [(second.vault_binding_id, "only-second.md")],
+    ]
+
+    # 2. Resolution precedence: a one-request override outranks the retained
+    #    session without mutating it; the session alone resolves its own vault.
+    overridden = client.get(
+        "/api/companion/vault/context",
+        headers={**headers_a, "X-Active-Context-Override": session_b["context_selection_id"]},
+    )
+    assert overridden.status_code == 200, overridden.text
+    assert overridden.json()["active_vault_path"] == str(second_root)
+    plain = client.get("/api/companion/vault/context", headers=headers_a)
+    assert plain.status_code == 200, plain.text
+    assert plain.json()["active_vault_path"] == str(first_root)
+    retained = client.get(SELECTION_URL, headers=headers_a)
+    assert retained.status_code == 200, retained.text
+    assert retained.json()["context"]["vault_binding_ids"] == [first.vault_binding_id]
+    assert retained.json()["context"]["generation"] == session_a["context"]["generation"]
+
+    # 3. Projection separation: one artifact identity in both vaults stays
+    #    namespaced by binding in a many-binding request.
+    shared_identity = "---\nuuid: 00000000-0000-4000-8000-000000000d05\n---\n"
+    (first_root / "only-shared.md").write_text(shared_identity + "# Alpha\n", encoding="utf-8")
+    (second_root / "only-shared.md").write_text(shared_identity + "# Beta\n", encoding="utf-8")
+    both = client.post(
+        SELECTION_URL, json={"vault_binding_ids": [first.vault_binding_id, second.vault_binding_id]}
+    )
+    assert both.status_code == 201, both.text
+    many_headers = {"X-Active-Context-Session": both.json()["context_selection_id"]}
+    response = client.get("/api/companion/vault/notes/scoped", headers=many_headers)
+    assert response.status_code == 200, response.text
+    shared_rows = sorted(
+        (note["vault_binding_id"], note["title"], note["context_generation"])
+        for note in response.json()["notes"]
+        if note["path"] == "only-shared.md"
+    )
+    many_generation = both.json()["context"]["generation"]
+    assert shared_rows == sorted(
+        [
+            (first.vault_binding_id, "Alpha", many_generation),
+            (second.vault_binding_id, "Beta", many_generation),
+        ]
+    )
+
+    # 4. Retrieval provenance: the context the production request resolved is
+    #    the one retrieval filters and stamps on every hit.
+    seen: list = []
+    monkeypatch.setattr(
+        ask_routes,
+        "run_ask_graph",
+        lambda *_a, **kwargs: seen.append(kwargs["active_context"])
+        or SimpleNamespace(answer="ok", hits=[]),
+    )
+    monkeypatch.setattr(ask_routes, "_ensure_hybrid_store_loaded", lambda: None)
+    ask_routes._HYBRID_WARMED = True
+    try:
+        asked = client.post("/api/ask/scoped", json={"question": "needle?"}, headers=headers_a)
+    finally:
+        ask_routes._HYBRID_WARMED = False
+    assert asked.status_code == 200, asked.text
+    request_context = seen[-1]
+    assert request_context.binding_ids == (first.vault_binding_id,)
+    _patch_embeddings(monkeypatch)
+
+    class DurableIndex:
+        def generation_for_bindings(self, _binding_ids=None):
+            return "durable-generation-1"
+
+        def all_rows_for_bindings(self, _binding_ids=None):
+            return [
+                {
+                    "object_id": object_id,
+                    "text": "needle",
+                    "payload": {"domain": "core", "text": "needle"},
+                    "vault_binding_id": binding,
+                    "embedding": [0.1, 0.1, 0.1],
+                }
+                for object_id, binding in (
+                    ("in-a", first.vault_binding_id),
+                    ("in-b", second.vault_binding_id),
+                )
+            ]
+
+    monkeypatch.setattr("app.stores.get_vector_index", lambda: DurableIndex())
+    hybrid.reset_durable_rebuild_state()
+    hybrid.rebuild_from_durable_index(force=True)
+    try:
+        retrieved = retrieve(
+            RetrievalRequest(query="needle", k=5, scope="core", active_context=request_context)
+        )
+    finally:
+        hybrid.reset_durable_rebuild_state()
+    assert [hit.doc_id for hit in retrieved.hits] == ["in-a"]
+    assert retrieved.hits[0].payload["vault_binding_id"] == first.vault_binding_id
+    assert retrieved.hits[0].payload["context_generation"] == request_context.generation
+
+    # 5. Governed writes: one explicit authorized target inside the selected
+    #    set; its durable outbox row carries the binding/context envelope.
+    recorded: list[tuple] = []
+
+    class _Recorder:
+        def execute(self, sql, params=()):
+            recorded.append((sql, tuple(params)))
+            return SimpleNamespace(fetchone=lambda: (params[0],))
+
+        def close(self):
+            return None
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://recorder.invalid:5432/mvr05d")
+    monkeypatch.setattr(outbox_service, "_open_conn", lambda: _Recorder())
+    monkeypatch.setattr(outbox_service, "_self_owned_outbox_write_policy", lambda **_: "connect")
+    monkeypatch.setattr(capture_routes, "_offer_question_registration_proposal", lambda **_: None)
+    written = client.post(
+        "/api/companion/capture/scoped",
+        json={"text": "Parent acceptance", "target_binding_id": first.vault_binding_id},
+        headers=headers_a,
+    )
+    assert written.status_code == 200, written.text
+    receipt = written.json()["governed_write"]
+    assert receipt["decision_token"]["target_binding_id"] == first.vault_binding_id
+    assert "Parent acceptance" in (first_root / "Inbox/inbox.md").read_text(encoding="utf-8")
+    assert not (second_root / "Inbox/inbox.md").exists()
+    (insert,) = [params for sql, params in recorded if sql.lower().startswith("insert into outbox")]
+    meta = json.loads(insert[2])["meta"]
+    assert insert[6] == first.vault_binding_id
+    assert meta["outbox_envelope"] == OUTBOX_ENVELOPE_VERSION
+    assert meta["routing_class"] == "vault_bound"
+    assert meta["outbox_producer"] == "capture.appended"
+    assert meta["producer_context"] == {
+        "kind": "active_context",
+        "context_id": session_a["context"]["context_id"],
+        "context_generation": session_a["context"]["generation"],
+    }
+    refused = client.post(
+        "/api/companion/capture/scoped",
+        json={"text": "Forbidden", "target_binding_id": second.vault_binding_id},
+        headers=headers_a,
+    )
+    assert refused.status_code == 409, refused.text
+    assert not (second_root / "Inbox/inbox.md").exists()
+
+    # 6. Fail-closed stale selection: after a restart the old bearer requires
+    #    visible reselection and never falls back to the instance default.
+    open_default_vault_service(runtime.layout.registry_path).set(first.vault_binding_id)
+    selection_routes.reset_selection_store_for_tests()
+    stale_read = client.get("/api/companion/vault/notes/scoped", headers=headers_a)
+    assert stale_read.status_code == 401, stale_read.text
+    assert str(stale_read.json()["detail"]).startswith("reselection_required")
+    stale_write = client.post(
+        "/api/companion/capture/scoped",
+        json={"text": "Stale", "target_binding_id": first.vault_binding_id},
+        headers=headers_a,
+    )
+    assert stale_write.status_code in (401, 409), stale_write.text
+    assert "Stale" not in (first_root / "Inbox/inbox.md").read_text(encoding="utf-8")

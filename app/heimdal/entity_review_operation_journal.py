@@ -71,7 +71,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from app.events.models import new_event
 from app.events.types import HEIMDAL_REGISTER_ENTITY_MERGED, HEIMDAL_REGISTER_ENTITY_SPLIT
-from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+from app.instance.binding_ids import OUTBOX_QUARANTINE_BINDING_ID
 from app.services.outbox import write_outbox_event
 
 # ---------------------------------------------------------------------------
@@ -737,7 +737,12 @@ class EntityReviewOperationJournal:
                 payload=payload,
                 source=OPERATION_EVENT_SOURCE,
             )
-            write_outbox_event(event, conn=conn, idempotency_key=operation.outbox_event_id)
+            write_outbox_event(
+                event,
+                conn=conn,
+                idempotency_key=operation.outbox_event_id,
+                producer="heimdal.entity_review.merge",
+            )
             conn.commit()
             return replace(operation, state=STATE_EVENT_COMMITTED)
         except Exception:
@@ -769,11 +774,14 @@ class EntityReviewOperationJournal:
             self._validate_loaded(record, operation)
             cur = _exec(
                 conn,
+                # MVR-05D: the choke point stamps the live binding, not the
+                # retired compatibility marker. Match the producer's legacy key
+                # under any provable binding; quarantine never proves a commit.
                 "SELECT topic, payload FROM outbox "
-                "WHERE vault_binding_id = %s AND (id = %s OR legacy_key = %s) "
+                "WHERE vault_binding_id <> %s AND (id = %s OR legacy_key = %s) "
                 "ORDER BY (id = %s) DESC LIMIT 1",
                 (
-                    COMPATIBILITY_BINDING_ID,
+                    OUTBOX_QUARANTINE_BINDING_ID,
                     record.outbox_event_id,
                     record.outbox_event_id,
                     record.outbox_event_id,
@@ -961,9 +969,9 @@ class EntityRegisterSplitJournal(EntityReviewOperationJournal):
             if record is not None and record.completed:
                 for payload in record.plan["events"]:
                     event_id = split_event_id(record, payload)
-                    cur = _exec(conn, "SELECT payload FROM outbox WHERE vault_binding_id = %s "
+                    cur = _exec(conn, "SELECT payload FROM outbox WHERE vault_binding_id <> %s "
                                 "AND (id = %s OR legacy_key = %s) AND topic = %s",
-                                (COMPATIBILITY_BINDING_ID, event_id, event_id, HEIMDAL_REGISTER_ENTITY_SPLIT))
+                                (OUTBOX_QUARANTINE_BINDING_ID, event_id, event_id, HEIMDAL_REGISTER_ENTITY_SPLIT))
                     row = cur.fetchone()
                     envelope = _col(row, 0, "payload") if row is not None else None
                     if isinstance(envelope, str):
@@ -1026,10 +1034,15 @@ class EntityRegisterSplitJournal(EntityReviewOperationJournal):
             for payload in loaded.plan["events"]:
                 event = new_event(event_type=HEIMDAL_REGISTER_ENTITY_SPLIT, payload=payload, source=OPERATION_EVENT_SOURCE)
                 event_id = split_event_id(loaded, payload)
-                write_outbox_event(event, conn=conn, idempotency_key=event_id)
-                cur = _exec(conn, "SELECT payload FROM outbox WHERE vault_binding_id = %s "
+                write_outbox_event(
+                    event,
+                    conn=conn,
+                    idempotency_key=event_id,
+                    producer="heimdal.entity_review.split",
+                )
+                cur = _exec(conn, "SELECT payload FROM outbox WHERE vault_binding_id <> %s "
                             "AND (id = %s OR legacy_key = %s) AND topic = %s",
-                            (COMPATIBILITY_BINDING_ID, event_id, event_id, HEIMDAL_REGISTER_ENTITY_SPLIT))
+                            (OUTBOX_QUARANTINE_BINDING_ID, event_id, event_id, HEIMDAL_REGISTER_ENTITY_SPLIT))
                 row = cur.fetchone()
                 envelope = _col(row, 0, "payload") if row is not None else None
                 if isinstance(envelope, str):
