@@ -533,7 +533,13 @@ def test_session_selection_reuses_bindings_with_per_request_server_scope(
 
 
 @contextmanager
-def _running_watcher(config_path: Path, *, long_lived: bool = False):
+def _running_watcher(
+    config_path: Path,
+    *,
+    long_lived: bool = False,
+    first_tick_gate: threading.Event | None = None,
+    first_tick_done: threading.Event | None = None,
+):
     """Run the production watcher reconciler as an independent, separately ticking loop.
 
     The picker never calls it: it only observes the durable receipts this loop publishes,
@@ -548,8 +554,13 @@ def _running_watcher(config_path: Path, *, long_lived: bool = False):
     loaded = watcher_registry.load_registry_config(config_path) if long_lived else None
 
     def loop() -> None:
+        first_tick = True
         while not stop.is_set():
             try:
+                # Control arrival before either the writer lock or ingress fence.
+                # Foreground preparation must never wait on a fence held here.
+                if first_tick and first_tick_gate is not None:
+                    assert first_tick_gate.wait(timeout=5)
                 if loaded is None:
                     watcher_registry.run_registry_once(config_path)
                 else:
@@ -559,6 +570,9 @@ def _running_watcher(config_path: Path, *, long_lived: bool = False):
                         watcher_registry.run_registry_once.__wrapped__(
                             config_path, _loaded_config=loaded
                         )
+                if first_tick and first_tick_done is not None:
+                    first_tick_done.set()
+                first_tick = False
             except BaseException as exc:  # pragma: no cover - asserted by caller
                 errors.append(exc)
                 return
@@ -570,6 +584,8 @@ def _running_watcher(config_path: Path, *, long_lived: bool = False):
         yield errors
     finally:
         stop.set()
+        if first_tick_gate is not None:
+            first_tick_gate.set()
         thread.join(timeout=10)
         assert not thread.is_alive()
 
@@ -593,9 +609,11 @@ def _wait_until(predicate, *, timeout: float = 10.0) -> None:  # type: ignore[no
     assert predicate()
 
 
+@pytest.mark.parametrize("prepared_before_first_tick", [False, True], ids=["clear-first", "prepared-first"])
 def test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    prepared_before_first_tick: bool,
 ) -> None:
     """Legacy picker and default SET/CLEAR share one durable single-watcher handoff."""
 
@@ -790,7 +808,27 @@ def test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(
     # Activation and reconciliation must agree: the configured watcher acknowledges the
     # next first selection of its own root instead of silently answering no_lifecycle,
     # and refuses (staying idle, scanning nothing) a selection of any other root.
-    with _running_watcher(config_path, long_lived=True) as long_lived_errors:
+    first_tick_gate = threading.Event()
+    first_tick_done = threading.Event()
+    if not prepared_before_first_tick:
+        first_tick_gate.set()
+    original_wait = SettingsRebindActivation._wait_for_stage
+
+    def release_first_tick(activation, record, *, required_stage):
+        if required_stage == "acknowledged" and record.prior_binding_id is None:
+            first_tick_gate.set()
+            assert first_tick_done.wait(timeout=5)
+        original_wait(activation, record, required_stage=required_stage)
+
+    monkeypatch.setattr(SettingsRebindActivation, "_wait_for_stage", release_first_tick)
+    with _running_watcher(
+        config_path,
+        long_lived=True,
+        first_tick_gate=first_tick_gate,
+        first_tick_done=first_tick_done,
+    ) as long_lived_errors:
+        if not prepared_before_first_tick:
+            assert first_tick_done.wait(timeout=5)
         before_refusal = runtime.open_settings_rebind_store().read()
         events_before = len(_event_paths(tmp_path))
         (vault_a / "cleared-root-edit.md").write_text("must not be scanned\n", encoding="utf-8")
