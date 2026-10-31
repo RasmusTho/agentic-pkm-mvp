@@ -32,6 +32,7 @@ RUNTIME = '/opt/yggdrasil/bws-deploy-runtime/bin/python3'
 CONTROL_DIRECTORY = '/opt/yggdrasil/bws-control'
 _SYSTEMD_DIRECTORY = '/etc/systemd/system'
 _DROPIN_MAX_BYTES = 4096
+_DROPIN_MAX_INPUTS = 4
 _CONTROL_OWNER_UID = 0
 _CONTROL_OWNER_GID = 0
 PROC = Path('/proc')
@@ -140,31 +141,34 @@ _CONTROL_PATH_MAX_DIRECTORIES = 4 * 33 + 16 * 32
 
 
 def _control_path_descriptor_bound() -> int:
-    # Existing control/effect walks plus the fixed systemd ancestry, one unit
-    # directory and one selected file. Revalidation holds a second complete walk.
-    return _CONTROL_PATH_MAX_DIRECTORIES + len(Path(_SYSTEMD_DIRECTORY).parts) + 2
+    # Existing control/effect walks, fixed systemd ancestry, both supported unit
+    # directories and all selected files. Revalidation retains a second walk.
+    return (_CONTROL_PATH_MAX_DIRECTORIES + len(Path(_SYSTEMD_DIRECTORY).parts)
+            + 2 + _DROPIN_MAX_INPUTS)
 
 
-def _preserved_dropin_path(paths: Any, channel: str) -> str | None:
+def _preserved_dropin_path(paths: Any, channel: str) -> tuple[str, ...]:
     if type(paths) is not list:
         _unit_read_refuse('shape')
-    if not paths:
-        return None
-    if len(paths) != 1:
+    if len(paths) > _DROPIN_MAX_INPUTS:
         _dropin_selector_refuse('cardinality')
-    if type(paths[0]) is not str:
-        _unit_read_refuse('shape')
-    path = paths[0]
-    parent, _, name = path.rpartition('/')
     allowed = {f'{_SYSTEMD_DIRECTORY}/yggdrasil-bws-deploy@{instance}.service.d'
                for instance in ('', channel)}
-    if parent not in allowed:
-        _dropin_selector_refuse('allowed_parent')
-    if len(name) > 80:
-        _dropin_selector_refuse('basename_length')
-    if re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_.-]*\.conf', name) is None:
-        _dropin_selector_refuse('basename_grammar')
-    return path
+    names: set[str] = set()
+    for path in paths:
+        if type(path) is not str:
+            _unit_read_refuse('shape')
+        parent, _, name = path.rpartition('/')
+        if parent not in allowed:
+            _dropin_selector_refuse('allowed_parent')
+        if len(name) > 80:
+            _dropin_selector_refuse('basename_length')
+        if re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_.-]*\.conf', name) is None:
+            _dropin_selector_refuse('basename_grammar')
+        if name in names:
+            _refuse('unit_properties')
+        names.add(name)
+    return tuple(paths)
 
 
 def _dropin_selector_refuse(category: str) -> NoReturn:
@@ -240,10 +244,10 @@ class _ControlPathBinding:
 
     def __init__(self, control: dict[str, Any], slots: tuple[str, ...],
                  footprint: tuple[dict[str, Any], ...], effect_parents: tuple[str, ...],
-                 selected_dropin: str | None = None) -> None:
+                 selected_dropins: tuple[str, ...] = ()) -> None:
         self.control, self.slots, self.footprint = control, slots, footprint
         self.effect_parents = effect_parents
-        self.selected_dropin = selected_dropin
+        self.selected_dropins = selected_dropins
         self.path_assignment: str | None = None
         self.close_uncertain = False
         self.fds: dict[str, tuple[int, tuple[int, ...]]] = {}
@@ -261,7 +265,7 @@ class _ControlPathBinding:
                 stat.S_IMODE(value.st_mode), _control_path_mount(fd))
 
     def _input_identity(self, path: str, fd: int) -> tuple[int, ...]:
-        if path != self.selected_dropin:
+        if path not in self.selected_dropins:
             return self._identity(fd)
         value = os.fstat(fd)
         if (not stat.S_ISREG(value.st_mode) or value.st_nlink != 1
@@ -358,9 +362,11 @@ class _ControlPathBinding:
                 # Every admitted target's staging/replacement/restore parent,
                 # not just the top-level roots, must have this lookup view.
                 directory(path)
-            selected_projection: tuple[Any, ...] = ()
-            if self.selected_dropin is not None:
-                path = self.selected_dropin
+            # Select and inspect the entire vector before any content read. A
+            # later invalid member must never leave an adopted earlier subset.
+            selected_files: list[tuple[str, int, tuple[int, ...]]] = []
+            total_size = 0
+            for path in self.selected_dropins:
                 selected_parent, _, name = path.rpartition('/')
                 # Full root/target-parent/staging/restoration footprint is already
                 # retained above. Same-mount no-follow walks exclude bind aliases;
@@ -384,13 +390,28 @@ class _ControlPathBinding:
                         _refuse('retained_runtime')
                     raise
                 opened[path] = (fd, identity)
-                if identity[5] != opened['/'][1][5]:
+                if (identity[5] != opened['/'][1][5]
+                        or any(identity[:2] == prior[2][:2] for prior in selected_files)):
                     _refuse('root_control')
-                raw = os.pread(fd, _DROPIN_MAX_BYTES + 1, 0)
+                selected_files.append((path, fd, identity))
+                total_size += identity[7]
+            if total_size > _DROPIN_MAX_BYTES:
+                _refuse('root_control')
+            selected_projection: list[tuple[str, str, str]] = []
+            remaining = _DROPIN_MAX_BYTES
+            assignment: str | None = None
+            for path, fd, identity in selected_files:
+                # One shared budget and one sentinel for the entire walk,
+                # including growth/short-read/grammar failures.
+                raw = os.pread(fd, remaining + 1, 0)
+                remaining -= len(raw)
                 if len(raw) != identity[7] or self._input_identity(path, fd) != identity:
                     _refuse('root_control')
-                self.path_assignment = _preserved_path_assignment(raw)
-                selected_projection = (path, hashlib.sha256(raw).hexdigest(), self.path_assignment)
+                current_assignment = _preserved_path_assignment(raw)
+                if assignment is not None and current_assignment != assignment:
+                    _refuse('root_control')
+                assignment = current_assignment
+                selected_projection.append((path, hashlib.sha256(raw).hexdigest(), assignment))
             control_fd = opened[self.control['path']][0]
             for name in ('app', 'scripts'):
                 try:
@@ -455,7 +476,7 @@ class _ControlPathBinding:
                     _refuse('root_control')
                 current_fd = os.open('/' if path == '/' else name,
                                      os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-                                     | (0 if path == self.selected_dropin else os.O_DIRECTORY),
+                                     | (0 if path in self.selected_dropins else os.O_DIRECTORY),
                                      **({} if path == '/' else {'dir_fd': opened[parent_path or '/'][0]}))
                 try:
                     if self._input_identity(path, current_fd) != identity:
@@ -469,12 +490,13 @@ class _ControlPathBinding:
             snapshot: tuple[Any, ...] = (tuple((p, identity) for p, (_fd, identity) in sorted(opened.items())),
                         tuple(observations))
             if selected_projection:
-                snapshot += (selected_projection,)
+                snapshot += (tuple(selected_projection),)
             if self.snapshot is not None and snapshot != self.snapshot:
                 _refuse('root_control')
             if self.snapshot is None:
                 self.snapshot = snapshot
                 self.fds, keep = opened, True
+            self.path_assignment = assignment
             return snapshot
         except _OldQualificationRefusal:
             raise
@@ -1247,7 +1269,7 @@ class FixedBwsService:
             # The original read must retain its own refusal classification.
             dropin_paths = self._get('Unit', 'DropInPaths', 'as')
             try:
-                selected_dropin = _preserved_dropin_path(dropin_paths, self.channel)
+                selected_dropins = _preserved_dropin_path(dropin_paths, self.channel)
             except _OldQualificationRefusal as failure:
                 refinement = getattr(failure, 'unit_property', None)
                 selector_category = (
@@ -1267,7 +1289,7 @@ class FixedBwsService:
             if self._get('Unit', 'JoinsNamespaceOf', 'as') != []:
                 self._unit_property_refuse('Unit_JoinsNamespaceOf', 'value')
             loaded_projection: tuple[Any, ...] = ()
-            if selected_dropin is not None:
+            if selected_dropins:
                 # Finite effective semantics, not historical unit-byte identity.
                 # NeedDaemonReload is only a supplementary pending-change guard.
                 loaded = []
@@ -1291,13 +1313,13 @@ class FixedBwsService:
             if self.control_path_binding is None:
                 self.control_path_binding = _ControlPathBinding(
                     self.control, slots, self.installation_footprint, self.installation_effect_parents,
-                    selected_dropin,
+                    selected_dropins,
                 )
             elif (self.control_path_binding.slots != slots
-                  or self.control_path_binding.selected_dropin != selected_dropin):
+                  or self.control_path_binding.selected_dropins != selected_dropins):
                 _refuse('root_control')
             projection = self.control_path_binding.revalidate()
-            if selected_dropin is not None:
+            if selected_dropins:
                 if self.control_path_binding.path_assignment != next(value for value in environment if value.startswith('PATH=')):
                     _refuse('root_control')
                 projection += (loaded_projection,)
