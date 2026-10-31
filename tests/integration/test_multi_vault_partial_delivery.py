@@ -16,7 +16,9 @@ import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+import app.api.batch_operation_runtime as batch_runtime_module
 import app.api.routes.capture as capture_routes
+import app.api.routes.operations as operations_routes
 import app.vault.manager as vault_manager_module
 from app.api.app import app
 from app.api.compatibility_mutation import (
@@ -26,6 +28,8 @@ from app.api.compatibility_mutation import (
 )
 from app.api.routes import active_context_selection as selection_routes
 from app.api.request_governed_write import require_capture_context
+from app.instance.active_context_service import ActiveContextSelectionService
+from app.instance.context_selection import ReselectionRequiredError
 from app.instance.settings_rebind import SettingsRebindStore, _install_dormant_settings_rebind
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager
@@ -38,7 +42,20 @@ pytestmark = pytest.mark.not_pg
 
 _MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CAPABILITY_NOT_READY = {"error": "capability_not_ready", "capability": "mvr05c_scoped_write"}
-GOVERNED_CONTEXT_MUTATIONS = {("POST", "/api/companion/capture/scoped")}
+# Every graduated governed-context mutation route and the real selection
+# admission seam it resolves through: the scoped capture dependency, or the
+# production operation runtime (directly, or via the batch runtime, which
+# delegates to it and rebinds each effect item through it).
+_CAPTURE_ADMISSION = "require_capture_context"
+_OPERATION_ADMISSION = "build_production_operation_runtime"
+_BATCH_ADMISSION = "build_production_batch_runtime"
+GOVERNED_CONTEXT_MUTATIONS: dict[tuple[str, str], str] = {
+    ("POST", "/api/companion/capture/scoped"): _CAPTURE_ADMISSION,
+    ("POST", "/api/operations"): _OPERATION_ADMISSION,
+    ("POST", "/api/operations/batches/preview"): _BATCH_ADMISSION,
+    ("POST", "/api/operations/batches/{batch_id}/execute"): _BATCH_ADMISSION,
+    ("POST", "/api/operations/batches/{batch_id}/cancel"): _BATCH_ADMISSION,
+}
 
 # Mutation routes that write no vault-bound state, by endpoint module. A new
 # mutation route fails ``test_scoped_write_is_sealed_until_mvr05c`` until it is
@@ -57,6 +74,15 @@ NOT_VAULT_BOUND_MUTATIONS: dict[str, str] = {
     "app.api.routes.signboard": "the BuilderOps signboard, not a product vault",
     "app.api.routes.devui": "devUI overview synthesis over BuilderOps records",
     "app.api.routes.source_understanding": "pure P0 packet computation; persists nothing",
+}
+
+# Exact unsealed routes in an otherwise vault-bound module, by route rather
+# than module so a new sibling route still fails closed.
+NOT_VAULT_BOUND_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/operations/preconditions"): (
+        "observes native versions without executing or reserving an operation; admitted "
+        "through the production operation runtime"
+    ),
 }
 
 
@@ -182,6 +208,100 @@ def _other_process_moves_compatibility_picker(tmp_path: Path, root: Path) -> Non
     assert other.select_vault(root, remember=False).status == "selected"
 
 
+def _governed_probe_body(path: str, binding_id: str) -> dict[str, Any]:
+    if path == "/api/companion/capture/scoped":
+        return {"text": "must not land"}
+    if path == "/api/operations":
+        return {
+            "operation_id": "artifact.update", "request_id": "probe-request",
+            "active_context_ref": "probe", "vault_generation": "1",
+        }
+    if path == "/api/operations/batches/preview":
+        return {
+            "batch_id": "probe-batch", "operation_id": "artifact.update",
+            "active_context_ref": "probe", "vault_generation": "1",
+            "target_binding_id": binding_id,
+            "items": [{"request_id": "probe-item", "artifact_id": "probe", "expected_version": "1"}],
+        }
+    return {"expected_digest": "0" * 64}
+
+
+def _assert_governed_routes_resolve_selection(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    session: str,
+    binding_id: str,
+    roots: tuple[Path, ...],
+) -> None:
+    """Each governed route reaches the real selection admission through its seam.
+
+    Selection resolution is made to refuse; every governed route must have
+    reached it through its declared seam and refuse with 401 before any effect.
+    """
+
+    seams: list[str] = []
+    resolutions: list[str] = []
+
+    def refuse(self: Any, **kwargs: Any) -> Any:
+        resolutions.append(kwargs["required_permission"])
+        raise ReselectionRequiredError("probe refusal")
+
+    def recording(name: str, factory: Any) -> Any:
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            seams.append(name)
+            return factory(*args, **kwargs)
+
+        return wrapper
+
+    original_operation = operations_routes.build_production_operation_runtime
+    with monkeypatch.context() as scoped:
+        scoped.setattr(ActiveContextSelectionService, "resolve_request_context", refuse)
+        scoped.setattr(
+            operations_routes, _OPERATION_ADMISSION, recording(_OPERATION_ADMISSION, original_operation)
+        )
+        scoped.setattr(
+            operations_routes,
+            _BATCH_ADMISSION,
+            recording(_BATCH_ADMISSION, operations_routes.build_production_batch_runtime),
+        )
+        # The batch runtime admits by delegating to the production operation runtime.
+        scoped.setattr(
+            batch_runtime_module,
+            _OPERATION_ADMISSION,
+            recording(_OPERATION_ADMISSION, original_operation),
+        )
+        _probe_governed_routes(client, session, binding_id, roots, seams, resolutions)
+
+
+def _probe_governed_routes(
+    client: TestClient,
+    session: str,
+    binding_id: str,
+    roots: tuple[Path, ...],
+    seams: list[str],
+    resolutions: list[str],
+) -> None:
+    before = _tree(*roots)
+    for (method, path), seam in GOVERNED_CONTEXT_MUTATIONS.items():
+        seams.clear()
+        resolutions.clear()
+        response = client.request(
+            method,
+            _url(path),
+            headers={"X-Active-Context-Session": session},
+            json=_governed_probe_body(path, binding_id),
+        )
+        assert response.status_code == 401, (method, path, response.text)
+        assert resolutions, (method, path, "selection admission was not reached")
+        if seam == _CAPTURE_ADMISSION:
+            assert seams == [], (method, path, seams)
+        elif seam == _OPERATION_ADMISSION:
+            assert seams == [_OPERATION_ADMISSION], (method, path, seams)
+        else:
+            assert seams == [_BATCH_ADMISSION, _OPERATION_ADMISSION], (method, path, seams)
+    assert _tree(*roots) == before
+
+
 def test_scoped_write_is_sealed_until_mvr05c(tmp_path, monkeypatch) -> None:
     client, runtime, first, second = _setup(tmp_path, monkeypatch)
     root_a, root_b = Path(first.path), Path(second.path)
@@ -194,15 +314,19 @@ def test_scoped_write_is_sealed_until_mvr05c(tmp_path, monkeypatch) -> None:
         for method, path, route in _mutation_routes()
         if getattr(route.endpoint, "__governed_context_write__", False)
     }
-    assert governed == GOVERNED_CONTEXT_MUTATIONS
+    assert governed == set(GOVERNED_CONTEXT_MUTATIONS)
     for method, path, route in _mutation_routes():
-        if (method, path) in governed:
+        if GOVERNED_CONTEXT_MUTATIONS.get((method, path)) == _CAPTURE_ADMISSION:
             assert require_capture_context in _dependency_calls(route)
+    _assert_governed_routes_resolve_selection(
+        client, monkeypatch, session, first.vault_binding_id, (root_a, root_b)
+    )
     unclassified = sorted(
         f"{method} {path} ({route.endpoint.__module__})"
         for method, path, route in _mutation_routes()
         if not _is_sealed(route)
         and (method, path) not in governed
+        and (method, path) not in NOT_VAULT_BOUND_ROUTES
         and route.endpoint.__module__ not in NOT_VAULT_BOUND_MUTATIONS
     )
     assert not unclassified, "unsealed vault-bound mutation route:\n" + "\n".join(unclassified)
@@ -229,6 +353,8 @@ def test_scoped_write_is_sealed_until_mvr05c(tmp_path, monkeypatch) -> None:
         if not any(route.endpoint.__module__ == module for _m, _p, route in _mutation_routes())
     )
     assert not stale, stale
+    live_routes = {(method, path) for method, path, _route in _mutation_routes()}
+    assert set(NOT_VAULT_BOUND_ROUTES) <= live_routes
 
     before = _tree(root_a, root_b)
     carriers = (
