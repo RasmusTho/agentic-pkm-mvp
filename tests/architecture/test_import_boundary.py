@@ -354,8 +354,10 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
     # `local_operator_principal`; MVR-05A6 (#4580) adds the per-binding effect lease;
     # MVR-05A8 (#4582) adds the scalar compatibility resolver that assembles the
     # ownership fence and effect lease. SETTINGS-05A (#4967) adds the sealed dormant
-    # record transaction. All write under the same boundary and take the same seal.
+    # record transaction. MVR-06A (#3863) adds the delegated background-runtime role
+    # store. All write under the same boundary and take the same seal.
     assert _module_list(capability_section["allowed_importers"]) == {
+        "app.instance.background_authority",
         "app.instance.binding_effect_lease",
         "app.instance.local_operator_principal",
         "app.instance.ownership_ledger",

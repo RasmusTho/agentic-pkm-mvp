@@ -620,6 +620,17 @@ def run_background_authority_cutover(
     except Exception as error:
         if floor_advanced:
             try:
+                # Re-read before discarding anything: an intent generation that committed
+                # and then failed verification is a committed lineage, not this attempt's
+                # leftover, so it must never lose its role to compensation.
+                current = registry.read_existing()
+                if (
+                    current.revision != floor.revision
+                    or staged_background_intent(current) is not None
+                ):
+                    raise RegistryError(
+                        "the registry moved past this cutover's floor generation"
+                    )
                 if role_created and role is not None:
                     role_store.discard_uncommitted(
                         role.background_runtime_role_id, _capability=_capability

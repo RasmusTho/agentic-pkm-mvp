@@ -188,10 +188,11 @@ Delegated background-runtime role (MVR-06A, #3863, shipped):
 - Producer: `python -m app.instance.runtime background-authority-cutover` is the only producer of
   background identity. It runs inside the proved MVR-01B stopped deployment window, after the
   MVR-03 principal and MVR-05 floor exist, and is opted into by `MVR06_BACKGROUND_CUTOVER=1`
-  (`scripts/lib/instance_state_deployment.sh`). The same command, with `--bootstrap-kind
-  existing-install|channel|native`, serves existing-install migration and channel/native
-  bootstrap; the `tests/_mvr06_background_harness.py` fixtures drive that command rather than
-  seeding state. The lifecycle supervisor never mints an identity of its own.
+  (`scripts/lib/instance_state_deployment.sh`, which always passes `--bootstrap-kind
+  existing-install`). Channel and native bootstrap are, for now, operator-run invocations of the
+  same command with `--bootstrap-kind channel|native`; a fresh channel or native install without
+  that run stays on the pre-floor legacy path. The `tests/_mvr06_background_harness.py` fixtures
+  drive that command rather than seeding state. The lifecycle supervisor never mints an identity of its own.
 - Durable authority state: one CSPRNG-minted opaque `background_runtime_role_id` in the private,
   versioned, mode-`0600` record `background-runtime-role.json` beside the MVR-03 principal record
   (`app/instance/background_authority.py`). It records schema, revision, `delegator_role_id` (the

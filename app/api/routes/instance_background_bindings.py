@@ -49,6 +49,15 @@ def get_background_intent_service() -> BackgroundIntentAdminService:
     return open_background_intent_admin_service(_registry_path())
 
 
+def _registry_unavailable() -> HTTPException:
+    # A RegistryError message may name the registry path; the response carries a fixed
+    # code only, per the redaction contract.
+    return HTTPException(
+        status_code=503,
+        detail={"error": "registry_unavailable", "message": "instance registry is unavailable"},
+    )
+
+
 def _not_ready(exc: BackgroundIntentNotReadyError) -> HTTPException:
     return HTTPException(
         status_code=409,
@@ -66,7 +75,7 @@ def list_background_bindings(
     try:
         return service.list()
     except RegistryError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _registry_unavailable() from exc
 
 
 @router.get(
@@ -80,7 +89,7 @@ def inspect_background_binding(
     try:
         return service.inspect(vault_binding_id)
     except RegistryError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _registry_unavailable() from exc
 
 
 @router.post(

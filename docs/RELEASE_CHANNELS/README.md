@@ -204,8 +204,11 @@ background-role, delegation, intent, or compatibility field. Compatibility postu
   registry, principal, or vault access. Scalar rollback is already refused by the MVR-05 floor. A
   rollback to such an image therefore leaves the channel down rather than half-started; recovery
   is a roll-forward to a compatible image, never a projection that discards background intent.
-- **Floor lowering:** none. Only the cutover's own compensation may remove an MVR-06 floor, and only
-  when that same attempt committed no intent.
+- **Floor lowering:** no producer lowers it. Only the cutover's own compensation removes an MVR-06
+  floor, and only when that same attempt committed no intent. An operator `deployment-finish
+  --restore-root` of a pre-floor backup returns the channel to MVR-05 state and may leave an inert
+  `background-runtime-role.json` (ignored before the floor and reused or refused by the next
+  cutover); that restore is an explicit operator recovery, not a rollback path.
 
 ## Invariants (MUST hold)
 

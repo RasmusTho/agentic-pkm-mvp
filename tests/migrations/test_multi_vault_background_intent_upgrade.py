@@ -275,3 +275,22 @@ def test_background_role_and_intent_set_mvr06_floor_before_first_write(
     assert refused["_exit_code"] == 1
     assert "compensation is unproven" in refused["error"]
     assert "keep the deployment stopped" in refused["provisioning_action"]
+
+    # -- 6. an intent that committed before a later failure is never compensated ---------
+    committed, _, _, _ = mvr05_instance(tmp_path / "committed")
+    original_install = VaultRegistryStore.install_background_intent
+
+    def _commit_then_fail(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        original_install(self, *args, **kwargs)
+        raise RegistryError("injected post-commit fault")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(VaultRegistryStore, "install_background_intent", _commit_then_fail)
+        refused = run_background_cutover_through_cli(committed)
+    assert refused["_exit_code"] == 1
+    assert "compensation is unproven" in refused["error"]
+    kept = _lineage(committed)
+    # The committed lineage keeps its floor, intent, and role; nothing was discarded.
+    assert kept["schema"] == BACKGROUND_INTENT_REGISTRY_SCHEMA
+    assert kept["intent"] is not None and kept["role_exists"] is True
+    assert _preflight(committed, "worker") == 0
