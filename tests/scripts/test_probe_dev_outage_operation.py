@@ -345,7 +345,7 @@ def unit_metadata(binding, clock):
         TimeoutStopFailureMode="terminate",
         RuntimeDirectory="yggdrasil-host-probe-dev",
         StateDirectory="yggdrasil-host-probe-dev",
-        LoadCredentialEncrypted="bws-machine-account-token:/qualified/synthetic-token/dev/current",
+        LoadCredentialEncrypted=":".join(target.DEV_CREDENTIAL),
         StandardOutput="journal",
         StandardError="journal",
         ProtectSystem="strict",
@@ -413,9 +413,9 @@ class Command:
                 self.owner.unit = dict(envelope.original)
             data = b""
         elif argv == target.systemd("show"):
-            data = "".join(
-                key + "=" + self.owner.unit[key] + "\n" for key in target.UNIT_KEYS
-            ).encode()
+            data = manager_show(argv, self.owner.unit)
+        elif argv == target.dev_credential_property():
+            data = manager_credential_property(argv, self.owner.unit)
         elif argv == target.systemd("stop"):
             self.owner.unit.update(
                 ActiveState="inactive",
@@ -810,7 +810,12 @@ class FixedDevAdapterTests(unittest.TestCase):
             DropInPaths="",
         )
         if absent:
-            h.unit.update(LoadState="not-found", UnitFileState="not-found", FragmentPath="")
+            h.unit.update(
+                LoadState="not-found",
+                UnitFileState="not-found",
+                FragmentPath="",
+                LoadCredentialEncrypted="[unprintable]",
+            )
         qualification = target.InstallationQualification(
             "/var/lib",
             7,
@@ -1649,16 +1654,31 @@ class NativeSelector:
 
 
 def manager_show(argv, fields):
-    """Real show projection: empty structure arrays emit no line, even --all."""
+    """Actual show projection, including generic a(ss) [unprintable] output."""
     keys = next(
         arg.removeprefix("--property=") for arg in argv if arg.startswith("--property=")
     ).split(",")
     arrays = {"EnvironmentFiles", "ExecStart", "ExecStop", "ExecStopPost"}
     return "".join(
-        key + "=" + fields[key] + "\n"
+        key + "=" + ("[unprintable]" if key == "LoadCredentialEncrypted" else fields[key]) + "\n"
         for key in keys
         if key in fields and (fields[key] or key not in arrays and "--all" in argv)
     ).encode()
+
+
+def manager_credential_property(argv, fields):
+    assert argv == (
+        "/usr/bin/busctl",
+        "--json=short",
+        "get-property",
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1/unit/yggdrasil_2dhost_2dprobe_40dev_2eservice",
+        "org.freedesktop.systemd1.Service",
+        "LoadCredentialEncrypted",
+    )
+    assert fields["LoadState"] == "loaded", "No Service getter exists for absent unit"
+    rows = [fields["LoadCredentialEncrypted"].split(":", 1)]
+    return json.dumps({"type": "a(ss)", "data": rows}, separators=(",", ":")).encode()
 
 
 class DockerDiscoveryProducer:
@@ -2208,6 +2228,8 @@ class NativeKernel:
             return manager_show(argv, fields)
         if argv == target.systemd("show"):
             return manager_show(argv, self.unit)
+        if argv == target.dev_credential_property():
+            return manager_credential_property(argv, self.unit)
         if argv == target.systemd("stop"):
             self.unit.update(
                 ActiveState="inactive",
@@ -2276,6 +2298,197 @@ def _native(self):
     assembly = target.assemble_native(kernel.scope, kernel.dependencies, custody)
     self.addCleanup(assembly.files.close)
     return kernel, assembly
+
+
+def test_typed_credential_metadata_qualifies_actual_unprintable_producer(self):
+    kernel, assembly = _native(self)
+    self.assertIn(
+        b"LoadCredentialEncrypted=[unprintable]\n",
+        manager_show(target.systemd("show"), kernel.unit),
+    )
+    raw = target.read_dev_unit(assembly.caller.run)
+    unit = target.parse_unit(raw)
+    target.normal_unit(unit, kernel.scope.binding)
+    self.assertEqual(":".join(target.DEV_CREDENTIAL), unit["LoadCredentialEncrypted"])
+    self.assertEqual(
+        [target.systemd("show"), target.dev_credential_property()] * 2,
+        [process.argv for process in kernel.processes],
+    )
+    self.assertFalse(any(path == kernel.scope.credential_source for path in kernel.os.opened))
+    self.assertTrue(all(selector.closed for selector in kernel.selectors))
+    self.assertTrue(all(process.returncode == 0 for process in kernel.processes))
+    count = len(kernel.processes)
+    getter = target.dev_credential_property()
+    for argv, effect in (
+        (getter, True),
+        (getter[:-1] + ("SetCredentialEncrypted",), False),
+        (tuple(part.replace("_40dev_", "_40prod_") for part in getter), False),
+    ):
+        with self.assertRaises(target.Refusal):
+            assembly.caller.command.run(
+                argv,
+                timeout=1,
+                limit=8192,
+                effect=effect,
+                original_handle=kernel.scope.handle.fingerprint,
+            )
+    self.assertEqual(count, len(kernel.processes))
+
+
+def test_typed_credential_metadata_refuses_malformed_foreign_drift_and_lost_reads(self):
+    expected = list(target.DEV_CREDENTIAL)
+    values = {
+        "null": None,
+        "list": [],
+        "missing_type": {"data": [expected]},
+        "wrong_type": {"type": "as", "data": [expected]},
+        "extra_field": {"type": "a(ss)", "data": [expected], "extra": True},
+        "empty": {"type": "a(ss)", "data": []},
+        "duplicate_row": {"type": "a(ss)", "data": [expected, expected]},
+        "flat": {"type": "a(ss)", "data": expected},
+        "mapping_row": {"type": "a(ss)", "data": [{"id": expected[0], "path": expected[1]}]},
+        "extra_column": {"type": "a(ss)", "data": [[*expected, "extra"]]},
+        "wrong_id": {"type": "a(ss)", "data": [["another-token", expected[1]]]},
+        "wrong_channel": {
+            "type": "a(ss)",
+            "data": [[expected[0], expected[1].replace("/dev/", "/prod/")]],
+        },
+        "suffix_only": {"type": "a(ss)", "data": [[expected[0], "/foreign/dev/current"]]},
+        "relative_path": {"type": "a(ss)", "data": [[expected[0], "dev/current"]]},
+        "non_string": {"type": "a(ss)", "data": [[expected[0], True]]},
+    }
+    cases = list(values) + [
+        "invalid_json",
+        "duplicate_key",
+        "oversized",
+        "second_getter_drift",
+        "profile_drift",
+        "wrong_unit",
+        "aliased_unit",
+        "printable_mismatch",
+        "getter_nonzero",
+        "getter_deadline",
+    ]
+    for index, case in enumerate(cases):
+        with self.subTest(case=case):
+            if index:
+                self.fresh()
+            kernel, assembly = _native(self)
+            before = dict(kernel.os.files)
+            response = kernel.response
+            reads = {"show": 0, "typed": 0}
+
+            def metadata(argv, payload):
+                if argv == target.systemd("show"):
+                    reads["show"] += 1
+                    if case == "profile_drift" and reads["show"] == 2:
+                        kernel.unit["ProtectSystem"] = "full"
+                    if case == "wrong_unit":
+                        kernel.unit["Id"] = "yggdrasil-host-probe@prod.service"
+                    if case == "aliased_unit":
+                        kernel.unit["Names"] += " foreign.service"
+                    raw = response(argv, payload)
+                    if case == "printable_mismatch":
+                        return raw.replace(b"[unprintable]", b"another-token:/foreign/dev/current")
+                    return raw
+                if argv != target.dev_credential_property():
+                    return response(argv, payload)
+                reads["typed"] += 1
+                if case in values:
+                    return json.dumps(values[case]).encode()
+                if case == "invalid_json":
+                    return b"not-json"
+                if case == "duplicate_key":
+                    return b'{"type":"a(ss)","type":"a(ss)","data":[]}'
+                if case == "oversized":
+                    return b" " * 8193
+                if case == "second_getter_drift" and reads["typed"] == 2:
+                    return json.dumps(values["wrong_channel"]).encode()
+                if case == "getter_nonzero":
+                    kernel.forced_returncodes = {argv: 1}
+                if case == "getter_deadline":
+                    kernel.clock.value = assembly.caller.deadline + 1
+                return response(argv, payload)
+
+            kernel.response = metadata
+            with self.assertRaises((target.Refusal, target.Unknown)):
+                target.DevProbeAdapter(
+                    kernel.scope.binding, assembly.caller, assembly.files
+                ).admit()
+            self.assertEqual(before, kernel.os.files)
+            self.assertEqual([], self.h.deliveries)
+            self.assertFalse(
+                any(
+                    process.argv in {target.systemd("start"), target.systemd("stop")}
+                    for process in kernel.processes
+                )
+            )
+            self.assertFalse(
+                any(path == kernel.scope.credential_source for path in kernel.os.opened)
+            )
+            self.assertTrue(all(selector.closed for selector in kernel.selectors))
+            self.assertTrue(
+                all(
+                    pipe.closed
+                    for process in kernel.processes
+                    for pipe in (process.stdin, process.stdout, process.stderr)
+                )
+            )
+
+
+def test_typed_credential_metadata_preserves_absence_and_owned_restart_cancellation(self):
+    kernel, assembly = _native(self)
+    absent = dict(kernel.unit)
+    absent.update(
+        LoadState="not-found",
+        ActiveState="inactive",
+        SubState="dead",
+        MainPID="0",
+        UnitFileState="",
+        DropInPaths="",
+        FragmentPath="",
+        Job="",
+        NRestarts="0",
+    )
+    kernel.unit = absent
+    unit = target.parse_unit(target.read_dev_unit(assembly.caller.run), allow_absent=True)
+    self.assertEqual("not-found", unit["LoadState"])
+    self.assertEqual([target.systemd("show")], [process.argv for process in kernel.processes])
+
+    self.fresh()
+    kernel, assembly, guard = _armed_native_fault(self)
+    incident = (self.root / "native-incident.json").read_bytes()
+    kernel.unit.update(
+        ActiveState="activating",
+        SubState="auto-restart",
+        MainPID="0",
+        Job="41 /org/freedesktop/systemd1/job/41",
+        NRestarts="1",
+    )
+    kernel._processes()
+    response = kernel.response
+    changed = []
+
+    def advance_owned_job(argv, payload):
+        raw = response(argv, payload)
+        if argv == target.dev_credential_property() and not changed:
+            changed.append(True)
+            kernel.unit.update(
+                ActiveState="active",
+                SubState="running",
+                MainPID="7777",
+                Job="",
+                InvocationID="7" * 32,
+            )
+            kernel._processes()
+        return raw
+
+    kernel.response = advance_owned_job
+    result = target.cleanup_owned_dev_fault(assembly, guard.record)
+    self.assertEqual("unknown", result["status"])
+    self.assertEqual("0", kernel.unit["MainPID"])
+    self.assertEqual(incident, (self.root / "native-incident.json").read_bytes())
+    self.assertTrue(changed)
 
 
 def test_actual_linux_reader_computes_fixed_child_stream_source_worker_health(self):
