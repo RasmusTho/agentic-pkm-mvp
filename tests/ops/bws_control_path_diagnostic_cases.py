@@ -130,6 +130,47 @@ ROLE_CASES = [
     for role in ('selected_input', 'content_input', 'current_input', 'fresh_input')
     for fault, guard in FILE_ROLE_FAULTS + MOUNT_ROLE_FAULTS
 ] + [('role:path_absent:ancestor:mount-platform', 'path_absent', 'unknown', 'ancestor', 'mount_platform')]
+# directory() operations are outside the shared identity reader. Ancestor mount
+# crossing uses the first non-root ancestor (the root itself has no parent).
+ROLE_CASES += [
+    (f'role:{mode}:{role}:{fault}', mode, 'unknown', role, guard)
+    for mode in ('path_absent', 'path_selected')
+    for role in ('ancestor', 'control_root', 'application_root', 'launcher_root', 'backup_root',
+                 'effect_parent', 'slot_descent')
+    for fault, guard in (('walk-open', 'open_unknown'), ('walk-mount', 'mount_crossing'))
+] + [
+    (f'role:path_selected:selected_parent:{fault}', 'path_selected', 'unknown', 'selected_parent', guard)
+    for fault, guard in (('walk-open', 'open_unknown'), ('walk-mount', 'mount_crossing'))
+]
+# All non-file walk semantics/operations also run with the validated empty
+# vector. Prefix tests happen before selection, and file-only rows cannot run.
+ABSENT_CASES = [
+    ('empty-vector/' + row[0], 'path_absent', *row[2:])
+    for row in PATH_CASES + PATH_TOPOLOGY_CASES
+    if row[1] == 'path_selected' and row[3] in {
+        'roots', 'loader_app', 'loader_scripts', 'slot_descent', 'slot_census',
+        'absent_edge', 'current_edge', 'fresh_edge',
+    }
+]
+RESOURCE_CASES = [
+    (name, mode, 'unknown', role, guard)
+    for mode in ('path_absent', 'path_selected')
+    for name, role, guard in (
+        ('deep-application', 'application_root', 'directory_component_bound'),
+        ('deep-effect', 'effect_parent', 'directory_component_bound'),
+        ('manifest-effect-bound', 'effect_parents', 'bound'),
+        ('manifest-effect-directory-bound', 'effect_parent', 'descriptor_bound'),
+        ('manifest-effect-ancestor-bound', 'ancestor', 'descriptor_bound'),
+        ('manifest-slot-bound', 'slot_descent', 'descriptor_bound'),
+    )
+] + [
+    (name, 'path_selected', 'unknown', role, 'descriptor_bound')
+    for name, role in (
+        ('manifest-selected-parent-bound', 'selected_parent'),
+        ('manifest-selected-ancestor-bound', 'ancestor'),
+        ('manifest-file-bound', 'selected_file'),
+    )
+]
 ROLE_BATCHES = (len(ROLE_CASES) + 7) // 8
 
 
@@ -152,7 +193,7 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
     slot = Path(assignment[5:].split(':')[1])
     evidence = dict(fired=False, trace=[], opened={}, closed=[], reads=[], target=target,
                     original_environment=tuple(environment), open_arguments=[], stat_arguments=[])
-    if name in {row[0] for row in PATH_TOPOLOGY_CASES}:
+    if name in {row[0] for row in PATH_TOPOLOGY_CASES + RESOURCE_CASES}:
         evidence['fired'] = True
     if name in {'population', 'hints', 'absolute', 'backslash', 'canonical', 'components',
                 'misleading', 'duplicate'}:
@@ -222,6 +263,8 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
             'selected_input': target, 'content_input': target,
             'current_input': target, 'fresh_input': target,
         }[role]
+        if name == 'walk-mount' and role == 'ancestor':
+            scope_path = list(reversed(control.parents))[1]
         scope_read = {'content_input': 2, 'current_directory': 2, 'fresh_directory': 3,
                       'current_input': 3, 'fresh_input': 4}.get(role, 1)
     latest_identity = [None, 0]
@@ -247,6 +290,8 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
         full = resolved(path, kwargs)
         occurrence = called('open', full)
         evidence['open_arguments'].append((str(full), flags, tuple(sorted(kwargs))))
+        if name == 'walk-open' and full == scope_path and occurrence == 1:
+            fail()
         if (name == 'dir-open' and full == control or name == 'file-open' and full == target
                 or name == 'fresh-open' and full == Path('/') and occurrence == 2):
             fail()
@@ -434,6 +479,9 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
                 evidence['fired'] = True
                 return -1
             mount = 1
+            if name == 'walk-mount' and at_scope(*latest_identity):
+                evidence['fired'] = True
+                mount = 2
             if name == 'file-mount' and target_path == target or name == 'parent-mount' and target_path == target.parent:
                 evidence['fired'] = True
                 mount = 2

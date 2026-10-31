@@ -27,6 +27,13 @@ _ROOT_RPC_BATCHES = {'empty': 5, 'anchored': 4, 'alias': 1, 'proposed': 1, 'unce
 def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path,
               batch: int | None = None, input_count: int = 1, input_index: int = 0) -> None:
     """Run in a disposable interpreter; no native configuration is consulted."""
+    scenario = fault.split(':')[1] if fault.startswith('path-diagnostic:') else ''
+    application_fixture_root = base / 'checkout'
+    if scenario == 'deep-application':
+        application_fixture_root = base / 'deep_application'
+        while len(application_fixture_root.parts) - 1 < 33:
+            application_fixture_root /= 'nested'
+    generated_sources = []
     # Keep actual Git commands/bytes/readers on macOS, using a regular stdin
     # file for the external batch transport after observing blocked pipe writes.
     if sys.platform == 'darwin':
@@ -53,6 +60,53 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
             shutil.copyfile(source, target)
             target.chmod(0o755 if target.name == "postgres_deploy_service.py" else 0o644)
+    resource_scenarios = {
+        'deep-application', 'deep-effect', 'manifest-effect-bound',
+        'manifest-effect-directory-bound', 'manifest-effect-ancestor-bound', 'manifest-slot-bound',
+        'manifest-selected-parent-bound', 'manifest-selected-ancestor-bound', 'manifest-file-bound',
+    }
+    if scenario in resource_scenarios - {'deep-application'}:
+        if scenario == 'deep-effect':
+            parent = Path('app') / 'deep_effect'
+            while len(application_fixture_root.parts) - 1 + len(parent.parts) < 33:
+                parent /= 'nested'
+            parents = [parent]
+        elif scenario == 'manifest-effect-bound':
+            parents = [Path('app') / f'effect_{i:04d}' for i in range(645)]
+        else:
+            # Independent fixture topology arithmetic, not a changed capacity
+            # producer. The root/effect/selected walks still open every real FD.
+            systemd = base / 'systemd' if input_count else Path('/etc/systemd/system')
+            capacity = 4 * 33 + 16 * 32 + len(systemd.parts) + 2 + 4
+            known = set()
+            for path in (base / 'control', application_fixture_root, base / 'launcher', base / 'backup',
+                         application_fixture_root / 'app/ops', application_fixture_root / 'config/secrets'):
+                known.update((path, *path.parents))
+            delta, extra = {
+                'manifest-effect-directory-bound': (1, 3),
+                'manifest-effect-ancestor-bound': (2, 4),
+                'manifest-slot-bound': (-7 if input_count else 0, 0),
+                'manifest-selected-parent-bound': (-1, 2),
+                'manifest-selected-ancestor-bound': (0, 3),
+                'manifest-file-bound': (-2, 0),
+            }[scenario]
+            count = capacity + delta - len(known) - extra
+            assert 1 <= count <= 641
+            parents = [Path('app') / f'capacity_{i:04d}' for i in range(count)]
+            parents[0] /= Path(*(['nested'] * extra)) if extra else Path('.')
+            public_walk = set(known)
+            for parent in parents:
+                path = application_fixture_root / parent
+                public_walk.update((path, *path.parents))
+            assert len(public_walk) == capacity + delta
+            assert all(len((application_fixture_root / path).parts) - 1 <= 32 for path in parents)
+        for parent in parents:
+            relative = parent / 'source.py'
+            target = checkout / relative
+            target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            target.write_bytes(b'VALUE = "public synthetic candidate"\n')
+            target.chmod(0o644)
+            generated_sources.append(relative)
     contract = checkout / "config/secrets/host_secret_contract.json"
     contract.parent.mkdir(mode=0o755, parents=True)
     shutil.copyfile(repository / "config/secrets/host_secret_contract.json", contract)
@@ -93,12 +147,16 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         from tests.ops.test_bws_installation_transaction import _ordinary_terminal_installation_fixture
 
         patch = pytest.MonkeyPatch()
-        _ordinary_terminal_installation_fixture(base, patch, channel, journal_root=journal_root)
+        _ordinary_terminal_installation_fixture(base, patch, channel, journal_root=journal_root,
+                                                 application_root=application_fixture_root)
         config = linux.LinuxConfig.load(channel)
         installed = config.root
         state.update(config=config, installed=installed, transaction=transaction, control=control)
         for package in ("app", "scripts"):
             shutil.copytree(checkout / package, installed / package)
+        for relative in generated_sources:
+            previous = installed / relative
+            previous.write_bytes(b'# public synthetic previous generation\n' + previous.read_bytes())
         (installed / "config/secrets").mkdir(mode=0o755, parents=True)
         shutil.copyfile(repository / "tests/ops/fixtures/host_secret_contract_legacy.json",
                         installed / "config/secrets/host_secret_contract.json")
@@ -462,6 +520,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 assert effects and len(set(effects)) == len(effects)
                 assert all(any(path == root['path'] or path.startswith(root['path'] + '/')
                                for root in footprint[:2]) for path in effects)
+                assert {path.as_posix() for path in generated_sources} <= {change.path for change in changes}
                 return manifest
             patch.setattr(transaction._NativePorts, 'source_manifest', observed_manifest)
             real_service = transaction._NativePorts.service
@@ -552,7 +611,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         linux._rpc_via_supervisor = supervisor_rpc
 
         # Only this disposable child receives a finite synthetic resource ceiling.
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 512 if fault in {"hard", "path-preserved-hard"} else 8192))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256 if scenario in resource_scenarios else 64,
+                                                512 if fault in {"hard", "path-preserved-hard"} else 8192))
         state["original_limits"] = resource.getrlimit(resource.RLIMIT_NOFILE)
         if fault in {"unknown", "path-preserved-unknown"}:
             control._source_descriptor_capacity_snapshot = lambda: None
@@ -608,11 +668,11 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                "candidate_sha": revision, "image_digest": "sha256:" + "b" * 64, "bundle_name": "assembled"}
     # run() still reads its root-owned configuration boundary, sets cwd, ignores
     # bytecode and dispatches the exact verified candidate before native imports.
-    installed_root = base / "checkout"
+    installed_root = application_fixture_root
     config_file = base / "launcher.json"
     config_file.write_text(json.dumps({"root": str(installed_root)}))
     config_file.chmod(0o600)
-    installed_root.mkdir(mode=0o755)
+    installed_root.mkdir(mode=0o755, parents=True, exist_ok=True)
     real_open, real_fstat = os.open, os.fstat
     config_descriptors = set()
     def open_target(path, flags, *args, **kwargs):
@@ -645,7 +705,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         sys.meta_path.remove(bootstrap_finder)
         from tests.ops.bws_control_path_diagnostic_cases import ROLE_CASES, ROLE_BATCHES, prepare_path_case
         module, control_root = state['path_case_setup']
-        groups = [list(range(i, len(ROLE_CASES), ROLE_BATCHES)) for i in range(ROLE_BATCHES)]
+        groups = [list(range(i * 8, min((i + 1) * 8, len(ROLE_CASES)))) for i in range(ROLE_BATCHES)]
         assert set().union(*map(set, groups)) == set(range(len(ROLE_CASES)))
         assert sum(map(len, groups)) == len(ROLE_CASES)
         assert batch is not None and 0 <= batch < ROLE_BATCHES
@@ -808,7 +868,11 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     assert not hasattr(sys, "_yggdrasil_bws_source_rpc_process")
     if fault.startswith('path-diagnostic'):
         from tests.ops.bws_control_path_diagnostic_cases import expected_context
-        context = expected_context(fault.split(':')[1])
+        case_name = fault.split(':')[1]
+        from tests.ops.bws_control_path_diagnostic_cases import RESOURCE_CASES
+        context = (next(row[1:] for row in RESOURCE_CASES if row[0] == case_name
+                        and row[1] == ('path_selected' if input_count else 'path_absent'))
+                   if case_name in {row[0] for row in RESOURCE_CASES} else expected_context(case_name))
         if not input_count and context[0] == 'path_selected':
             context = ('path_absent', *context[1:])
         expected = 'old_kernel_initial_root_control__' + '__'.join(context)
@@ -1178,11 +1242,13 @@ if __name__ == "__main__":
 @pytest.mark.parametrize('channel', ['dev', 'test'])
 @pytest.mark.parametrize('case', __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['PATH_CASES']).PATH_CASES
                          + __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['PATH_TOPOLOGY_CASES']).PATH_TOPOLOGY_CASES
+                         + __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['ABSENT_CASES']).ABSENT_CASES
+                         + [('resource/' + row[1] + '/' + row[0], *row[1:]) for row in __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['RESOURCE_CASES']).RESOURCE_CASES]
                          + [(f'role-batch-{i}',) for i in range(__import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['ROLE_BATCHES']).ROLE_BATCHES)],
                          ids=lambda row: row[0])
 def test_initial_control_path_diagnostics_cross_verified_source_rpc(secure_tmp_path, channel, case):
     if case[0].startswith('role-batch-'):
-        from tests.ops.bws_control_path_diagnostic_cases import ROLE_CASES, ROLE_BATCHES
+        from tests.ops.bws_control_path_diagnostic_cases import ROLE_CASES
         batch = int(case[0].removeprefix('role-batch-'))
         with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
             completed = subprocess.run(
@@ -1194,8 +1260,15 @@ def test_initial_control_path_diagnostics_cross_verified_source_rpc(secure_tmp_p
         assert completed.returncode == 0, completed.stderr
         proof = json.loads(completed.stdout)
         assert proof == dict(status='role-matrix', total_cases=len(ROLE_CASES),
-            case_indices=list(range(batch, len(ROLE_CASES), ROLE_BATCHES)), source_only=True, restored=True)
+            case_indices=list(range(batch * 8, min((batch + 1) * 8, len(ROLE_CASES)))), source_only=True, restored=True)
         assert 'PRIVATE_CANARY' not in completed.stdout + completed.stderr
+        return
+    if case[0].startswith(('empty-vector/', 'resource/')):
+        name = case[0].removeprefix('empty-vector/') if case[0].startswith('empty-vector/') else case[0].split('/')[2]
+        count = 0 if case[1] == 'path_absent' else 4
+        result = exercise_control_path_transaction(secure_tmp_path, channel, 'diagnostic:' + name,
+                                                   input_count=count)
+        assert result['prebackup_gate'] == 'old_kernel_initial_root_control__' + '__'.join(case[1:])
         return
     result = exercise_control_path_transaction(secure_tmp_path, channel, 'diagnostic:' + case[0],
                                                input_count=4, input_index=3)
