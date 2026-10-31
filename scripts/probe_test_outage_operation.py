@@ -53,6 +53,10 @@ PACKAGE_PATHS = (
     PROBE,
 )
 PREP = Path(__file__).resolve().parent
+TEST_CREDENTIAL = (
+    "bws-machine-account-token",
+    "/var/lib/yggdrasil/bws-tokens/test/current",
+)
 UNIT_KEYS = (
     "Id",
     "Names",
@@ -817,6 +821,64 @@ def unit_profile(unit: dict[str, str], *, cleanup: bool = False) -> dict[str, An
     }
 
 
+def test_credential_property() -> tuple[str, ...]:
+    return (
+        "/usr/bin/busctl",
+        "--json=short",
+        "get-property",
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1/unit/yggdrasil_2dhost_2dprobe_40test_2eservice",
+        "org.freedesktop.systemd1.Service",
+        "LoadCredentialEncrypted",
+    )
+
+
+def read_test_unit(command: Callable[..., bytes]) -> bytes:
+    """Join the fixed unit profile to its typed credential ID/path metadata.
+
+    systemctl can render a(ss) as [unprintable]. Only the exact typed D-Bus
+    property establishes the binding; neither that marker nor a path suffix
+    does. Both typed reads must qualify around a stable unit/config profile.
+    Transient job/process state may advance; return the later actual sample.
+    Every read uses the caller's existing finite process/byte/close budget.
+    """
+    raw = command(systemd("show"))
+    first = systemctl_fields(raw, UNIT_KEYS)
+    if first["LoadState"] == "not-found":
+        # An absent unit needs no credential getter. parse_unit still has to
+        # positively qualify absence before temporary staging is permitted.
+        return raw
+    snapshots = []
+    expected = ":".join(TEST_CREDENTIAL)
+    for fields in (first, None):
+        if fields is None:
+            fields = systemctl_fields(command(systemd("show")), UNIT_KEYS)
+        if (
+            fields["Id"] != UNIT
+            or fields["Names"].split() != [UNIT]
+            or fields["LoadState"] != "loaded"
+            or fields["LoadCredentialEncrypted"] not in {"[unprintable]", expected}
+        ):
+            raise Refusal("typed_credential_unit_or_projection_unqualified")
+        raw_property = command(test_credential_property(), limit=8192)
+        try:
+            value = json.loads(raw_property, object_pairs_hook=unique)
+        except (ValueError, UnicodeError):
+            raise Refusal("typed_test_credential_metadata_malformed") from None
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"type", "data"}
+            or value["type"] != "a(ss)"
+            or value["data"] != [list(TEST_CREDENTIAL)]
+        ):
+            raise Refusal("typed_test_credential_binding_unqualified")
+        fields["LoadCredentialEncrypted"] = expected
+        snapshots.append(fields)
+    if unit_profile(snapshots[0], cleanup=True) != unit_profile(snapshots[1], cleanup=True):
+        raise Unknown("typed_credential_unit_profile_changed_during_read")
+    return "".join(key + "=" + snapshots[1][key] + "\n" for key in UNIT_KEYS).encode()
+
+
 def test_cgroup(path: str) -> bool:
     # Instantiated services normally live below a per-template subslice.
     parts = PurePosixPath(path).parts
@@ -968,7 +1030,7 @@ def normal_unit(unit: dict[str, str], binding: Binding) -> None:
     }.items():
         if unit[key] != value:
             raise Refusal("normal_runtime_state_hardening_or_stream_unqualified")
-    if not unit["LoadCredentialEncrypted"].endswith("/test/current"):
+    if unit["LoadCredentialEncrypted"] != ":".join(TEST_CREDENTIAL):
         raise Refusal("normal_test_systemd_credential_unqualified")
     finite_stop_seconds(unit)
 
@@ -1610,7 +1672,7 @@ class TestProbeAdapter:
 
     def _observe(self, *, active: bool, health: bool = False) -> tuple[dict[str, str], Runtime]:
         assert self.current_config is not None
-        unit = parse_unit(self.caller.run(systemd("show")))
+        unit = parse_unit(read_test_unit(self.caller.run))
         if (unit["ActiveState"] == "active") is not active:
             raise Unknown("test_service_state_unconfirmed")
         runtime = self.caller.read_runtime(self.binding, health=health)
@@ -2272,7 +2334,7 @@ class TemporaryTestInstallation:
             raise Refusal("temporary_test_installation_replay")
         self.binding.require(self.caller)
         source, directories = exact_source(archive, manifest, self.caller)
-        self.original = parse_unit(self.caller.run(systemd("show")), allow_absent=True)
+        self.original = parse_unit(read_test_unit(self.caller.run), allow_absent=True)
         if self.original["ActiveState"] != "inactive":
             raise Refusal("use_existing_active_test_adapter_instead")
         self.qualification.require(self.binding, self.original)
@@ -2393,7 +2455,7 @@ class TemporaryTestInstallation:
         finally:
             self.caller.close("staged_config_binding", lambda: self.ops.close(descriptor))
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
-        loaded = parse_unit(self.caller.run(systemd("show")))
+        loaded = parse_unit(read_test_unit(self.caller.run))
         if (
             loaded["ActiveState"] != "inactive"
             or loaded["WorkingDirectory"] != native_source
@@ -2420,7 +2482,7 @@ class TemporaryTestInstallation:
                 raise Unknown("source_or_unit_drift_before_first_launch")
         config = self.files.read("config")
         assert config is not None
-        unit = parse_unit(self.caller.run(systemd("show")))
+        unit = parse_unit(read_test_unit(self.caller.run))
         if unit["ActiveState"] != "inactive" or unit_profile(unit) != unit_profile(
             self.installed_unit
         ):
@@ -2542,7 +2604,7 @@ class TemporaryTestInstallation:
             finally:
                 self.caller.close("owned_rmdir_parent", lambda: self.ops.close(parent))
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
-        restored = parse_unit(self.caller.run(systemd("show")), allow_absent=True)
+        restored = parse_unit(read_test_unit(self.caller.run), allow_absent=True)
         if (
             unit_profile(restored) != unit_profile(self.original)
             or restored["ActiveState"] != "inactive"
@@ -2761,6 +2823,8 @@ class NativeCommand:
         self.safe, self.bounded = namespace["_safe_command"], namespace["_bounded_process"]
 
     def _allowed(self, argv: tuple[str, ...], effect: bool) -> None:
+        if argv == test_credential_property() and not effect:
+            return
         if argv in {
             systemd("show"),
             systemd("start"),
@@ -3719,7 +3783,7 @@ class LinuxRuntimeReader:
         if self.caller is None or original_handle != self.scope.handle.fingerprint:
             raise Refusal("native_runtime_not_assembled_to_original_handle")
         boot, owner = self._selection(binding)
-        first = parse_unit(self.caller.run(systemd("show")), allow_absent=True)
+        first = parse_unit(read_test_unit(self.caller.run), allow_absent=True)
         preinstallation = (
             first["ActiveState"] != "active"
             and not require_health
@@ -3732,7 +3796,7 @@ class LinuxRuntimeReader:
         initial = None
         while True:
             self.caller.check()
-            unit = parse_unit(self.caller.run(systemd("show")), allow_absent=True)
+            unit = parse_unit(read_test_unit(self.caller.run), allow_absent=True)
             active = unit["ActiveState"] == "active"
             identity = tuple(
                 unit[key] for key in ("InvocationID", "MainPID", "ExecMainStartTimestampMonotonic")
@@ -3825,7 +3889,7 @@ class LinuxRuntimeReader:
         if require_health:
             ready_status, _ = self.http.get(binding.api_base + "/readyz", binding)
             health_status, health = self.http.get(binding.api_base + "/api/health", binding)
-        again = parse_unit(self.caller.run(systemd("show")), allow_absent=True)
+        again = parse_unit(read_test_unit(self.caller.run), allow_absent=True)
         if unit_profile(again) != unit_profile(unit) or any(
             again[key] != unit[key] for key in VOLATILE
         ):
@@ -4304,7 +4368,7 @@ def run_fixed_test_worker(
 ) -> dict[str, Any]:
     """One finite native program, including normal cadence, with no send retry."""
     scope, caller, files = assembly.scope, assembly.caller, assembly.files
-    original = parse_unit(caller.run(systemd("show")), allow_absent=True)
+    original = parse_unit(read_test_unit(caller.run), allow_absent=True)
     installation = None
     guard = None
 
@@ -4713,7 +4777,7 @@ class NativeFaultGuard:
                 self.caller.close("owned_operation_marker", lambda: self.ops.close(descriptor))
             self.caller.close("owned_operation_marker_parent", lambda: self.ops.close(parent))
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
-        guarded = parse_unit(self.caller.run(systemd("show")))
+        guarded = parse_unit(read_test_unit(self.caller.run))
         if (
             "YGG_TEST_OPERATION=" + self.scope.handle.operation
             not in guarded["Environment"].split()
@@ -4855,7 +4919,7 @@ class NativeFaultGuard:
                 self.caller.close("guard_parent_removal", lambda: self.ops.close(parent))
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
 
-        restored = parse_unit(self.caller.run(systemd("show")))
+        restored = parse_unit(read_test_unit(self.caller.run))
         if unit_profile(restored) != unit_profile(self.before_unit):
             raise Unknown("original_unit_profile_not_restored_after_owned_marker")
 
@@ -4894,7 +4958,7 @@ def cleanup_owned_test_fault(assembly: NativeAssembly, record: dict[str, Any]) -
     guarded = record["guarded_unit"]
 
     def observe() -> dict[str, str]:
-        value = parse_unit(caller.run(systemd("show")), allow_restarts=True, cleanup_states=True)
+        value = parse_unit(read_test_unit(caller.run), allow_restarts=True, cleanup_states=True)
         if unit_profile(value, cleanup=True) != unit_profile(guarded, cleanup=True):
             raise Unknown("guard_refuses_foreign_test_profile")
         normal_unit(value, binding)
@@ -5390,7 +5454,7 @@ def discover_fixed_test_producer(
         host_meta.st_ino,
     ):
         raise Refusal("observed_worker_heartbeat_translation_not_same_inode")
-    unit_raw = command(systemd("show"))
+    unit_raw = read_test_unit(command)
     unit = parse_unit(unit_raw, allow_absent=True)
     sdk_path = (
         unit["ExecStart"].split("path=", 1)[1].split(" ;", 1)[0]
