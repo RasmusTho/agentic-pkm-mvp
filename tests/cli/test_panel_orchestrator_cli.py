@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -22,13 +23,22 @@ from app.stores.plan_store import get_plan_store, reset_plan_store
 
 pytestmark = pytest.mark.not_pg
 
+# These functional callers reach Product model access on the panel runtime /
+# promotion path; enroll only them in the scoped deterministic gateway (#6504).
+_product_gateway = pytest.mark.usefixtures("product_model_access_gateway")
+
 
 def _seed_note(note_uuid: str, markdown: str) -> None:
+    # Panel runtime acknowledges only after a source CAS inside a bound vault
+    # (#5333); an ObjectStore-only note cannot stand in for that source.
+    note_file = Path(os.environ["VAULT_ROOT"]) / "vault" / f"{note_uuid}.md"
+    note_file.parent.mkdir(parents=True, exist_ok=True)
+    note_file.write_text(markdown, encoding="utf-8")
     obj = DomainObject(
         uuid=note_uuid,
         kind="note",
         payload={"raw_text": markdown, "origin": "vault"},
-        source_ref="vault/Note.md",
+        source_ref=str(note_file),
         created_at=datetime.now(timezone.utc),
     )
     ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-panel-plan")
@@ -41,9 +51,10 @@ def _read_outbox(path: Path) -> list[dict]:
 
 
 @pytest.fixture(autouse=True)
-def _reset_state() -> None:
+def _reset_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     object_store_module._MEMORY_STORE.clear()
     reset_plan_store()
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
 
 
 def test_promotion_tool_executes_and_emits_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,6 +121,7 @@ def test_panel_orchestrate_plan_cli_executes_plan(tmp_path: Path, monkeypatch: p
     assert "promote.intent.created" in event_names
 
 
+@_product_gateway
 def test_panel_planner_plan_can_be_executed_after_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     note_uuid = str(uuid4())
     markdown = """%% AI:Start %%
@@ -128,6 +140,7 @@ mappings:
   - id: promote.evergreen
     label: "Gör denna anteckning evergreen"
     intent_type: promotion
+    trust_verb: APPLY
     downstream_event: review.promote.evergreen
     params:
       maturity: evergreen
