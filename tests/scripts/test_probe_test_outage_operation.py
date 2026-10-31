@@ -1647,7 +1647,8 @@ class DockerDiscoveryProducer:
             r"{{json \.([A-Za-z.]+)}}", lambda match: json.dumps(field(match[1])), output
         )
         output = output.replace("{{.State.Pid}}", str(row["State"]["Pid"]))
-        assert "{{" not in output and "}}" not in output
+        # Adjacent closing braces are ordinary JSON for nested mappings.
+        assert "{{" not in output
         return (output + "\n").encode()
 
 
@@ -2397,7 +2398,7 @@ def test_discovery_uses_actual_docker_projection_and_refuses_unsupported_binding
         "heartbeat_setting_duplicated",
         "worker_wrong_channel",
         "different_candidate_image",
-        "dual_stack_publication",
+        "mixed_scope_dual_stack_publication",
         "unpublished_api",
         "ambiguous_heartbeat_mount",
     )
@@ -2443,7 +2444,7 @@ def test_discovery_uses_actual_docker_projection_and_refuses_unsupported_binding
                 worker["Config"]["Env"][0] = "PKM_ENVIRONMENT=prod"
             elif case == "different_candidate_image":
                 worker["Image"] = "sha256:" + "d" * 64
-            elif case == "dual_stack_publication":
+            elif case == "mixed_scope_dual_stack_publication":
                 api["NetworkSettings"]["Ports"]["8000/tcp"].append(
                     {"HostIp": "::", "HostPort": "47777"}
                 )
@@ -2489,6 +2490,94 @@ def test_discovery_uses_actual_docker_projection_and_refuses_unsupported_binding
                     "label=com.docker.compose.project=observed-test-project",
                     "--format",
                     "{{.ID}}",
+                ),
+                docker.calls,
+            )
+            self.assertEqual(before, kernel.os.files)
+            self.assertFalse(any(p.argv[0] == "/usr/bin/systemd-run" for p in kernel.processes))
+            self.assertFalse(
+                any(
+                    p.argv in {target.systemd("start"), target.systemd("stop")}
+                    for p in kernel.processes
+                )
+            )
+
+
+def test_discovery_accepts_only_one_ipv4_route_and_its_same_port_ipv6_twin(self):
+    v4 = {"HostIp": "0.0.0.0", "HostPort": "47777"}
+    local = {"HostIp": "127.0.0.1", "HostPort": "47777"}
+    v6 = {"HostIp": "::", "HostPort": "47777"}
+    cases = (
+        ("wildcard_ipv4", [v4], True),
+        ("loopback_ipv4", [local], True),
+        ("wildcard_twin", [v4, v6], True),
+        ("reversed_wildcard_twin", [v6, v4], True),
+        ("loopback_with_wildcard_twin", [local, v6], False),
+        ("reversed_loopback_with_wildcard_twin", [v6, local], False),
+        ("conflicting_ports", [v4, {**v6, "HostPort": "47778"}], False),
+        ("two_ipv4_routes", [v4, local], False),
+        ("duplicate_ipv4", [v4, v4], False),
+        ("duplicate_ipv6", [v6, v6], False),
+        ("third_route", [v4, v6, local], False),
+        ("ipv6_only", [v6], False),
+        ("other_ipv6", [v4, {**v6, "HostIp": "::1"}], False),
+        ("other_ipv4", [{**v4, "HostIp": "192.0.2.10"}, v6], False),
+        ("non_string_ip", [{**v4, "HostIp": []}], False),
+        ("extra_field", [{**v4, "extra": "value"}], False),
+        ("missing_ip", [{"HostPort": "47777"}], False),
+        ("missing_port", [{"HostIp": "0.0.0.0"}], False),
+        ("null_row", [None], False),
+        ("string_row", ["0.0.0.0:47777"], False),
+        ("integer_port", [{**v4, "HostPort": 47777}], False),
+        ("boolean_port", [{**v4, "HostPort": True}], False),
+        ("unicode_port", [{**v4, "HostPort": "٤٧٧٧٧"}], False),
+        ("leading_zero_port", [{**v4, "HostPort": "04777"}], False),
+        ("zero_port", [{**v4, "HostPort": "0"}], False),
+        ("out_of_range_port", [{**v4, "HostPort": "65536"}], False),
+        ("unpublished", None, False),
+        ("empty", [], False),
+        ("mapping_instead_of_rows", v4, False),
+    )
+    for index, (case, publications, accepted) in enumerate(cases):
+        with self.subTest(case=case):
+            if index:
+                self.fresh()
+            kernel, assembly = _native(self)
+            docker = DockerDiscoveryProducer()
+            docker.containers[0]["NetworkSettings"]["Ports"]["8000/tcp"] = publications
+            original, before = kernel.response, dict(kernel.os.files)
+
+            def response(argv, payload):
+                return docker(argv) if argv[0] == "/usr/bin/docker" else original(argv, payload)
+
+            kernel.response = response
+
+            def discover():
+                return target.discover_fixed_test_producer(
+                    kernel.dependencies,
+                    (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
+                    deadline=1100,
+                )
+
+            if accepted:
+                facts = discover()
+                self.assertEqual("http://127.0.0.1:47777", facts["api_base"])
+                self.assertEqual(
+                    ["a" * 64, "b" * 64], [row[1] for row in facts["candidate_references"]]
+                )
+                self.assertEqual("9:223", facts["heartbeat_backing"])
+            else:
+                with self.assertRaisesRegex(
+                    target.Refusal, "actual_test_api_publication_ambiguous_or_unsupported"
+                ):
+                    discover()
+            self.assertIn(
+                (
+                    "/usr/bin/docker",
+                    "inspect",
+                    "--format",
+                    target.DOCKER_TEST_API_METADATA,
+                    "a" * 12,
                 ),
                 docker.calls,
             )
@@ -3445,6 +3534,10 @@ def test_cold_four_file_bootstrap_reaches_observed_sdk_without_preseeded_source(
         kernel.scope.binding.sdk_realpath if path == kernel.scope.binding.sdk else path
     )
     docker = DockerDiscoveryProducer()
+    docker.containers[0]["NetworkSettings"]["Ports"]["8000/tcp"] = [
+        {"HostIp": "::", "HostPort": "47777"},
+        {"HostIp": "0.0.0.0", "HostPort": "47777"},
+    ]
     response, actual_path, calls, handoffs = kernel.response, Path, [], []
 
     def namespace_path(value):
