@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from dataclasses import asdict
 import threading
 import time
 from typing import Any, Dict
+from uuid import UUID
 
 from app.components.embeddings import EmbeddingIdentity
 from app.components.llm.fabric import LLMTaskIntent, get_embeddings_client
@@ -15,6 +17,54 @@ except Exception:  # pragma: no cover - memory backend optional in some contexts
     MemoryVectorIndex = None  # type: ignore
 
 _RECONCILE_HINT = "python -m app.cli index reconcile"
+
+
+def inspect_source_projections(
+    object_ids: tuple[UUID, ...], *, vault_binding_id: str
+) -> dict[str, dict[str, Any]]:
+    """Read selected committed object/vector/relation facts without repairing them.
+
+    This is the diagnostic service boundary for consumers that need actual
+    projection observations, rather than Store handles or the legacy contract
+    shims. PostgreSQL reads use the selected binding on every provider. The
+    explicitly configured memory backend keeps its existing process-local
+    semantics. Missing projections remain missing; provider failures propagate.
+    This query neither warms the retrieval cache nor invokes embedding/repair.
+    """
+    from app.index.artifact_metadata import canonicalize_indexable_text, compute_payload_content_hash
+    from app.objects import resolve_object_store_port
+    from app.stores import get_relation_index
+
+    binding = resolve_object_store_port(vault_binding_id=vault_binding_id)
+    vectors: Any
+    links: Any
+    if binding.backend == "pg":
+        from app.stores.pg import PgRelationIndex, PgVectorIndex
+
+        vectors = PgVectorIndex(vault_binding_id=vault_binding_id)
+        links = PgRelationIndex(vault_binding_id=vault_binding_id)
+    else:
+        vectors, links = get_vector_index(), get_relation_index()
+    requested = {str(object_id) for object_id in object_ids}
+    vector_rows = {str(row["object_id"]): row for row in vectors.all_rows()
+                   if str(row["object_id"]) in requested}
+    result = {}
+    for object_id in object_ids:
+        obj = binding.store.get(object_id)
+        payload = obj.get("payload", {}) if obj is not None else {}
+        vector = vector_rows.get(str(object_id), {})
+        memberships = links.memberships(object_id)
+        result[str(object_id)] = {
+            "object_text": canonicalize_indexable_text(payload),
+            "store_content_hash": compute_payload_content_hash(payload) if obj is not None else None,
+            "store_source_ref": obj.get("source_ref") if obj is not None else None,
+            "index_content_hash": vector.get("payload", {}).get("provenance", {}).get("content_hash"),
+            "index_source_ref": vector.get("source_ref"),
+            "memberships": [asdict(row) | {"object_id": str(row.object_id)} for row in memberships],
+            "neighbors": {kind: sorted(str(value) for value in links.neighbors(object_id, rel=kind, k=100))
+                          for kind in ("supports", "extends", "contradicts", "derived_from")},
+        }
+    return result
 
 
 def _load_pg_diagnostics() -> tuple[Any, Any, Any, Any, Any] | None:

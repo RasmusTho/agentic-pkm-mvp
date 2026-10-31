@@ -16,6 +16,7 @@ from app.middleware.trace import TraceIdMiddleware
 from app.observability import configure_metrics, setup_logging
 from app.observability.status_service import register_source_understanding_availability_provider
 from app.api.routes.operations import router as operations_router
+from app.api.native_operations_acceptance import router as operations_acceptance_router
 
 try:
     from app.api.routes.ingest import router as ingest_router
@@ -387,6 +388,7 @@ def _create_app() -> FastAPI:
     application.mount("/static", StaticFiles(directory=static_dir), name="static")
     configure_metrics(application)
     application.include_router(operations_router, prefix="/api")
+    application.include_router(operations_acceptance_router, prefix="/api")
 
     if ingest_router is not None:
         application.include_router(ingest_router)
