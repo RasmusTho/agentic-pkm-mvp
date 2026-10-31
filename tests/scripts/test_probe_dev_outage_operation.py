@@ -1344,9 +1344,17 @@ class MemoryLinuxOS:
             {},
         )
         self.next_fd, self.next_inode, self.opened, self.closed = 2000, 3000, [], []
+        # The fake filesystem hosts the imported source at the registered caller
+        # path even when pytest imports its bytes from a different CI checkout.
+        # Capture before remote roles temporarily change the module's __file__.
+        imported_program = target.__file__
         self.path = SimpleNamespace(
             realpath=lambda path: (
-                kernel.scope.binding.sdk_realpath if path == kernel.scope.binding.sdk else path
+                target.LOCAL_DEV_PROGRAM
+                if path == imported_program
+                else kernel.scope.binding.sdk_realpath
+                if path == kernel.scope.binding.sdk
+                else path
             )
         )
         self.current_directory = target.LOCAL_DEV_WORKTREE
@@ -1740,7 +1748,7 @@ class DockerDiscoveryProducer:
             r"{{json \.([A-Za-z.]+)}}", lambda match: json.dumps(field(match[1])), output
         )
         output = output.replace("{{.State.Pid}}", str(row["State"]["Pid"]))
-        assert "{{" not in output and "}}" not in output
+        assert "{{" not in output
         return (output + "\n").encode()
 
 
@@ -2598,6 +2606,84 @@ def test_discovery_uses_actual_docker_projection_and_refuses_unsupported_binding
             )
 
 
+def test_discovery_qualifies_exact_ipv4_and_matching_wildcard_pair_from_raw_inspect(self):
+    def row(address, port="47777"):
+        return {"HostIp": address, "HostPort": port}
+
+    cases = (
+        ("loopback", [row("127.0.0.1")], True),
+        ("wildcard", [row("0.0.0.0")], True),
+        ("wildcard_pair", [row("0.0.0.0"), row("::")], True),
+        ("wildcard_pair_reversed", [row("::"), row("0.0.0.0")], True),
+        ("minimum_port", [row("0.0.0.0", "1"), row("::", "1")], True),
+        ("maximum_port", [row("0.0.0.0", "65535"), row("::", "65535")], True),
+        ("missing", None, False),
+        ("empty", [], False),
+        ("mapping", row("0.0.0.0"), False),
+        ("null_row", [None], False),
+        ("string_row", ["0.0.0.0:47777"], False),
+        ("missing_address", [{"HostPort": "47777"}], False),
+        ("missing_port", [{"HostIp": "0.0.0.0"}], False),
+        ("extra_field", [dict(row("0.0.0.0"), Unexpected="value")], False),
+        ("object_address", [row({"address": "0.0.0.0"})], False),
+        ("integer_port", [row("0.0.0.0", 47777)], False),
+        ("boolean_port", [row("0.0.0.0", True)], False),
+        ("leading_zero", [row("0.0.0.0", "047777")], False),
+        ("unicode_digits", [row("0.0.0.0", "４７７７７")], False),
+        ("space_port", [row("0.0.0.0", "47777 ")], False),
+        ("plus_port", [row("0.0.0.0", "+47777")], False),
+        ("zero_port", [row("0.0.0.0", "0")], False),
+        ("overflow_port", [row("0.0.0.0", "65536")], False),
+        ("ipv6_only", [row("::")], False),
+        ("ipv6_loopback", [row("::1")], False),
+        ("loopback_and_ipv6", [row("127.0.0.1"), row("::")], False),
+        ("foreign_ipv4", [row("192.0.2.7")], False),
+        ("two_ipv4", [row("127.0.0.1"), row("0.0.0.0")], False),
+        ("duplicate_ipv4", [row("0.0.0.0"), row("0.0.0.0")], False),
+        ("duplicate_ipv6", [row("::"), row("::")], False),
+        ("three_rows", [row("0.0.0.0"), row("::"), row("::")], False),
+        ("different_ports", [row("0.0.0.0"), row("::", "47778")], False),
+    )
+    for index, (name, published, accepted) in enumerate(cases):
+        with self.subTest(publication=name):
+            if index:
+                self.fresh()
+            kernel = NativeKernel(self.h)
+            docker = DockerDiscoveryProducer()
+            docker.containers[0]["NetworkSettings"]["Ports"]["8000/tcp"] = published
+            response, before = kernel.response, dict(kernel.os.files)
+            kernel.response = lambda argv, payload: (
+                docker(argv) if argv[0] == "/usr/bin/docker" else response(argv, payload)
+            )
+
+            def discover():
+                return target.discover_fixed_dev_producer(
+                    kernel.dependencies,
+                    (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
+                    deadline=1100,
+                )
+
+            if accepted:
+                facts = discover()
+                self.assertEqual("http://127.0.0.1:" + published[0]["HostPort"], facts["api_base"])
+            else:
+                with self.assertRaisesRegex(
+                    target.Refusal, "actual_dev_api_publication_ambiguous_or_unsupported"
+                ):
+                    discover()
+            self.assertEqual(2, sum(argv[1] == "inspect" for argv in docker.calls))
+            self.assertEqual(before, kernel.os.files)
+            self.assertFalse(any(p.argv[0] == "/usr/bin/systemd-run" for p in kernel.processes))
+            self.assertFalse(
+                any(
+                    p.argv in {target.systemd("start"), target.systemd("stop")}
+                    for p in kernel.processes
+                )
+            )
+            self.assertFalse(kernel.os.fds)
+            self.assertTrue(all(selector.closed for selector in kernel.selectors))
+
+
 class MappedNativeOS:
     """Privileged syscall boundary mapped only into one real private fixture."""
 
@@ -2979,6 +3065,7 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
         with self.subTest(packet=changed):
             with self.assertRaisesRegex(target.Refusal, expected):
                 invoke(dict(packet, **changed))
+    imported_program = target.__file__
     for foreign in ("cwd", "module", "program"):
         with self.subTest(actual_entry=foreign):
             original_program = kernel.os.files[target.LOCAL_DEV_PROGRAM]
@@ -2991,7 +3078,7 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
             with patch.object(
                 target,
                 "__file__",
-                "/foreign/program.py" if foreign == "module" else target.LOCAL_DEV_PROGRAM,
+                "/foreign/program.py" if foreign == "module" else imported_program,
             ):
                 with self.assertRaises(target.Refusal):
                     invoke()
@@ -3514,9 +3601,6 @@ def test_cold_four_file_bootstrap_reaches_observed_sdk_without_preseeded_source(
         ExecStopPost="",
         Type="",
         Environment="",
-    )
-    kernel.os.path.realpath = lambda path: (
-        kernel.scope.binding.sdk_realpath if path == kernel.scope.binding.sdk else path
     )
     docker = DockerDiscoveryProducer()
     response, actual_path, calls, handoffs = kernel.response, Path, [], []
@@ -4268,6 +4352,8 @@ def whole_native_call(
     foreign_state_after_guard=False,
     original_state_directory_present=False,
     original_service_inactive=False,
+    api_publication=None,
+    publication_refused=False,
 ):
     """Current local entry -> serialized program -> first preflight -> real drill."""
     import contextlib, io
@@ -4364,6 +4450,8 @@ def whole_native_call(
     for path in (packet["gh_executable"], packet["caller_interpreter"]):
         kernel.os.add(path, b"existing qualified local executable", mode=0o755)
     docker = DockerDiscoveryProducer()
+    if api_publication is not None:
+        docker.containers[0]["NetworkSettings"]["Ports"]["8000/tcp"] = api_publication
     original_response, calls, stages = kernel.response, [], []
     original_path = Path
 
@@ -4505,6 +4593,14 @@ def whole_native_call(
                 except SDKExited as exit_status:
                     if exit_status.args:
                         kernel.forced_returncodes[argv] = exit_status.args[0]
+                except module.Refusal as refusal:
+                    if not publication_refused:
+                        raise
+                    case.assertEqual(
+                        "actual_dev_api_publication_ambiguous_or_unsupported", str(refusal)
+                    )
+                    kernel.forced_returncodes[argv] = 78
+                    stages.append("publication-refused-before-sdk")
                 else:
                     raise AssertionError("SDK exec must replace the bootstrap")
             kernel.supervisor.update(ActiveState="inactive", SubState="dead", MainPID="0", Job="")
@@ -4635,7 +4731,12 @@ def whole_native_call(
                     local_inputs + "custody.py",
                 ]
             )
-        case.assertEqual(78 if unhealthy_before_install or foreign_state_after_guard else 0, code)
+        case.assertEqual(
+            78
+            if unhealthy_before_install or foreign_state_after_guard or publication_refused
+            else 0,
+            code,
+        )
         result = json.loads(output.getvalue())
     except target.Unknown:
         if not lost_transport_ack:
@@ -4659,6 +4760,37 @@ def whole_native_call(
         )
     )
     case.assertEqual(1, sum(argv[0] == "/usr/bin/ssh" for argv in calls))
+    if publication_refused:
+        case.assertEqual(
+            ["serialized-remote-entry", "cold-first-preflight", "publication-refused-before-sdk"],
+            stages,
+        )
+        case.assertEqual([], case.h.deliveries)
+        case.assertEqual(original_unit, kernel.unit)
+        case.assertFalse(
+            any(
+                path == root + "/source"
+                or path.startswith(root + "/source/")
+                or path.startswith("/run/systemd/system/")
+                or path
+                in {root + "/probe-state", root + "/native-input.json", root + "/request.json"}
+                for path in kernel.os.meta
+            )
+        )
+        case.assertFalse(
+            any(
+                argv
+                in {
+                    target.systemd("start"),
+                    target.systemd("stop"),
+                    target.systemd("reload_for_temporary_dev"),
+                }
+                or argv[0] == "/usr/bin/systemd-run"
+                and "--watch-dev-operation" in argv
+                for argv in calls
+            )
+        )
+        return result, kernel
     completed_stage = (
         "unhealthy-before-installation"
         if unhealthy_before_install
@@ -4726,6 +4858,60 @@ def whole_native_call(
     )
     case.assertFalse(any("--channel" in argv and "test" in argv for argv in calls))
     return result, kernel
+
+
+def test_actual_dev_cli_qualifies_reversed_wildcard_pair_and_refuses_ambiguous_ports():
+    for refused in (False, True):
+        case = NativeBindingTests()
+        case.setUp()
+        try:
+            result, _ = whole_native_call(
+                case,
+                api_publication=[
+                    {"HostIp": "::", "HostPort": "47778" if refused else "47777"},
+                    {"HostIp": "0.0.0.0", "HostPort": "47777"},
+                ],
+                publication_refused=refused,
+            )
+            case.assertEqual("REFUSED" if refused else "PASS", result["status"])
+            if refused:
+                case.assertEqual("first_preflight", result["phase"])
+                case.assertEqual(
+                    "actual_dev_api_publication_ambiguous_or_unsupported", result["reason"]
+                )
+                case.assertFalse(result["live_acceptance"])
+            else:
+                case.assertTrue(result["config_restored"] and result["same_correlation"])
+                case.assertGreaterEqual(result["completed_later_suppressions"], 2)
+        finally:
+            case.doCleanups()
+            case.tearDown()
+
+
+def test_real_import_from_non_owner_checkout_uses_only_filesystem_port_mapping():
+    import importlib.util
+
+    with tempfile.TemporaryDirectory(prefix="portable-dev-source-") as directory:
+        copied_path = Path(directory) / "probe_dev_outage_operation.py"
+        copied_path.write_bytes(Path(target.__file__).read_bytes())
+        spec = importlib.util.spec_from_file_location("portable_copied_dev_program", copied_path)
+        copied = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {spec.name: copied}):
+            spec.loader.exec_module(copied)
+            with patch.object(sys.modules[__name__], "target", copied):
+                case = NativeBindingTests()
+                case.setUp()
+                try:
+                    case.assertNotEqual(copied.__file__, copied.LOCAL_DEV_PROGRAM)
+                    case.assertEqual(
+                        copied.__file__, copied.run_claimed_local_caller.__code__.co_filename
+                    )
+                    # Actual CLI -> serialized remote entry plus all existing
+                    # wrong cwd/module/bytes/interpreter and authority negatives.
+                    case.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home()
+                finally:
+                    case.doCleanups()
+                    case.tearDown()
 
 
 def test_actual_dev_invocation_enforces_bindings_and_custody():

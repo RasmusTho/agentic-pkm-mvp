@@ -5476,15 +5476,34 @@ def discover_fixed_dev_producer(
         if len(matches) != 1:
             raise Refusal("one_actual_outbox_worker_process_not_observed")
         worker_pid, argv = matches[0]
-    ports = api.get("ports", {}).get("8000/tcp")
+    published = api.get("ports")
+    ports = published.get("8000/tcp") if isinstance(published, dict) else None
     if (
         not isinstance(ports, list)
-        or len(ports) != 1
-        or ports[0].get("HostIp") not in {"127.0.0.1", "0.0.0.0"}
-        or not str(ports[0].get("HostPort", "")).isdigit()
-        or not 1 <= int(ports[0]["HostPort"]) <= 65535
+        or len(ports) not in {1, 2}
+        or any(
+            not isinstance(row, dict)
+            or set(row) != {"HostIp", "HostPort"}
+            or not isinstance(row["HostIp"], str)
+            or not isinstance(row["HostPort"], str)
+            or re.fullmatch(r"[1-9][0-9]{0,4}", row["HostPort"]) is None
+            or int(row["HostPort"]) > 65535
+            for row in ports
+        )
     ):
         raise Refusal("actual_dev_api_publication_ambiguous_or_unsupported")
+    addresses = {row["HostIp"] for row in ports}
+    if not (
+        len(ports) == 1
+        and addresses <= {"127.0.0.1", "0.0.0.0"}
+        or len(ports) == 2
+        and addresses == {"0.0.0.0", "::"}
+        and ports[0]["HostPort"] == ports[1]["HostPort"]
+    ):
+        raise Refusal("actual_dev_api_publication_ambiguous_or_unsupported")
+    # Docker's host-IP-omitted publication can include one matching IPv6 row.
+    # The health route still derives from the positively observed IPv4 binding.
+    api_port = next(row["HostPort"] for row in ports if row["HostIp"] != "::")
     path = worker["heartbeat"]
     mounts = [
         mount
@@ -5563,7 +5582,7 @@ def discover_fixed_dev_producer(
         "sdk": sdk_path,
         "sdk_realpath": sdk_realpath,
         "sdk_sha256": sdk_digest,
-        "api_base": "http://127.0.0.1:" + str(ports[0]["HostPort"]),
+        "api_base": "http://127.0.0.1:" + api_port,
         "producer_route": "compose-dev-api-worker:" + api["project"],
         "worker_host_pid": worker_pid,
         "worker_namespace_pid": namespace_pid[0],
