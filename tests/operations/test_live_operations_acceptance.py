@@ -24,6 +24,17 @@ def test_native_read_leases_preserve_frozen_authority_and_original_evidence(tmp_
     instance = host(tmp_path, monkeypatch, freeze=False)
     prepared = read_private(instance.runtime.registry.path.parent / CONTEXT_FILE)
     original_hash = prepared["fixture"]["registry_sha256"]
+    source_bytes = {path: path.read_bytes() for path in instance.root.rglob("*.md")}
+    context_file = instance.runtime.registry.path.parent / CONTEXT_FILE
+    prepared_bytes = context_file.read_bytes()
+    journal = instance.runtime.registry.path.parent / "operation-receipts.json"
+    journal_bytes = journal.read_bytes() if journal.exists() else None
+    # This exact POST is app-local qualification, not a source write or a
+    # caller-approved effect manifest. Keep the production runtime/journal real.
+    supplied = instance.client.post("/api/operations/acceptance/admission",
+                                   json={"approved": True, "slots": []}, headers=instance.headers)
+    assert supplied.status_code == 422
+    assert context_file.read_bytes() == prepared_bytes
     frozen = instance.client.post("/api/operations/acceptance/admission", json={}, headers=instance.headers)
     assert frozen.status_code == 200, frozen.text
     first = frozen.json()
@@ -38,6 +49,8 @@ def test_native_read_leases_preserve_frozen_authority_and_original_evidence(tmp_
     assert snapshot.extensions["bindingEffectLeases"][instance.binding_id]["generation"] >= 2
     assert len(retained["slots"]) == 15
     assert "registry_checkpoint" not in retained
+    assert source_bytes == {path: path.read_bytes() for path in instance.root.rglob("*.md")}
+    assert (journal.read_bytes() if journal.exists() else None) == journal_bytes
     # Keep the real configured-backend doctor and independent selected-source
     # coverage. No DATABASE_URL or optional legacy-PG scan is needed for memory.
     monkeypatch.delenv("DATABASE_URL", raising=False)

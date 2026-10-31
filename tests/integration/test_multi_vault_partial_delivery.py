@@ -76,12 +76,16 @@ NOT_VAULT_BOUND_MUTATIONS: dict[str, str] = {
     "app.api.routes.source_understanding": "pure P0 packet computation; persists nothing",
 }
 
-# Exact unsealed routes in an otherwise vault-bound module, by route rather
-# than module so a new sibling route still fails closed.
+# Exact unsealed routes, by route rather than module so a new sibling route
+# still fails closed.
 NOT_VAULT_BOUND_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/api/operations/preconditions"): (
         "observes native versions without executing or reserving an operation; admitted "
         "through the production operation runtime"
+    ),
+    ("POST", "/api/operations/acceptance/admission"): (
+        "derives and freezes private instance-local acceptance context through production "
+        "selection admission and native preconditions; no vault write or operation reservation"
     ),
 }
 
