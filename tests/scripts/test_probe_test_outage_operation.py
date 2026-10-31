@@ -6,6 +6,7 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import tempfile
@@ -1559,6 +1560,97 @@ def manager_show(argv, fields):
     ).encode()
 
 
+class DockerDiscoveryProducer:
+    """External Docker port: apply argv filters and the actual Go projection.
+
+    The fixed template subset follows docker/cli's inspector/templates and
+    formatter/container contracts. Inputs have Docker's raw inspect shape;
+    no parser-facing dictionary or preselected container is returned.
+    """
+
+    def __init__(self):
+        self.containers = [
+            {
+                "Id": identity * 64,
+                "Image": "sha256:" + "c" * 64,
+                "State": {"Pid": pid, "Running": True},
+                "Config": {
+                    "Labels": {
+                        "org.opencontainers.image.revision": "f" * 40,
+                        "com.docker.compose.project": "observed-test-project",
+                        "com.docker.compose.service": service,
+                    },
+                    "Env": ["PKM_ENVIRONMENT=test"]
+                    + (
+                        ["WORKER_HEARTBEAT_PATH=/runtime/producer.json"]
+                        if service == "worker"
+                        else []
+                    ),
+                },
+                "NetworkSettings": {
+                    "Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "47777"}]}
+                    if service == "api"
+                    else {},
+                },
+                "Mounts": [{"Source": "/var/lib/actual-backing", "Destination": "/runtime"}]
+                if service == "worker"
+                else [],
+            }
+            for identity, service, pid in (("a", "api", 808), ("b", "worker", 707))
+        ]
+        self.calls = []
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+        if argv[:2] == ("/usr/bin/docker", "ps"):
+            assert argv[-2:] == ("--format", "{{.ID}}")
+            assert len(argv[2:-2]) % 2 == 0
+            filters = []
+            for option, value in zip(argv[2:-2:2], argv[3:-2:2], strict=True):
+                assert option == "--filter" and value.startswith("label=")
+                filters.append(value.removeprefix("label=").split("=", 1))
+            return "".join(
+                row["Id"][:12] + "\n"
+                for row in self.containers
+                if row["State"]["Running"]
+                and all(row["Config"]["Labels"].get(key) == value for key, value in filters)
+            ).encode()
+        assert argv[:3] == ("/usr/bin/docker", "inspect", "--format") and len(argv) == 5
+        rows = [row for row in self.containers if row["Id"].startswith(argv[-1])]
+        assert len(rows) == 1
+        row = rows[0]
+
+        def field(path):
+            value = row
+            for part in path.split("."):
+                value = value[part]
+            return value
+
+        # Go's range emits nothing for a missing env key and concatenates all
+        # matching entries; either can make this caller's JSON invalid.
+        output = re.sub(
+            r'{{range \.Config.Env}}{{if eq \(index \(split \. "="\) 0\) "([^"]+)"}}'
+            r'{{json \(index \(split \. "="\) 1\)}}{{end}}{{end}}',
+            lambda match: "".join(
+                json.dumps(value.split("=")[1])
+                for value in row["Config"]["Env"]
+                if value.split("=")[0] == match[1]
+            ),
+            argv[3],
+        )
+        output = re.sub(
+            r'{{json \(index \.Config.Labels "([^"]+)"\)}}',
+            lambda match: json.dumps(row["Config"]["Labels"].get(match[1])),
+            output,
+        )
+        output = re.sub(
+            r"{{json \.([A-Za-z.]+)}}", lambda match: json.dumps(field(match[1])), output
+        )
+        output = output.replace("{{.State.Pid}}", str(row["State"]["Pid"]))
+        assert "{{" not in output and "}}" not in output
+        return (output + "\n").encode()
+
+
 class NativeKernel:
     def __init__(self, h):
         self.h, self.clock, self.processes, self.reaped, self.killed, self.selectors = (
@@ -2261,37 +2353,11 @@ def test_fixed_supervisor_transport_and_actual_dispatcher_claim_shape(self):
 def test_first_accepted_preflight_derives_actual_compose_mapping_not_defaults(self):
     kernel, assembly = _native(self)
     original = kernel.response
-    api = {
-        "id": "a" * 64,
-        "image_id": "sha256:" + "c" * 64,
-        "revision": "f" * 40,
-        "pid": 808,
-        "project": "observed-test-project",
-        "service": "api",
-        "channel": "test",
-        "ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "47777"}]},
-        "mounts": [],
-    }
-    worker = {
-        "id": "b" * 64,
-        "image_id": "sha256:" + "c" * 64,
-        "revision": "f" * 40,
-        "pid": 707,
-        "project": "observed-test-project",
-        "service": "worker",
-        "channel": "test",
-        "heartbeat": "/runtime/producer.json",
-        "ports": {},
-        "mounts": [{"Source": "/var/lib/actual-backing", "Destination": "/runtime"}],
-    }
+    docker = DockerDiscoveryProducer()
 
     def response(argv, payload):
-        if argv[0:2] == ("/usr/bin/docker", "ps"):
-            return (
-                "b" * 12 if "label=com.docker.compose.service=worker" in argv else "a" * 12
-            ).encode() + b"\n"
-        if argv[0:2] == ("/usr/bin/docker", "inspect"):
-            return json.dumps(worker if argv[-1].startswith("b") else api).encode()
+        if argv[0] == "/usr/bin/docker":
+            return docker(argv)
         return original(argv, payload)
 
     kernel.response = response
@@ -2309,13 +2375,131 @@ def test_first_accepted_preflight_derives_actual_compose_mapping_not_defaults(se
     self.assertEqual("9:223", facts["heartbeat_backing"])
     self.assertEqual("observed-test-project", facts["producer_route"].split(":", 1)[1])
     self.assertIsNone(facts["actual_vm_id"], "inventory VM104 is only a proposal")
-    worker["channel"] = "prod"
+    docker.containers[1]["Config"]["Env"][0] = "PKM_ENVIRONMENT=prod"
     with self.assertRaises(target.Refusal):
         target.discover_fixed_test_producer(
             kernel.dependencies,
             (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
             deadline=1100,
         )
+
+
+def test_discovery_uses_actual_docker_projection_and_refuses_unsupported_bindings(self):
+    cases = (
+        "normal_with_unrelated_containers",
+        "revision_label_absent",
+        "worker_stopped",
+        "worker_foreign_project",
+        "two_matching_workers",
+        "malformed_worker_list_id",
+        "short_inspect_id",
+        "heartbeat_setting_absent",
+        "heartbeat_setting_duplicated",
+        "worker_wrong_channel",
+        "different_candidate_image",
+        "dual_stack_publication",
+        "unpublished_api",
+        "ambiguous_heartbeat_mount",
+    )
+    for index, case in enumerate(cases):
+        with self.subTest(case=case):
+            if index:
+                self.fresh()
+            kernel, assembly = _native(self)
+            docker = DockerDiscoveryProducer()
+            api, worker = docker.containers
+            expected = target.Refusal
+            if case == "normal_with_unrelated_containers":
+                foreign = json.loads(json.dumps(worker))
+                foreign["Id"] = "d" * 64
+                foreign["Config"]["Labels"]["com.docker.compose.project"] = "another-project"
+                stopped = json.loads(json.dumps(worker))
+                stopped["Id"], stopped["State"]["Running"] = "e" * 64, False
+                docker.containers.extend((foreign, stopped))
+                expected = None
+            elif case == "revision_label_absent":
+                for row in docker.containers:
+                    del row["Config"]["Labels"]["org.opencontainers.image.revision"]
+                expected = None
+            elif case == "worker_stopped":
+                worker["State"]["Running"] = False
+            elif case == "worker_foreign_project":
+                worker["Config"]["Labels"]["com.docker.compose.project"] = "another-project"
+            elif case == "two_matching_workers":
+                second = json.loads(json.dumps(worker))
+                second["Id"] = "d" * 64
+                docker.containers.append(second)
+            elif case == "malformed_worker_list_id":
+                worker["Id"] = "z" * 64
+            elif case == "short_inspect_id":
+                worker["Id"] = "b" * 12
+            elif case == "heartbeat_setting_absent":
+                worker["Config"]["Env"] = ["PKM_ENVIRONMENT=test"]
+                expected = json.JSONDecodeError
+            elif case == "heartbeat_setting_duplicated":
+                worker["Config"]["Env"].append("WORKER_HEARTBEAT_PATH=/runtime/producer.json")
+                expected = json.JSONDecodeError
+            elif case == "worker_wrong_channel":
+                worker["Config"]["Env"][0] = "PKM_ENVIRONMENT=prod"
+            elif case == "different_candidate_image":
+                worker["Image"] = "sha256:" + "d" * 64
+            elif case == "dual_stack_publication":
+                api["NetworkSettings"]["Ports"]["8000/tcp"].append(
+                    {"HostIp": "::", "HostPort": "47777"}
+                )
+            elif case == "unpublished_api":
+                api["NetworkSettings"]["Ports"]["8000/tcp"] = None
+            elif case == "ambiguous_heartbeat_mount":
+                worker["Mounts"].append(
+                    {"Source": "/var/lib/another-backing", "Destination": "/runtime"}
+                )
+            response, before = kernel.response, dict(kernel.os.files)
+
+            def ports(argv, payload):
+                return docker(argv) if argv[0] == "/usr/bin/docker" else response(argv, payload)
+
+            def discover():
+                return target.discover_fixed_test_producer(
+                    kernel.dependencies,
+                    (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
+                    deadline=1100,
+                )
+
+            kernel.response = ports
+            if expected is None:
+                facts = discover()
+                self.assertEqual("http://127.0.0.1:47777", facts["api_base"])
+                self.assertEqual(
+                    ["a" * 64, "b" * 64], [r[1] for r in facts["candidate_references"]]
+                )
+                self.assertEqual(
+                    ["a" * 12, "b" * 12],
+                    [argv[-1] for argv in docker.calls if argv[1] == "inspect"],
+                )
+            else:
+                with self.assertRaises(expected):
+                    discover()
+            self.assertIn(
+                (
+                    "/usr/bin/docker",
+                    "ps",
+                    "--filter",
+                    "label=com.docker.compose.service=worker",
+                    "--filter",
+                    "label=com.docker.compose.project=observed-test-project",
+                    "--format",
+                    "{{.ID}}",
+                ),
+                docker.calls,
+            )
+            self.assertEqual(before, kernel.os.files)
+            self.assertFalse(any(p.argv[0] == "/usr/bin/systemd-run" for p in kernel.processes))
+            self.assertFalse(
+                any(
+                    p.argv in {target.systemd("start"), target.systemd("stop")}
+                    for p in kernel.processes
+                )
+            )
 
 
 class MappedNativeOS:
@@ -3111,26 +3295,7 @@ def test_cold_four_file_bootstrap_reaches_observed_sdk_without_preseeded_source(
     kernel.os.path.realpath = lambda path: (
         kernel.scope.binding.sdk_realpath if path == kernel.scope.binding.sdk else path
     )
-    api = {
-        "id": "a" * 64,
-        "image_id": "sha256:" + "c" * 64,
-        "revision": "f" * 40,
-        "pid": 808,
-        "project": "observed-test-project",
-        "service": "api",
-        "channel": "test",
-        "ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "47777"}]},
-        "mounts": [],
-    }
-    worker = dict(
-        api,
-        id="b" * 64,
-        pid=707,
-        service="worker",
-        ports={},
-        heartbeat="/runtime/producer.json",
-        mounts=[{"Source": "/var/lib/actual-backing", "Destination": "/runtime"}],
-    )
+    docker = DockerDiscoveryProducer()
     response, actual_path, calls, handoffs = kernel.response, Path, [], []
 
     def namespace_path(value):
@@ -3206,12 +3371,8 @@ def test_cold_four_file_bootstrap_reaches_observed_sdk_without_preseeded_source(
             ):
                 target.main(["--supervised-first-preflight", packet["operation"]])
             raise AssertionError("first preflight must exec the qualified SDK")
-        if argv[:2] == ("/usr/bin/docker", "ps"):
-            return (
-                "b" * 12 if "label=com.docker.compose.service=worker" in argv else "a" * 12
-            ).encode() + b"\n"
-        if argv[:2] == ("/usr/bin/docker", "inspect"):
-            return json.dumps(worker if argv[-1].startswith("b") else api).encode()
+        if argv[0] == "/usr/bin/docker":
+            return docker(argv)
         return response(argv, payload)
 
     kernel.response, kernel.os.execve = ports, execve
