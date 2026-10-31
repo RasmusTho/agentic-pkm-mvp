@@ -447,6 +447,12 @@ class DormantSettingsRebindReconciler:
             return RebindCycle(record=record, mode="dormant", receipt=None)
         if record.phase == "no_lifecycle":
             return RebindCycle(record=record, mode="no_lifecycle", receipt=None)
+        if record.phase == "prepared" and self.cleared_before(record):
+            # A restart may load the enabled env config before a foreign selection
+            # replaces the completed CLEAR. Restore that durable idle posture before
+            # deciding whether this candidate can re-arm the configured watcher;
+            # a refusal must not leave the cleared root enabled for this cycle.
+            cfg.enable = False
         if not cfg.enable:
             # A configured watcher idle after a completed CLEAR reconciles the next
             # selection exactly as a freshly started configured watcher would: it
