@@ -2,13 +2,6 @@
   "invariant": "INV-EF1",
   "rows": [
     {
-      "artifact": "scripts/probe_dev_outage_operation.py",
-      "category": "ii",
-      "why_load_bearing": "The bounded #6505 DEV operation authenticates its exact claimed local worktree, branch and executing entry before transport. This fixed personal checkout is an operation-specific caller authority anchor, not a Product path default or live target qualification.",
-      "disposition": "stay",
-      "issue": "#6505"
-    },
-    {
       "artifact": "docs/CLOUD_SECRET_PROVISIONING/ADMINISTER_SECRETS_VALUE_FREE.md",
       "category": "iii",
       "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
@@ -697,7 +690,7 @@
     {
       "artifact": "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/PARENT_FEATURE_ISSUE.md",
       "category": "iv",
-      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midgård as the authorized production vault so disposable validation cannot be rebound to another data authority.",
+      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midg\u00e5rd as the authorized production vault so disposable validation cannot be rebound to another data authority.",
       "disposition": "stay",
       "issue": "#4749"
     },
@@ -711,7 +704,7 @@
     {
       "artifact": "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md",
       "category": "iv",
-      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midgård as the authorized production vault so disposable validation cannot be rebound to another data authority.",
+      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midg\u00e5rd as the authorized production vault so disposable validation cannot be rebound to another data authority.",
       "disposition": "stay",
       "issue": "#4749"
     },
@@ -725,7 +718,7 @@
     {
       "artifact": "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RUN_READ_ONLY_OWNER_PILOT.md",
       "category": "iv",
-      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midgård as the authorized production vault so disposable validation cannot be rebound to another data authority.",
+      "why_load_bearing": "The #4749 receipt-sourced production-pilot contract must name Midg\u00e5rd as the authorized production vault so disposable validation cannot be rebound to another data authority.",
       "disposition": "stay",
       "issue": "#4749"
     },
@@ -3003,6 +2996,13 @@
       "why_load_bearing": "The #6244 actual conformant manual experiment retains exact supported local-interpreter argv or frozen carried instructions. These immutable evidence bytes are load-bearing provenance, not a Product default, launcher, credential or new policy.",
       "disposition": "stay",
       "issue": "#6244"
+    },
+    {
+      "artifact": "scripts/probe_dev_outage_operation.py",
+      "category": "ii",
+      "why_load_bearing": "The bounded #6505 DEV operation authenticates its exact claimed local worktree, branch and executing entry before transport. This fixed personal checkout is an operation-specific caller authority anchor, not a Product path default or live target qualification.",
+      "disposition": "stay",
+      "issue": "#6505"
     }
   ]
 }
