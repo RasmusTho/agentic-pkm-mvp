@@ -190,6 +190,23 @@ partial, divergent, stale, or interrupted state remains fenced and retryable ins
 falling back to either authority source. The detailed deployment mechanics are owned by
 [Deployment and Environments](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
 
+**MVR-06 minimum-runtime floor (MVR-06A, #3863, shipped; opt-in).** A channel advances to
+`minimumRuntimeSchema=mvr-06` only when its deploy runs with `MVR06_BACKGROUND_CUTOVER=1`; merely
+deploying a capable image never does. The floor commits in one registry generation that also
+qualifies the registry schema to `agentic-pkm.instance-vault-registry.v3`, before the first
+background-role, delegation, intent, or compatibility field. Compatibility posture:
+
+- **Compatible images:** an image containing `app/instance/background_authority.py` (MVR-06A or
+  later) understands the v3 schema, the delegated background-role record, and the staged intent;
+  it is the only valid rollback or roll-forward target for a floored channel.
+- **Older images are refused:** every pre-MVR-06 image (MVR-05D `92e6740a4` and earlier) accepts
+  only registry schemas v1/v2 and stops at its existing consumer-preflight schema gate before
+  registry, principal, or vault access. Scalar rollback is already refused by the MVR-05 floor. A
+  rollback to such an image therefore leaves the channel down rather than half-started; recovery
+  is a roll-forward to a compatible image, never a projection that discards background intent.
+- **Floor lowering:** none. Only the cutover's own compensation may remove an MVR-06 floor, and only
+  when that same attempt committed no intent.
+
 ## Invariants (MUST hold)
 
 These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Environment Invariants](../ENVIRONMENTS.md) with channel-scoped isolation rules.

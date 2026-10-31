@@ -288,6 +288,43 @@ This document is the canonical spec that epic #2655 (deployment + environment-se
 - **Full-environment downtime is authorized for the cutover** (S7). The cutover from the shared-checkout bind-mount model to pinned images may take all channels down briefly.
 - **Auth↔topology** is reconciled by treating the local reverse proxy / bridge hop as a **trusted proxy** (trusted `X-Forwarded-For`) or by using host networking, while **untrusted callers stay rejected** (#2223 intent). The tactical fix already shipped in PR #2665; this document formalizes it (see §Auth↔topology decision).
 
+## MVR-06 background-authority floor (MVR-06A, #3863)
+
+Repository support is shipped; no channel has been advanced by this change. The floor is the
+irreversible compatibility boundary for the delegated background-runtime role and the staged
+background intent (`docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md`).
+
+- **Producer and order.** With `MVR06_BACKGROUND_CUTOVER=1`,
+  `scripts/lib/instance_state_deployment.sh` runs
+  `python -m app.instance.runtime background-authority-cutover --bootstrap-kind existing-install`
+  in `instance-state-init`, last inside the proved stopped deployment window: after
+  `principal-cutover` (MVR-03, the delegator), `mvr05-record-floor` (the MVR-05 channel fence it
+  advances from), and `settings-rebind-install-dormant`, and before `deployment-finish`. The
+  command refuses outside that window. It commits the `minimumRuntimeSchema=mvr-06` floor with
+  registry schema v3 first, then the private `background-runtime-role.json` record, then the staged
+  `backgroundIntent`. Channel and native bootstrap use the same command with `--bootstrap-kind
+  channel|native`. Without the opt-in the wrapper runs nothing new and the channel stays at MVR-05.
+- **Operator preflight.** Before opting in: the MVR-03 principal must exist (run the
+  `MVR03_PRINCIPAL_CUTOVER=1` deployment first); the MVR-05 floor must be recorded; and, per
+  KD-A42F26A9AD87 from #3862, the outbox must be drained or its writers stopped before any DEV/TEST
+  rollout. After the cutover, `background-authority-show` and `background-binding-list` print the
+  redacted role and staged-intent receipts.
+- **Startup gate.** After the floor, the compose `watcher` and `worker` preflight require a complete,
+  valid role and intent lineage before the process starts; the `api` preflight does not. Every
+  pre-MVR-06 image refuses the v3 registry at its schema gate before registry or auth access.
+- **Compatible rollback / roll-forward images.** Only an image that contains
+  `app/instance/background_authority.py` (this change or later) may run a floored channel, in either
+  direction. Rolling back to MVR-05D (`92e6740a4`) or older leaves API, watcher, and worker stopped at
+  preflight; the floor is never lowered by a rollback and there is no database rollback.
+- **Recovery.** Every cutover failure keeps the stopped window, because the wrapper cannot tell a
+  compensated failure from an ambiguous one. A failure before the intent commits has already
+  compensated its own role and floor, so the operator reruns the deploy or runs
+  `deployment-release`. A killed cutover leaves a floor-qualified partial lineage that only a rerun of
+  `background-authority-cutover` (idempotent, reusing any role it already wrote) completes. An output
+  naming "compensation is unproven" means the registry and role state must be inspected before any
+  release. A revoked background role (`background-role-revoke`) blocks the next background start
+  until `background-role-redelegate`.
+
 ## Environment matrix
 
 The contract spans three channels: `dev`, `test`, and `prod`. The local Compose fallback can run them in

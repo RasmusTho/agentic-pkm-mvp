@@ -184,6 +184,41 @@ Operational stance:
   intentional trusted proxy boundary
 - rate limiting should protect public API surfaces without blocking internal trusted automation
 
+Delegated background-runtime role (MVR-06A, #3863, shipped):
+- Producer: `python -m app.instance.runtime background-authority-cutover` is the only producer of
+  background identity. It runs inside the proved MVR-01B stopped deployment window, after the
+  MVR-03 principal and MVR-05 floor exist, and is opted into by `MVR06_BACKGROUND_CUTOVER=1`
+  (`scripts/lib/instance_state_deployment.sh`). The same command, with `--bootstrap-kind
+  existing-install|channel|native`, serves existing-install migration and channel/native
+  bootstrap; the `tests/_mvr06_background_harness.py` fixtures drive that command rather than
+  seeding state. The lifecycle supervisor never mints an identity of its own.
+- Durable authority state: one CSPRNG-minted opaque `background_runtime_role_id` in the private,
+  versioned, mode-`0600` record `background-runtime-role.json` beside the MVR-03 principal record
+  (`app/instance/background_authority.py`). It records schema, revision, `delegator_role_id` (the
+  MVR-03 `local_operator_role_id`), scopes, `auth_epoch`, status, and delegation provenance. It is
+  never derived from `appInstallId`, a credential, a human identity, or a path; the delegator's role
+  id, not its credential revision, is pinned, so API-key rotation does not invalidate it.
+- Least privilege: the scopes are exactly `queue.claim_ack`, `receipt.write`, `settings.reload`,
+  `watcher.ingest`, and `worker.dispatch`. A scope outside the operator's delegable set exceeds the
+  delegator; an operator-only scope (for example `instance.admin` or `content.governed_write`) is
+  over-broad; a missing scope is partial. The role grants no content-write, intent-administration,
+  or principal-management authority.
+- Startup preflight: once `minimumRuntimeSchema=mvr-06` is recorded, the `watcher` and `worker`
+  consumer preflight (`python -m app.instance.runtime preflight`, run by compose before each
+  process) requires one complete role and intent lineage and refuses a missing, stale (delegator is
+  not the current operator role), ambiguous (role id equals a foreground principal), over-broad,
+  partial, unsafe-mode, or revoked delegation, so no background process starts or dispatches under
+  it. The foreground `api` preflight does not depend on the background role. Before the floor the
+  legacy path is unchanged.
+- Auth-epoch revocation: `background-role-revoke` is the GOV revocation producer; it advances
+  `auth_epoch` and marks the role revoked, so the next background start fails preflight.
+  `background-role-redelegate` is the governed recovery and mints a new role id at the next epoch
+  under the current operator; it never replaces an active, valid delegation. MVR-06A has no
+  running-lifecycle supervisor, so a revocation takes effect at the next background start; draining
+  running lifecycles on an epoch change is the MVR-06B continuous-reconciliation contract.
+- Receipts carry opaque role ids, scopes, epoch, revisions, and provenance only, never a host path,
+  credential, or binding payload.
+
 BuilderOps independent control-plane contract (#3790):
 - BuilderOps does not inherit Product `API_KEY`, loopback bypass, or Companion proxy trust. Its
   independent service requires a bearer credential on health, status, metrics, record, and lease

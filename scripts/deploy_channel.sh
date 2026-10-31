@@ -63,6 +63,7 @@ Environment:
   DEPLOY_HEALTH_TIMEOUT_SECONDS=90  health gate timeout
   MVR03_PRINCIPAL_CUTOVER=1         explicitly activate the one-time principal floor/role cutover
   MVR03_PRINCIPAL_LOOPBACK_LISTENER is pinned from config/deploy/<channel>.env (0 or 1)
+  MVR06_BACKGROUND_CUTOVER=1        explicitly activate the one-time MVR-06 background-authority floor/role cutover
 EOF
 }
 
