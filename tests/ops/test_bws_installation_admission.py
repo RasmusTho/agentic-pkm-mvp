@@ -544,3 +544,32 @@ def test_dropin_selector_diagnostics_are_allowlisted_and_legacy_compatible(monke
             with pytest.raises(admission.InstallationAdmissionRefused):
                 lease._validate_receipt({**legacy, 'prebackup_gate': gate})
         lease.complete(legacy)
+
+
+def test_initial_control_path_diagnostics_preserve_closed_stage_parity(monkeypatch, tmp_path):
+    from tests.ops.bws_control_path_diagnostic_cases import PATH_CASES
+    assert admission._INITIAL_PATH_CONTEXTS == transaction._INITIAL_PATH_CONTEXTS
+    assert admission._INITIAL_PATH_REFINEMENTS == transaction._INITIAL_PATH_REFINEMENTS
+    assert admission._PREBACKUP_REFUSAL_GATES == transaction._PREBACKUP_REFUSAL_GATES
+    assert {tuple(row[1:]) for row in PATH_CASES} <= admission._INITIAL_PATH_REFINEMENTS
+    _patch_directories(monkeypatch, tmp_path)
+    request = _request()
+    legacy = _receipt(request, status='refused_before_backup')
+    with admission.installation_admission(**request) as lease:
+        for context in sorted(admission._INITIAL_PATH_REFINEMENTS):
+            gate = 'old_kernel_initial_root_control__' + '__'.join(context)
+            for suffix in ('', '__provenance_unavailable'):
+                receipt = transaction._receipt(request, status='refused_before_backup', old_generation=None,
+                    new_generation=None, backup_manifest=None, prebackup_gate=gate + suffix)
+                assert lease._validate_receipt(receipt) == receipt
+            for bad in (gate.replace('initial', 'empty_control'), gate + '__PRIVATE_CANARY',
+                        gate.replace('__unknown__', '__foreign__')):
+                if bad == gate:
+                    continue
+                with pytest.raises(admission.InstallationAdmissionRefused):
+                    lease._validate_receipt({**legacy, 'prebackup_gate': bad})
+            for status in ('installed', 'compensated_restored', 'compensated_stopped',
+                           'unknown', 'refused_before_stop'):
+                with pytest.raises(admission.InstallationAdmissionRefused):
+                    lease._validate_receipt({**_receipt(request, status=status), 'prebackup_gate': gate})
+        lease.complete(legacy)

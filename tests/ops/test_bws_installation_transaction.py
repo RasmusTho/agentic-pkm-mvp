@@ -4007,9 +4007,9 @@ def test_preserved_dropin_profile_binds_effects_and_revalidation(monkeypatch, se
                     target = selected if mode == 'mount' else case.app_root / 'app/ops'
                     identity = target.stat()
                     original = module._control_path_mount
-                    def mount(fd):
+                    def mount(fd, **context):
                         info = module.os.fstat(fd)
-                        return original(fd) + int((info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino))
+                        return original(fd, **context) + int((info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino))
                     monkeypatch.setattr(module, '_control_path_mount', mount)
                 with pytest.raises(RuntimeError):
                     service.revalidate_empty_control_configuration()
@@ -4025,3 +4025,66 @@ def test_preserved_dropin_profile_preserves_compensation_boundaries(secure_tmp_p
     result = exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode,
                                               input_count=input_count, input_index=input_count - 1)
     assert result['status'] == ('compensated_stopped' if mode == 'partial' else 'unknown')
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('case,count', [('population', 1), ('grammar', 1), ('assignment', 2),
+                                       ('file-link', 4), ('loader-scripts-present', 0), ('descent-type', 0)])
+def test_initial_control_path_diagnostics_reach_canonical_receipt(secure_tmp_path, channel, case, count):
+    from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
+    from tests.ops.bws_control_path_diagnostic_cases import expected_context
+    result = exercise_control_path_transaction(secure_tmp_path, channel, 'diagnostic:' + case,
+                                               input_count=count)
+    context = expected_context(case)
+    if not count and context[0] == 'path_selected':
+        context = ('path_absent', *context[1:])
+    assert result['prebackup_gate'] == 'old_kernel_initial_root_control__' + '__'.join(context)
+
+
+@pytest.mark.parametrize('metadata', ['missing', 'list', 'member', 'foreign', 'subclass', 'unknown', 'nonprebackup'])
+def test_initial_control_path_diagnostics_preserve_privacy_provenance_and_fallback(metadata):
+    from app.ops import bws_installation_lifecycle as lifecycle
+    request, ports, admission, service, events, *_ = _transaction_fixture()
+    class Foreign(RuntimeError):
+        root_control = ('path_selected', 'unknown', 'selected_content', 'grammar')
+        subgate = 'root_control'
+    class Unsupported(lifecycle._OldQualificationRefusal):
+        pass
+    def refuse(**_kwargs):
+        failure = lifecycle._OldQualificationRefusal('root_control',
+            root_control=('path_selected', 'unknown', 'selected_content', 'grammar'))
+        if metadata == 'missing':
+            del failure.root_control
+        elif metadata == 'list':
+            failure.root_control = list(failure.root_control)
+        elif metadata == 'member':
+            failure.root_control = ('path_selected', 'unknown', 'selected_content', ['PRIVATE_CANARY'])
+        elif metadata == 'unknown':
+            failure.root_control = ('path_selected', 'unknown', 'selected_content', 'PRIVATE_CANARY')
+        elif metadata == 'foreign':
+            raise Foreign('PRIVATE_CANARY')
+        elif metadata == 'subclass':
+            raise Unsupported('root_control', root_control=failure.root_control)
+        raise failure
+    if metadata == 'nonprebackup':
+        # Later phases must not export even valid initial-only metadata.
+        service.require_old_kernel = refuse
+    else:
+        service.qualify_old = refuse
+    if metadata == 'nonprebackup':
+        with pytest.raises(lifecycle._OldQualificationRefusal):
+            transaction._execute_source_installation('dev', request, ports)
+        result = admission.receipt
+    else:
+        result = transaction._execute_source_installation('dev', request, ports)['source_installation']
+    if metadata == 'nonprebackup':
+        assert result is None  # Existing unresolved later-phase ownership: no terminal receipt.
+        assert not {'stop_old', 'apply', 'start_new'} & set(events)
+        return
+    else:
+        assert result['prebackup_gate'] == ('old_kernel_qualification' if metadata in {'foreign', 'subclass'}
+                                             else 'old_kernel_initial_root_control')
+        assert all(result[k] is None for k in ('old_generation_sha256', 'new_generation_sha256',
+                                               'backup_manifest_sha256'))
+    assert 'PRIVATE_CANARY' not in repr(result)
+    assert not {'stop_old', 'apply', 'start_new'} & set(events)
