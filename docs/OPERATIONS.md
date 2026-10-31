@@ -175,23 +175,27 @@ selector uses the already-read property and checks cardinality before element sh
 then allowed parent, basename length, and basename grammar. Empty selection and a
 valid singleton retain their existing behavior. The public diagnostic contains only
 the category; it does not disclose a count, path, property value, exception, digest,
-or other private input. Accepted selections and prebackup refusal/effect boundaries
-remain unchanged. Legacy absent, coarse, value, and `selection` receipts remain
+or other private input. Cardinality now refuses above the fixed bound of four;
+duplicate paths/basenames use the coarse selection refusal. Prebackup refusal/effect
+boundaries remain unchanged. Legacy absent, coarse, value, and `selection` receipts remain
 valid. Source26's public result identifies the selector family but leaves its actual
 failed predicate unknown; it establishes neither a source defect nor native
 acceptance.
 
 The captured-empty control-PATH configuration supports the finite preserved PATH-only
 drop-in profile documented in [Native source preflight and recovery](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery):
-one protected selected `.conf` file in the fixed instance/template `/etc` unit
-directory, bounded two-line syntax and exact agreement with the sole typed loaded
-PATH assignment. Complete Environment bytes/order remain bound. Null output streams,
+up to four ordered protected `.conf` files in the fixed instance/template `/etc` unit
+directories, each with bounded two-line syntax and exact agreement with the sole typed
+loaded PATH assignment. Empty/singleton behavior is preserved. The entire vector is
+validated before content reads, rejects duplicate paths/names and aliased identities,
+and shares one 4096-byte accepted /4097-byte returned-content budget per walk,
+including failures. Complete Environment bytes/order remain bound. Null output streams,
 UMask 0077, canonical encrypted-credential metadata and empty plain credentials are
 checked without credential payload/file reads; pending reload refuses. These added
 checks use existing coarse/family diagnostics and disclose no selected path, content,
 metadata, effective value, digest or backend exception.
 
-The preserved file/ancestor/mount projection is disjoint from application, control,
+The complete preserved file/ancestor/mount vector is disjoint from application, control,
 launcher, backup and all staging/restoration effect parents, remains bound through
 same-handle compensation, and never authorizes configuration/control writes. Changed
 selection, content, lookup/mount edges or named effective settings refuse or retain
@@ -323,14 +327,17 @@ before any separately authorized native decision.
 ##### Planned retained PATH-input vector
 
 The [selected target contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#planned-retained-path-input-vector)
-extends the existing PATH-only profile to at most four ordered, fully retained
-inputs with identical decoded loaded PATH and one aggregate content budget. It is
-**not implemented or natively qualified**; current empty/singleton support remains
-unchanged. Source proof must cover the whole vector, all three descriptor-admission
-branches, generation/restoration and sticky original-close uncertainty. Existing
+was implemented and source-verified by [#6502](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6502):
+at most four ordered, fully retained inputs in the existing PATH-only profile, with
+identical decoded loaded PATH and one aggregate content budget. The heading retains
+the selected target's existing anchor. Empty/singleton behavior remains compatible.
+Production-path source proof covers the whole vector, all three descriptor-admission
+branches and actual retained-count subtraction, generation/original-handle restoration
+and sticky original-close uncertainty. Existing
 value-free diagnostic and provenance rules remain mandatory. Actual native fit is
-unknown, and neither this contract nor diagnostic-only delivery authorizes an
-observer, configuration change, installation or DEV/TEST acceptance.
+unknown. Exact-image delivery, native DEV/TEST qualification and parent acceptance
+remain separate. Source delivery authorizes no observer, configuration change or
+installation and does not close #6170, #5850 or #6207.
 
 ### #6300 fixed-selection reconciliation (historical, count-only)
 

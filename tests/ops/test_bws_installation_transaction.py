@@ -1251,7 +1251,7 @@ def test_source_manifest_combined_inventory_budget_refuses_before_backup(
 
 @pytest.mark.parametrize(
     "capacity", ["unknown", "insufficient", "inventory-insufficient",
-                 "control-projection-insufficient"],
+                 "control-projection-insufficient", "control-path-insufficient"],
 )
 def test_source_descriptor_capacity_refuses_before_backup(
     monkeypatch, secure_tmp_path, capacity,
@@ -1274,6 +1274,17 @@ def test_source_descriptor_capacity_refuses_before_backup(
     if capacity == "unknown":
         snapshot = lambda: None
         reason = "descriptor_capacity_unknown"
+    elif capacity == 'control-path-insufficient':
+        lifecycle_module = importlib.import_module('app.ops.bws_installation_lifecycle')
+        monkeypatch.setattr(lifecycle_module, '_control_projection_descriptor_bound', lambda: 0)
+        inventory_peak_for_capacity = 0
+        required = control_module._source_descriptor_peak(prepare_roots, changes, case.backup)
+        with monkeypatch.context() as scalar_bound:
+            scalar_bound.setattr(lifecycle_module, '_control_path_descriptor_bound', lambda: 650)
+            old_required = control_module._source_descriptor_peak(prepare_roots, changes, case.backup)
+        assert required == old_required + 4
+        snapshot = lambda: (128, 128 + old_required, 128 + old_required)
+        reason = 'descriptor_capacity_insufficient'
     elif capacity == "inventory-insufficient":
         lifecycle_module = importlib.import_module("app.ops.bws_installation_lifecycle")
         inventory_peak_for_capacity = lifecycle_module._control_projection_descriptor_bound() + 1
@@ -1317,7 +1328,8 @@ def test_source_descriptor_capacity_refuses_before_backup(
     assert not list(case.backup_root.iterdir())
 
 
-def test_source_descriptor_capacity_covers_control_discovery_peak(secure_tmp_path):
+@pytest.mark.parametrize('branch', ['transients', 'inventory', 'projection'])
+def test_source_descriptor_capacity_covers_control_discovery_peak(monkeypatch, secure_tmp_path, branch):
     module = importlib.import_module("app.ops.bws_control_installation")
     lifecycle = importlib.import_module("app.ops.bws_installation_lifecycle")
     backup_path = secure_tmp_path / "descriptor-bound"
@@ -1328,6 +1340,9 @@ def test_source_descriptor_capacity_covers_control_discovery_peak(secure_tmp_pat
         backup_info.st_uid, backup_info.st_gid, stat.S_IMODE(backup_info.st_mode),
     )
     projection_peak = lifecycle._control_projection_descriptor_bound()
+    path_peak = lifecycle._control_path_descriptor_bound()
+    assert path_peak == 644 + 4 + 2 + 4 == 654
+    assert 2 * path_peak + 1 == 1309
     assert projection_peak == 4 + 16 * (32 + 2 * 33) == 1572
 
     handle_peak = 1 + len(module._path(backup_root.path, absolute=True)) + 2
@@ -1335,6 +1350,25 @@ def test_source_descriptor_capacity_covers_control_discovery_peak(secure_tmp_pat
     assert module._source_descriptor_peak(
         {}, (), backup_root, runtime_fd_already_open=True,
     ) == handle_peak + projection_peak
+    # Independently force each maximum, including the two branches which add
+    # the path bound outside the unchanged projection maximum.
+    projection = 0 if branch != 'projection' else 1572
+    inventory = 2000 if branch == 'inventory' else 0
+    monkeypatch.setattr(lifecycle, '_control_projection_descriptor_bound', lambda: projection)
+    for held in (0, 1, 27, 654):
+        runtime = 0
+        expected = handle_peak + max(9 + 654, runtime + inventory + 654, runtime + projection) - held
+        assert module._source_descriptor_peak({}, (), backup_root, inventory,
+            runtime_fd_already_open=True, control_path_fds_already_open=held) == expected
+        monkeypatch.setattr(module, '_source_descriptor_capacity_snapshot',
+                            lambda: (30, 30 + expected - 1, 30 + expected - 1))
+        with pytest.raises(module.InstallationRefused, match='descriptor_capacity_insufficient'):
+            module._require_source_descriptor_capacity({}, (), backup_root, inventory,
+                runtime_fd_already_open=True, control_path_fds_already_open=held)
+        monkeypatch.setattr(module, '_source_descriptor_capacity_snapshot',
+                            lambda: (30, 30 + expected, 30 + expected))
+        module._require_source_descriptor_capacity({}, (), backup_root, inventory,
+            runtime_fd_already_open=True, control_path_fds_already_open=held)
 
 
 def test_source_inventory_descriptor_peak_covers_actual_open_stack(monkeypatch, secure_tmp_path):
@@ -2709,11 +2743,11 @@ def test_dropin_selector_refusals_preserve_order_effects_and_success(scenario):
 
         service.qualify_old = refuse
     elif scenario == 'empty_success':
-        assert lifecycle._preserved_dropin_path([], 'dev') is None
+        assert lifecycle._preserved_dropin_path([], 'dev') == ()
     else:
         parent = f'{lifecycle._SYSTEMD_DIRECTORY}/yggdrasil-bws-deploy@.service.d'
         selected = parent + '/valid-singleton.conf'
-        assert lifecycle._preserved_dropin_path([selected], 'dev') == selected
+        assert lifecycle._preserved_dropin_path([selected], 'dev') == (selected,)
 
     result = transaction._execute_source_installation('dev', request, ports)
     receipt = result['source_installation']
@@ -3894,15 +3928,18 @@ def test_initial_unit_property_refinement_preserves_privacy_and_legacy_fallback(
     assert events.count('runtime_close') == 1
 
 
-@pytest.mark.parametrize('mode', ['manifest', 'selection', 'content', 'ancestor', 'lookup', 'mount',
+@pytest.mark.parametrize('index', range(4))
+@pytest.mark.parametrize('mode', ['manifest', 'selection', 'reorder', 'add', 'remove', 'content', 'metadata', 'ancestor', 'lookup', 'mount',
                                   'effect-mount', 'application-overlap', 'backup-overlap',
+                                  'launcher-overlap', 'control-overlap',
                                   'prebackup', 'prestop', 'after-start', 'closing'])
-def test_preserved_dropin_profile_binds_effects_and_revalidation(monkeypatch, secure_tmp_path, mode):
+def test_preserved_dropin_profile_binds_effects_and_revalidation(monkeypatch, secure_tmp_path, mode, index):
     import base64
     from tests.ops.test_bws_installation_lifecycle import configure_control_path_service, configure_preserved_dropin
     if mode in {'prebackup', 'prestop', 'after-start', 'closing'}:
         from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
-        result = exercise_control_path_transaction(secure_tmp_path, 'dev', 'preserved-' + mode)
+        result = exercise_control_path_transaction(secure_tmp_path, 'dev', 'preserved-' + mode,
+                                                  input_count=4, input_index=index)
         assert result['status'] == ('refused_before_backup' if mode == 'prebackup' else 'unknown')
         return
     case = _empty_control_manifest_case(monkeypatch, secure_tmp_path)
@@ -3919,8 +3956,12 @@ def test_preserved_dropin_profile_binds_effects_and_revalidation(monkeypatch, se
     properties = configure_control_path_service(module, monkeypatch, state, case.control_root,
         case.app_root, runtime, launcher, 'dev', ['PATH=/usr/bin:' + str(case.control_root)])
     directory = (case.app_root if mode == 'application-overlap' else Path(proof['backup_root'].path)
-                 if mode == 'backup-overlap' else secure_tmp_path.resolve())
-    selected = configure_preserved_dropin(module, monkeypatch, directory, properties, 'dev')
+                 if mode == 'backup-overlap' else Path(case.roots['launcher'].path)
+                 if mode == 'launcher-overlap' else case.control_root
+                 if mode == 'control-overlap' else secure_tmp_path.resolve())
+    configure_preserved_dropin(module, monkeypatch, directory, properties, 'dev', count=4, mixed_parents=True)
+    paths = tuple(Path(path) for path in properties['Unit', 'DropInPaths'])
+    selected = paths[index]
     raw = payloads['launcher', 'yggdrasil-bws-deploy']
     service = module.FixedBwsService(unit='yggdrasil-bws-deploy@dev.service', channel='dev')
     arguments = dict(application_root=dict(path=str(case.app_root), **case.profile['roots']['application']),
@@ -3936,7 +3977,7 @@ def test_preserved_dropin_profile_binds_effects_and_revalidation(monkeypatch, se
             service.qualify_old(**arguments)
             contract = service.contract
             held = service.control_path_binding.fds
-            assert str(selected) in held
+            assert all(str(path) in held for path in paths)
             assert all(path in held for path in proof['control_path_effect_parents'])
             assert all(root['path'] in held for root in proof['control_path_footprint'])
             if mode == 'manifest':
@@ -3946,8 +3987,16 @@ def test_preserved_dropin_profile_binds_effects_and_revalidation(monkeypatch, se
             else:
                 if mode == 'selection':
                     properties['Unit', 'DropInPaths'] = []
+                elif mode == 'reorder':
+                    properties['Unit', 'DropInPaths'].reverse()
+                elif mode == 'add':
+                    properties['Unit', 'DropInPaths'].append(str(selected.with_name('extra.conf')))
+                elif mode == 'remove':
+                    properties['Unit', 'DropInPaths'].pop(index)
                 elif mode == 'content':
                     selected.write_bytes(selected.read_bytes().replace(b'/usr/bin', b'/opt/bin'))
+                elif mode == 'metadata':
+                    selected.chmod(0o600)
                 elif mode == 'ancestor':
                     selected.parent.chmod(0o777)
                 elif mode == 'lookup':
@@ -3969,8 +4018,10 @@ def test_preserved_dropin_profile_binds_effects_and_revalidation(monkeypatch, se
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('input_count', [1, 4])
 @pytest.mark.parametrize('mode', ['partial', 'restored-drift'])
-def test_preserved_dropin_profile_preserves_compensation_boundaries(secure_tmp_path, channel, mode):
+def test_preserved_dropin_profile_preserves_compensation_boundaries(secure_tmp_path, channel, mode, input_count):
     from tests.deploy.test_bws_source_rpc_assembly import exercise_control_path_transaction
-    result = exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode)
+    result = exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode,
+                                              input_count=input_count, input_index=input_count - 1)
     assert result['status'] == ('compensated_stopped' if mode == 'partial' else 'unknown')
