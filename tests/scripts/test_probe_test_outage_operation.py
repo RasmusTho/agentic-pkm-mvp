@@ -2710,9 +2710,7 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
     from datetime import datetime, timezone
 
     kernel, assembly = _native(self)
-    program = (
-        "from __future__ import annotations\nfrom dataclasses import dataclass\n@dataclass\nclass Receipt:\n operation: str\ndef native_entry(role,e):\n r=Receipt(e['packet']['operation']);return {'schema':'executed-remote-envelope.v1','operation':r.operation}\n"
-    ).encode()
+    program = Path(target.__file__).read_bytes()
     contract = b"fixed reviewed issue6493"
     packet = {
         "schema": "fixed_test_probe.carrier.v1",
@@ -2735,12 +2733,21 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
         "normal_interval_seconds": 61,
         "heartbeat_stale_seconds": 601,
         "gh_executable": "/opt/homebrew/bin/gh",
-        "caller_interpreter": "/Users/rasmus/.pyenv/versions/3.12.7/bin/python3",
+        "caller_interpreter": "/opt/synthetic-caller/bin/python3",
     }
     for path in (packet["gh_executable"], packet["caller_interpreter"]):
         kernel.os.add(path, b"qualified existing local tool", mode=0o755)
     original = kernel.response
     executed = []
+    caller_path = target.LOCAL_TEST_WORKTREE + "/scripts/probe_test_outage_operation.py"
+    entry = {
+        "file": caller_path,
+        "cwd": target.LOCAL_TEST_WORKTREE,
+        "executable": packet["caller_interpreter"],
+    }
+    kernel.os.add(caller_path, program, mode=0o644)
+    kernel.os.getcwd = lambda: entry["cwd"]
+    kernel.os.path.realpath = lambda path: path
     authority = {
         "ok": True,
         "task": {
@@ -2796,24 +2803,80 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
             ).encode()
         if argv[0] == "/usr/bin/ssh":
             self.assertIn(b"sys.modules[m.__name__]=m", payload)
+
+            def remote_port(role, envelope):
+                import base64
+
+                self.assertEqual("remote-launch", role)
+                self.assertEqual(program, base64.b64decode(envelope["program"]))
+                self.assertEqual(packet["program_sha256"], target.sha(program))
+                # SSH is the external port of this local-caller test. Remote
+                # execution has separate real bootstrap/native mechanism proof.
+                return {
+                    "schema": "fixed_test_probe.outcome.v1",
+                    "status": "REFUSED",
+                    "operation": envelope["packet"]["operation"],
+                }
+
+            def execute_remote_source(source, namespace):
+                exec(source, namespace)
+                self.assertIs(sys.modules[namespace["__name__"]].__dict__, namespace)
+                self.assertEqual(namespace["Binding"].__module__, namespace["__name__"])
+                namespace["native_entry"] = remote_port
+
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                exec(compile(payload, "actual-assembled-remote-envelope", "exec"), {})
+                exec(
+                    compile(payload, "actual-assembled-remote-envelope", "exec"),
+                    {"exec": execute_remote_source},
+                )
             executed.append(json.loads(output.getvalue()))
             return output.getvalue().encode()
         return original(argv, payload)
 
     kernel.response = response
     archive, manifest, _ = fixture_source()
-    result = target.run_claimed_local_caller(
-        json.dumps(packet).encode(),
-        kernel.dependencies,
-        (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
-        archive,
-        manifest,
-    )
+    inputs = "/synthetic-local-inputs"
+    for name, data in (
+        ("carrier.json", json.dumps(packet).encode()),
+        ("source.tar", archive),
+        ("manifest.json", manifest),
+        ("custody.py", (PUBLIC / "scripts/probe_upgrade_operation.py").read_bytes()),
+    ):
+        kernel.os.add(inputs + "/" + name, data)
+
+    def invoke():
+        output = io.StringIO()
+        with (
+            patch.object(target, "__file__", entry["file"]),
+            patch.object(sys, "executable", entry["executable"]),
+            patch.object(
+                target.LinuxDependencies, "standard_library", return_value=kernel.dependencies
+            ),
+            contextlib.redirect_stdout(output),
+        ):
+            result = target.main(
+                [
+                    "--request",
+                    inputs + "/carrier.json",
+                    "--archive",
+                    inputs + "/source.tar",
+                    "--manifest",
+                    inputs + "/manifest.json",
+                    "--custody-source",
+                    inputs + "/custody.py",
+                ]
+            )
+        self.assertEqual(78, result)
+        return output.getvalue().encode()
+
+    result = invoke()
     self.assertEqual(
-        {"schema": "executed-remote-envelope.v1", "operation": packet["operation"]},
+        {
+            "schema": "fixed_test_probe.outcome.v1",
+            "status": "REFUSED",
+            "operation": packet["operation"],
+        },
         json.loads(result),
     )
     self.assertEqual(1, len(executed))
@@ -2822,6 +2885,38 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
     ssh = [process for process in kernel.processes if process.argv[0] == "/usr/bin/ssh"]
     self.assertEqual(1, len(ssh))
     self.assertNotIn("GH_TOKEN", ssh[0].environment)
+    for key, value in (
+        ("file", "/copied-checkout/scripts/probe_test_outage_operation.py"),
+        ("cwd", "/another-checkout"),
+        ("executable", "/opt/foreign-python/bin/python3"),
+    ):
+        with self.subTest(actual_entry=key):
+            before, previous = len(kernel.processes), entry[key]
+            entry[key] = value
+            with self.assertRaisesRegex(target.Refusal, "actual_caller_file_cwd_or_interpreter"):
+                invoke()
+            self.assertEqual(before, len(kernel.processes))
+            entry[key] = previous
+    before = len(kernel.processes)
+    kernel.os.files[caller_path] = b"stale local caller"
+    with self.assertRaisesRegex(target.Refusal, "actual_caller_source_not_reviewed"):
+        invoke()
+    self.assertEqual(before, len(kernel.processes))
+    kernel.os.files[caller_path] = program
+    for path, key, value in (
+        (caller_path, "st_uid", 12345),
+        (caller_path, "st_mode", stat.S_IFREG | 0o664),
+        (packet["caller_interpreter"], "st_mode", stat.S_IFREG | 0o775),
+    ):
+        with self.subTest(entry_metadata=key, path=path):
+            metadata = kernel.os.meta[path]
+            previous = getattr(metadata, key)
+            setattr(metadata, key, value)
+            before = len(kernel.processes)
+            with self.assertRaisesRegex(target.Refusal, "actual_caller_.*metadata"):
+                invoke()
+            self.assertEqual(before, len(kernel.processes))
+            setattr(metadata, key, previous)
     for surface, key, value in (
         (authority["task"], "claimed_by", "former-holder"),
         (authority["task"], "task_id", "github-foreign-issue-6493"),
@@ -2836,18 +2931,72 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
         with self.subTest(authority_key=key, value=value):
             previous, surface[key] = surface[key], value
             with self.assertRaises(target.Refusal):
-                target.run_claimed_local_caller(
-                    json.dumps(packet).encode(),
-                    kernel.dependencies,
-                    (PUBLIC / "scripts/probe_upgrade_operation.py").read_text(),
-                    archive,
-                    manifest,
-                )
+                invoke()
             surface[key] = previous
             self.assertEqual(
                 1,
                 len([process for process in kernel.processes if process.argv[0] == "/usr/bin/ssh"]),
             )
+
+    for change in ("source", "same_bytes_replacement", "interpreter_replacement", "cwd"):
+        with self.subTest(after_authority=change):
+            script_inode = kernel.os.meta[caller_path].st_ino
+            tool_inode = kernel.os.meta[packet["caller_interpreter"]].st_ino
+
+            def replace_after_authority(argv, payload):
+                result = response(argv, payload)
+                if (
+                    argv[0] == packet["caller_interpreter"]
+                    and "load_lifecycle_authority" in argv[2]
+                ):
+                    if change == "source":
+                        kernel.os.files[caller_path] = b"changed after initial local admission"
+                    elif change == "same_bytes_replacement":
+                        kernel.os.meta[caller_path].st_ino += 1
+                    elif change == "interpreter_replacement":
+                        kernel.os.meta[packet["caller_interpreter"]].st_ino += 1
+                    else:
+                        entry["cwd"] = "/changed-after-authority"
+                return result
+
+            kernel.response = replace_after_authority
+            with self.assertRaisesRegex(target.Refusal, "actual_caller_"):
+                invoke()
+            self.assertEqual(1, len([p for p in kernel.processes if p.argv[0] == "/usr/bin/ssh"]))
+            kernel.os.files[caller_path] = program
+            kernel.os.meta[caller_path].st_ino = script_inode
+            kernel.os.meta[packet["caller_interpreter"]].st_ino = tool_inode
+            entry["cwd"] = target.LOCAL_TEST_WORKTREE
+    kernel.response = response
+    close = kernel.os.close
+
+    def lost_entry_close(descriptor):
+        path = kernel.os.fds[descriptor][0]
+        close(descriptor)
+        if path == caller_path:
+            raise OSError("synthetic caller descriptor close loss")
+
+    before = len(kernel.processes)
+    kernel.os.close = lost_entry_close
+    with self.assertRaises(OSError):
+        invoke()
+    self.assertEqual(before, len(kernel.processes))
+    kernel.os.close = close
+    read, epoch, monotonic = kernel.os.read, kernel.clock.epoch, kernel.clock.value
+
+    def exhaust_entry_budget(descriptor, count):
+        value = read(descriptor, count)
+        if kernel.os.fds[descriptor][0] == caller_path:
+            kernel.clock.advance(1800)
+        return value
+
+    kernel.os.read = exhaust_entry_budget
+    with self.assertRaisesRegex(target.Unknown, "whole_local_caller_entry_budget"):
+        invoke()
+    self.assertEqual(before, len(kernel.processes))
+    kernel.os.read = read
+    kernel.clock.epoch, kernel.clock.value = epoch, monotonic
+    self.assertFalse(any(path == caller_path for path, _ in kernel.os.fds.values()))
     sys.modules.pop("fixed_test_program", None)
 
 

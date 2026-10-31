@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 import re
 import secrets
 import stat
+import sys
 import tarfile
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -5901,6 +5902,75 @@ def run_claimed_local_caller(
     import base64
 
     packet = carrier_packet(packet_raw)
+
+    def caller_entry() -> tuple[Any, ...]:
+        api = dependencies.os
+        path = LOCAL_TEST_WORKTREE + "/scripts/probe_test_outage_operation.py"
+        if (
+            api.getcwd() != LOCAL_TEST_WORKTREE
+            or api.path.realpath(__file__) != path
+            or api.path.realpath(path) != path
+            or not absolute(sys.executable)
+            or api.path.realpath(sys.executable) != api.path.realpath(packet["caller_interpreter"])
+        ):
+            raise Refusal("actual_caller_file_cwd_or_interpreter_unqualified")
+        interpreter = api.stat(api.path.realpath(sys.executable), follow_symlinks=False)
+        if (
+            not stat.S_ISREG(interpreter.st_mode)
+            or interpreter.st_mode & 0o022
+            or not interpreter.st_mode & 0o111
+            or interpreter.st_uid not in {0, api.geteuid()}
+        ):
+            raise Refusal("actual_caller_interpreter_metadata_unqualified")
+        descriptor = api.open(path, api.O_RDONLY | api.O_NOFOLLOW | api.O_NONBLOCK | api.O_CLOEXEC)
+        try:
+            before = api.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or before.st_uid not in {0, api.geteuid()}
+                or before.st_mode & 0o022
+                or not 0 < before.st_size <= 1_048_576
+            ):
+                raise Refusal("actual_caller_file_metadata_unqualified")
+            data = bytearray()
+            while True:
+                if packet["_end_epoch"] - dependencies.time.time() <= 2.1:
+                    raise Unknown("whole_local_caller_entry_budget")
+                block = api.read(descriptor, min(16384, 1_048_577 - len(data)))
+                if not block:
+                    break
+                data.extend(block)
+                if len(data) > 1_048_576:
+                    raise Refusal("actual_caller_file_bound")
+            after = api.fstat(descriptor)
+            keys = (
+                "st_dev",
+                "st_ino",
+                "st_size",
+                "st_mtime_ns",
+                "st_ctime_ns",
+                "st_mode",
+                "st_uid",
+                "st_gid",
+                "st_nlink",
+            )
+            identity = tuple(getattr(before, key) for key in keys)
+            if (
+                identity != tuple(getattr(after, key) for key in keys)
+                or len(data) != before.st_size
+                or sha(bytes(data)) != packet["program_sha256"]
+            ):
+                raise Refusal("actual_caller_source_not_reviewed_program")
+            return (
+                *identity,
+                api.path.realpath(sys.executable),
+                *(getattr(interpreter, key) for key in keys),
+            )
+        finally:
+            api.close(descriptor)
+
+    original_entry = caller_entry()
     if sha(archive) != ARCHIVE_SHA256 or sha(manifest) != MANIFEST_SHA256:
         raise Refusal("caller_live_archive_identity")
     # Reuse exact accepted primitives with no PROD resource imports/globals.
@@ -6108,6 +6178,8 @@ def run_claimed_local_caller(
         if key in dependencies.os.environ:
             environment[key] = dependencies.os.environ[key]
     # Single original submission; caller never retries a lost acknowledgement.
+    if caller_entry() != original_entry:
+        raise Refusal("actual_caller_entry_changed_before_transport")
     remaining = packet["_end_epoch"] - dependencies.time.time() - 2.1
     if remaining <= 0:
         raise Unknown("whole_caller_transport_reserve")
