@@ -2,6 +2,13 @@
   "invariant": "INV-EF1",
   "rows": [
     {
+      "artifact": "scripts/probe_dev_outage_operation.py",
+      "category": "ii",
+      "why_load_bearing": "The bounded #6505 DEV operation authenticates its exact claimed local worktree, branch and executing entry before transport. This fixed personal checkout is an operation-specific caller authority anchor, not a Product path default or live target qualification.",
+      "disposition": "stay",
+      "issue": "#6505"
+    },
+    {
       "artifact": "docs/CLOUD_SECRET_PROVISIONING/ADMINISTER_SECRETS_VALUE_FREE.md",
       "category": "iii",
       "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
