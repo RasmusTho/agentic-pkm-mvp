@@ -5340,15 +5340,34 @@ def discover_fixed_test_producer(
         if len(matches) != 1:
             raise Refusal("one_actual_outbox_worker_process_not_observed")
         worker_pid, argv = matches[0]
-    ports = api.get("ports", {}).get("8000/tcp")
+    published = api.get("ports")
+    ports = published.get("8000/tcp") if isinstance(published, dict) else None
     if (
         not isinstance(ports, list)
-        or len(ports) != 1
-        or ports[0].get("HostIp") not in {"127.0.0.1", "0.0.0.0"}
-        or not str(ports[0].get("HostPort", "")).isdigit()
-        or not 1 <= int(ports[0]["HostPort"]) <= 65535
+        or not 1 <= len(ports) <= 2
+        or any(
+            not isinstance(row, dict)
+            or set(row) != {"HostIp", "HostPort"}
+            or type(row["HostIp"]) is not str
+            or row["HostIp"] not in {"127.0.0.1", "0.0.0.0", "::"}
+            or type(row["HostPort"]) is not str
+            or re.fullmatch(r"[1-9][0-9]{0,4}", row["HostPort"]) is None
+            or int(row["HostPort"]) > 65535
+            for row in ports
+        )
     ):
         raise Refusal("actual_test_api_publication_ambiguous_or_unsupported")
+    # Docker may publish one container port as an IPv4/IPv6 wildcard pair.
+    # Keep one positively selected IPv4 route; the twin cannot add another port.
+    ipv4 = [row for row in ports if row["HostIp"] in {"127.0.0.1", "0.0.0.0"}]
+    if (
+        len(ipv4) != 1
+        or len(ports) == 2
+        and {row["HostIp"] for row in ports} != {"0.0.0.0", "::"}
+        or any(row["HostPort"] != ipv4[0]["HostPort"] for row in ports)
+    ):
+        raise Refusal("actual_test_api_publication_ambiguous_or_unsupported")
+    api_port = ipv4[0]["HostPort"]
     path = worker["heartbeat"]
     mounts = [
         mount
@@ -5427,7 +5446,7 @@ def discover_fixed_test_producer(
         "sdk": sdk_path,
         "sdk_realpath": sdk_realpath,
         "sdk_sha256": sdk_digest,
-        "api_base": "http://127.0.0.1:" + str(ports[0]["HostPort"]),
+        "api_base": "http://127.0.0.1:" + api_port,
         "producer_route": "compose-test-api-worker:" + api["project"],
         "worker_host_pid": worker_pid,
         "worker_namespace_pid": namespace_pid[0],
