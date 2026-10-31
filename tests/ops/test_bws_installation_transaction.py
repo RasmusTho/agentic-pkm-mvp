@@ -2047,6 +2047,10 @@ def _transaction_fixture(
     current = {"profile": actual_candidate}
 
     class Ports:
+        # This effect-port fixture models an already bound synthetic caller.
+        # Real loader/candidate binding is covered by the source-RPC assembly.
+        early_refusal_sources_bound = True
+
         def verify_caller_checkout(self, _request):
             events.append("verify_caller_checkout")
 
@@ -2686,6 +2690,54 @@ def test_prebackup_refusal_receipt_reports_finite_gate(options, expected_gate):
     assert admission.receipt == receipt
 
 
+@pytest.mark.parametrize('scenario', [
+    'cardinality', 'allowed_parent', 'basename_length', 'basename_grammar',
+    'legacy_selection', 'empty_success', 'singleton_success',
+])
+def test_dropin_selector_refusals_preserve_order_effects_and_success(scenario):
+    from app.ops import bws_installation_lifecycle as lifecycle
+
+    request, ports, admission, service, events, *_ = _transaction_fixture()
+    if scenario in lifecycle._DROPIN_SELECTOR_CATEGORIES or scenario == 'legacy_selection':
+        category = 'selection' if scenario == 'legacy_selection' else scenario
+
+        def refuse(**_kwargs):
+            events.append('qualify_old_refusal')
+            raise lifecycle._OldQualificationRefusal(
+                'unit_properties', unit_property=('Unit_DropInPaths', category),
+            )
+
+        service.qualify_old = refuse
+    elif scenario == 'empty_success':
+        assert lifecycle._preserved_dropin_path([], 'dev') is None
+    else:
+        parent = f'{lifecycle._SYSTEMD_DIRECTORY}/yggdrasil-bws-deploy@.service.d'
+        selected = parent + '/valid-singleton.conf'
+        assert lifecycle._preserved_dropin_path([selected], 'dev') == selected
+
+    result = transaction._execute_source_installation('dev', request, ports)
+    receipt = result['source_installation']
+    if scenario in lifecycle._DROPIN_SELECTOR_CATEGORIES or scenario == 'legacy_selection':
+        category = 'selection' if scenario == 'legacy_selection' else scenario
+        gate = f'old_kernel_initial_unit_properties__Unit_DropInPaths__{category}'
+        _assert_old_refusal(result, events, gate)
+        assert events.index('verify_candidate') < events.index('source_manifest')
+        assert events.index('source_manifest') < events.index('runtime_enter')
+        assert events.index('runtime_enter') < events.index('qualify_old_refusal')
+        assert events.count('runtime_close') == 1
+        assert all(receipt[key] is None for key in (
+            'old_generation_sha256', 'new_generation_sha256', 'backup_manifest_sha256',
+        ))
+        assert admission.receipt == receipt
+    else:
+        assert receipt['status'] == 'installed'
+        assert events.index('prepare') < events.index('apply_launcher')
+        assert events.index('apply_launcher') < events.index('stop_old')
+        assert events.index('stop_old') < events.index('apply_source')
+        assert events.index('apply_source') < events.index('start_new')
+        assert admission.receipt == receipt
+
+
 @pytest.mark.parametrize("fault", ["missing-port", "missing-peak", "bool-peak", "negative-peak"])
 def test_invalid_descriptor_port_or_peak_refuses_before_service(fault):
     request, ports, admission, _service, events, _old, _candidate = _transaction_fixture()
@@ -2827,6 +2879,29 @@ def test_legacy_first_call_uses_old_boundary_without_profile_rpc():
     assert qualified_preflight < events.index("verify_caller_sources") < events.index("prepare")
     assert events.index("prepare") < events.index("apply_launcher") < events.index("stop_old")
     assert events.index("stop_old") < events.index("apply_source")
+
+
+@pytest.mark.parametrize('bound', [True, False, None, 1, 'PRIVATE_CANARY'])
+def test_early_refusal_provenance_preserves_prebackup_order(bound):
+    request, ports, admission, service, events, *_ = _transaction_fixture()
+    ports.early_refusal_sources_bound = bound
+    def refuse(**_kwargs):
+        events.append('qualify_old_refusal')
+        raise bws_installation_lifecycle._OldQualificationRefusal(
+            'unit_properties', unit_property=('Unit_DropInPaths', 'selection'),
+        )
+    service.qualify_old = refuse
+    result = transaction._execute_source_installation('dev', request, ports)
+    gate = 'old_kernel_initial_unit_properties__Unit_DropInPaths__selection'
+    if bound is not True:
+        gate += '__provenance_unavailable'
+    _assert_old_refusal(result, events, gate)
+    assert admission.receipt == result['source_installation']
+    assert events.index('verify_candidate') < events.index('source_manifest')
+    assert events.index('source_manifest') < events.index('runtime_enter') < events.index('qualify_old_refusal')
+    assert events.count('preflight') == events.count('runtime_close') == 1
+    assert 'verify_caller_sources' not in events
+    assert not {'prepare', 'apply_launcher', 'stop_old', 'apply_source', 'start_new'} & set(events)
 
 
 def test_candidate_launcher_is_staged_before_stop_under_same_handle():

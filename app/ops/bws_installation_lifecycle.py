@@ -71,10 +71,15 @@ _UNIT_PROPERTY_READ_SITES = _UNIT_PROPERTY_VALUE_SITES | frozenset(
      'Service_ExecStopPost Service_ExecStopPost_final Service_Environment Service_EnvironmentFiles '
      'Unit_ActiveState Unit_SubState Unit_Job Service_ControlPID Service_MainPID').split()
 )
+_DROPIN_SELECTOR_CATEGORIES = frozenset({
+    'cardinality', 'allowed_parent', 'basename_length', 'basename_grammar',
+})
 _UNIT_PROPERTY_REFINEMENTS = frozenset(
     (site, kind) for site in _UNIT_PROPERTY_READ_SITES
     for kind in ('backend', 'decode', 'signature', 'shape')
-) | frozenset((site, 'value') for site in _UNIT_PROPERTY_VALUE_SITES)
+) | frozenset((site, 'value') for site in _UNIT_PROPERTY_VALUE_SITES) | frozenset({
+    ('Unit_DropInPaths', 'selection'), ('Unit_DropInPaths', 'unsupported'),
+}) | frozenset(('Unit_DropInPaths', kind) for kind in _DROPIN_SELECTOR_CATEGORIES)
 
 
 class _OldQualificationRefusal(RuntimeError):
@@ -142,19 +147,32 @@ def _control_path_descriptor_bound() -> int:
 
 def _preserved_dropin_path(paths: Any, channel: str) -> str | None:
     if type(paths) is not list:
-        _refuse('unit_properties')
+        _unit_read_refuse('shape')
     if not paths:
         return None
-    if len(paths) != 1 or type(paths[0]) is not str:
-        _refuse('unit_properties')
+    if len(paths) != 1:
+        _dropin_selector_refuse('cardinality')
+    if type(paths[0]) is not str:
+        _unit_read_refuse('shape')
     path = paths[0]
     parent, _, name = path.rpartition('/')
     allowed = {f'{_SYSTEMD_DIRECTORY}/yggdrasil-bws-deploy@{instance}.service.d'
                for instance in ('', channel)}
-    if (parent not in allowed or len(name) > 80
-            or re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_.-]*\.conf', name) is None):
-        _refuse('unit_properties')
+    if parent not in allowed:
+        _dropin_selector_refuse('allowed_parent')
+    if len(name) > 80:
+        _dropin_selector_refuse('basename_length')
+    if re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_.-]*\.conf', name) is None:
+        _dropin_selector_refuse('basename_grammar')
     return path
+
+
+def _dropin_selector_refuse(category: str) -> NoReturn:
+    if category not in _DROPIN_SELECTOR_CATEGORIES:
+        _refuse('unit_properties')
+    raise _OldQualificationRefusal(
+        'unit_properties', unit_property=('Unit_DropInPaths', category),
+    ) from None
 
 
 def _preserved_path_assignment(raw: bytes) -> str:
@@ -1107,6 +1125,8 @@ class FixedBwsService:
                 kind = getattr(failure, 'read_kind', None)
                 if type(kind) is str and kind in {'backend', 'decode', 'signature', 'shape'}:
                     self._unit_property_refuse(site, kind)
+            if site == 'Unit_DropInPaths':
+                self._unit_property_refuse(site, 'unsupported')
             _refuse('unit_properties')
 
     def _call(self, method: str, signature: str) -> Any:
@@ -1224,12 +1244,26 @@ class FixedBwsService:
                 namespace_value = self._get('Service', name, signature)
                 if type(namespace_value) is not type(namespace_expected) or namespace_value != namespace_expected:
                     self._unit_property_refuse('Service_' + name, 'value')
+            # The original read must retain its own refusal classification.
+            dropin_paths = self._get('Unit', 'DropInPaths', 'as')
             try:
-                selected_dropin = _preserved_dropin_path(self._get('Unit', 'DropInPaths', 'as'), self.channel)
+                selected_dropin = _preserved_dropin_path(dropin_paths, self.channel)
             except _OldQualificationRefusal as failure:
-                if failure.unit_property is not None:
-                    raise
-                self._unit_property_refuse('Unit_DropInPaths', 'value')
+                refinement = getattr(failure, 'unit_property', None)
+                selector_category = (
+                    refinement[1]
+                    if type(failure) is _OldQualificationRefusal
+                    and type(failure.subgate) is str
+                    and failure.subgate == 'unit_properties'
+                    and type(refinement) is tuple and len(refinement) == 2
+                    and all(type(value) is str for value in refinement)
+                    and refinement[0] == 'Unit_DropInPaths'
+                    and refinement[1] in _DROPIN_SELECTOR_CATEGORIES else None
+                )
+                kind = ('unsupported' if type(failure) is not _OldQualificationRefusal else
+                        'shape' if failure.read_kind == 'shape' else
+                        selector_category if selector_category is not None else 'selection')
+                self._unit_property_refuse('Unit_DropInPaths', kind)
             if self._get('Unit', 'JoinsNamespaceOf', 'as') != []:
                 self._unit_property_refuse('Unit_JoinsNamespaceOf', 'value')
             loaded_projection: tuple[Any, ...] = ()

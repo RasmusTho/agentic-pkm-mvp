@@ -157,6 +157,18 @@ coarse gate remain readable and immutable. A classified refusal still has null o
 new and backup hashes and cannot reach prepare, backup, stop or apply. All original
 guards, their invocation order and retained-runtime cleanup remain binding.
 
+At the initial `Unit_DropInPaths` selector, the finite first-failed categories are
+`cardinality`, `allowed_parent`, `basename_length`, and `basename_grammar`. The
+selector uses the already-read property and checks cardinality before element shape,
+then allowed parent, basename length, and basename grammar. Empty selection and a
+valid singleton retain their existing behavior. The public diagnostic contains only
+the category; it does not disclose a count, path, property value, exception, digest,
+or other private input. Accepted selections and prebackup refusal/effect boundaries
+remain unchanged. Legacy absent, coarse, value, and `selection` receipts remain
+valid. Source26's public result identifies the selector family but leaves its actual
+failed predicate unknown; it establishes neither a source defect nor native
+acceptance.
+
 The captured-empty control-PATH configuration supports the finite preserved PATH-only
 drop-in profile documented in [Native source preflight and recovery](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#native-source-preflight-and-recovery):
 one protected selected `.conf` file in the fixed instance/template `/etc` unit
@@ -210,6 +222,26 @@ retry. Source23 remains historically `old_kernel_initial_unit_properties` with
 its inner cause UNKNOWN. This source-only change requires a newly matched image
 for any separately authorized later operation; it grants no native retry,
 installation, DEV-heavy, TEST or parent acceptance.
+
+For the captured-empty PATH branch, `Unit_DropInPaths__selection` means the
+original selector rejected the existing selection grammar. `shape` also covers
+the original list/element representation checks; `unsupported` means the original
+property read refused without a supported read classification. Transport,
+decode and signature failures retain their existing kinds. No selected path,
+entry count, property value or exception text is exported. The historical
+`Unit_DropInPaths__value` spelling remains readable; Source25's recorded value
+classification leaves its actual private cause UNKNOWN.
+
+An initial OLD diagnostic uses the existing source-loader origins and executed-byte
+hashes compared with the already computed verified-candidate manifest. This check
+adds no native read and does not move the later full caller-source verification.
+If that early binding is unavailable, the finite initial gate keeps its cause and
+adds `__provenance_unavailable`; its source-specific attribution is unverified.
+Missing or mismatched loader metadata and a missing candidate binding cannot claim
+verified source provenance. Legacy diagnostics without the suffix remain readable
+and do not retrospectively prove that this comparison ran. All later source,
+resource-close, first-failure and effect gates remain mandatory. This source-only
+support grants no native retry, installation or DEV/TEST acceptance.
 
 Root/control refinements use the existing field, with the complete closed spelling
 `old_kernel_<stage>_root_control__<mode>__<side>__<role>__<guard>`. Stage is
@@ -275,6 +307,18 @@ canonical request still binds clean caller/Git candidate C to immutable image D
 whose OCI revision is C; changed diagnostic bytes require a newly matched C/D
 before any separately authorized native decision.
 
+
+##### Planned retained PATH-input vector
+
+The [selected target contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#planned-retained-path-input-vector)
+extends the existing PATH-only profile to at most four ordered, fully retained
+inputs with identical decoded loaded PATH and one aggregate content budget. It is
+**not implemented or natively qualified**; current empty/singleton support remains
+unchanged. Source proof must cover the whole vector, all three descriptor-admission
+branches, generation/restoration and sticky original-close uncertainty. Existing
+value-free diagnostic and provenance rules remain mandatory. Actual native fit is
+unknown, and neither this contract nor diagnostic-only delivery authorizes an
+observer, configuration change, installation or DEV/TEST acceptance.
 
 ### #6300 fixed-selection reconciliation (historical, count-only)
 

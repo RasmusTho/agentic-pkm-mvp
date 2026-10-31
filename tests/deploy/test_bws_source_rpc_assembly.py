@@ -289,6 +289,14 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 selected = None if kind == 'valid' else dict(site=site, kind=kind)
                 install_unit_property_transport(lifecycle, patch, state, state['path_properties'], selected,
                                                 real_run=original_lifecycle_run)
+                if kind == 'unsupported':
+                    original_typed = lifecycle._typed
+                    def unclassified_read(argv, signature):
+                        value = original_typed(argv, signature)
+                        if argv[-1] == 'DropInPaths':
+                            lifecycle._refuse('unit_properties')
+                        return value
+                    patch.setattr(lifecycle, '_typed', unclassified_read)
             patch.setattr(lifecycle, '_public_launcher_bytes', original_public_launcher_bytes)
             assert lifecycle._public_launcher_bytes is original_public_launcher_bytes
             assert lifecycle._public_launcher_bytes.__name__ == '_public_launcher_bytes'
@@ -346,6 +354,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             def service(ports, selected_channel):
                 value = real_service(ports, selected_channel)
                 state['service'] = value
+                state['early_sources_bound'] = ports.early_refusal_sources_bound
                 state['events'].append('service')
                 if slot_kind.startswith('preserved-'):
                     original_config = value._config
@@ -418,6 +427,34 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             def interrupt_backup(*_args):
                 raise KeyboardInterrupt()
             control._backup = interrupt_backup
+        if fault.startswith('unit-'):
+            original_sources = transaction._source_modules
+            def source_binding(*args, **kwargs):
+                early = 'candidate_source_files' in kwargs
+                state['events'].append('early_source_binding' if early else 'caller_source_binding')
+                if not early:
+                    assert state['service'].phase != 'qualifying'
+                    return original_sources(*args, **kwargs)
+                def unexpected_read(*_args, **_kwargs):
+                    raise AssertionError('early binding repeated a native source read')
+                with pytest.MonkeyPatch.context() as no_reads:
+                    no_reads.setattr(transaction, '_read_relative', unexpected_read)
+                    no_reads.setattr(transaction, '_open_absolute_directory', unexpected_read)
+                    return original_sources(*args, **kwargs)
+            patch.setattr(transaction, '_source_modules', source_binding)
+            provenance = fault.partition(':')[0]
+            if provenance == 'unit-missing':
+                delattr(lifecycle, transaction._SOURCE_HASH_ATTRIBUTE)
+            elif provenance == 'unit-mismatch':
+                setattr(lifecycle, transaction._SOURCE_HASH_ATTRIBUTE, '0' * 64)
+            elif provenance == 'unit-origin':
+                lifecycle.__file__ = str(base / 'PRIVATE_CANARY.py')
+            elif provenance == 'unit-candidate':
+                original_verify = transaction._NativePorts.verify_candidate
+                def unavailable_candidate(ports, *args):
+                    original_verify(ports, *args)
+                    ports._verified_candidate_sha = None
+                patch.setattr(transaction._NativePorts, 'verify_candidate', unavailable_candidate)
         state.update(backups=backups, receipts=receipts, bound=True, control_root=control_root)
         return finder
 
@@ -632,9 +669,19 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         assert list(state["backups"].iterdir()) == []
     elif fault.startswith('unit-') and not fault.endswith(':valid'):
         _, site, kind = fault.split(':')
-        expected_kind = 'shape' if kind == 'value' and site == 'Service_Environment' else kind
+        expected_kind = ('shape' if kind == 'nested' or kind == 'value'
+                         and site in {'Service_Environment', 'Unit_DropInPaths'} else
+                         'allowed_parent' if site == 'Unit_DropInPaths' and kind == 'selection' else kind)
+        unavailable = fault.partition(':')[0] in {'unit-missing', 'unit-mismatch', 'unit-origin', 'unit-candidate'}
         assert result['status'] == 'refused_before_backup', result
-        assert result['prebackup_gate'] == 'old_kernel_initial_unit_properties__' + site + '__' + expected_kind
+        assert result['prebackup_gate'] == ('old_kernel_initial_unit_properties__' + site + '__' + expected_kind
+                                          + ('__provenance_unavailable' if unavailable else ''))
+        assert state['early_sources_bound'] is not unavailable
+        assert state['events'].count('early_source_binding') == (0 if fault.startswith('unit-candidate:') else 1)
+        assert 'caller_source_binding' not in state['events']
+        from tests.ops.test_bws_installation_lifecycle import _UNIT_INITIAL_TRACE
+        stop_site = 'Service_EnvironmentFiles' if (site, kind) == ('Service_Environment', 'value') else site
+        assert state['unit_trace'] == _UNIT_INITIAL_TRACE[:_UNIT_INITIAL_TRACE.index(stop_site) + 1]
         assert all(result[key] is None for key in (
             'old_generation_sha256', 'new_generation_sha256', 'backup_manifest_sha256'))
         assert not {'prepare', 'stop', 'start'} & set(state['events'])
@@ -653,6 +700,11 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         service = state['service']
         assert result['status'] == ('compensated_stopped' if fault == 'path-partial' else 'installed'), (result, state.get('prepare_failure'))
         assert service.runtime_close_completed and service.control_path_binding.closed
+        if fault.startswith('unit-'):
+            assert state['early_sources_bound'] is True
+            assert state['events'].index('early_source_binding') < state['events'].index('service')
+            assert state['events'].index('service') < state['events'].index('caller_source_binding')
+            assert state['events'].index('caller_source_binding') < state['events'].index('prepare')
         assert not service.control_path_binding.fds
         assert state['path_properties']['Service', 'Environment'] == state['path_environment']
         assert service.contract[2] == tuple(state['path_environment'])
@@ -791,6 +843,58 @@ def test_initial_unit_property_diagnostics_cross_real_source_rpc(secure_tmp_path
             [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(secure_tmp_path),
              str(Path(__file__).resolve().parents[2]), channel, 'unit-:' + site + ':' + kind,
              str(Path(directory).resolve())],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
+        )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result['restored'] and result['source_only']
+    assert result['status'] == ('installed' if kind == 'valid' else 'refused_before_backup')
+    assert 'PRIVATE_CANARY' not in completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize(('fault', 'expected_gate', 'expected_status'), [
+    ('unit-:Unit_DropInPaths:cardinality',
+     'old_kernel_initial_unit_properties__Unit_DropInPaths__cardinality', 'refused_before_backup'),
+    ('unit-:Unit_DropInPaths:allowed_parent',
+     'old_kernel_initial_unit_properties__Unit_DropInPaths__allowed_parent', 'refused_before_backup'),
+    ('unit-:Unit_DropInPaths:basename_length',
+     'old_kernel_initial_unit_properties__Unit_DropInPaths__basename_length', 'refused_before_backup'),
+    ('unit-:Unit_DropInPaths:basename_grammar',
+     'old_kernel_initial_unit_properties__Unit_DropInPaths__basename_grammar', 'refused_before_backup'),
+    ('unit-:Unit_DropInPaths:valid', None, 'installed'),
+    ('path-preserved-valid', None, 'installed'),
+])
+def test_dropin_selector_diagnostics_cross_real_source_rpc(
+    secure_tmp_path, channel, fault, expected_gate, expected_status,
+):
+    with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
+        completed = subprocess.run(
+            [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(secure_tmp_path),
+             str(Path(__file__).resolve().parents[2]), channel, fault, str(Path(directory).resolve())],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
+        )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result['restored'] and result['source_only']
+    assert result['status'] == expected_status
+    assert result.get('prebackup_gate') == expected_gate
+    assert 'PRIVATE_CANARY' not in completed.stdout + completed.stderr
+    assert 'arbitrary-PATH-private-canary.conf' not in completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('provenance,kind', [
+    ('bound', 'selection'), ('bound', 'nested'), ('bound', 'backend'),
+    ('bound', 'unsupported'), ('bound', 'valid'), ('missing', 'selection'),
+    ('mismatch', 'selection'), ('origin', 'selection'), ('candidate', 'selection'),
+])
+def test_early_refusal_diagnostic_is_bound_to_verified_candidate(secure_tmp_path, channel, provenance, kind):
+    with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
+        completed = subprocess.run(
+            [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(secure_tmp_path),
+             str(Path(__file__).resolve().parents[2]), channel,
+             'unit-' + provenance + ':Unit_DropInPaths:' + kind, str(Path(directory).resolve())],
             cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
         )
     assert completed.returncode == 0, completed.stderr

@@ -145,10 +145,15 @@ _UNIT_PROPERTY_READ_SITES = _UNIT_PROPERTY_VALUE_SITES | frozenset(
      'Service_ExecStopPost Service_ExecStopPost_final Service_Environment Service_EnvironmentFiles '
      'Unit_ActiveState Unit_SubState Unit_Job Service_ControlPID Service_MainPID').split()
 )
+_DROPIN_SELECTOR_CATEGORIES = frozenset({
+    'cardinality', 'allowed_parent', 'basename_length', 'basename_grammar',
+})
 _UNIT_PROPERTY_REFINEMENTS = frozenset(
     (site, kind) for site in _UNIT_PROPERTY_READ_SITES
     for kind in ('backend', 'decode', 'signature', 'shape')
-) | frozenset((site, 'value') for site in _UNIT_PROPERTY_VALUE_SITES)
+) | frozenset((site, 'value') for site in _UNIT_PROPERTY_VALUE_SITES) | frozenset({
+    ('Unit_DropInPaths', 'selection'), ('Unit_DropInPaths', 'unsupported'),
+}) | frozenset(('Unit_DropInPaths', kind) for kind in _DROPIN_SELECTOR_CATEGORIES)
 _UNIT_PROPERTY_REFINEMENT_GATES = frozenset(
     'old_kernel_initial_unit_properties__' + '__'.join(context)
     for context in _UNIT_PROPERTY_REFINEMENTS
@@ -186,6 +191,11 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "qualified_writer_snapshot",
     "generation_qualification",
 }) | _ROOT_CONTROL_REFINEMENT_GATES | _UNIT_PROPERTY_REFINEMENT_GATES
+# Keep finite cause detail when the early executed-source binding is unavailable.
+_PREBACKUP_REFUSAL_GATES |= frozenset(
+    gate + '__provenance_unavailable' for gate in _PREBACKUP_REFUSAL_GATES
+    if gate.startswith('old_kernel_initial_')
+)
 _LOCAL_SOURCE_REFERENCE = re.compile(
     rb"(?<![A-Za-z0-9_])c?(?:app|scripts|llm_contract|mimer_runtime|companion_ui)"
     rb"(?:(?:\.[A-Za-z_][A-Za-z_0-9]*)|(?:/[A-Za-z_][A-Za-z_0-9]*))*(?![A-Za-z0-9_])",
@@ -1001,6 +1011,7 @@ def _read_relative(root_fd: int, relative: str) -> tuple[bytes, int]:
 
 def _source_modules(
     config: Any, roots: dict[str, Path], *, caller_source_modules: object = None,
+    candidate_source_files: object = None,
 ) -> list[dict[str, object]]:
     if (getattr(sys, "pycache_prefix", None) != _SOURCE_PYCACHE_PREFIX
             or getattr(sys, "dont_write_bytecode", None) is not True):
@@ -1068,6 +1079,30 @@ def _source_modules(
     if not names or len(names) > _MAX_MODULES:
         _refuse()
     identities: list[dict[str, object]] = []
+    if candidate_source_files is not None:
+        # The original manifest has already read/hashed these candidate files.
+        # Reuse the loader's executed-byte hashes without another native read.
+        if type(candidate_source_files) is not list or len(candidate_source_files) > _MAX_SOURCE_FILES:
+            _refuse()
+        candidates: dict[tuple[str, str], dict[str, object]] = {}
+        for row in candidate_source_files:
+            if (type(row) is not dict or set(row) != {"root", "path", "sha256", "mode", "size"}
+                    or type(row["root"]) is not str or type(row["path"]) is not str
+                    or type(row["sha256"]) is not str
+                    or re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) is None
+                    or type(row["mode"]) is not int):
+                _refuse()
+            key = (row["root"], row["path"])
+            if key in candidates:
+                _refuse()
+            candidates[key] = row
+        for module_name, (root_name, relative) in sorted(names.items()):
+            candidate = candidates.get((root_name, relative))
+            if candidate is None or candidate["sha256"] != loaded_source_hashes[module_name]:
+                _refuse()
+            identities.append({"module": module_name, "root": root_name, "path": relative,
+                               "sha256": candidate["sha256"], "mode": candidate["mode"]})
+        return identities
     descriptors: list[int] = []
     root_descriptors: dict[str, int] = {}
     try:
@@ -2295,6 +2330,8 @@ class _NativePorts:
         self.lifecycle_close_uncertain = False
         self._caller_profile_sent = False
         self._caller_source_modules: list[dict[str, object]] | None = None
+        self._verified_candidate_sha: str | None = None
+        self.early_refusal_sources_bound = False
         caller_root = getattr(sys, "_yggdrasil_bws_candidate_checkout", None)
         self.caller_root = Path(caller_root) if type(caller_root) is str else None
 
@@ -2330,6 +2367,7 @@ class _NativePorts:
         if self.caller_root is None:
             _refuse()
         _verify_candidate(self.caller_root, request)
+        self._verified_candidate_sha = request["candidate_sha"]
 
     def verify_caller_sources(self, request: dict[str, str]) -> None:
         """Bind already imported caller modules to the exact candidate before any backup write."""
@@ -2364,12 +2402,30 @@ class _NativePorts:
                         roots: dict[str, Any], backup_root: Any) -> tuple[tuple[Any, ...], dict[tuple[str, str], bytes], dict[str, Any]]:
         if self.caller_root is None:
             _refuse()
-        return candidate_manifest(
+        manifest = candidate_manifest(
             profile, revision=request["candidate_sha"], roots=roots, backup_root=backup_root,
             git_show=lambda revision, path: _git_show(self.caller_root, revision, path),
             git_source_files=lambda revision: _git_source_files(self.caller_root, revision),
             git_file_mode=lambda revision, path: _git_mode(self.caller_root, revision, path),
         )
+        self.early_refusal_sources_bound = False
+        if self._verified_candidate_sha == request["candidate_sha"]:
+            try:
+                modules = _source_modules(
+                    config, {"application": self.caller_root, "control": _CONTROL_DIRECTORY},
+                    candidate_source_files=manifest[2]["candidate_files"],
+                )
+                if not {
+                    "app.ops.bws_installation_transaction", "app.ops.bws_installation_admission",
+                    "app.ops.bws_installation_lifecycle",
+                } <= {row["module"] for row in modules if row["root"] == "application"}:
+                    _refuse()
+            except Exception:
+                # Diagnostics cannot move a failure ahead of original qualification.
+                pass
+            else:
+                self.early_refusal_sources_bound = True
+        return manifest
 
     def preflight_source_descriptor_capacity(
         self, roots: dict[str, Any], changes: tuple[Any, ...], backup_root: Any,
@@ -2615,6 +2671,9 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                                     and all(type(value) is str for value in unit_property)
                                     and unit_property in _UNIT_PROPERTY_REFINEMENTS):
                                 refusal_gate = classified + "__" + "__".join(unit_property)
+                if (refusal_gate.startswith("old_kernel_initial_")
+                        and getattr(ports, "early_refusal_sources_bound", False) is not True):
+                    refusal_gate += "__provenance_unavailable"
                 receipt = _receipt(request, status="refused_before_backup", old_generation=None,
                                    new_generation=None, backup_manifest=None,
                                    prebackup_gate=refusal_gate)

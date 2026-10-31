@@ -1017,6 +1017,8 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/agent_memory",
             "tests/knowledge_compilation/test_review_admission_handoff.py",
             "tests/retrieval",
+            "tests/boundaries/test_domain_separation_defaults.py",
+            "tests/boundaries/test_panel_text_not_indexed.py",
             "tests/context_bundles",
             "tests/api/test_context_bundle_route.py",
             "tests/api/test_mvr05b4c_emitted_bundle_binding.py",
@@ -1147,6 +1149,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/components/llm",
             "tests/components/reasoning",
             "tests/index/test_identity_migration.py",
+            "tests/agents/test_set_evaluator.py",
             "tests/llm",
             "tests/cli/test_embed_probe.py",
             "tests/eval",
@@ -1342,6 +1345,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # for `ask` in PR #4495 (#2921; #4501).
             "tests/architecture/test_agent_state_spine.py",
             "tests/agents/test_runtime_state_contract.py",
+            "tests/cli/test_panel_cli.py",
+            "tests/cli/test_panel_orchestrator_cli.py",
+            "tests/cli/test_panel_runtime_cli.py",
         ),
     ),
     (
@@ -1473,21 +1479,44 @@ EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
             # The Product embedding probe now resolves clients through the LLM
             # fabric; keep the CLI entrypoint on the same focused coverage.
             "app/cli/embed_probe.py",
+            "tests/agents/test_set_evaluator.py",
         }
     ),
     # Product retrieval's embedding adapter is an exact seam between the LLM
     # fabric and the memory/indexing owners. Route it through the established
     # retrieval/index suites without claiming other components/ modules.
-    "memory_retrieval": frozenset({"app/components/retrieval.py"}),
+    "memory_retrieval": frozenset(
+        {
+            "app/components/retrieval.py",
+            "tests/boundaries/test_domain_separation_defaults.py",
+            "tests/boundaries/test_panel_text_not_indexed.py",
+        }
+    ),
     # Separator-only note-path normalization is shared by the vault and
     # knowledge modules, both covered by the vault owner's target set. Keep
     # this exact so a similarly named, unowned runtime module still fails closed.
-    "vault": frozenset({"app/path_utils.py"}),
+    "vault": frozenset(
+        {
+            "app/path_utils.py",
+            "tests/agents/test_reviewer.py",
+            "tests/agents/test_reviewer_single_note.py",
+        }
+    ),
     # These two planner producers are part of the orchestration admission
     # boundary. Keep their ownership exact while routing them through the
     # existing orchestration target set.
     "orchestration": frozenset(
         {"app/planner/provider.py", "app/planner/prompts.py"}
+    ),
+    # The Panel CLI functional modules drive the panel runtime and promotion
+    # consumer end to end. Own them exactly (#6504) so a direct edit runs them
+    # with the promotion_panel suites; other tests/cli modules stay unowned.
+    "promotion_panel": frozenset(
+        {
+            "tests/cli/test_panel_cli.py",
+            "tests/cli/test_panel_orchestrator_cli.py",
+            "tests/cli/test_panel_runtime_cli.py",
+        }
     ),
 }
 

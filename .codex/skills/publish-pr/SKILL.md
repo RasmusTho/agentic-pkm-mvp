@@ -33,9 +33,12 @@ by local `origin/main`, remote readback, and GitHub REST. Every committed path s
 including reverted paths, and every dirty path must fit the explicit intended set. New PRs require
 an absent remote head and empty all-state history. Existing updates require `--existing-pr-number`,
 one exact open PR, matching repository/base/head/lane/Issue scope and local/remote heads, and the
-existing PR scope-revalidation gate. Updates make only additive commits and non-force pushes;
-metadata is changed only after exact current-head readback. Unrelated dirty paths are preserved by
-refusing before staging.
+existing PR scope-revalidation gate. Content updates make only additive commits and non-force
+pushes; a clean unchanged head may update metadata under that gate's metadata-only rule without
+creating a commit or intending a head change. The existing adapter still performs its ordinary
+non-force same-SHA push before the plan-bound metadata update. Metadata is changed only after
+exact current-head readback.
+Unrelated dirty paths are preserved by refusing before staging.
 
 Every candidate commit since the bound base must also satisfy the existing commit-message rule:
 `Refs #<id>` is allowed; closing-keyword references are refused before publication. The adapter

@@ -1,23 +1,39 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from click.testing import CliRunner
 
 from app.cli import cli
 from app import objects as object_store_module
 from app.objects import DomainObject, ObjectStore
 
+# These functional callers reach Product model access on the panel runtime /
+# promotion path; enroll only them in the scoped deterministic gateway (#6504).
+_product_gateway = pytest.mark.usefixtures("product_model_access_gateway")
+
+
+@pytest.fixture(autouse=True)
+def _bound_vault_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+
 
 def _seed_panel_note(note_uuid: str, markdown: str) -> None:
+    # Panel runtime acknowledges only after a source CAS inside a bound vault
+    # (#5333); an ObjectStore-only note cannot stand in for that source.
+    note_file = Path(os.environ["VAULT_ROOT"]) / "vault" / f"{note_uuid}.md"
+    note_file.parent.mkdir(parents=True, exist_ok=True)
+    note_file.write_text(markdown, encoding="utf-8")
     obj = DomainObject(
         uuid=note_uuid,
         kind="note",
         payload={"raw_text": markdown},
-        source_ref="vault/Note.md",
+        source_ref=str(note_file),
         created_at=datetime.now(timezone.utc),
     )
     ObjectStore().save_object(obj, emit_outbox=False, trace_id="trace-cli")
@@ -39,6 +55,7 @@ mappings:
     return path
 
 
+@_product_gateway
 def test_panel_cli_emits_outbox(tmp_path: Path, monkeypatch) -> None:
     # clear memory store between runs
     object_store_module._MEMORY_STORE.clear()
