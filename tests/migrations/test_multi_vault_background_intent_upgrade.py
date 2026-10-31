@@ -276,6 +276,23 @@ def test_background_role_and_intent_set_mvr06_floor_before_first_write(
     assert "compensation is unproven" in refused["error"]
     assert "keep the deployment stopped" in refused["provisioning_action"]
 
+    # -- 6a. a role write that landed but raised is reconciled before the floor drops ----
+    landed, _, _, _ = mvr05_instance(tmp_path / "landed-role")
+    landed_before = _lineage(landed)
+    original_write = BackgroundRuntimeRoleStore._write
+
+    def _write_then_fail(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        original_write(self, *args, **kwargs)  # os.replace done ...
+        raise OSError("injected directory fsync fault")  # ... bootstrap never returns
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(BackgroundRuntimeRoleStore, "_write", _write_then_fail)
+        failed = run_background_cutover_through_cli(landed)
+    assert failed["_exit_code"] == 1 and "injected directory fsync fault" in failed["error"]
+    # The floor came down only together with the role: no delegation without its floor.
+    assert _lineage(landed) == landed_before
+    previous_registry_image.VaultRegistryStore(landed.layout.registry_path).read_existing()
+
     # -- 6. an intent that committed before a later failure is never compensated ---------
     committed, _, _, _ = mvr05_instance(tmp_path / "committed")
     original_install = VaultRegistryStore.install_background_intent

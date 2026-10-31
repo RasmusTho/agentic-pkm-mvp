@@ -631,10 +631,21 @@ def run_background_authority_cutover(
                     raise RegistryError(
                         "the registry moved past this cutover's floor generation"
                     )
-                if role_created and role is not None:
+                # Reconcile the role from disk, not from ``role_created``: a write can
+                # land (``os.replace``) and still raise (directory fsync), so bootstrap
+                # never returned. Any role this attempt put on disk must be gone before
+                # the floor is lowered; an unreadable record leaves the floor in place.
+                on_disk = role_store.load()
+                if on_disk is not None and (
+                    existing_role is None
+                    or on_disk.background_runtime_role_id
+                    != existing_role.background_runtime_role_id
+                ):
                     role_store.discard_uncommitted(
-                        role.background_runtime_role_id, _capability=_capability
+                        on_disk.background_runtime_role_id, _capability=_capability
                     )
+                    if role_store.load() is not None:
+                        raise RegistryError("this cutover's background role is still present")
                 registry.compensate_mvr06_runtime_floor(
                     expected_revision=floor.revision, _capability=_capability
                 )
