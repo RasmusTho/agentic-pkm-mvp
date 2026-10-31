@@ -268,9 +268,16 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
         scope_read = {'content_input': 2, 'current_directory': 2, 'fresh_directory': 3,
                       'current_input': 3, 'fresh_input': 4}.get(role, 1)
     latest_identity = [None, 0]
+    latest_descriptor = [None]
     def at_scope(path, occurrence):
         return path == scope_path and occurrence == scope_read
     owned, counts = {}, {}
+    def identity_in_scope(fd=None):
+        # A later runtime query must not inherit the last PATH identity's
+        # fault after that original descriptor was closed during refusal.
+        current = latest_descriptor[0] if fd is None else fd
+        return (current is not None and current == latest_descriptor[0]
+                and owned.get(current) == latest_identity[0] and at_scope(*latest_identity))
     def fail():
         evidence['fired'] = True
         raise OSError('PRIVATE_CANARY exception /secret/path errno=777')
@@ -317,6 +324,7 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
         path = owned.get(fd)
         occurrence = called('fstat', path)
         latest_identity[:] = path, occurrence
+        latest_descriptor[0] = fd
         # Metadata changes happen only at the original lifecycle reads, never
         # at the real transaction/manifest/snapshot readers.
         if (at_scope(path, occurrence) if role_case else path == target and occurrence == 1):
@@ -362,12 +370,12 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
     def inheritable(fd):
         path = owned.get(fd)
         called('inheritable', path)
-        if (at_scope(*latest_identity) if role_case else path == target) and name in {'file-inherit', 'file-inherit-query'}:
+        if (identity_in_scope(fd) if role_case else path == target) and name in {'file-inherit', 'file-inherit-query'}:
             if name.endswith('query'):
                 fail()
             evidence['fired'] = True
             return True
-        if (at_scope(*latest_identity) if role_case else path == control) and name in {'dir-inherit', 'dir-inherit-query'}:
+        if (identity_in_scope(fd) if role_case else path == control) and name in {'dir-inherit', 'dir-inherit-query'}:
             if name.endswith('query'):
                 fail()
             evidence['fired'] = True
@@ -375,7 +383,7 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
         return original_os.get_inheritable(fd)
     def access(fd, command):
         called('fcntl', owned.get(fd))
-        if (at_scope(*latest_identity) if role_case else owned.get(fd) == target) and name in {'file-access', 'file-access-query'}:
+        if (identity_in_scope(fd) if role_case else owned.get(fd) == target) and name in {'file-access', 'file-access-query'}:
             if name.endswith('query'):
                 fail()
             evidence['fired'] = True
@@ -472,14 +480,14 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
             assert (path, flags, mask) == (b'', 0x1900, 0x1000)
             target_path = owned.get(fd)
             called('statx', target_path)
-            in_scope = at_scope(*latest_identity) if role_case else target_path == control
+            in_scope = identity_in_scope(fd) if role_case else target_path == control
             if in_scope and name == 'mount-call':
                 fail()
             if in_scope and name == 'mount-result':
                 evidence['fired'] = True
                 return -1
             mount = 1
-            if name == 'walk-mount' and at_scope(*latest_identity):
+            if name == 'walk-mount' and identity_in_scope(fd):
                 evidence['fired'] = True
                 mount = 2
             if name == 'file-mount' and target_path == target or name == 'parent-mount' and target_path == target.parent:
@@ -494,15 +502,15 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
             result.raw = struct.pack('=I', mask) + b'\0' * 140 + struct.pack('=Q', mount) + b'\0' * 104
             return 0
     def libc(*_args, **_kwargs):
-        if name == 'mount-libc' and (at_scope(*latest_identity) if role_case else control in owned.values()):
+        if name == 'mount-libc' and (identity_in_scope() if role_case else control in owned.values()):
             fail()
         return Libc()
     def buffer(*args):
-        if name == 'mount-buffer' and (at_scope(*latest_identity) if role_case else control in owned.values()):
+        if name == 'mount-buffer' and (identity_in_scope() if role_case else control in owned.values()):
             fail()
         return real_buffer(*args)
     def unpack(*args):
-        if name == 'mount-unpack' and (at_scope(*latest_identity) if role_case else control in owned.values()):
+        if name == 'mount-unpack' and (identity_in_scope() if role_case else control in owned.values()):
             fail()
         return real_unpack(*args)
     patch.setattr(ctypes, 'CDLL', libc)
