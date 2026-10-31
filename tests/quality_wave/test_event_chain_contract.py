@@ -32,6 +32,10 @@ from app.watcher.events import build_watcher_run_event
 
 pytestmark = pytest.mark.not_pg
 
+# These functional callers reach Product model access on the panel runtime /
+# promotion path; enroll only them in the scoped deterministic gateway (#6504).
+_product_gateway = pytest.mark.usefixtures("product_model_access_gateway")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -115,6 +119,11 @@ def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outbox_path: Pat
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    # Panel writeback acknowledges only after a source CAS inside a bound vault
+    # (#5333); the seeded note lives under this root.
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
     monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
     monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
@@ -194,6 +203,7 @@ class TestWatcherEventContract:
 # 3. Full event chain: panel → promote.intent → consumer → promote.done
 # ---------------------------------------------------------------------------
 
+@_product_gateway
 class TestFullEventChain:
     """End-to-end contract: panel agent → promote.intent.created → consumer → promote.done."""
 
@@ -291,6 +301,7 @@ class TestFullEventChain:
 # 4. Idempotency: rerun produces no duplicate effects
 # ---------------------------------------------------------------------------
 
+@_product_gateway
 class TestIdempotency:
     """Idempotency contract: rerunning the same chain on the same note must not duplicate promote.done."""
 

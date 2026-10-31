@@ -1349,6 +1349,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # for `ask` in PR #4495 (#2921; #4501).
             "tests/architecture/test_agent_state_spine.py",
             "tests/agents/test_runtime_state_contract.py",
+            "tests/cli/test_panel_cli.py",
+            "tests/cli/test_panel_orchestrator_cli.py",
+            "tests/cli/test_panel_runtime_cli.py",
         ),
     ),
     (
@@ -1508,6 +1511,16 @@ EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
     # existing orchestration target set.
     "orchestration": frozenset(
         {"app/planner/provider.py", "app/planner/prompts.py"}
+    ),
+    # The Panel CLI functional modules drive the panel runtime and promotion
+    # consumer end to end. Own them exactly (#6504) so a direct edit runs them
+    # with the promotion_panel suites; other tests/cli modules stay unowned.
+    "promotion_panel": frozenset(
+        {
+            "tests/cli/test_panel_cli.py",
+            "tests/cli/test_panel_orchestrator_cli.py",
+            "tests/cli/test_panel_runtime_cli.py",
+        }
     ),
 }
 
