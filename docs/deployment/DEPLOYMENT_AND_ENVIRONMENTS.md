@@ -1276,31 +1276,37 @@ launcher/interpreter, loaded-source provenance and writer/quiescence gates remai
 independently mandatory. Complete Environment bytes and ordering are bound into
 the private lifecycle/generation projection; child runtime-bin prepending is unchanged.
 
-The captured-empty PATH branch also accepts exactly one selected `.conf` file in
+The captured-empty PATH branch also accepts up to four ordered selected `.conf` files in
 `/etc/systemd/system/yggdrasil-bws-deploy@<dev|test>.service.d/` or the corresponding
-`yggdrasil-bws-deploy@.service.d/` template directory. Its non-hidden ASCII basename
+`yggdrasil-bws-deploy@.service.d/` template directory. Each non-hidden ASCII basename
 is selected by grammar (at most 80 characters), with no guessed name or historical
 author requirement. The protected root-owned no-follow chain must end in a regular,
-singly linked, non-executable file of at most 4096 bytes. Its entire syntax is two
+singly linked, non-executable file of at most 4096 bytes; the whole vector has one
+4096-byte accepted ceiling. Each file's entire syntax is two
 newline-terminated lines: `[Service]` and `Environment=PATH=<value>`, optionally with
 one pair of double quotes around the complete assignment. PATH retains the above
 component bounds and admits only ASCII letters, digits, underscore, dot, slash,
 colon, plus and hyphen; whitespace, expansion, escaping, continuation, resets,
-extra directives and sections refuse. Only this selected file is read; no other
-configuration content or directory content census is needed. Its bytes are preserved.
+extra directives and sections refuse. Only these selected files are read; no other
+configuration content or directory content census is needed. Their bytes and original
+order are preserved. Duplicate paths/basenames, aliased identities, unsupported members
+or subsets refuse. All metadata and declared sizes are validated before content reads;
+one remaining-total budget plus a sentinel bounds returned bytes to 4097 per walk,
+including refusal.
 
-The parsed assignment must exactly equal the sole typed loaded Environment PATH
+Every parsed assignment must exactly equal the sole typed loaded Environment PATH
 value. The existing namespace, exec, environment-import, root and trigger guards
 remain mandatory. Additional typed evidence must show `NeedDaemonReload=false`,
 `StandardOutput=StandardError=null`, `UMask=0077`, empty `LoadCredential`, and the
 canonical encrypted-credential metadata pair `bws-machine-account-token` to
 `/var/lib/yggdrasil/bws-tokens/<channel>/current`. Credential payloads, SetCredential
-properties and credential files are never read. The file version/content projection,
+properties and credential files are never read. The complete file version/content vector,
 PATH and these effective settings join the private service/generation contract and
 all existing qualification, prebackup, prestop, candidate, closing and restoration
 checks. Unsupported, missing or wrongly typed evidence refuses without value-bearing
-diagnostics. The additional retained file/ancestors and fresh verification walk are
-included in descriptor admission; preparation subtracts already retained demand.
+diagnostics. All retained files/ancestors and the fresh verification walk are
+included in all three descriptor-admission branches; preparation subtracts only
+the actual already retained demand.
 
 This is finite invariant-relevant loaded semantic proof, not historical loaded-unit
 raw-byte identity. `NeedDaemonReload=false` is only a supplementary pending-change
@@ -1316,10 +1322,11 @@ At the initial `Unit_DropInPaths` selector, the first failed predicate is report
 only as one finite category: `cardinality`, `allowed_parent`, `basename_length`, or
 `basename_grammar`. Classification uses the original already-read property and keeps
 cardinality before element shape, then checks parent, basename length, and basename
-grammar in the existing order. Empty selection and valid singleton behavior do not
+grammar in the existing order. Cardinality refuses above the fixed maximum of four;
+duplicate names/paths retain the coarse selection refusal. Empty selection and valid singleton behavior do not
 change. The diagnostic exposes no actual count, path, property value, exception,
-digest, or other private input. Accepted selections and prebackup refusal/effect
-boundaries remain unchanged. Legacy absent, coarse, value, and `selection` receipts
+digest, or other private input. Prebackup refusal/effect boundaries remain unchanged.
+Legacy absent, coarse, value, and `selection` receipts
 remain valid. Source26 does not identify the actual failed predicate and establishes
 neither a source defect nor native acceptance.
 
@@ -2233,14 +2240,15 @@ For failures before migration execution starts, the ordinary fail-closed recover
 
 #### Planned retained PATH-input vector
 
-**State: selected target contract; not implemented or natively qualified.** The
-current supported preserved-input profile above remains empty or one selected
-PATH-only file. The [#6170 engineering disposition](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6170#issuecomment-6534813553)
-selects this conditional source extension after comparing a separate fit observer
-with qualification inside the installation transaction. Actual native fit remains
-unknown. Source delivery must not be reported as DEV/TEST or parent acceptance.
+**State: selected target implemented and source-verified by [#6502](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6502);
+native fit remains unknown.** The heading retains the selected target's existing
+anchor. The preserved-input source profile above now supports empty/singleton and
+two-to-four ordered PATH-only files. The [#6170 engineering disposition](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6170#issuecomment-6534813553)
+selected this conditional extension instead of a separate fit observer. Source
+verification is separate from exact-image delivery, DEV/TEST qualification and
+parent acceptance; none of those native outcomes is established here.
 
-The implementation must preserve empty/singleton behavior and accept at most four
+The implementation preserves empty/singleton behavior and accepts at most four
 selected files, all satisfying the existing PATH-only profile. Four is a fixed
 public engineering bound, not an observed native count or a resource-derived
 maximum. Validate the complete exact typed vector before content reads; retain its
@@ -2289,7 +2297,7 @@ and handle/source-inventory branches. Verify all three admission branches and
 subtract only the path descriptors actually retained at preparation. Partial open,
 metadata, read and close failures must remain inside the admitted envelope.
 
-The source proof must extend the existing production selector/configuration,
+The source proof exercises the existing production selector/configuration,
 `_NativePorts`, verified-candidate RPC/manifest and compensation seams for both
 DEV and TEST. Cover empty/singleton regression, two/four successes, five inputs,
 duplicates/aliases/both parents, aggregate 4096/4097, every file index's failures,

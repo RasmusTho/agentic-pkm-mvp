@@ -25,7 +25,7 @@ _ROOT_RPC_BATCHES = {'empty': 5, 'anchored': 4, 'alias': 1, 'proposed': 1, 'unce
 
 
 def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path,
-              batch: int | None = None) -> None:
+              batch: int | None = None, input_count: int = 1, input_index: int = 0) -> None:
     """Run in a disposable interpreter; no native configuration is consulted."""
     # Keep actual Git commands/bytes/readers on macOS, using a regular stdin
     # file for the external batch transport after observing blocked pipe writes.
@@ -246,8 +246,27 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 state['events'] = ObservedEvents(state['events'])
                 state['events'].append('preserved-fixture')
                 selected = configure_preserved_dropin(lifecycle, patch, base, state['path_properties'],
-                    channel, quoted=slot_kind == 'preserved-quoted', template=slot_kind == 'preserved-quoted')
-                state.update(selected_dropin=selected, dropin_bytes=selected.read_bytes())
+                    channel, quoted=slot_kind == 'preserved-quoted', template=slot_kind == 'preserved-quoted',
+                    count=input_count, mixed_parents=input_count > 1)
+                selected_paths = tuple(Path(path) for path in state['path_properties']['Unit', 'DropInPaths'])
+                selected = selected_paths[input_index]
+                state.update(selected_dropin=selected, dropin_bytes=selected.read_bytes(),
+                             dropin_vector=tuple((path, path.read_bytes()) for path in selected_paths))
+                vector = state['path_properties']['Unit', 'DropInPaths']
+                if slot_kind == 'preserved-five':
+                    vector.append(str(selected.with_name('fifth.conf')))
+                elif slot_kind == 'preserved-duplicate':
+                    vector[-1] = vector[0]
+                elif slot_kind == 'preserved-duplicate-basename':
+                    vector[-1] = str(selected_paths[-1].with_name(selected_paths[0].name))
+                elif slot_kind == 'preserved-member-type':
+                    vector[-1] = 1
+                elif slot_kind == 'preserved-overflow':
+                    for path in selected_paths:
+                        path.write_bytes(b'x' * 1025)
+                elif slot_kind == 'preserved-alias':
+                    selected.unlink()
+                    os.link(selected_paths[0], selected)
                 if slot_kind == 'preserved-malformed':
                     selected.write_bytes(selected.read_bytes() + b'ExecStart=/PRIVATE_CANARY\n')
                 if slot_kind == 'preserved-mismatch':
@@ -261,7 +280,11 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                             raise OSError('PRIVATE_CANARY backend')
                         return transport(argv)
                     patch.setattr(lifecycle, '_run', unavailable)
-                if slot_kind in {'preserved-close', 'preserved-transient-close'}:
+                if slot_kind == 'preserved-refusal-close':
+                    # Independent state refusal after _config retained every input.
+                    state['path_properties']['Unit', 'Job'] = [1, '/PRIVATE_CANARY']
+                if slot_kind in {'preserved-close', 'preserved-transient-close', 'preserved-refusal-close',
+                                 'preserved-compensation-close', 'preserved-compensation-transient-close'}:
                     original_close = lifecycle.os.close
                     target_info = selected.stat()
                     def close_selected(fd):
@@ -273,8 +296,11 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                         info = lifecycle.os.fstat(fd)
                         owned = (info.st_dev, info.st_ino) == (target_info.st_dev, target_info.st_ino)
                         binding = getattr(state.get('service'), 'control_path_binding', None)
-                        selected_phase = binding is not None and (
-                            binding.closed if slot_kind == 'preserved-close' else not binding.closed)
+                        retained_close = slot_kind in {'preserved-close', 'preserved-refusal-close',
+                                                       'preserved-compensation-close'}
+                        selected_phase = binding is not None and (binding.closed if retained_close else not binding.closed)
+                        if slot_kind.startswith('preserved-compensation-'):
+                            selected_phase &= bool(state.get('same_handle_compensation'))
                         original_close(fd)
                         if owned and selected_phase and not state.get('close_failed'):
                             state['close_failed'] = True
@@ -283,6 +309,27 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                             (base / 'selected-close-proof.json').write_text(json.dumps({'attempts': 1}))
                             raise OSError('PRIVATE_CANARY ambiguous close')
                     patch.setattr(lifecycle.os, 'close', close_selected)
+                    original_envelope_close = control._SourceDescriptorEnvelope.close
+                    def envelope_close(envelope, *, owned_resources_closed):
+                        if slot_kind in {'preserved-refusal-close', 'preserved-compensation-close',
+                                         'preserved-compensation-transient-close'}:
+                            service = state['service']
+                            handle = state.get('prepared_handle')
+                            proof = dict(
+                                uncertain=service.control_path_binding.close_uncertain,
+                                resources_closed=owned_resources_closed,
+                                attempts=state['selected_failed_attempts'],
+                                same_handle=bool(state.get('same_handle_compensation')),
+                                compensation_complete=bool(handle and handle.compensation_complete),
+                                old_restored=(old_source.read_bytes() == state['old_source']
+                                              and public_launcher.read_bytes() == state['old_launcher']),
+                                inputs_preserved=all(path.read_bytes() == raw for path, raw in state['dropin_vector']),
+                                effect_actions=[event for event in state['events'] if event in {'stop', 'start'}],
+                                prepared='prepare' in state['events'],
+                            )
+                            (base / 'combined-close-proof.json').write_text(json.dumps(proof))
+                        return original_envelope_close(envelope, owned_resources_closed=owned_resources_closed)
+                    patch.setattr(control._SourceDescriptorEnvelope, 'close', envelope_close)
             if fault.startswith('unit-'):
                 from tests.ops.test_bws_installation_lifecycle import install_unit_property_transport
                 _, site, kind = fault.split(':')
@@ -372,7 +419,10 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                             state['drifted'] = True
                             # Independent manager reload changes effective semantics;
                             # the on-disk bytes and pending-reload flag stay unchanged.
-                            state['path_properties']['Service', 'StandardOutput'] = 'journal'
+                            if input_count > 1:
+                                selected.write_bytes(selected.read_bytes().replace(b'/usr/bin', b'/opt/bin'))
+                            else:
+                                state['path_properties']['Service', 'StandardOutput'] = 'journal'
                             (base / 'preserved-drift-proof.json').write_text(json.dumps({
                                 'mode': fault, 'drifted': True,
                             }))
@@ -383,14 +433,28 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             original_prepare = transaction._NativePorts.prepare
             def prepare(ports, *args, **kwargs):
                 state['events'].append('prepare')
+                held = state['service'].control_path_binding.fds
+                assert kwargs['control_path_fds_already_open'] == len(held)
+                assert kwargs['runtime_fd_already_open'] is True
+                if slot_kind.startswith('preserved-'):
+                    assert all(str(path) in held for path, _raw in state['dropin_vector'])
+                    assert state['service'].control_path_binding.selected_dropins == tuple(
+                        str(path) for path, _raw in state['dropin_vector'])
                 try:
-                    return original_prepare(ports, *args, **kwargs)
+                    state['prepared_handle'] = original_prepare(ports, *args, **kwargs)
+                    return state['prepared_handle']
                 except Exception as failure:
                     state['prepare_failure'] = (type(failure).__name__, getattr(failure, 'reason', None),
                         [(Path(frame.filename).name, frame.name, frame.lineno)
                          for frame in traceback.extract_tb(failure.__traceback__)[-6:]])
                     raise
             patch.setattr(transaction._NativePorts, 'prepare', prepare)
+            original_compensate = transaction._NativePorts.compensate
+            def compensate(ports, handle):
+                assert handle is state['prepared_handle'] is ports._descriptor_handle
+                state['same_handle_compensation'] = True
+                return original_compensate(ports, handle)
+            patch.setattr(transaction._NativePorts, 'compensate', compensate)
             state['old_source'] = old_source.read_bytes()
             state['old_launcher'] = public_launcher.read_bytes()
         else:
@@ -401,7 +465,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         # stay real and independently reject drift.
         def supervisor_rpc(selected_channel, selected):
             assert selected_channel == channel and selected["action"] == "source-installation-profile"
-            if fault in {'path-partial', 'path-preserved-partial', 'path-preserved-restored-drift'} and 'start' in state['events']:
+            if fault in {'path-partial', 'path-preserved-partial', 'path-preserved-restored-drift',
+                         'path-preserved-compensation-close', 'path-preserved-compensation-transient-close'} and 'start' in state['events']:
                 raise RuntimeError('synthetic external profile unavailable')
             profile = transaction.loaded_source_profile(
                 SimpleNamespace(channel=channel, root=checkout), operation_id=request["operation_id"],
@@ -427,7 +492,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             def interrupt_backup(*_args):
                 raise KeyboardInterrupt()
             control._backup = interrupt_backup
-        if fault.startswith('unit-'):
+        if fault.startswith(('unit-', 'path-preserved-')):
             original_sources = transaction._source_modules
             def source_binding(*args, **kwargs):
                 early = 'candidate_source_files' in kwargs
@@ -603,7 +668,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         # terminal receipt when changed configuration prevents quiescence proof.
         assert status == 78 and output.getvalue() == '' and state['drifted']
         assert not list(state['receipts'].glob('*.receipt.json'))
-        assert state['selected_dropin'].read_bytes() == state['dropin_bytes']
+        if input_count == 1:
+            assert state['selected_dropin'].read_bytes() == state['dropin_bytes']
         assert state['path_properties']['Unit', 'NeedDaemonReload'] is False
         if fault == 'path-preserved-restored-drift':
             assert (state['installed'] / 'app/ops/bws_control_installation.py').read_bytes() == state['old_source']
@@ -638,7 +704,9 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             assert service.runtime_close_completed
             if service.control_path_binding:
                 assert not service.control_path_binding.fds
-            if mode in {'malformed', 'mismatch', 'backend', 'prebackup'}:
+            initial_refusals = {'malformed', 'mismatch', 'backend', 'prebackup', 'five', 'duplicate',
+                                'duplicate-basename', 'member-type', 'overflow', 'alias'}
+            if mode in initial_refusals:
                 assert result['status'] == 'refused_before_backup', result
                 assert not {'prepare', 'stop', 'start'} & set(state['events'])
                 assert not list(state['backups'].iterdir())
@@ -646,20 +714,30 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                                                        'backup_manifest_sha256'))
             else:
                 assert result['status'] == ('compensated_stopped' if mode == 'partial' else 'installed'), result
+                assert state['early_sources_bound'] is True
+                assert state['events'].index('early_source_binding') < state['events'].index('service')
+                assert state['events'].index('caller_source_binding') < state['events'].index('prepare')
                 assert service.contract[2] == tuple(state['path_environment'])
                 assert state['path_properties']['Service', 'Environment'] == state['path_environment']
                 manifest = json.loads((state['backups'] / 'assembled/manifest.json').read_text())
                 assert all(row['root'] in {'application', 'launcher'} for row in manifest)
                 assert state['events'].count('start') == 1
                 if mode == 'partial':
+                    assert state['same_handle_compensation'] is True
+                    assert state['prepared_handle'].compensation_complete is True
                     assert (state['installed'] / 'app/ops/bws_control_installation.py').read_bytes() == state['old_source']
                     assert (base / 'launcher/yggdrasil-bws-deploy').read_bytes() == state['old_launcher']
                     assert any(restored for _, restored in state['configuration_phases'])
                 else:
                     assert result['new_generation_sha256'] == state['transaction']._generation_sha(
                         state['last_profile'], service.new_token, service.contract)
-            if mode not in {'malformed', 'mismatch'}:
-                assert state['selected_dropin'].read_bytes() == state['dropin_bytes']
+            if mode == 'prebackup' and input_count > 1:
+                assert state['drifted'] is True
+                assert all(path.read_bytes() == (raw.replace(b'/usr/bin', b'/opt/bin')
+                           if path == state['selected_dropin'] else raw)
+                           for path, raw in state['dropin_vector'])
+            elif mode not in {'malformed', 'mismatch', 'overflow'}:
+                assert all(path.read_bytes() == raw for path, raw in state['dropin_vector'])
             assert (state['control_root'] / 'unrelated.txt').read_bytes() == b'preserved synthetic non-executable data'
     elif fault in {"hard", "unknown"}:
         assert result["status"] == "refused_before_backup", result
@@ -783,15 +861,17 @@ def test_control_path_slots_complete_real_source_transaction(secure_tmp_path, ch
     exercise_control_path_transaction(secure_tmp_path, channel, slot)
 
 
-def exercise_control_path_transaction(base, channel, slot):
+def exercise_control_path_transaction(base, channel, slot, *, input_count=1, input_index=0):
     with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
         completed = subprocess.run(
             [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(base),
-             str(Path(__file__).resolve().parents[2]), channel, 'path-' + slot, str(Path(directory).resolve())],
+             str(Path(__file__).resolve().parents[2]), channel, 'path-' + slot, str(Path(directory).resolve()),
+             '0', str(input_count), str(input_index)],
             cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
         )
     if slot in {'close', 'transient-initial', 'transient-prebackup', 'proc-close', 'launcher-close',
                 'preserved-close', 'preserved-transient-close', 'preserved-prestop',
+                'preserved-refusal-close', 'preserved-compensation-close', 'preserved-compensation-transient-close',
                 'preserved-after-start', 'preserved-closing', 'preserved-restored-drift'}:
         assert completed.returncode == 78 and completed.stdout == '', completed.stderr
         owner = json.loads((base / 'receipts' / (channel + '.source-installation.lock')).read_text())
@@ -811,6 +891,14 @@ def exercise_control_path_transaction(base, channel, slot):
             assert [event for event in events if event in {'stop', 'start'}] == expected_actions[slot]
         elif slot in {'preserved-close', 'preserved-transient-close'}:
             assert json.loads((base / 'selected-close-proof.json').read_text()) == {'attempts': 1}
+        elif slot in {'preserved-refusal-close', 'preserved-compensation-close', 'preserved-compensation-transient-close'}:
+            compensated = slot.startswith('preserved-compensation-')
+            assert json.loads((base / 'combined-close-proof.json').read_text()) == dict(
+                uncertain=True, resources_closed=False, attempts=1, same_handle=compensated,
+                compensation_complete=compensated, old_restored=True, inputs_preserved=True,
+                effect_actions=['stop', 'start', 'stop'] if compensated else [], prepared=compensated,
+            )
+            assert (base / 'receipts' / (channel + '.source-installation.lock')).exists()
         return {'status': 'unknown'}
     assert completed.returncode == 0, completed.stderr
     result = json.loads(completed.stdout)
@@ -820,15 +908,22 @@ def exercise_control_path_transaction(base, channel, slot):
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
-@pytest.mark.parametrize('mode', ['valid', 'quoted', 'malformed', 'mismatch', 'backend'])
-def test_preserved_dropin_profile_crosses_verified_source_rpc(secure_tmp_path, channel, mode):
-    exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode)
+@pytest.mark.parametrize('mode,input_count', [
+    (mode, count) for count in (1, 2, 4) for mode in ('valid', 'quoted', 'malformed', 'mismatch', 'backend')
+] + [(mode, 4) for mode in ('five', 'duplicate', 'duplicate-basename', 'member-type', 'overflow', 'alias')])
+def test_preserved_dropin_profile_crosses_verified_source_rpc(secure_tmp_path, channel, mode, input_count):
+    exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode,
+                                     input_count=input_count, input_index=input_count - 1)
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
-@pytest.mark.parametrize('mode', ['hard', 'unknown', 'close', 'transient-close'])
-def test_preserved_dropin_profile_resource_privacy_and_close(secure_tmp_path, channel, mode):
-    exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode)
+@pytest.mark.parametrize('mode,input_index', [('hard', 0), ('unknown', 0)] + [
+    (mode, index) for mode in ('close', 'transient-close', 'refusal-close', 'compensation-close',
+                             'compensation-transient-close') for index in range(4)
+])
+def test_preserved_dropin_profile_resource_privacy_and_close(secure_tmp_path, channel, mode, input_index):
+    exercise_control_path_transaction(secure_tmp_path, channel, 'preserved-' + mode,
+                                     input_count=4, input_index=input_index)
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
 @pytest.mark.parametrize('site', ['Service_Environment', 'Service_PrivateTmp', 'Unit_ActiveState'])
@@ -932,4 +1027,6 @@ def exercise_unit_property_close(base, mode):
 
 if __name__ == "__main__":
     _exercise(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4], Path(sys.argv[5]),
-              int(sys.argv[6]) if len(sys.argv) > 6 else None)
+              int(sys.argv[6]) if len(sys.argv) > 6 else None,
+              int(sys.argv[7]) if len(sys.argv) > 7 else 1,
+              int(sys.argv[8]) if len(sys.argv) > 8 else 0)

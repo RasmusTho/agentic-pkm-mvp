@@ -939,28 +939,38 @@ def test_all_matching_invalid_backup_is_transaction_refusal(case, fault):
 
 
 @pytest.mark.parametrize('close_site', ['retained', 'current', 'first_identity'])
-def test_control_path_slot_descriptor_envelope_and_close_uncertainty(monkeypatch, secure_tmp_path, close_site):
-    from tests.ops.test_bws_installation_lifecycle import control_path_fixture
+@pytest.mark.parametrize('index', range(4))
+def test_control_path_slot_descriptor_envelope_and_close_uncertainty(monkeypatch, secure_tmp_path, close_site, index):
+    from tests.ops.test_bws_installation_lifecycle import control_path_fixture, configure_preserved_dropin
     from app.ops import bws_installation_lifecycle as lifecycle
     module = importlib.import_module('app.ops.bws_control_installation')
     fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(), fixture.properties,
+                               'dev', count=4, mixed_parents=True)
+    selected = Path(fixture.properties['Unit', 'DropInPaths'][index])
+    target = selected.stat()
     owned = set()
     original_open, original_close = lifecycle.os.open, lifecycle.os.close
     close_calls = []
     failed_fd = None
+    failed_close_index = None
     armed = False
     def tracked_open(*args, **kwargs):
         fd = original_open(*args, **kwargs)
         owned.add(fd)
         return fd
     def tracked_close(fd):
-        nonlocal failed_fd
+        nonlocal failed_fd, failed_close_index
         close_calls.append(fd)
         owned.discard(fd)
+        info = lifecycle.os.fstat(fd)
+        selected_file = (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino)
         original_close(fd)
-        if armed and failed_fd is None:
+        if armed and selected_file and failed_fd is None:
             failed_fd = fd
         if fd == failed_fd:
+            if failed_close_index is None:
+                failed_close_index = len(close_calls) - 1
             raise OSError('synthetic close uncertainty')
     monkeypatch.setattr(lifecycle.os, 'open', tracked_open)
     monkeypatch.setattr(lifecycle.os, 'close', tracked_close)
@@ -968,7 +978,7 @@ def test_control_path_slot_descriptor_envelope_and_close_uncertainty(monkeypatch
         with fixture.service.retained_runtime():
             fixture.service.qualify_old(**fixture.arguments)
             count = len(fixture.service.control_path_binding.fds)
-            assert 0 < count <= lifecycle._CONTROL_PATH_MAX_DIRECTORIES
+            assert 4 < count <= lifecycle._control_path_descriptor_bound()
             roots = {'application': _root(module, fixture.roots['application'])}
             backup = _root(module, fixture.roots['backup'])
             changes, _ = _manifest_changes(module, 1)
@@ -980,19 +990,21 @@ def test_control_path_slot_descriptor_envelope_and_close_uncertainty(monkeypatch
             with pytest.raises(module.InstallationRefused, match='descriptor_capacity_insufficient'):
                 module._require_source_descriptor_capacity(roots, changes, backup, 1)
             if close_site == 'retained':
-                failed_fd = next(iter(fixture.service.control_path_binding.fds.values()))[0]
+                failed_fd = fixture.service.control_path_binding.fds[str(selected)][0]
             close_calls.clear()
             armed = True
             if close_site == 'first_identity':
                 retained = {record[0] for record in fixture.service.control_path_binding.fds.values()}
                 original_mount = lifecycle._control_path_mount
                 def mount(fd):
-                    if fd not in retained:
+                    info = lifecycle.os.fstat(fd)
+                    if fd not in retained and (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
                         raise OSError('synthetic metadata unavailable before retention')
                     return original_mount(fd)
                 monkeypatch.setattr(lifecycle, '_control_path_mount', mount)
             if close_site != 'retained':
                 fixture.service.control_path_binding.revalidate()
     assert not owned and not fixture.service.runtime_close_completed
-    assert close_calls.count(failed_fd) == 1
+    assert failed_close_index is not None
+    assert close_calls[failed_close_index:].count(failed_fd) == 1
     assert not fixture.service.control_path_binding.fds
