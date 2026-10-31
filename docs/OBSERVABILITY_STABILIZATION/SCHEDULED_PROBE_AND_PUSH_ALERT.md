@@ -140,6 +140,16 @@ This retires only the named local consumer and does not assert physical-asset or
 equivalence. Issue #4076 remains open for the qualified isolated TEST outage/recovery drill;
 production installation and local retirement are not the TEST acceptance receipt.
 
+The [2026-10-30 TEST first-preflight receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6493#issuecomment-6535859691)
+records operation `230149723a60e4c497a04f8efc07a9a9` as `REFUSED`: its same-project running-worker
+selector did not observe exactly one valid ID. That count-or-ID-shape refusal does not establish
+worker absence or health. The original supervisor and cgroup were positively contained, the watch
+and TEST probe units were absent, and no qualified-worker or drill entry occurred. Result SHA-256
+`542a4448014fc00b91b3cf0a830f4dcdb8a8860febe5325ba4498fcb9a4c7b71` and reconciliation SHA-256
+`6a71c89eeaecfd53acc2e16315c8aa153bf0b07529d4a30a27fa6138cacdbfa0` identify that evidence.
+Earlier attempts retain their separate `UNKNOWN` results and positive containment receipts.
+Controlled down/recovery acceptance and its final owner-doc mapping remain open under #6493.
+
 ## Purpose
 
 Give the single operator one always-on signal that prod is actually serving: a
