@@ -2717,6 +2717,11 @@ class VaultRegistryStore:
             for key, value in frontmatter.items()
             if key not in known_legacy_fields
         }
+        # MVR-06A: ``backgroundIntent`` is authoritative only under the MVR-06 floor, which
+        # a legacy app-local document can never carry. A legacy value is untrusted: it is
+        # preserved as lineage and never adopted as background intent.
+        if BACKGROUND_INTENT_KEY in extensions:
+            extensions["legacyBackgroundIntent"] = extensions.pop(BACKGROUND_INTENT_KEY)
         # A legacy payload may already carry an explicit default. It is untrusted:
         # binding identity is minted during this migration, so it is adopted only
         # when it names exactly one migrated registration. Otherwise the raw value
