@@ -1466,7 +1466,8 @@ def control_path_fixture(monkeypatch, secure_tmp_path, *, channel='dev', slot='d
 
 
 
-def configure_preserved_dropin(module, patch, base, properties, channel, *, quoted=False, template=False):
+def configure_preserved_dropin(module, patch, base, properties, channel, *, quoted=False, template=False,
+                               count=1, mixed_parents=False):
     """Independent temporary disk and loaded manager state; no native input."""
     directory = base / 'systemd'
     unit_directory = directory / f"yggdrasil-bws-deploy@{'' if template else channel}.service.d"
@@ -1477,8 +1478,17 @@ def configure_preserved_dropin(module, patch, base, properties, channel, *, quot
     line = '"' + assignment + '"' if quoted else assignment
     selected.write_bytes(('[Service]\nEnvironment=' + line + '\n').encode())
     selected.chmod(0o644)
+    paths = [selected]
+    for index in range(1, count):
+        parent = (directory / 'yggdrasil-bws-deploy@.service.d'
+                  if mixed_parents and index % 2 else unit_directory)
+        parent.mkdir(mode=0o755, exist_ok=True)
+        extra = parent / f'preserved-{index}-private-canary.conf'
+        extra.write_bytes(selected.read_bytes())
+        extra.chmod(0o644)
+        paths.append(extra)
     properties.update({
-        ('Unit', 'DropInPaths'): [str(selected)], ('Unit', 'NeedDaemonReload'): False,
+        ('Unit', 'DropInPaths'): [str(path) for path in paths], ('Unit', 'NeedDaemonReload'): False,
         ('Service', 'StandardOutput'): 'null', ('Service', 'StandardError'): 'null',
         ('Service', 'UMask'): 0o077,
         ('Service', 'LoadCredentialEncrypted'): [
@@ -1489,6 +1499,7 @@ def configure_preserved_dropin(module, patch, base, properties, channel, *, quot
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('count', [1, 2, 4])
 @pytest.mark.parametrize('fault', [
     'valid', 'quoted-template', 'two', 'wrong-directory', 'hidden', 'long-name', 'traversal',
     'extra-directive', 'extra-section', 'multiple', 'reset', 'expansion', 'escape', 'encoding',
@@ -1498,14 +1509,17 @@ def configure_preserved_dropin(module, patch, base, properties, channel, *, quot
     'credential', 'plain-credential', 'reload', 'reload-type', 'missing', 'backend', 'signature',
     'equal-mtime', 'older-mtime',
 ])
-def test_preserved_dropin_profile_semantic_matrix(monkeypatch, secure_tmp_path, channel, fault):
+def test_preserved_dropin_profile_semantic_matrix(monkeypatch, secure_tmp_path, channel, count, fault):
     fixture = control_path_fixture(monkeypatch, secure_tmp_path, channel=channel)
     selected = configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(),
-        fixture.properties, channel, quoted=fault == 'quoted-template', template=fault == 'quoted-template')
+        fixture.properties, channel, quoted=fault == 'quoted-template', template=fault == 'quoted-template',
+        count=count, mixed_parents=count > 1)
+    # Exercise the last member too; no valid prefix may hide a bad suffix.
+    selected = Path(fixture.properties['Unit', 'DropInPaths'][-1])
     original = selected.read_bytes()
     properties = fixture.properties
     if fault == 'two':
-        properties['Unit', 'DropInPaths'] *= 2
+        properties['Unit', 'DropInPaths'].append(properties['Unit', 'DropInPaths'][0])
     elif fault == 'wrong-directory':
         properties['Unit', 'DropInPaths'] = ['/run/systemd/system/unit.service.d/path.conf']
     elif fault in {'hidden', 'long-name', 'traversal'}:
@@ -1763,7 +1777,7 @@ def install_unit_property_transport(module, patch, state, properties, fault=None
             if kind in {'cardinality', 'allowed_parent', 'basename_length', 'basename_grammar'}:
                 parent = f'{module._SYSTEMD_DIRECTORY}/yggdrasil-bws-deploy@.service.d'
                 data = {
-                    'cardinality': [f'{parent}/one.conf', f'{parent}/two.conf'],
+                    'cardinality': [f'{parent}/input-{index}.conf' for index in range(5)],
                     'allowed_parent': ['/PRIVATE_CANARY/' + (' ' * 81)],
                     'basename_length': [f'{parent}/' + (' ' * 81)],
                     'basename_grammar': [f'{parent}/bad name.conf'],
@@ -1821,7 +1835,7 @@ def test_dropin_selector_refusal_categories_are_finite_and_ordered(monkeypatch):
     template_parent = f'{systemd_directory}/yggdrasil-bws-deploy@.service.d'
     dev_parent = f'{systemd_directory}/yggdrasil-bws-deploy@dev.service.d'
     cases = (
-        ([object(), object()], 'cardinality'),
+        ([object()] * 5, 'cardinality'),
         (['/PRIVATE_CANARY/' + (' ' * 81)], 'allowed_parent'),
         ([template_parent + '/' + (' ' * 81)], 'basename_length'),
         ([template_parent + '/bad name.conf'], 'basename_grammar'),
@@ -1836,12 +1850,12 @@ def test_dropin_selector_refusal_categories_are_finite_and_ordered(monkeypatch):
         assert 'PRIVATE_CANARY' not in repr(caught.value.unit_property)
         observed.add(caught.value.unit_property[1])
     assert observed == lifecycle._DROPIN_SELECTOR_CATEGORIES
-    assert lifecycle._preserved_dropin_path([], 'dev') is None
+    assert lifecycle._preserved_dropin_path([], 'dev') == ()
     assert lifecycle._preserved_dropin_path([template_parent + '/valid-name.conf'], 'dev') == (
-        template_parent + '/valid-name.conf'
+        template_parent + '/valid-name.conf',
     )
     assert lifecycle._preserved_dropin_path([dev_parent + '/valid_name.conf'], 'dev') == (
-        dev_parent + '/valid_name.conf'
+        dev_parent + '/valid_name.conf',
     )
 
 
@@ -1867,6 +1881,176 @@ def test_dropin_selector_rejects_malformed_refinement(monkeypatch, secure_tmp_pa
     assert caught.value.unit_property == ('Unit_DropInPaths', 'selection')
     assert fixture.state['unit_trace'] == _UNIT_INITIAL_TRACE[:44]
     assert fixture.service.runtime_close_completed and not fixture.state['events']
+
+
+@pytest.mark.parametrize('fault', [
+    'five', 'list-type', 'member-type', 'duplicate-path', 'duplicate-basename', 'alias',
+    'invalid-last', 'aggregate-4096', 'aggregate-4097',
+])
+def test_preserved_dropin_vector_preflight_and_shared_budget(monkeypatch, secure_tmp_path, fault):
+    from collections import UserList, UserString
+    from types import SimpleNamespace
+
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(), fixture.properties,
+                               'dev', count=4, mixed_parents=True)
+    paths = [Path(path) for path in fixture.properties['Unit', 'DropInPaths']]
+    vector = fixture.properties['Unit', 'DropInPaths']
+    if fault == 'five':
+        vector.append(str(paths[0].with_name('fifth.conf')))
+    elif fault == 'list-type':
+        fixture.properties['Unit', 'DropInPaths'] = UserList(vector)
+    elif fault == 'member-type':
+        vector[-1] = UserString(vector[-1])
+    elif fault == 'duplicate-path':
+        vector[-1] = vector[0]
+    elif fault == 'duplicate-basename':
+        vector[-1] = str(paths[-1].with_name(paths[0].name))
+    elif fault == 'invalid-last':
+        vector[-1] = '/PRIVATE_CANARY/unsupported.conf'
+    elif fault.startswith('aggregate-'):
+        # Four exact 1024-byte files, with an unchanged single loaded PATH.
+        assignment = next(value for value in fixture.environment if value.startswith('PATH='))
+        assignment += '/' + 'x' * (1001 - len(assignment) - 1)
+        fixture.environment[1] = assignment
+        fixture.properties['Service', 'Environment'] = list(fixture.environment)
+        raw = ('[Service]\nEnvironment=' + assignment + '\n').encode()
+        assert len(raw) == 1024
+        for path in paths:
+            path.write_bytes(raw)
+        if fault == 'aggregate-4097':
+            paths[-1].write_bytes(raw + b'\n')
+    first = paths[0].stat()
+    last = paths[-1].stat()
+    real_fstat, real_pread = lifecycle.os.fstat, lifecycle.os.pread
+    reads = []
+    def fstat(fd):
+        value = real_fstat(fd)
+        if fault == 'alias' and (value.st_dev, value.st_ino) == (last.st_dev, last.st_ino):
+            return SimpleNamespace(**{**{name: getattr(value, name) for name in dir(value)
+                                        if name.startswith('st_')}, 'st_ino': first.st_ino})
+        return value
+    def pread(fd, size, offset):
+        raw = real_pread(fd, size, offset)
+        if real_fstat(fd).st_ino in {path.stat().st_ino for path in paths}:
+            reads.append((size, len(raw)))
+        return raw
+    monkeypatch.setattr(lifecycle.os, 'fstat', fstat)
+    monkeypatch.setattr(lifecycle.os, 'pread', pread)
+    with fixture.service.retained_runtime():
+        if fault == 'aggregate-4096':
+            fixture.service.qualify_old(**fixture.arguments)
+            assert reads == [(4097, 1024), (3073, 1024), (2049, 1024), (1025, 1024)]
+        else:
+            with pytest.raises(RuntimeError, match='bws_lifecycle_unproven'):
+                fixture.service.qualify_old(**fixture.arguments)
+            assert reads == []  # Complete selection/metadata/total before content.
+    assert not fixture.state['events']
+
+
+@pytest.mark.parametrize('index', range(4))
+@pytest.mark.parametrize('fault', ['open', 'metadata', 'read', 'short-read', 'growth', 'shrink', 'replacement'])
+def test_preserved_dropin_vector_partial_failure_closes_every_original(
+    monkeypatch, secure_tmp_path, index, fault,
+):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(), fixture.properties,
+                               'dev', count=4, mixed_parents=True)
+    paths = tuple(Path(path) for path in fixture.properties['Unit', 'DropInPaths'])
+    target = paths[index]
+    identities = {path.stat().st_ino for path in paths}
+    target_inode = target.stat().st_ino
+    real_open, real_close = lifecycle.os.open, lifecycle.os.close
+    real_identity, real_pread = lifecycle._ControlPathBinding._input_identity, lifecycle.os.pread
+    owned, reads = set(), []
+    fired = False
+    def open_fd(path, flags, *args, **kwargs):
+        nonlocal fired
+        if fault == 'open' and str(path) == target.name:
+            fired = True
+            raise OSError('PRIVATE_CANARY')
+        fd = real_open(path, flags, *args, **kwargs)
+        assert fd not in owned
+        owned.add(fd)
+        return fd
+    def close_fd(fd):
+        assert fd in owned
+        owned.remove(fd)
+        real_close(fd)
+    def identity(binding, path, fd):
+        nonlocal fired
+        if fault == 'metadata' and path == str(target):
+            fired = True
+            raise OSError('PRIVATE_CANARY')
+        return real_identity(binding, path, fd)
+    def pread(fd, size, offset):
+        nonlocal fired
+        inode = lifecycle.os.fstat(fd).st_ino
+        if inode == target_inode and not fired:
+            fired = True
+            if fault == 'read':
+                raise OSError('PRIVATE_CANARY')
+            if fault == 'growth':
+                target.write_bytes(target.read_bytes() + b'x' * 8192)
+            elif fault == 'shrink':
+                target.write_bytes(b'x')
+            elif fault == 'replacement':
+                raw = target.read_bytes()
+                target.rename(target.with_name('retained-original.conf'))
+                target.write_bytes(raw)
+        raw = real_pread(fd, size, offset)
+        if inode == target_inode and fault == 'short-read':
+            raw = raw[:-1]
+        if inode in identities:
+            reads.append(len(raw))
+        return raw
+    monkeypatch.setattr(lifecycle.os, 'open', open_fd)
+    monkeypatch.setattr(lifecycle.os, 'close', close_fd)
+    monkeypatch.setattr(lifecycle.os, 'pread', pread)
+    monkeypatch.setattr(lifecycle._ControlPathBinding, '_input_identity', identity)
+    with pytest.raises(RuntimeError, match='bws_lifecycle_unproven'):
+        with fixture.service.retained_runtime():
+            fixture.service.qualify_old(**fixture.arguments)
+    assert fired and not owned and sum(reads) <= 4097
+    if fault in {'open', 'metadata'}:
+        assert reads == []
+    assert not fixture.state['events'] and not fixture.service.control_path_binding.fds
+    assert fixture.service.runtime_close_completed and not fixture.state['events']
+
+
+@pytest.mark.parametrize('index', range(4))
+def test_preserved_dropin_vector_never_closes_replacement_descriptor(monkeypatch, secure_tmp_path, index):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(), fixture.properties,
+                               'dev', count=4, mixed_parents=True)
+    replacement = secure_tmp_path / 'replacement'
+    replacement.write_bytes(b'untouched replacement descriptor')
+    original_close = lifecycle.os.close
+    attempted = []
+    replacement_fd = None
+    def close_fd(fd):
+        attempted.append(fd)
+        original_close(fd)
+    monkeypatch.setattr(lifecycle.os, 'close', close_fd)
+    try:
+        with pytest.raises(RuntimeError, match='bws_lifecycle_unproven'):
+            with fixture.service.retained_runtime():
+                fixture.service.qualify_old(**fixture.arguments)
+                binding = fixture.service.control_path_binding
+                selected = fixture.properties['Unit', 'DropInPaths'][index]
+                replacement_fd = binding.fds[selected][0]
+                other = os.open(replacement, os.O_RDONLY | os.O_NOFOLLOW)
+                os.dup2(other, replacement_fd, inheritable=False)
+                original_close(other)
+                attempted.clear()
+                fixture.service.revalidate_empty_control_configuration()
+        assert replacement_fd not in attempted
+        assert os.fstat(replacement_fd).st_ino == replacement.stat().st_ino
+        assert binding.close_uncertain and not binding.fds
+        assert not fixture.service.runtime_close_completed and not fixture.state['events']
+    finally:
+        if replacement_fd is not None:
+            original_close(replacement_fd)
 
 
 @pytest.mark.parametrize('site,kind', [
@@ -1908,16 +2092,18 @@ def test_initial_unit_property_sites_and_failure_kinds(monkeypatch, secure_tmp_p
     assert 'PRIVATE_CANARY' not in str(caught.value) + repr(capsys.readouterr())
 
 
-def test_preserved_dropin_descriptor_saturation_refuses_before_file_open(monkeypatch, secure_tmp_path):
+@pytest.mark.parametrize('index', range(4))
+def test_preserved_dropin_descriptor_saturation_refuses_before_file_open(monkeypatch, secure_tmp_path, index):
     fixture = control_path_fixture(monkeypatch, secure_tmp_path)
-    selected = configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(),
-                                         fixture.properties, 'dev')
+    configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(),
+                              fixture.properties, 'dev', count=4, mixed_parents=True)
+    selected_paths = tuple(Path(path) for path in fixture.properties['Unit', 'DropInPaths'])
     # Independent finite fixture topology: qualification opens these root and
     # effect-parent ancestors before selecting the file. Leave exactly no slot.
     directories = set()
-    for path in (*fixture.roots.values(), selected.parent):
+    for path in (*fixture.roots.values(), *(path.parent for path in selected_paths[:index + 1])):
         directories.update((path, *path.parents))
-    limit = len(directories)
+    limit = len(directories) + index
     monkeypatch.setattr(lifecycle, '_control_path_descriptor_bound', lambda: limit)
     real_open, real_close = lifecycle.os.open, lifecycle.os.close
     owned = set()
@@ -1925,7 +2111,7 @@ def test_preserved_dropin_descriptor_saturation_refuses_before_file_open(monkeyp
     maximum = 0
     def open_fd(path, flags, *args, **kwargs):
         nonlocal maximum
-        if str(path) == selected.name:
+        if str(path) in {item.name for item in selected_paths}:
             selected_opens.append(path)
         fd = real_open(path, flags, *args, **kwargs)
         assert fd not in owned
@@ -1941,7 +2127,7 @@ def test_preserved_dropin_descriptor_saturation_refuses_before_file_open(monkeyp
     with pytest.raises(RuntimeError, match='bws_lifecycle_unproven'):
         with fixture.service.retained_runtime():
             fixture.service.qualify_old(**fixture.arguments)
-    assert selected_opens == []
+    assert selected_opens == [path.name for path in selected_paths[:index]]
     assert not owned and not fixture.service.control_path_binding.fds
     assert maximum <= limit + 1  # existing separately budgeted runtime reader
     assert fixture.state['events'] == []
