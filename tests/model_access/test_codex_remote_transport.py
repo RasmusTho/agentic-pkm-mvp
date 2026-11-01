@@ -874,12 +874,19 @@ def test_private_ingress_context_loads_ca_and_client_chain(monkeypatch) -> None:
     assert context.check_hostname is True
 
 
-def test_tailnet_mtls_transport_requires_tailnet_origin_and_identity(monkeypatch) -> None:
+def test_tailnet_mtls_transport_requires_tailnet_origin_and_identity(monkeypatch, tmp_path) -> None:
     for endpoint in ("http://100.100.20.30:9443", "https://192.168.1.2:9443", "https://100.128.0.1:9443", "https://host.example:9443", "https://100.100.20.30:9443/path", "https://user:pw@100.100.20.30:9443"):
         with pytest.raises(ValueError):
             CodexRemoteTransport(endpoint=endpoint, path_adapter="tailnet_mtls_https", tls_verify="/ca.pem", client_certificate=("/client.pem", "/client.key"))
     with pytest.raises(ValueError, match="verified mutual TLS"):
         CodexRemoteTransport(endpoint="https://100.100.20.30:9443", path_adapter="tailnet_mtls_https", tls_verify=True)
+    bad_ca = tmp_path / "untrusted-ca.pem"
+    bad_ca.write_text("not a trusted certificate", encoding="utf-8")
+    with pytest.raises(ValueError, match="TLS configuration is invalid"):
+        CodexRemoteTransport(
+            endpoint="https://100.100.20.30:9443", path_adapter="tailnet_mtls_https",
+            tls_verify=str(bad_ca), client_certificate=("/client.pem", "/client.key"),
+        )
     context = ssl.create_default_context()
     captured = {}
     class Transport:
