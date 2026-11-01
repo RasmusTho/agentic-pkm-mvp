@@ -2301,11 +2301,18 @@ def run(
             # row instead of leaving it queued until a vault is selected.
             logger.debug("worker tick idled: no vault selected")
         try:
-            binding_runtime = (
-                None
-                if tick_vault_root is None
-                else resolve_background_worker_runtime(vault_root=tick_vault_root)
-            )
+            from app.instance.background_supervisor import BackgroundBindingIdle
+
+            try:
+                binding_runtime = (
+                    None
+                    if tick_vault_root is None
+                    else resolve_background_worker_runtime(vault_root=tick_vault_root)
+                )
+            except BackgroundBindingIdle:
+                # MVR-06B: explicit-empty / no-vault durable intent is honest idle.
+                binding_runtime = None
+                no_vault_idle = True
             eligible = eligible_worker_bindings(binding_runtime)
             binding_stamp = required_worker_binding_stamp(binding_runtime)
             message = (
