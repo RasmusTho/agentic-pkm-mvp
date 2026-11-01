@@ -573,3 +573,49 @@ def test_initial_control_path_diagnostics_preserve_closed_stage_parity(monkeypat
                 with pytest.raises(admission.InstallationAdmissionRefused):
                     lease._validate_receipt({**_receipt(request, status=status), 'prebackup_gate': gate})
         lease.complete(legacy)
+
+
+def test_initial_roots_below_role_pair_receipts_match_finite_contract(monkeypatch, tmp_path):
+    from tests.ops.bws_control_path_diagnostic_cases import ROOT_BELOW_PAIRS
+    expected = {(mode, 'unknown', role, 'below')
+                for mode in ('path_absent', 'path_selected') for _, _, role in ROOT_BELOW_PAIRS}
+    assert len(expected) == 12
+    for module in (transaction, admission):
+        assert {row for row in module._INITIAL_PATH_REFINEMENTS if row[2].startswith('roots_')} == expected
+    assert admission._INITIAL_PATH_CONTEXTS == transaction._INITIAL_PATH_CONTEXTS
+    assert admission._PREBACKUP_REFUSAL_GATES == transaction._PREBACKUP_REFUSAL_GATES
+    _patch_directories(monkeypatch, tmp_path)
+    request = _request()
+    legacy = {**_receipt(request, status='refused_before_backup'),
+              'prebackup_gate': 'old_kernel_initial_root_control__path_selected__unknown__roots__below'}
+    with admission.installation_admission(**request) as lease:
+        for context in expected:
+            gate = 'old_kernel_initial_root_control__' + '__'.join(context)
+            for suffix in ('', '__provenance_unavailable'):
+                receipt = transaction._receipt(request, status='refused_before_backup', old_generation=None,
+                    new_generation=None, backup_manifest=None, prebackup_gate=gate + suffix)
+                assert lease._validate_receipt(receipt) == receipt
+            bad_gates = [gate.replace('initial', 'empty_control'), gate + '__PRIVATE_CANARY',
+                         gate.replace('__below', '__equal'), gate.replace('__below', '__above'),
+                         gate.replace('__below', '__recorded_identity'),
+                         gate.replace('__unknown__', '__old__'), gate.replace('__unknown__', '__proposed__'),
+                         gate.replace(context[0], 'path_environment'), gate.replace(context[0], 'captured_empty')]
+            for bad_role in ('roots_control_application', 'roots_application_launcher', 'roots_control_backup',
+                             'roots_application_backup', 'roots_launcher_backup', 'roots_control_control',
+                             'roots_application_application', 'roots_launcher_launcher', 'roots_backup_backup',
+                             'roots_unknown_control', 'roots_backup_PRIVATE_CANARY'):
+                bad_gates.append(gate.replace(context[2], bad_role))
+            for bad in bad_gates:
+                with pytest.raises(admission.InstallationAdmissionRefused):
+                    lease._validate_receipt({**legacy, 'prebackup_gate': bad})
+            for status in ('installed', 'compensated_restored', 'compensated_stopped',
+                           'unknown', 'refused_before_stop'):
+                with pytest.raises(admission.InstallationAdmissionRefused):
+                    lease._validate_receipt({**_receipt(request, status=status), 'prebackup_gate': gate})
+        assert lease.complete(legacy) == legacy  # Historical roots/below is not rewritten.
+    receipt_path = tmp_path / 'receipts' / ('bws-source-installation-' + request['operation_id'] + '.receipt.json')
+    retained_bytes = receipt_path.read_bytes()
+    recovery = {key: request[key] for key in ('operation_id', 'candidate_sha', 'image_digest', 'bundle_name')}
+    recovery['action'] = 'source-installation-reconcile'
+    assert admission.reconcile_installation_operation('dev', recovery) == {'source_installation': legacy}
+    assert receipt_path.read_bytes() == retained_bytes

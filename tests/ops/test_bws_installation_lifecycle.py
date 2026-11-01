@@ -2316,7 +2316,8 @@ def test_initial_control_path_defensive_inventory_keeps_real_producer_invariants
             binding = lifecycle._ControlPathBinding(ctl, (str(fixture.slot),), bad, effects)
             with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
                 binding.revalidate()
-            assert caught.value.root_control[-2:] == ('roots', guard)
+            assert caught.value.root_control[-2:] == (
+                'roots_application_control' if guard == 'below' else 'roots', guard)
         for path, guard in (('relative', 'directory_absolute'),
                             ('/a//b', 'directory_canonical'),
                             ('/' + '/'.join(['p'] * 33), 'directory_component_bound')):
@@ -2441,6 +2442,83 @@ def test_initial_control_path_walk_has_independent_complete_os_trace(monkeypatch
                keys == (('dir_fd', True), ('follow_symlinks', False))
                for path, keys in evidence['stat_arguments'])
     assert not evidence['owned'] and not binding.fds
+
+
+@pytest.mark.parametrize('selected', [False, True], ids=['absent', 'selected'])
+@pytest.mark.parametrize('current,earlier,role',
+    __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['ROOT_BELOW_PAIRS']).ROOT_BELOW_PAIRS)
+def test_initial_roots_below_role_pair_diagnostics(monkeypatch, secure_tmp_path, selected, current, earlier, role):
+    from tests.ops.bws_control_path_diagnostic_cases import prepare_path_case
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    if selected:
+        configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(), fixture.properties, 'dev')
+    names = ('control', 'application', 'launcher', 'backup')
+    roots = [fixture.arguments['control_root'], *fixture.arguments['installation_footprint']]
+    current_index, earlier_index = names.index(current), names.index(earlier)
+    nested = fixture.roots[earlier] / 'PRIVATE_CANARY_nested'
+    nested.mkdir(mode=0o755)
+    roots[current_index] = {**roots[current_index], 'path': str(nested)}
+    # A later root must never even have its path inspected after the first
+    # failure. These remain exact dicts as required by the real shape guard.
+    for index in range(current_index + 1, 4):
+        roots[index] = {}
+    comparisons = []
+    class Prefix(str):
+        pass
+    class RootPath(str):
+        __hash__ = str.__hash__
+        def __new__(cls, value, name):
+            result = super().__new__(cls, value)
+            result.role = name
+            return result
+        def __eq__(self, other):
+            if isinstance(other, RootPath):
+                comparisons.append(('equal', self.role, other.role))
+            return super().__eq__(other)
+        def __add__(self, suffix):
+            result = Prefix(super().__add__(suffix))
+            result.role = self.role
+            return result
+        def startswith(self, prefix, *args):
+            if isinstance(prefix, Prefix):
+                comparisons.append(('startswith', self.role, prefix.role))
+            return super().startswith(prefix, *args)
+    for index in range(current_index + 1):
+        roots[index] = {**roots[index], 'path': RootPath(roots[index]['path'], names[index])}
+    expected_comparisons = []
+    for index in range(1, current_index + 1):
+        for previous in range(index):
+            expected_comparisons += [('equal', names[index], names[previous]),
+                                     ('startswith', names[index], names[previous])]
+            if (index, previous) == (current_index, earlier_index):
+                break
+            expected_comparisons.append(('startswith', names[previous], names[index]))
+    evidence = prepare_path_case(lifecycle, monkeypatch, fixture.state, fixture.properties,
+        fixture.roots['control'], fixture.properties['Unit', 'DropInPaths'], 'valid')
+    binding = lifecycle._ControlPathBinding(roots[0], (str(fixture.slot),), tuple(roots[1:]),
+        fixture.arguments['installation_effect_parents'], tuple(fixture.properties['Unit', 'DropInPaths']))
+    expected_trace, opened = [], []
+    def directory(path):
+        if path in opened:
+            return
+        if path != Path('/'):
+            directory(path.parent)
+        expected_trace.extend((operation, str(path)) for operation in ('open', 'fstat', 'inheritable', 'statx'))
+        opened.append(path)
+    for name in names[:current_index]:
+        directory(fixture.roots[name])
+    for path in reversed(opened):
+        expected_trace.extend((operation, str(path)) for operation in ('fstat', 'close'))
+    with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+        binding.revalidate()
+    assert caught.value.root_control == ('path_selected' if selected else 'path_absent', 'unknown', role, 'below')
+    assert comparisons == expected_comparisons  # Same predicate/access order, no repeat or later pair.
+    assert evidence['trace'] == expected_trace  # No added OS/metadata/content observation.
+    binding.close()
+    assert not evidence['owned'] and not binding.fds and not binding.close_uncertain
+    assert len(evidence['closed']) == len(opened)
+    assert str(caught.value) == 'bws_lifecycle_unproven'
+    assert 'PRIVATE_CANARY' not in repr(caught.value.root_control)
 
 
 def test_initial_control_path_role_exclusions_have_direct_guard_proof(monkeypatch, secure_tmp_path):
