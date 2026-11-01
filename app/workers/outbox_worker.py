@@ -38,7 +38,10 @@ from app.events.topic_schema_registry import (
 )
 from app.indexer.consumer import process_event as process_indexer_event
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
-from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
+from app.instance.scalar_binding_runtime import (
+    resolve_background_worker_runtime,
+    resolve_scalar_binding_runtime,
+)
 from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 from app.knowledge.write_ops import read_note_text_with_version
 from app.objects import resolve_canonical_object_id
@@ -365,7 +368,14 @@ def run_once(
         return WorkerTickResult(state="no_vault", processed=0)
 
     resolved_root = _resolve_optional_vault_root(vault_root)
-    binding_runtime = resolve_scalar_binding_runtime(vault_root=resolved_root)
+    from app.instance.background_supervisor import BackgroundBindingIdle
+
+    try:
+        binding_runtime = resolve_background_worker_runtime(vault_root=resolved_root)
+    except BackgroundBindingIdle:
+        # MVR-06B: explicit-empty or compatibility no-vault intent is durable idle.
+        logger.debug("outbox worker tick idled: durable background intent runs no binding")
+        return WorkerTickResult(state="no_vault", processed=0)
     eligible = eligible_worker_bindings(binding_runtime)
     if _eligible_binding_ids is not None:
         if eligible is None or not set(_eligible_binding_ids).issubset(eligible):
@@ -2224,7 +2234,7 @@ def run(
     if startup_root is not None:
         try:
             startup_stamp = required_worker_binding_stamp(
-                resolve_scalar_binding_runtime(vault_root=startup_root)
+                resolve_background_worker_runtime(vault_root=startup_root)
             )
             require_upgrade_drained(startup_stamp)
         except OutboxEnvelopeUpgradeBlocked:
@@ -2294,7 +2304,7 @@ def run(
             binding_runtime = (
                 None
                 if tick_vault_root is None
-                else resolve_scalar_binding_runtime(vault_root=tick_vault_root)
+                else resolve_background_worker_runtime(vault_root=tick_vault_root)
             )
             eligible = eligible_worker_bindings(binding_runtime)
             binding_stamp = required_worker_binding_stamp(binding_runtime)

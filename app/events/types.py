@@ -129,6 +129,13 @@ KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED = "knowledge_acquisition.stage.dead_le
 # new registry revision and binding identity only: never a content-root path,
 # vault name, or other raw binding payload.
 INSTANCE_DEFAULT_VAULT_CHANGED = "instance.default_vault.changed"
+# MVR-06B (#3864): the idempotent wake-up hint for one durable background-intent
+# revision (bridge handoff, compatibility picker/default rebind, governed add/remove,
+# transfer repair). KERNEL-08 schema registered at
+# `schemas/events/instance.background_intent.changed.v1.schema.json`. Lineage posture,
+# NOT a dispatched command: the supervisor reconciles the durable registry revision and
+# auth epoch; this row only accelerates that. Binding ids and revisions only.
+INSTANCE_BACKGROUND_INTENT_CHANGED = "instance.background_intent.changed"
 # MVR-04: a non-authoritative vault-dimension grouping changed. Grouping only; it
 # carries no authority and no consumer may read admission from it.
 INSTANCE_VAULT_DIMENSION_CHANGED = "instance.vault_dimension.changed"
@@ -217,6 +224,7 @@ HEIMDAL_MEETING_USER_NOTE_WRITTEN = "heimdal.meeting.user_note.written"
 HEIMDAL_MEETING_FINALIZED = "heimdal.meeting.finalized"
 
 __all__ = [
+    "INSTANCE_BACKGROUND_INTENT_CHANGED",
     "INSTANCE_DEFAULT_VAULT_CHANGED",
     "INSTANCE_VAULT_DIMENSION_CHANGED",
     "INGEST_OBJECT_CREATED",

@@ -146,6 +146,18 @@ class OwnershipFenceUnavailable(BindingEffectLeaseError, LedgerError):
     """The ledger refused a foreground binding effect acquisition."""
 
 
+class BindingLifecycleSealed(BindingEffectLeaseError):
+    """MVR-06B: a draining-removal or reactivating binding admits no new shared effect.
+
+    The removal/reactivation reconciler holds the exclusive lease; every ordinary
+    foreground/background holder is refused until the lifecycle completes or recovers.
+    """
+
+
+#: Registration lifecycle reservations that seal ordinary (shared) effect acquisition.
+_SEALED_LIFECYCLE_STATES = frozenset({"draining_removal", "reactivating"})
+
+
 class BindingEffectLeaseTimeout(BindingEffectLeaseError):
     """The requested effect window did not become available in time."""
 
@@ -343,6 +355,8 @@ class BindingEffectLeaseManager:
                     vault_binding_id, channel_id=channel_id, root=root
                 ):
                     with self._state_locked(vault_binding_id):
+                        if mode == "shared":
+                            self._assert_lifecycle_admits_shared(vault_binding_id)
                         current = self._load_reconciled_locked(vault_binding_id)
                         if mode == "shared":
                             available = (
@@ -427,6 +441,8 @@ class BindingEffectLeaseManager:
             if held is None:
                 raise BindingEffectLeaseError("binding effect acquisition ended without a holder")
             yield held
+        except BindingLifecycleSealed:
+            raise
         except LedgerError as exc:
             raise OwnershipFenceUnavailable(str(exc)) from exc
         finally:
@@ -701,6 +717,14 @@ class BindingEffectLeaseManager:
         self._atomic_private_json(self._state_path(vault_binding_id), recovered)
         path.unlink()
         self._fsync_directory(self.state_root)
+
+    def _assert_lifecycle_admits_shared(self, vault_binding_id: str) -> None:
+        registration = self.registry_store.load().registrations.get(vault_binding_id)
+        state = None if registration is None else registration.extensions.get("lifecycleState")
+        if state in _SEALED_LIFECYCLE_STATES:
+            raise BindingLifecycleSealed(
+                f"binding effect acquisition is sealed while the binding is {state}"
+            )
 
     def _registry_state(self, vault_binding_id: str) -> _LeaseState:
         snapshot = self.registry_store.load()

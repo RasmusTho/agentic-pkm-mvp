@@ -168,6 +168,13 @@ PRODUCERS: tuple[OutboxProducer, ...] = (
         "global",
     ),
     _p(
+        "shared.instance.background_supervisor",
+        "app/instance/background_supervisor.py",
+        "emit_background_intent_event",
+        "shared",
+        "global",
+    ),
+    _p(
         "shared.instance.vault_dimensions",
         "app/instance/vault_dimensions.py",
         "emit_dimension_mutation_event",
