@@ -1199,6 +1199,18 @@ class DeployRemote(Protocol):
     def prove_absence(self, operation_id: str, plan: DeployPlan) -> dict[str, str | bool]: ...
 
 
+def host_deploy_image_binding(plan: DeployPlan) -> str | None:
+    """Retain only public image selectors and a fingerprint of the private plan."""
+    if plan.channel not in {'dev', 'test'} or plan.image_digest is None:
+        return None
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+    return json.dumps({
+        'schema': 'host-deploy-image-binding.v1', 'repository': IMAGE_REPOSITORY,
+        'channel': plan.channel, 'revision': plan.revision, 'image_digest': plan.image_digest,
+        'plan_fingerprint': DeployJournal.plan_fingerprint(plan),
+    }, sort_keys=True, separators=(',', ':'))
+
+
 def bootstrap_password(admin: SecretAdmin, operation: HostSecretOperation, *, empty: bool) -> None:
     """Only locked empty-data bootstrap; never generic rotation or a retry-create."""
     operation.require_active(operation.target)
@@ -1252,8 +1264,14 @@ def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
                                              or plan.principal_cutover))):
         raise PostgresDeployError()
     plan.validate()
+    if plan.channel in {'dev', 'test'} and plan.image_digest is None:
+        raise PostgresDeployError()
     try:
         arguments: dict[str, Any] = {'allow_bootstrap': allow_bootstrap}
+        binding = host_deploy_image_binding(plan)
+        if binding is not None:
+            arguments['deploy_image_binding'] = binding
+            arguments['allow_legacy_terminal'] = operation_id is not None
         if operation_id is not None:
             arguments['operation_id'] = operation_id
         with admin.controller.deploy_operation(plan.channel, **arguments) as (operation, resumed):
