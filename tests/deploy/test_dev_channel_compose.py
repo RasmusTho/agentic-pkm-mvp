@@ -300,6 +300,7 @@ def _render_signboard_deploy_compose(
     vault_host_root: Path | None,
     runtime_signboard_root: str = "",
     force_no_active_vault: bool = False,
+    model_access_bindings: dict[str, str] | None = None,
 ) -> tuple[dict[str, object], Path, bytes]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     runtime_env = tmp_path / "runtime.env"
@@ -324,6 +325,22 @@ def _render_signboard_deploy_compose(
         encoding="utf-8",
     )
 
+    wrapper = DEPLOY_COMPOSE_WRAPPER
+    if model_access_bindings is not None:
+        model_env = tmp_path / "model-access.env"
+        model_env.write_text(
+            "".join(f"{key}={value}\n" for key, value in model_access_bindings.items()),
+            encoding="utf-8",
+        )
+        wrapper = tmp_path / "deploy_channel_compose.sh"
+        wrapper.write_text(
+            DEPLOY_COMPOSE_WRAPPER.read_text(encoding="utf-8").replace(
+                MODEL_ACCESS_ENV_FILE, str(model_env)
+            ),
+            encoding="utf-8",
+        )
+        for sibling in ("instance_ownership_host_state.sh", "signboard_root.sh"):
+            shutil.copyfile(DEPLOY_COMPOSE_WRAPPER.parent / sibling, tmp_path / sibling)
     command = """
 set -euo pipefail
 source "$1"
@@ -356,7 +373,7 @@ deploy_channel_compose "$2" dev docker-compose.dev.yml pkm-dev-signboard-contrac
             "-c",
             command,
             "signboard-compose-contract",
-            str(DEPLOY_COMPOSE_WRAPPER),
+            str(wrapper),
             str(REPO_ROOT),
             str(channel_env),
         ],
@@ -716,3 +733,19 @@ def test_deploy_channel_runtime_env_vault_binding_ignores_parent_shell_stale_val
                 f"{service} rendered the stale parent-shell {key}: ambient shell "
                 "state overrode the governed channel selection (#3875)"
             )
+
+
+@requires_docker
+def test_tailnet_model_access_is_scoped_to_product_callers(tmp_path: Path) -> None:
+    keys = {"MODEL_ACCESS_EXECUTOR_PATH": "tailnet_mtls", "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT": "https://100.100.20.30:9443"}
+    bindings = {**keys, "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE": "/run/model-access/ca.pem", "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT": "/run/model-access/client.pem", "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY": "/run/model-access/client.key"}
+    compose, _, _ = _render_signboard_deploy_compose(tmp_path / "tailnet", signboard_host_root=None, vault_host_root=None, model_access_bindings=bindings)
+    for name, service in compose["services"].items():
+        env = service.get("environment", {})
+        if name in RUNTIME_SERVICES:
+            assert all(env.get(key) == value for key, value in keys.items())
+        else:
+            assert not set(keys).intersection(env), name
+    prod = _load_compose(REPO_ROOT / "docker-compose.prod.yml")["services"]
+    for service in prod.values():
+        assert not set(keys).intersection(service.get("environment", {}))

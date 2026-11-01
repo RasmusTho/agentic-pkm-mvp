@@ -199,6 +199,8 @@ deploy_channel_model_access_runtime_env_preflight() {
   local bindings assignment key value
   local -a model_access_keys=(
     MODEL_ACCESS_CODEX_VLAN_ENDPOINT
+    MODEL_ACCESS_EXECUTOR_PATH
+    MODEL_ACCESS_CODEX_TAILNET_ENDPOINT
     MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE
     MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT
     MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY
@@ -223,6 +225,7 @@ deploy_channel_model_access_runtime_env_preflight() {
     RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON:-python3}" - 2>/dev/null <<'PY'
 from __future__ import annotations
 
+import ipaddress
 import os
 from pathlib import PurePosixPath
 import sys
@@ -231,6 +234,8 @@ from urllib.parse import urlsplit
 
 allowed = {
     "MODEL_ACCESS_CODEX_VLAN_ENDPOINT",
+    "MODEL_ACCESS_EXECUTOR_PATH",
+    "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT",
     "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE",
     "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT",
     "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY",
@@ -261,7 +266,10 @@ for line in content.splitlines():
         refuse()
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         refuse()
-    if key == "MODEL_ACCESS_CODEX_VLAN_ENDPOINT":
+    if key == "MODEL_ACCESS_EXECUTOR_PATH":
+        if value not in {"", "vlan", "tailnet_mtls"}:
+            refuse()
+    elif key in {"MODEL_ACCESS_CODEX_VLAN_ENDPOINT", "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT"}:
         try:
             endpoint = urlsplit(value)
             hostname = endpoint.hostname
@@ -275,9 +283,25 @@ for line in content.splitlines():
             or endpoint.password is not None
         ):
             refuse()
+        if key == "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT":
+            try:
+                valid_tailnet = ipaddress.ip_address(hostname) in ipaddress.ip_network("100.64.0.0/10")
+                valid_port = endpoint.port is None or 1 <= endpoint.port <= 65535
+            except ValueError:
+                refuse()
+            if not valid_tailnet or not valid_port or endpoint.path not in {"", "/"} or endpoint.query or endpoint.fragment:
+                refuse()
     elif value and not PurePosixPath(value).is_absolute():
         refuse()
     values[key] = value
+
+if values.get("MODEL_ACCESS_EXECUTOR_PATH") == "tailnet_mtls" and not all(
+    values.get(key) for key in (
+        "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT", "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE",
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT", "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY",
+    )
+):
+    refuse()
 
 for key in sorted(allowed):
     sys.stdout.write(f"{key}={values.get(key, '')}\n")
@@ -291,7 +315,7 @@ PY
     key="${assignment%%=*}"
     value="${assignment#*=}"
     case "${key}" in
-      MODEL_ACCESS_CODEX_VLAN_ENDPOINT|MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE|MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT|MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY)
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT|MODEL_ACCESS_EXECUTOR_PATH|MODEL_ACCESS_CODEX_TAILNET_ENDPOINT|MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE|MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT|MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY)
         export "${key}=${value}"
         ;;
       *)
@@ -318,6 +342,8 @@ deploy_channel_model_access_preflight() {
   local key
   local -a model_access_keys=(
     MODEL_ACCESS_CODEX_VLAN_ENDPOINT
+    MODEL_ACCESS_EXECUTOR_PATH
+    MODEL_ACCESS_CODEX_TAILNET_ENDPOINT
     MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE
     MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT
     MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY

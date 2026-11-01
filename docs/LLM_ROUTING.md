@@ -82,10 +82,11 @@ their configured provider. The value `mock` remains the fallback when a task has
 These overlays also accept the optional host-local
 `/etc/yggdrasil/model-access/runtime.env` path-reference file and mount
 `/etc/yggdrasil/model-access/codex-client` read-only for those callers only. The host-managed file
-may contain only `MODEL_ACCESS_CODEX_VLAN_ENDPOINT` and the three CA/certificate/key path
-references. The deploy wrapper fails closed on duplicate, malformed, or additional keys; it accepts
-only an HTTPS endpoint without URL credentials and absolute file paths, then exports just those
-four values. Compose does not read the raw file as a service `env_file`, so unrelated settings or
+may contain `MODEL_ACCESS_CODEX_VLAN_ENDPOINT`, the three CA/certificate/key path references,
+and the optional `MODEL_ACCESS_EXECUTOR_PATH` and `MODEL_ACCESS_CODEX_TAILNET_ENDPOINT` references.
+The deploy wrapper fails closed on duplicate, malformed, or additional keys; it accepts the new
+endpoint only as an HTTPS Tailnet IPv4 literal and requires the identity references when that path
+is selected. Compose does not read the raw file as a service `env_file`, so unrelated settings or
 credentials cannot leak into Product containers. The file selects no model and activates no route.
 The deploy entrypoint validates this separation before acquiring the channel lock or preparing
 migrations/state. Immediately before a Product-channel Compose invocation, it snapshots the governed
@@ -178,9 +179,15 @@ Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`,
 
 Model choice and cross-host network path are separate configuration layers. The Product client now
 resolves `profile.codex_remote_host` through the configured profiles in
-`config/model_access/executor_network_paths.yaml`. The active Ygg profile contains only
-`ygg_vlan_primary`; no Tailscale endpoint, Serve setup, or fallback is required for acceptance or
-rollout. Host-local environment-variable references are checked in; endpoint values, host
+`config/model_access/executor_network_paths.yaml`. The default Ygg profile contains only
+`ygg_vlan_primary`; no Tailscale endpoint, Serve setup, or fallback is required by default.
+DEV/TEST can explicitly select `MODEL_ACCESS_EXECUTOR_PATH=tailnet_mtls` and the host-local
+`MODEL_ACCESS_CODEX_TAILNET_ENDPOINT` to use the separately named `ygg_tailnet_mtls` path. It uses
+the same CA/client-identity references and Product authorization as the VLAN path, with an HTTPS
+literal in `100.64.0.0/10`; it does not require Tailscale Serve. The legacy `VLAN` names on the
+shared identity references are compatibility names, not a claim about the selected network path.
+Invalid selection or missing selected-path references fails closed. Host-local environment-variable
+references are checked in; endpoint values, host
 identities, CA bundles, and client certificates remain on the host. Provider/model policy does not
 choose an endpoint or network adapter.
 
@@ -190,7 +197,7 @@ advance to the next configured path only for `PATH_UNAVAILABLE`, `CONNECT_TIMEOU
 and missing path configuration fail closed. Once a non-200 HTTP
 status is received, a stalled, disconnected, or oversized error body preserves that status; only a
 fully decoded explicit path-local error code can authorize another configured path. The active Ygg
-profile has no second path, so VLAN failure is terminal. The VLAN ingress uses mutually
+default profile has no second path, so VLAN failure is terminal. The VLAN ingress uses mutually
 authenticated HTTPS to a host-local RFC1918 IPv4 or IPv6 unique-local address literal; DNS names
 are rejected so a public endpoint cannot receive completion content. The executor backend remains
 loopback-bound and does not rely on Tailscale-Serve headers or per-action capability claims.

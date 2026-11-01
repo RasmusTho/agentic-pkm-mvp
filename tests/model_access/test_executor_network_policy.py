@@ -615,3 +615,49 @@ def test_unclassified_path_preflight_does_not_select_another_provider(
 
     assert transports["ygg_vlan_primary"].preflight_requests
     assert transports["tailscale_fallback"].preflight_requests == []
+
+
+def test_tailnet_mtls_profile_is_opt_in_and_preserves_vlan_default(tmp_path: Path) -> None:
+    from app.model_access.executor_network_policy import resolve_executor_paths
+
+    env = _host_environment(tmp_path)
+    default = resolve_executor_paths("profile.codex_remote_host", environment=env)
+    assert [path.path_profile for path in default] == ["ygg_vlan_primary"]
+    env["MODEL_ACCESS_EXECUTOR_PATH"] = "tailnet_mtls"
+    with pytest.raises(ExecutorNetworkConfigurationError, match="path_configuration_missing"):
+        resolve_executor_paths("profile.codex_remote_host", environment=env)
+    env["MODEL_ACCESS_CODEX_TAILNET_ENDPOINT"] = "https://100.100.20.30:9443"
+    selected = resolve_executor_paths("profile.codex_remote_host", environment=env)
+    assert [(path.path_profile, path.adapter) for path in selected] == [
+        ("ygg_tailnet_mtls", "tailnet_mtls_https")
+    ]
+    assert selected[0].client_certificate == (env["MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT"], env["MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY"])
+    env["MODEL_ACCESS_EXECUTOR_PATH"] = "not-a-profile"
+    with pytest.raises(ExecutorNetworkConfigurationError, match="path_selection_invalid"):
+        resolve_executor_paths("profile.codex_remote_host", environment=env)
+
+
+def test_tailnet_mtls_product_route_preserves_identity_and_no_replay(tmp_path: Path) -> None:
+    env = _host_environment(tmp_path)
+    env.update(MODEL_ACCESS_EXECUTOR_PATH="tailnet_mtls", MODEL_ACCESS_CODEX_TAILNET_ENDPOINT="https://100.100.20.30:9443")
+    chosen: list[ResolvedExecutorPath] = []
+    fake = _FakePathTransport(completion_error="execution_indeterminate")
+    def factory(path: ResolvedExecutorPath) -> _FakePathTransport:
+        chosen.append(path)
+        return fake
+    router = ExecutorNetworkPathRouter(environment=env, transport_factory=factory)
+    preflight_request = ProductPreflightRequest(provider="openai", model="gpt-6-luna", reasoning_effort="low")
+    completion = ProductCompletionRequest(provider="openai", model="gpt-6-luna", reasoning_effort="low", trusted_instructions="Test.", user_input="Test.")
+    try:
+        admitted = router.preflight_product(preflight_request)
+        assert admitted.receipt.selected_path_profile == "ygg_tailnet_mtls"
+        assert admitted.receipt.route.catalog_snapshot_hash == "sha256:" + "a" * 64
+        with pytest.raises(RemoteCompletionError, match="execution_indeterminate"):
+            router.complete_product_selected_path(completion, receipt=admitted.receipt)
+        with pytest.raises(RemoteCompletionError, match="executor_path_preflight_required"):
+            router.complete_product_selected_path(completion, receipt=admitted.receipt)
+    finally:
+        router.close()
+    assert [path.path_profile for path in chosen] == ["ygg_tailnet_mtls"]
+    assert fake.product_preflight_requests == [preflight_request]
+    assert fake.product_completion_requests == [completion]

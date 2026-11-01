@@ -86,7 +86,10 @@ def test_configured_mtls_vlan_path_is_the_only_executor_path() -> None:
     authentication = policy["authentication_profiles"]["ygg_vlan_mutual_tls"]
     assert vlan_policy == "policy.vlan_mtls_authenticated_caller"
     assert configured_order == ["ygg_vlan_primary"]
-    assert set(path_profiles) == {"ygg_vlan_primary"}
+    assert set(path_profiles) == {"ygg_vlan_primary", "ygg_tailnet_mtls"}
+    assert policy["executor_path_policies"]["profile.codex_tailnet_mtls_host"]["order"] == [
+        "ygg_tailnet_mtls"
+    ]
     assert authentication["mode"] == "mutual_tls"
 
     payload = _preflight_payload()

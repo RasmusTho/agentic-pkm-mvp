@@ -11707,3 +11707,42 @@ def test_cache_cleanup_requires_existing_native_lock(tmp_path, monkeypatch):
         effects.activate(plan)
     assert set(state['images']) == before and calls == []
     assert len(warnings) == 1 and b'reason=retained_inventory_unproven' in warnings[0]
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+@pytest.mark.parametrize("valid", [True, False])
+def test_tailnet_mtls_model_access_env_preflight(tmp_path: Path, channel: str, valid: bool) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    if channel == "test":
+        _configure_dev_test_environment_clobber_preflight(
+            root, env, tmp_path, channel="test", overlay_content=_HEIMDAL_FIXED_OVERLAY
+        )
+        runtime = root / "tmp-test/runtime.env"
+        runtime.write_text(runtime.read_text(encoding="utf-8") + "TTS_ENABLED=false\n", encoding="utf-8")
+    model_env = tmp_path / "model-access-runtime.env"
+    endpoint = "https://100.100.20.30:9443" if valid else "https://203.0.113.1:9443"
+    model_env.write_text("\n".join((
+        "MODEL_ACCESS_EXECUTOR_PATH=tailnet_mtls",
+        f"MODEL_ACCESS_CODEX_TAILNET_ENDPOINT={endpoint}",
+        "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE=/run/model-access/ca.pem",
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT=/run/model-access/client.pem",
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY=/run/model-access/client.key",
+        "",
+    )), encoding="utf-8")
+    for relative in ("scripts/deploy_channel.sh", "scripts/lib/deploy_channel_compose.sh"):
+        path = root / relative
+        path.write_text(path.read_text(encoding="utf-8").replace("/etc/yggdrasil/model-access/runtime.env", str(model_env)), encoding="utf-8")
+    docker = Path(env["PATH"].split(os.pathsep)[0]) / "docker"
+    injection = '''if [[ "$*" == compose* ]]; then
+  printf 'tailnet-bindings %s|%s\\n' "${MODEL_ACCESS_EXECUTOR_PATH:-}" "${MODEL_ACCESS_CODEX_TAILNET_ENDPOINT:-}" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+fi
+'''
+    docker.write_text(docker.read_text(encoding="utf-8").replace("set -eu\n", "set -eu\n" + injection, 1), encoding="utf-8")
+    result = _run_deploy(root, env, sha, channel=channel)
+    if valid:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert any(event == f"tailnet-bindings tailnet_mtls|{endpoint}" for event in _deploy_events(env))
+    else:
+        assert result.returncode == 78
+        assert "model-access runtime env preflight: blocked" in result.stderr
+        assert not any(event.startswith("tailnet-bindings ") for event in _deploy_events(env))

@@ -315,3 +315,16 @@ def test_test_runtime_services_have_mock_provider_and_vault_binding(tmp_path: Pa
 
     assert _environment(services["migrate"])["LLM_PROVIDER"] == "mock"
     assert _environment(services["heimdal-capture-watch"])["LLM_PROVIDER"] == "mock"
+
+
+def test_tailnet_model_access_is_scoped_to_product_callers(tmp_path: Path) -> None:
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text("", encoding="utf-8")
+    keys = {"MODEL_ACCESS_EXECUTOR_PATH": "tailnet_mtls", "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT": "https://100.100.20.30:9443"}
+    services = _services(_merged_compose(runtime_env, model_access_bindings=keys))
+    for name, service in services.items():
+        env = _environment(service)
+        if name in {"api", "worker", "watcher"}:
+            assert all(env.get(key) == value for key, value in keys.items())
+        else:
+            assert not set(keys).intersection(env), name
