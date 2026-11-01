@@ -2202,8 +2202,12 @@ BWS_SOURCE_INSTALLATION_PATHS = BWS_SOURCE_INSTALLATION_SOURCES | frozenset({
     "tests/ops/test_bws_installation_lifecycle.py",
     "tests/ops/test_bws_installation_transaction.py",
     "tests/ops/test_bws_control_installation.py",
+    "tests/ops/bws_control_path_diagnostic_cases.py",
     "tests/ops/fixtures/host_secret_contract_legacy.json",
     "tests/deploy/test_bws_source_rpc_assembly.py",
+    "scripts/select_pr_tests.py",
+    "tests/scripts/test_select_pr_tests.py",
+    "docs/development/TEST_STRATEGY_HOT_PATH.md",
     "docs/OPERATIONS.md",
     "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
 })

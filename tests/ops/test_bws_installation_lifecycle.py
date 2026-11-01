@@ -1358,7 +1358,7 @@ def configure_control_path_service(module, patch, state, control, application, r
     if sys.platform != 'linux':
         # macOS has no Linux statx. Replace only that OS metadata port; Linux CI
         # exercises the actual syscall, including mount IDs on held directories.
-        patch.setattr(module, '_control_path_mount', lambda fd: real_os.fstat(fd).st_dev)
+        patch.setattr(module, '_control_path_mount', lambda fd, **_context: real_os.fstat(fd).st_dev)
     properties = {
         ('Unit', 'Id'): f'yggdrasil-bws-deploy@{channel}.service',
         ('Unit', 'LoadState'): 'loaded', ('Service', 'Type'): 'simple',
@@ -1471,7 +1471,7 @@ def configure_preserved_dropin(module, patch, base, properties, channel, *, quot
     """Independent temporary disk and loaded manager state; no native input."""
     directory = base / 'systemd'
     unit_directory = directory / f"yggdrasil-bws-deploy@{'' if template else channel}.service.d"
-    unit_directory.mkdir(mode=0o755, parents=True)
+    unit_directory.mkdir(mode=0o755, parents=True, exist_ok=True)
     patch.setattr(module, '_SYSTEMD_DIRECTORY', str(directory))
     selected = unit_directory / 'arbitrary-PATH-private-canary.conf'
     assignment = next(value for value in properties['Service', 'Environment'] if value.startswith('PATH='))
@@ -1671,7 +1671,7 @@ def test_control_path_slot_refusal_matrix(monkeypatch, secure_tmp_path, fault):
                 slot.mkdir(mode=0o755)
             else:
                 original = lifecycle._control_path_mount
-                monkeypatch.setattr(lifecycle, '_control_path_mount', lambda fd: original(fd) + 1)
+                monkeypatch.setattr(lifecycle, '_control_path_mount', lambda fd, **context: original(fd, **context) + 1)
             with pytest.raises(RuntimeError):
                 fixture.service.revalidate_empty_control_configuration()
         else:
@@ -1977,12 +1977,12 @@ def test_preserved_dropin_vector_partial_failure_closes_every_original(
         assert fd in owned
         owned.remove(fd)
         real_close(fd)
-    def identity(binding, path, fd):
+    def identity(binding, path, fd, **context):
         nonlocal fired
         if fault == 'metadata' and path == str(target):
             fired = True
             raise OSError('PRIVATE_CANARY')
-        return real_identity(binding, path, fd)
+        return real_identity(binding, path, fd, **context)
     def pread(fd, size, offset):
         nonlocal fired
         inode = lifecycle.os.fstat(fd).st_ino
@@ -2131,3 +2131,361 @@ def test_preserved_dropin_descriptor_saturation_refuses_before_file_open(monkeyp
     assert not owned and not fixture.service.control_path_binding.fds
     assert maximum <= limit + 1  # existing separately budgeted runtime reader
     assert fixture.state['events'] == []
+
+
+@pytest.mark.parametrize('case', __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['PATH_CASES']).PATH_CASES,
+                         ids=lambda row: row[0])
+def test_initial_control_path_diagnostics_cover_source_inventory(monkeypatch, secure_tmp_path, case):
+    from tests.ops.bws_control_path_diagnostic_cases import prepare_path_case
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(), fixture.properties,
+                               'dev', count=4, mixed_parents=True)
+    selected = fixture.properties['Unit', 'DropInPaths']
+    if case[0] == 'proposed-hint':
+        payload = b'public candidate ' + str(fixture.roots['control']).encode()
+        fixture.arguments['launcher_content'] = dict(sha256=hashlib.sha256(payload).hexdigest(),
+            base64=base64.b64encode(payload).decode())
+    evidence = prepare_path_case(lifecycle, monkeypatch, fixture.state, fixture.properties,
+                                 fixture.roots['control'], selected, case[0])
+    with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+        with fixture.service.retained_runtime():
+            fixture.service.qualify_old(**fixture.arguments)
+    assert caught.value.root_control == tuple(case[1:])
+    assert str(caught.value) == 'bws_lifecycle_unproven'
+    assert not fixture.state['events'] and evidence['fired']
+    assert not evidence['owned']
+    assert 'PRIVATE_CANARY' not in repr(caught.value.root_control)
+    # Every successful open is closed once; repeated integer FD reuse is
+    # accounted per path/open, not mistaken for a second close of one handle.
+    assert sum(map(len, evidence['opened'].values())) == len(evidence['closed'])
+    if fixture.service.control_path_binding:
+        assert not fixture.service.control_path_binding.fds
+
+
+def test_initial_control_path_diagnostics_preserve_order_budgets_and_close(monkeypatch, secure_tmp_path):
+    from tests.ops.bws_control_path_diagnostic_cases import prepare_path_case
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(), fixture.properties,
+                               'dev', count=4, mixed_parents=True)
+    selected = fixture.properties['Unit', 'DropInPaths']
+    evidence = prepare_path_case(lifecycle, monkeypatch, fixture.state, fixture.properties,
+                                 fixture.roots['control'], selected, 'valid')
+    transport = lifecycle._run
+    properties = []
+    def observed(argv):
+        properties.append(argv[-1])
+        return transport(argv)
+    monkeypatch.setattr(lifecycle, '_run', observed)
+    with fixture.service.retained_runtime():
+        fixture.service.qualify_old(**fixture.arguments)
+        binding = fixture.service.control_path_binding
+        assert binding.path_assignment == fixture.environment[1]
+        assert fixture.service.contract[2] == tuple(fixture.environment)
+        first_walk = list(evidence['trace'])
+        reads = [row for row in evidence['reads'] if row[0] in selected]
+        assert [row[0] for row in reads] == selected
+        remaining = 4096
+        for _path, requested, returned in reads:
+            assert requested == remaining + 1
+            remaining -= returned
+        # Entire vector metadata is established before the first byte read.
+        first_read = first_walk.index(('pread', selected[0])) if ('pread', selected[0]) in first_walk else None
+        assert first_read is not None
+        assert all(first_walk.index(('open', path)) < first_read for path in selected)
+        assert properties[properties.index('DropInPaths') + 1:properties.index('ActiveState')] == [
+            'JoinsNamespaceOf', 'NeedDaemonReload', 'StandardOutput', 'StandardError', 'UMask',
+            'LoadCredentialEncrypted', 'LoadCredential',
+        ]
+        assert not fixture.state['events']
+    assert not evidence['owned'] and not binding.fds
+
+
+def test_initial_control_path_defensive_inventory_keeps_real_producer_invariants(monkeypatch, secure_tmp_path):
+    """No core producer is replaced to make an unreachable initial row appear."""
+    # Typed Environment rejects NUL before PATH; the branch excludes non-PATH
+    # hints/absent slots. The real parser constructs one PATH and its regex
+    # excludes NUL/backslash, so these are direct defensive negatives only.
+    monkeypatch.setattr(lifecycle, 'CONTROL_DIRECTORY', '/control')
+    for environment, guard in (
+        (['PATH=/control', 'OTHER=/control'], 'non_path_hint'),
+        (['PATH=/control:/bad\0path'], 'path_nul'),
+        (['PATH=/usr/bin'], 'slot_absent'),
+    ):
+        with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+            lifecycle._control_path_slots(environment)
+        assert caught.value.root_control == ('path_environment', 'unknown', 'loaded_slots', guard)
+    for raw in (b'[Service]\nEnvironment=PATH=/control:/bad\\path\n',
+                b'[Service]\nEnvironment=PATH=/control:/bad\0path\n'):
+        with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+            lifecycle._preserved_path_assignment(raw)
+        assert caught.value.root_control[-1] == 'grammar'
+
+    for name in ('nul', 'non_path_hint', 'no_slot'):
+        directory = secure_tmp_path / name
+        directory.mkdir(mode=0o755)
+        with monkeypatch.context() as patch:
+            fixture = control_path_fixture(patch, directory)
+            if name == 'nul':
+                fixture.properties['Service', 'Environment'][1] += '\0'
+            elif name == 'non_path_hint':
+                fixture.properties['Service', 'Environment'].append('OTHER=' + str(fixture.slot))
+            else:
+                fixture.properties['Service', 'Environment'] = ['PATH=/usr/bin']
+            with fixture.service.retained_runtime():
+                if name == 'no_slot':
+                    fixture.service.qualify_old(**fixture.arguments)
+                    assert fixture.service.control_path_binding is None
+                else:
+                    with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                        fixture.service.qualify_old(**fixture.arguments)
+                    if name == 'nul':
+                        assert caught.value.unit_property == ('Service_Environment', 'shape')
+                    else:
+                        assert caught.value.root_control == ('captured_empty', 'old', 'hints', 'environment_hint')
+
+    # A real successful construction proves fresh binding/snapshot state. The
+    # below direct saved-state negatives exercise real guards after retention;
+    # initial qualification never adopts a binding from another operation.
+    directory = secure_tmp_path / 'retained'
+    directory.mkdir(mode=0o755)
+    with monkeypatch.context() as patch:
+        fixture = control_path_fixture(patch, directory)
+        configure_preserved_dropin(lifecycle, patch, directory.resolve(), fixture.properties, 'dev')
+        assert fixture.service.control_path_binding is None
+        with fixture.service.retained_runtime():
+            fixture.service.qualify_old(**fixture.arguments)
+            binding = fixture.service.control_path_binding
+            assert binding.snapshot is not None
+            original_slots = binding.slots
+            binding.slots = ('/changed',)
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                fixture.service._config()
+            assert caught.value.root_control[-1] == 'slots_changed'
+            binding.slots = original_slots
+            original_selected = binding.selected_dropins
+            binding.selected_dropins = ()
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                fixture.service._config()
+            assert caught.value.root_control[-1] == 'selection_changed'
+            binding.selected_dropins = original_selected
+            fixture.properties['Service', 'Environment'] = ['PATH=/usr/bin']
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                fixture.service._config()
+            assert caught.value.root_control[-1] == 'branch_changed'
+            fixture.properties['Service', 'Environment'] = list(fixture.environment)
+            saved = binding.snapshot
+            binding.snapshot = ('different_complete_private_snapshot',)
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                binding.revalidate()
+            assert caught.value.root_control[-1] == 'disagreement'
+            binding.snapshot = saved
+            path = next(iter(binding.fds))
+            fd, identity = binding.fds[path]
+            binding.fds[path] = fd, (*identity[:4], identity[4] ^ 0o004, *identity[5:])
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                binding.revalidate()
+            assert caught.value.root_control[-1] == 'retained_version'
+            binding.fds[path] = fd, identity
+
+    # These malformed shapes are impossible from source_manifest: it constructs
+    # the ordered tuple of three six-field mappings and deduplicated, nonempty
+    # effect parents from the actual application/launcher changes. Exercise the
+    # direct real consumer guards without making NativePorts lie about them.
+    directory = secure_tmp_path / 'shapes'
+    directory.mkdir(mode=0o755)
+    with monkeypatch.context() as patch:
+        fixture = control_path_fixture(patch, directory)
+        ctl = fixture.arguments['control_root']
+        footprint = fixture.arguments['installation_footprint']
+        effects = fixture.arguments['installation_effect_parents']
+        for bad, guard in (([], 'tuple_type'), ((), 'population'), ((None,) * 3, 'member_mapping')):
+            binding = lifecycle._ControlPathBinding(ctl, (str(fixture.slot),), bad, effects)
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                binding.revalidate()
+            assert caught.value.root_control[-2:] == ('footprint', guard)
+        for bad, guard in (([], 'tuple_type'), ((), 'empty'), (('x',) * 645, 'bound'),
+                           ((1,), 'member_type'), ((effects[0], effects[0]), 'duplicate'),
+                           (('/outside',), 'outside_effect')):
+            binding = lifecycle._ControlPathBinding(ctl, (str(fixture.slot),), footprint, bad)
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                binding.revalidate()
+            assert caught.value.root_control[-2:] == ('effect_parents', guard)
+        for path, guard in ((ctl['path'], 'equal'), (ctl['path'] + '/nested', 'below'),
+                            (str(Path(ctl['path']).parent), 'above')):
+            bad = ({**footprint[0], 'path': path}, *footprint[1:])
+            binding = lifecycle._ControlPathBinding(ctl, (str(fixture.slot),), bad, effects)
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                binding.revalidate()
+            assert caught.value.root_control[-2:] == ('roots', guard)
+        for path, guard in (('relative', 'directory_absolute'),
+                            ('/a//b', 'directory_canonical'),
+                            ('/' + '/'.join(['p'] * 33), 'directory_component_bound')):
+            binding = lifecycle._ControlPathBinding({**ctl, 'path': path}, (), footprint, effects)
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                binding.revalidate()
+            assert caught.value.root_control[-1] == guard
+        for path, guard in ((ctl['path'], 'equal'), (ctl['path'] + '/below', 'below'),
+                            (str(Path(ctl['path']).parent), 'above')):
+            binding = lifecycle._ControlPathBinding(ctl, (str(fixture.slot),), footprint, effects,
+                (path + '/synthetic.conf',))
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                binding.revalidate()
+            assert caught.value.root_control[-2:] == ('selected_parent', guard)
+
+
+def test_initial_control_path_config_and_capacity_defensive_guards(monkeypatch, secure_tmp_path):
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    with fixture.service.retained_runtime():
+        fixture.service.qualify_old(**fixture.arguments)
+        original = fixture.service.installation_footprint
+        for footprint, guard in (((), 'population'),
+            (({**original[0], 'inode': -1}, *original[1:]), 'application'),
+            ((original[0], {**original[1], 'path': '/different'}, original[2]), 'launcher_parent'),
+            ((original[0], {}, original[2]), 'construction_unknown')):
+            fixture.service.installation_footprint = footprint
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                fixture.service._config()
+            assert caught.value.root_control[-2:] == ('config_footprint', guard)
+        fixture.service.installation_footprint = original
+    # Real directory opens reach the unchanged envelope; do not replace the
+    # bound function, a core producer or an already-computed guard result.
+    root = fixture.roots['application']
+    effects = []
+    for i in range(80):
+        path = root / f'branch-{i}'
+        depth = max(1, 30 - len(root.parts))
+        for _ in range(depth):
+            path /= 'nested'
+        path.mkdir(mode=0o755, parents=True)
+        effects.append(str(path))
+    binding = lifecycle._ControlPathBinding(fixture.arguments['control_root'], (),
+        fixture.arguments['installation_footprint'], tuple(effects))
+    with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+        binding.revalidate()
+    assert caught.value.root_control[-1] == 'descriptor_bound'
+    assert not binding.fds and not binding.close_uncertain
+    bad = lifecycle._ControlPathBinding({}, (), fixture.arguments['installation_footprint'], ())
+    with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+        bad.revalidate()
+    assert caught.value.root_control[-2:] == ('walk', 'unexpected_unknown')
+
+
+def test_initial_control_path_walk_has_independent_complete_os_trace(monkeypatch, secure_tmp_path):
+    from tests.ops.bws_control_path_diagnostic_cases import prepare_path_case
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(), fixture.properties,
+                               'dev', count=4, mixed_parents=True)
+    selected = fixture.properties['Unit', 'DropInPaths']
+    evidence = prepare_path_case(lifecycle, monkeypatch, fixture.state, fixture.properties,
+                                 fixture.roots['control'], selected, 'valid')
+    effect_parent = fixture.roots['application'] / 'separate/effect'
+    effect_parent.mkdir(mode=0o755, parents=True)
+    fixture.arguments['installation_effect_parents'] += (str(effect_parent),)
+    arguments = fixture.arguments
+    binding = lifecycle._ControlPathBinding(arguments['control_root'], (str(fixture.slot),),
+        arguments['installation_footprint'], arguments['installation_effect_parents'], tuple(selected))
+    # Independently authored algorithmic expectation, using fixture topology;
+    # no production allowlist, observed call or predicate supplies this order.
+    expected, opened = [], []
+    def event(operation, path):
+        expected.append((operation, str(path)))
+    def identity(path):
+        event('fstat', path)
+        event('inheritable', path)
+        if str(path) in selected:
+            event('fcntl', path)
+        event('statx', path)
+    def directory(path):
+        if path in opened:
+            return
+        if path != Path('/'):
+            directory(path.parent)
+        event('open', path)
+        identity(path)
+        opened.append(path)
+    for name in ('control', 'application', 'launcher', 'backup'):
+        directory(fixture.roots[name])
+    for path in arguments['installation_effect_parents']:
+        directory(Path(path))
+    for path in selected:
+        directory(Path(path).parent)
+        event('open', path)
+        identity(path)
+        opened.append(Path(path))
+    for path in selected:
+        event('pread', path)
+        identity(path)
+    for name in ('app', 'scripts'):
+        event('stat', fixture.roots['control'] / name)
+    event('stat', fixture.slot)
+    directory(fixture.slot)
+    for operation in ('fstat', 'scandir', 'scandir_enter', 'scandir_next', 'scandir_exit', 'fstat'):
+        event(operation, fixture.slot)
+    for path in opened:
+        event('stat', path)
+        identity(path)
+        event('open', path)
+        identity(path)
+        event('close', path)
+    for path in reversed(opened):
+        event('fstat', path)
+        event('close', path)
+    binding.revalidate()
+    binding.close()
+    assert evidence['trace'] == expected
+    for path, flags, keys in evidence['open_arguments']:
+        assert flags == (os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                         | (0 if path in selected else os.O_DIRECTORY))
+        assert keys == (() if path == '/' else ('dir_fd',))
+    assert all(keys == (('follow_symlinks', False),) if path == '/' else
+               keys == (('dir_fd', True), ('follow_symlinks', False))
+               for path, keys in evidence['stat_arguments'])
+    assert not evidence['owned'] and not binding.fds
+
+
+def test_initial_control_path_role_exclusions_have_direct_guard_proof(monkeypatch, secure_tmp_path):
+    from types import SimpleNamespace
+    fixture = control_path_fixture(monkeypatch, secure_tmp_path)
+    configure_preserved_dropin(lifecycle, monkeypatch, secure_tmp_path.resolve(), fixture.properties, 'dev')
+    with fixture.service.retained_runtime():
+        fixture.service.qualify_old(**fixture.arguments)
+        binding = fixture.service.control_path_binding
+        # Retained reads require the successful previous walk; initial service
+        # construction is binding=None (also asserted by the actual RPC factory).
+        for path, role, guard in ((str(fixture.roots['control']), 'retained_directory', 'directory_fstat_unknown'),
+            (fixture.properties['Unit', 'DropInPaths'][0], 'retained_input', 'file_fstat_unknown')):
+            original = lifecycle.os.fstat
+            target = binding.fds[path][0]
+            fired = False
+            def unavailable(fd):
+                nonlocal fired
+                if fd == target and not fired:
+                    fired = True
+                    raise OSError('PRIVATE_CANARY')
+                return original(fd)
+            with monkeypatch.context() as patch:
+                patch.setattr(lifecycle.os, 'fstat', unavailable)
+                with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                    binding.revalidate()
+            assert fired
+            assert caught.value.root_control == ('path_selected', 'unknown', role, guard)
+        # A slot census only requests directory(current) after the root walk or
+        # each present descent already cached it; absent descent skips census.
+        # Exercise that exact real identity guard directly, without inventing a
+        # new initial producer state or replacing directory/cache logic.
+        fd = binding.fds[str(fixture.slot)][0]
+        with monkeypatch.context() as patch:
+            patch.setattr(lifecycle.os, 'fstat', lambda _fd: (_ for _ in ()).throw(OSError('PRIVATE_CANARY')))
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                binding._identity(fd, mode='path_selected', role='slot_census')
+        assert caught.value.root_control == ('path_selected', 'unknown', 'slot_census', 'directory_fstat_unknown')
+        # Unsupported process-constant platform first fails at ancestor in a
+        # complete walk. This direct later-role negative proves the same real
+        # mount guard without fabricating a mid-call platform transition.
+        with monkeypatch.context() as patch:
+            patch.setattr(lifecycle, 'sys', SimpleNamespace(platform='unsupported'))
+            from tests.ops.bws_control_path_diagnostic_cases import REAL_MOUNT
+            with pytest.raises(lifecycle._OldQualificationRefusal) as caught:
+                REAL_MOUNT(fd, mode='path_selected', role='slot_census')
+        assert caught.value.root_control == ('path_selected', 'unknown', 'slot_census', 'mount_platform')
+    assert not binding.fds and not binding.close_uncertain

@@ -27,6 +27,13 @@ _ROOT_RPC_BATCHES = {'empty': 5, 'anchored': 4, 'alias': 1, 'proposed': 1, 'unce
 def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path,
               batch: int | None = None, input_count: int = 1, input_index: int = 0) -> None:
     """Run in a disposable interpreter; no native configuration is consulted."""
+    scenario = fault.split(':')[1] if fault.startswith('path-diagnostic:') else ''
+    application_fixture_root = base / 'checkout'
+    if scenario == 'deep-application':
+        application_fixture_root = base / 'deep_application'
+        while len(application_fixture_root.parts) - 1 < 33:
+            application_fixture_root /= 'nested'
+    generated_sources = []
     # Keep actual Git commands/bytes/readers on macOS, using a regular stdin
     # file for the external batch transport after observing blocked pipe writes.
     if sys.platform == 'darwin':
@@ -53,10 +60,57 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
             shutil.copyfile(source, target)
             target.chmod(0o755 if target.name == "postgres_deploy_service.py" else 0o644)
+    resource_scenarios = {
+        'deep-application', 'deep-effect', 'manifest-effect-bound',
+        'manifest-effect-directory-bound', 'manifest-effect-ancestor-bound', 'manifest-slot-bound',
+        'manifest-selected-parent-bound', 'manifest-selected-ancestor-bound', 'manifest-file-bound',
+    }
+    if scenario in resource_scenarios - {'deep-application'}:
+        if scenario == 'deep-effect':
+            parent = Path('app') / 'deep_effect'
+            while len(application_fixture_root.parts) - 1 + len(parent.parts) < 33:
+                parent /= 'nested'
+            parents = [parent]
+        elif scenario == 'manifest-effect-bound':
+            parents = [Path('app') / f'effect_{i:04d}' for i in range(645)]
+        else:
+            # Independent fixture topology arithmetic, not a changed capacity
+            # producer. The root/effect/selected walks still open every real FD.
+            systemd = base / 'systemd' if input_count else Path('/etc/systemd/system')
+            capacity = 4 * 33 + 16 * 32 + len(systemd.parts) + 2 + 4
+            known = set()
+            for path in (base / 'control', application_fixture_root, base / 'launcher', base / 'backup',
+                         application_fixture_root / 'app/ops', application_fixture_root / 'config/secrets'):
+                known.update((path, *path.parents))
+            delta, extra = {
+                'manifest-effect-directory-bound': (1, 3),
+                'manifest-effect-ancestor-bound': (2, 4),
+                'manifest-slot-bound': (-7 if input_count else 0, 0),
+                'manifest-selected-parent-bound': (-1, 2),
+                'manifest-selected-ancestor-bound': (0, 3),
+                'manifest-file-bound': (-2, 0),
+            }[scenario]
+            count = capacity + delta - len(known) - extra
+            assert 1 <= count <= 641
+            parents = [Path('app') / f'capacity_{i:04d}' for i in range(count)]
+            parents[0] /= Path(*(['nested'] * extra)) if extra else Path('.')
+            public_walk = set(known)
+            for parent in parents:
+                path = application_fixture_root / parent
+                public_walk.update((path, *path.parents))
+            assert len(public_walk) == capacity + delta
+            assert all(len((application_fixture_root / path).parts) - 1 <= 32 for path in parents)
+        for parent in parents:
+            relative = parent / 'source.py'
+            target = checkout / relative
+            target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            target.write_bytes(b'VALUE = "public synthetic candidate"\n')
+            target.chmod(0o644)
+            generated_sources.append(relative)
     contract = checkout / "config/secrets/host_secret_contract.json"
     contract.parent.mkdir(mode=0o755, parents=True)
     shutil.copyfile(repository / "config/secrets/host_secret_contract.json", contract)
-    if fault == 'root-matrix-proposed':
+    if fault in {'root-matrix-proposed', 'path-diagnostic:proposed-hint'}:
         # A genuine exact Git launcher whose supported code is unchanged but
         # whose bytes carry a forbidden empty-topology hint. No payload shim.
         candidate_launcher = checkout / 'scripts/postgres_deploy_service.py'
@@ -75,7 +129,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     namespace.update(__name__="__main__", _OWNER_UID=os.geteuid(), _OWNER_GID=os.getegid())
     binding, _source = namespace["_candidate_launcher_binding"](checkout, revision)
     setattr(sys, namespace["_VERIFIED_CANDIDATE_ENTRYPOINT"], binding)
-    if not fault.startswith(('root-', 'unit-', 'path-preserved-')):
+    if not fault.startswith(('root-', 'unit-', 'path-preserved-', 'path-diagnostic')):
         namespace["_candidate_checkout_root"] = lambda _sha: checkout
     namespace["_preimport_reservation"] = lambda *_args: namespace["_PreimportReservation"](None)
     real_loader = namespace["_install_source_loader"]
@@ -93,12 +147,16 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         from tests.ops.test_bws_installation_transaction import _ordinary_terminal_installation_fixture
 
         patch = pytest.MonkeyPatch()
-        _ordinary_terminal_installation_fixture(base, patch, channel, journal_root=journal_root)
+        _ordinary_terminal_installation_fixture(base, patch, channel, journal_root=journal_root,
+                                                 application_root=application_fixture_root)
         config = linux.LinuxConfig.load(channel)
         installed = config.root
         state.update(config=config, installed=installed, transaction=transaction, control=control)
         for package in ("app", "scripts"):
             shutil.copytree(checkout / package, installed / package)
+        for relative in generated_sources:
+            previous = installed / relative
+            previous.write_bytes(b'# public synthetic previous generation\n' + previous.read_bytes())
         (installed / "config/secrets").mkdir(mode=0o755, parents=True)
         shutil.copyfile(repository / "tests/ops/fixtures/host_secret_contract_legacy.json",
                         installed / "config/secrets/host_secret_contract.json")
@@ -107,8 +165,20 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         control_root, backups, launchers, receipts = (base / name for name in (
             "control", "backup", "launcher", "receipts",
         ))
-        for directory in (control_root, backups, launchers, receipts):
-            directory.mkdir(mode=0o755)
+        topology = fault.split(':')[1] if fault.startswith('path-diagnostic:') else ''
+        if topology == 'roots-equal':
+            backups = control_root
+        elif topology == 'roots-below':
+            backups = control_root / 'nested_backup'
+        elif topology == 'roots-above':
+            backups = base / 'control_parent'
+            control_root = backups / 'control'
+        elif topology == 'parent-equal':
+            control_root = base / 'systemd' / f'yggdrasil-bws-deploy@{channel}.service.d'
+        elif topology == 'parent-above':
+            control_root = base / 'systemd' / f'yggdrasil-bws-deploy@{channel}.service.d' / 'control'
+        for directory in dict.fromkeys((control_root, backups, launchers, receipts)):
+            directory.mkdir(mode=0o755, parents=True, exist_ok=True)
         public_launcher = launchers / "yggdrasil-bws-deploy"
         public_launcher.write_bytes(b"synthetic legacy launcher\n")
         public_launcher.chmod(0o755)
@@ -237,7 +307,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             state['path_properties'] = configure_control_path_service(
                 lifecycle, patch, state, control_root, installed, runtime, public_launcher, channel, environment,
             )
-            if slot_kind.startswith('preserved-'):
+            if slot_kind.startswith('preserved-') or slot_kind.startswith('diagnostic') and input_count:
                 from tests.ops.test_bws_installation_lifecycle import configure_preserved_dropin
                 class ObservedEvents(list):
                     def append(self, event):
@@ -245,7 +315,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                         (base / 'preserved-events.json').write_text(json.dumps(self))
                 state['events'] = ObservedEvents(state['events'])
                 state['events'].append('preserved-fixture')
-                selected = configure_preserved_dropin(lifecycle, patch, base, state['path_properties'],
+                selected = configure_preserved_dropin(lifecycle, patch, control_root if topology == 'parent-below' else base, state['path_properties'],
                     channel, quoted=slot_kind == 'preserved-quoted', template=slot_kind == 'preserved-quoted',
                     count=input_count, mixed_parents=input_count > 1)
                 selected_paths = tuple(Path(path) for path in state['path_properties']['Unit', 'DropInPaths'])
@@ -392,17 +462,74 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             if fault == 'path-effect-alias':
                 target_info = (installed / 'app/ops').stat()
                 original_mount = lifecycle._control_path_mount
-                def mounted_target(fd):
+                def mounted_target(fd, **context):
                     info = lifecycle.os.fstat(fd)
-                    mount = original_mount(fd)
+                    mount = original_mount(fd, **context)
                     return mount + 1 if (info.st_dev, info.st_ino) == (target_info.st_dev, target_info.st_ino) else mount
                 patch.setattr(lifecycle, '_control_path_mount', mounted_target)
+            if slot_kind.startswith('diagnostic') and ':' in slot_kind:
+                from tests.ops.bws_control_path_diagnostic_cases import prepare_path_case
+                state['path_diagnostic'] = prepare_path_case(
+                    lifecycle, patch, state, state['path_properties'], control_root,
+                    state['path_properties']['Unit', 'DropInPaths'], slot_kind.split(':')[1],
+                )
+            state['path_case_setup'] = (lifecycle, control_root)
+            if slot_kind.startswith('diagnostic:') and slot_kind.endswith('-close'):
+                original_envelope_close = control._SourceDescriptorEnvelope.close
+                def diagnostic_envelope_close(envelope, *, owned_resources_closed):
+                    try:
+                        from collections import Counter
+                        evidence = state['path_diagnostic']
+                        opened = Counter((path, fd) for path, fds in evidence['opened'].items() for fd in fds)
+                        closed = Counter(evidence['closed'])
+                        selected_paths = state['path_properties']['Unit', 'DropInPaths']
+                        selected_reads = [row for row in evidence['reads'] if row[0] in selected_paths]
+                        trace = evidence['trace']
+                        # Durable synthetic witness BEFORE the original fatal exit.
+                        # No assertion after namespace.run() is relied on here.
+                        proof = dict(
+                            fault_reached=evidence['fired'],
+                            all_original_closes_once=opened == closed,
+                            no_owned_fds=not evidence['owned'],
+                            failed_closes=len(evidence.get('failed_closes', [])),
+                            uncertain=state['service'].control_path_binding.close_uncertain,
+                            resources_closed=owned_resources_closed,
+                            initial=state['service'].phase == 'qualifying',
+                            selected_reads=len(selected_reads),
+                            loader_reached=any(operation == 'stat' and path in {
+                                str(control_root / 'app'), str(control_root / 'scripts')
+                            } for operation, path in trace),
+                            actions=[event for event in state['events'] if event in {'prepare', 'stop', 'start'}],
+                        )
+                        (base / 'diagnostic-close-proof.json').write_text(json.dumps(proof))
+                    finally:
+                        original_envelope_close(envelope, owned_resources_closed=owned_resources_closed)
+                patch.setattr(control._SourceDescriptorEnvelope, 'close', diagnostic_envelope_close)
+            original_manifest = transaction._NativePorts.source_manifest
+            def observed_manifest(ports, profile, config, request, roots, backup_root):
+                manifest = original_manifest(ports, profile, config, request, roots, backup_root)
+                changes, _payloads, proof = manifest
+                footprint, effects = proof['control_path_footprint'], proof['control_path_effect_parents']
+                assert type(footprint) is tuple and len(footprint) == 3
+                assert all(type(root) is dict and set(root) == {'path', 'device', 'inode', 'uid', 'gid', 'mode'}
+                           for root in footprint)
+                assert tuple(root['path'] for root in footprint) == (
+                    roots['application'].path, roots['launcher'].path, backup_root.path)
+                assert effects == tuple(sorted({str(Path(roots[change.root].path) / Path(change.path).parent)
+                                                for change in changes}))
+                assert effects and len(set(effects)) == len(effects)
+                assert all(any(path == root['path'] or path.startswith(root['path'] + '/')
+                               for root in footprint[:2]) for path in effects)
+                assert {path.as_posix() for path in generated_sources} <= {change.path for change in changes}
+                return manifest
+            patch.setattr(transaction._NativePorts, 'source_manifest', observed_manifest)
             real_service = transaction._NativePorts.service
             def service(ports, selected_channel):
                 value = real_service(ports, selected_channel)
                 state['service'] = value
                 state['early_sources_bound'] = ports.early_refusal_sources_bound
                 state['events'].append('service')
+                assert value.control_path_binding is None
                 if slot_kind.startswith('preserved-'):
                     original_config = value._config
                     def config(**kwargs):
@@ -436,7 +563,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 held = state['service'].control_path_binding.fds
                 assert kwargs['control_path_fds_already_open'] == len(held)
                 assert kwargs['runtime_fd_already_open'] is True
-                if slot_kind.startswith('preserved-'):
+                if slot_kind.startswith('preserved-') or slot_kind.startswith('diagnostic') and input_count:
                     assert all(str(path) in held for path, _raw in state['dropin_vector'])
                     assert state['service'].control_path_binding.selected_dropins == tuple(
                         str(path) for path, _raw in state['dropin_vector'])
@@ -484,7 +611,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         linux._rpc_via_supervisor = supervisor_rpc
 
         # Only this disposable child receives a finite synthetic resource ceiling.
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 512 if fault in {"hard", "path-preserved-hard"} else 8192))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256 if scenario in resource_scenarios else 64,
+                                                512 if fault in {"hard", "path-preserved-hard"} else 8192))
         state["original_limits"] = resource.getrlimit(resource.RLIMIT_NOFILE)
         if fault in {"unknown", "path-preserved-unknown"}:
             control._source_descriptor_capacity_snapshot = lambda: None
@@ -492,7 +620,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             def interrupt_backup(*_args):
                 raise KeyboardInterrupt()
             control._backup = interrupt_backup
-        if fault.startswith(('unit-', 'path-preserved-')):
+        if fault.startswith(('unit-', 'path-preserved-', 'path-diagnostic')):
             original_sources = transaction._source_modules
             def source_binding(*args, **kwargs):
                 early = 'candidate_source_files' in kwargs
@@ -508,13 +636,13 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                     return original_sources(*args, **kwargs)
             patch.setattr(transaction, '_source_modules', source_binding)
             provenance = fault.partition(':')[0]
-            if provenance == 'unit-missing':
+            if provenance in {'unit-missing', 'path-diagnostic-missing'}:
                 delattr(lifecycle, transaction._SOURCE_HASH_ATTRIBUTE)
-            elif provenance == 'unit-mismatch':
+            elif provenance in {'unit-mismatch', 'path-diagnostic-mismatch'}:
                 setattr(lifecycle, transaction._SOURCE_HASH_ATTRIBUTE, '0' * 64)
-            elif provenance == 'unit-origin':
+            elif provenance in {'unit-origin', 'path-diagnostic-origin'}:
                 lifecycle.__file__ = str(base / 'PRIVATE_CANARY.py')
-            elif provenance == 'unit-candidate':
+            elif provenance in {'unit-candidate', 'path-diagnostic-candidate'}:
                 original_verify = transaction._NativePorts.verify_candidate
                 def unavailable_candidate(ports, *args):
                     original_verify(ports, *args)
@@ -540,11 +668,11 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                "candidate_sha": revision, "image_digest": "sha256:" + "b" * 64, "bundle_name": "assembled"}
     # run() still reads its root-owned configuration boundary, sets cwd, ignores
     # bytecode and dispatches the exact verified candidate before native imports.
-    installed_root = base / "checkout"
+    installed_root = application_fixture_root
     config_file = base / "launcher.json"
     config_file.write_text(json.dumps({"root": str(installed_root)}))
     config_file.chmod(0o600)
-    installed_root.mkdir(mode=0o755)
+    installed_root.mkdir(mode=0o755, parents=True, exist_ok=True)
     real_open, real_fstat = os.open, os.fstat
     config_descriptors = set()
     def open_target(path, flags, *args, **kwargs):
@@ -568,6 +696,54 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     sys.argv = [str(script), "rpc", channel]
     sys.stdin, output = io.StringIO(json.dumps(request)), io.StringIO()
     sys.stdout = output
+    if fault == 'path-diagnostic-role-matrix':
+        import uuid
+        sys.path.insert(0, str(checkout))
+        sys.dont_write_bytecode = True
+        sys.pycache_prefix = '/dev/null'
+        bootstrap_finder = guarded_bind_effects(checkout)
+        sys.meta_path.remove(bootstrap_finder)
+        from tests.ops.bws_control_path_diagnostic_cases import ROLE_CASES, ROLE_BATCHES, prepare_path_case
+        module, control_root = state['path_case_setup']
+        groups = [list(range(i * 8, min((i + 1) * 8, len(ROLE_CASES)))) for i in range(ROLE_BATCHES)]
+        assert set().union(*map(set, groups)) == set(range(len(ROLE_CASES)))
+        assert sum(map(len, groups)) == len(ROLE_CASES)
+        assert batch is not None and 0 <= batch < ROLE_BATCHES
+        indices = groups[batch]
+        assert 1 <= len(indices) <= 8
+        original_selected = list(state['path_properties']['Unit', 'DropInPaths'])
+        for index in indices:
+            case = ROLE_CASES[index]
+            request['operation_id'] = str(uuid.uuid4())
+            state['path_properties']['Unit', 'DropInPaths'] = original_selected if case[1] == 'path_selected' else []
+            with pytest.MonkeyPatch.context() as case_patch:
+                evidence = prepare_path_case(module, case_patch, state, state['path_properties'],
+                    control_root, state['path_properties']['Unit', 'DropInPaths'], case[0])
+                sys.stdin, output = io.StringIO(json.dumps(request)), io.StringIO()
+                sys.stdout = output
+                status = namespace['run']()
+                assert status == 0, (index, case, status, output.getvalue())
+                result = json.loads(output.getvalue())['source_installation']
+                expected = 'old_kernel_initial_root_control__' + '__'.join(case[1:])
+                assert result['status'] == 'refused_before_backup' and result['prebackup_gate'] == expected, (case, result)
+                assert all(result[key] is None for key in (
+                    'old_generation_sha256', 'new_generation_sha256', 'backup_manifest_sha256'))
+                assert evidence['fired'] and not evidence['owned'], case
+                if case[1] == 'path_absent':
+                    assert not any(path in original_selected for path, _requested, _returned in evidence['reads'])
+                assert state['service'].runtime_close_completed
+                assert not state['service'].control_path_binding.fds
+                assert state['early_sources_bound'] is True
+                assert not {'prepare', 'stop', 'start'} & set(state['events'])
+                assert not list(state['backups'].iterdir())
+                receipt_name = 'bws-source-installation-' + request['operation_id'] + '.receipt.json'
+                assert json.loads((state['receipts'] / receipt_name).read_text()) == result
+                assert 'PRIVATE_CANARY' not in output.getvalue()
+                assert resource.getrlimit(resource.RLIMIT_NOFILE) == state['original_limits']
+        sys.stdout = sys.__stdout__
+        print(json.dumps(dict(status='role-matrix', total_cases=len(ROLE_CASES), case_indices=indices,
+                              source_only=True, restored=True)))
+        return
     if fault.startswith('root-matrix'):
         import uuid
         # Bootstrap binds ports once, retaining every original source reader.
@@ -690,7 +866,29 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     result = json.loads(output.getvalue())["source_installation"]
     assert resource.getrlimit(resource.RLIMIT_NOFILE) == state["original_limits"]
     assert not hasattr(sys, "_yggdrasil_bws_source_rpc_process")
-    if fault.startswith('path-preserved-'):
+    if fault.startswith('path-diagnostic'):
+        from tests.ops.bws_control_path_diagnostic_cases import expected_context
+        case_name = fault.split(':')[1]
+        from tests.ops.bws_control_path_diagnostic_cases import RESOURCE_CASES
+        context = (next(row[1:] for row in RESOURCE_CASES if row[0] == case_name
+                        and row[1] == ('path_selected' if input_count else 'path_absent'))
+                   if case_name in {row[0] for row in RESOURCE_CASES} else expected_context(case_name))
+        if not input_count and context[0] == 'path_selected':
+            context = ('path_absent', *context[1:])
+        expected = 'old_kernel_initial_root_control__' + '__'.join(context)
+        unavailable = fault.partition(':')[0] != 'path-diagnostic'
+        assert result['status'] == 'refused_before_backup', result
+        assert result['prebackup_gate'] == expected + ('__provenance_unavailable' if unavailable else ''), result
+        assert all(result[key] is None for key in (
+            'old_generation_sha256', 'new_generation_sha256', 'backup_manifest_sha256'))
+        assert not {'prepare', 'stop', 'start'} & set(state['events'])
+        assert not (state['backups'] / 'assembled').exists()
+        assert state['early_sources_bound'] is not unavailable
+        assert 'caller_source_binding' not in state['events']
+        evidence = state['path_diagnostic']
+        assert evidence['fired'] and not evidence['owned']
+        assert 'PRIVATE_CANARY' not in output.getvalue()
+    elif fault.startswith('path-preserved-'):
         mode = fault.removeprefix('path-preserved-')
         assert 'PRIVATE_CANARY' not in output.getvalue()
         assert 'arbitrary-PATH-private-canary' not in output.getvalue()
@@ -768,7 +966,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         assert 'PRIVATE_CANARY' not in output.getvalue()
     elif fault in {'path-effect-alias', 'path-process-cwd'}:
         assert result['status'] == 'refused_before_backup'
-        assert result['prebackup_gate'] == ('old_kernel_initial_root_control' if fault == 'path-effect-alias'
+        assert result['prebackup_gate'] == ('old_kernel_initial_root_control__path_absent__unknown__effect_parent__mount_crossing' if fault == 'path-effect-alias'
                                             else 'old_kernel_initial_service_process')
         assert state['events'].count('stop') == state['events'].count('start') == 0
         assert not list(state['backups'].iterdir())
@@ -869,14 +1067,23 @@ def exercise_control_path_transaction(base, channel, slot, *, input_count=1, inp
              '0', str(input_count), str(input_index)],
             cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
         )
-    if slot in {'close', 'transient-initial', 'transient-prebackup', 'proc-close', 'launcher-close',
+    if slot.startswith('diagnostic:') and slot.endswith('-close') or slot in {'close', 'transient-initial', 'transient-prebackup', 'proc-close', 'launcher-close',
                 'preserved-close', 'preserved-transient-close', 'preserved-prestop',
                 'preserved-refusal-close', 'preserved-compensation-close', 'preserved-compensation-transient-close',
                 'preserved-after-start', 'preserved-closing', 'preserved-restored-drift'}:
         assert completed.returncode == 78 and completed.stdout == '', completed.stderr
         owner = json.loads((base / 'receipts' / (channel + '.source-installation.lock')).read_text())
-        assert owner['operation_id']
+        assert owner['operation_id'] == '65752d22-1a9b-48df-a0cc-5e1087595b22'
         assert not list((base / 'receipts').glob('*.receipt.json'))
+        if slot.startswith('diagnostic:'):
+            case = slot.split(':')[1]
+            assert json.loads((base / 'diagnostic-close-proof.json').read_text()) == dict(
+                fault_reached=True, all_original_closes_once=True, no_owned_fds=True,
+                failed_closes=4 if case == 'grammar-multiple-close' else 1,
+                uncertain=True, resources_closed=False, initial=True,
+                selected_reads=0 if case == 'dir-fstat-close' else 4,
+                loader_reached=case == 'fresh-version-close', actions=[],
+            )
         if slot in {'preserved-prestop', 'preserved-after-start', 'preserved-closing', 'preserved-restored-drift'}:
             assert json.loads((base / 'preserved-drift-proof.json').read_text()) == {
                 'mode': 'path-' + slot, 'drifted': True,
@@ -1030,3 +1237,57 @@ if __name__ == "__main__":
               int(sys.argv[6]) if len(sys.argv) > 6 else None,
               int(sys.argv[7]) if len(sys.argv) > 7 else 1,
               int(sys.argv[8]) if len(sys.argv) > 8 else 0)
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('case', __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['PATH_CASES']).PATH_CASES
+                         + __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['PATH_TOPOLOGY_CASES']).PATH_TOPOLOGY_CASES
+                         + __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['ABSENT_CASES']).ABSENT_CASES
+                         + [('resource/' + row[1] + '/' + row[0], *row[1:]) for row in __import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['RESOURCE_CASES']).RESOURCE_CASES]
+                         + [(f'role-batch-{i}',) for i in range(__import__('tests.ops.bws_control_path_diagnostic_cases', fromlist=['ROLE_BATCHES']).ROLE_BATCHES)],
+                         ids=lambda row: row[0])
+def test_initial_control_path_diagnostics_cross_verified_source_rpc(secure_tmp_path, channel, case):
+    if case[0].startswith('role-batch-'):
+        from tests.ops.bws_control_path_diagnostic_cases import ROLE_CASES
+        batch = int(case[0].removeprefix('role-batch-'))
+        with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
+            completed = subprocess.run(
+                [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(secure_tmp_path),
+                 str(Path(__file__).resolve().parents[2]), channel, 'path-diagnostic-role-matrix',
+                 str(Path(directory).resolve()), str(batch), '4', '3'],
+                cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
+            )
+        assert completed.returncode == 0, completed.stderr
+        proof = json.loads(completed.stdout)
+        assert proof == dict(status='role-matrix', total_cases=len(ROLE_CASES),
+            case_indices=list(range(batch * 8, min((batch + 1) * 8, len(ROLE_CASES)))), source_only=True, restored=True)
+        assert 'PRIVATE_CANARY' not in completed.stdout + completed.stderr
+        return
+    if case[0].startswith(('empty-vector/', 'resource/')):
+        name = case[0].removeprefix('empty-vector/') if case[0].startswith('empty-vector/') else case[0].split('/')[2]
+        count = 0 if case[1] == 'path_absent' else 4
+        result = exercise_control_path_transaction(secure_tmp_path, channel, 'diagnostic:' + name,
+                                                   input_count=count)
+        assert result['prebackup_gate'] == 'old_kernel_initial_root_control__' + '__'.join(case[1:])
+        return
+    result = exercise_control_path_transaction(secure_tmp_path, channel, 'diagnostic:' + case[0],
+                                               input_count=4, input_index=3)
+    assert result['prebackup_gate'] == 'old_kernel_initial_root_control__' + '__'.join(case[1:])
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('mode', ['diagnostic:grammar-close', 'diagnostic:dir-fstat-close',
+                                  'diagnostic:fresh-version-close', 'diagnostic:grammar-multiple-close', 'preserved-close', 'preserved-transient-close', 'preserved-refusal-close',
+                                  'preserved-compensation-close', 'preserved-compensation-transient-close'])
+def test_initial_control_path_diagnostics_preserve_uncertain_owner(secure_tmp_path, channel, mode):
+    # These actual assembled paths assert exit 78, no stdout/terminal receipt,
+    # original handle compensation, one close and durable retained owner.
+    exercise_control_path_transaction(secure_tmp_path, channel, mode, input_count=4, input_index=3)
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('provenance', ['missing', 'mismatch', 'origin', 'candidate'])
+def test_initial_control_path_diagnostics_preserve_source_binding(secure_tmp_path, channel, provenance):
+    result = exercise_control_path_transaction(secure_tmp_path, channel,
+                                               'diagnostic-' + provenance + ':grammar', input_count=4)
+    assert result['prebackup_gate'].endswith('__provenance_unavailable')
