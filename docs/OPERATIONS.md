@@ -1350,6 +1350,16 @@ The template's production installation is recorded in the 2026-10-30 receipt bel
 incident continued suppressing duplicate alerts; controlled TEST acceptance remains open under
 #4076. The dated receipts retain their exact source and observation scope.
 
+The [2026-10-30 TEST first-preflight receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6493#issuecomment-6535859691)
+records operation `230149723a60e4c497a04f8efc07a9a9` as `REFUSED` before qualified-worker or drill
+entry: the same-project running-worker selector did not observe exactly one valid ID. This does
+not distinguish worker count from ID shape or establish worker absence or health. The original
+supervisor/cgroup were positively contained and the watch/TEST probe units were absent. The result
+SHA-256 is `542a4448014fc00b91b3cf0a830f4dcdb8a8860febe5325ba4498fcb9a4c7b71`; its separate
+reconciliation SHA-256 is `6a71c89eeaecfd53acc2e16315c8aa153bf0b07529d4a30a27fa6138cacdbfa0`.
+Earlier `UNKNOWN` results remain preserved. No controlled down/recovery or live TEST acceptance
+is claimed; #6493's actual acceptance and final receipt mapping remain open.
+
 The Linux service uses the `heimdal-external-alerts` BWS consumer and the `discord.webhook`
 binding. The BWS token is read through systemd credentials and is removed from the probe child's
 environment; only a short-lived mode-0600 runtime file carries the declared webhook binding.
