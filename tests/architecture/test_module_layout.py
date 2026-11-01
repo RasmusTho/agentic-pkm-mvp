@@ -4,6 +4,8 @@ import os
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Generated / vendored / nested-checkout trees that are not this repo's source
@@ -26,6 +28,7 @@ def _iter_source_py() -> "list[Path]":
             if not d.startswith(".")
             and d not in _PRUNE_DIRS
             and not d.endswith(".egg-info")
+            and not (Path(dirpath) == REPO_ROOT and d.startswith("pytest-secure-"))
         ]
         for name in filenames:
             if name.endswith(".py"):
@@ -81,3 +84,40 @@ def test_memory_package_renamed() -> None:
         assert not match, (
             f"{path} still references app.memory (old package) — update to app.memory_kv"
         )
+
+
+def test_import_guards_exclude_secure_fixture_roots_without_hiding_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
+    (tmp_path / "app" / "memory_kv").mkdir(parents=True)
+    fixture_source = tmp_path / "pytest-secure-example" / "checkout" / "app" / "main.py"
+    fixture_source.parent.mkdir(parents=True)
+    fixture_source.write_text("import app.memory\nimport app.obs\n")
+    genuine_source = tmp_path / "nested" / "pytest-secure-real" / "source.py"
+    genuine_source.parent.mkdir(parents=True)
+    genuine_source.write_text("import app.memory_kv\nimport app.observability\n")
+
+    scanned = _iter_source_py()
+    assert fixture_source not in scanned
+    assert genuine_source in scanned
+    test_memory_package_renamed()
+    test_no_obs_observability_split()
+
+    genuine_source.write_text("import app.memory\n")
+    with pytest.raises(AssertionError, match="still references app.memory"):
+        test_memory_package_renamed()
+    genuine_source.write_text("import app.obs\n")
+    with pytest.raises(AssertionError, match="still imports from app.obs"):
+        test_no_obs_observability_split()
+
+    real_read_text = Path.read_text
+    def missing_source(path: Path, *args: object, **kwargs: object) -> str:
+        if path == genuine_source:
+            raise FileNotFoundError("real source became unavailable")
+        return real_read_text(path, *args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(Path, "read_text", missing_source)
+        with pytest.raises(FileNotFoundError, match="real source became unavailable"):
+            test_memory_package_renamed()
