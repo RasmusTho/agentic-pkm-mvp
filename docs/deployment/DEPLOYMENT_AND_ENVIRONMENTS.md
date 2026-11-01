@@ -830,20 +830,48 @@ alias or a stale inventory is insufficient. No volume, application, database, va
 retained receipt is a cleanup target. The normal deployment must continue when optional cleanup
 is safely skipped; a real pull or deployment error remains a failure.
 
-Capacity admission is a separate precondition for each governed pre-pull and deployment pull.
-Qualify the actual Docker data-root, each affected root or tmpfs filesystem, any shared
-underlying storage pool and the writers sharing each resource. Bind its byte and inode floors,
-pool data/metadata limits, and a finite upper bound on the effect's incremental demand. Preserve each
-channel's explicitly configured, qualified policy; do not apply DEV's observed 30-GiB operational
-margin as an implicit TEST default. A free-space sample alone is not a reservation. Participating
-DEV/TEST writers must use a common enforceable reservation, quota or equivalent capacity
-mechanism and release only their own reservation after a terminal result; prove how concurrent
-writers and failures preserve the configured headroom. If the store, budget, policy, reservation
-or participating-writer coverage is unknown, refuse that cache effect before dispatch and report
-an actionable finite reason. Unmanaged external writers cannot be made safe by a repository
-snapshot; detect or exclude them through the actual host enforcement boundary and report the
-residual limitation. Operators retain a documented path to add capacity or make an explicitly
-qualified, exact-image recovery without deleting retained evidence.
+The future capacity guard must admit each governed DEV/TEST cache-affecting pull before it starts:
+source pre-pull, deployment, source-persistence, source diagnostic and operator restoration.
+Qualify the actual Docker and containerd stores and staging locations, affected root and tmpfs
+filesystems, and the shared pool's data and metadata. Configure byte and inode floors separately
+for each channel, together with a conservative per-pull budget based on measured image and
+unpacking demand plus margin. Qualify these values against actual candidates and hosts; DEV's
+observed 30-GiB operating margin is not an implicit TEST default.
+
+Coordinate participating pull writers through the existing operation authorities and a common
+per-guest admission fence with a documented lock order. A guest-local fence does not exclude the
+other guest. For the shared pool, each admission must account for the configured budgets of all
+pulls that could overlap, including unresolved pulls, in addition to a pool margin. The two-guest
+case may conservatively count one full configured budget for each guest at every admission, if all
+participating paths are limited to one pull per guest and both guests can obtain fresh authenticated
+pool data and metadata measurements for the same qualified pool. Configure and enforce a finite
+maximum measurement age. This avoids a separate capacity registry; another mechanism
+must demonstrate equivalent coordination. If the relevant store, writer coverage, measurements,
+policy or budget cannot be qualified, refuse the new effect before dispatch with a finite,
+actionable reason. Bootstrap and configuration producers must supply the policy before this guard
+is enabled.
+
+Measure and alert on low guest bytes/inodes, low pool data/metadata headroom and unavailable or
+stale measurements even when no new pull is requested. Stop admitting new pulls when the policy cannot be met; retain existing
+operation evidence and provide a documented way to add capacity or perform a qualified exact-image
+recovery. After a lost pull response, its possible capacity use must remain accounted for until
+authenticated quiescence is established: closing a client or retiring a source-only owner does
+not prove dockerd stopped. The one-pull-per-guest limit must survive client, supervisor
+and host restarts: retain and check existing durable operation evidence, and admit no subsequent
+pull on that guest until authenticated quiescence proves the earlier work no longer writes. Verify a crash with a
+continuing Docker pull, a new request and restart. Provide a bounded, documented operator recovery
+that can establish this quiescence without replay, for example a qualified daemon restart and cache
+consistency check when those also prove any containerd/snapshotter work ended. Quiescence can end
+the capacity charge but does not establish whether the image pull succeeded or changed the cache;
+retain UNKNOWN effect status and digest protection until independently resolved. Cached, already
+verified source images must remain usable.
+
+This is a coordinated admission and early-warning policy, not a hard storage reservation or quota.
+Measured image demand is an estimate, and unmanaged writers, unexpected unpacking growth, a changed
+store or pool, and already-running effects can cross a margin between observations. State these
+limits in diagnostics and live acceptance; do not claim that the policy prevents every disk-full
+condition. It changes neither the complete retained-image protection requirement nor the pause on
+unsafe reclamation. This target is not yet installed or adopted.
 
 The ordered implementation and acceptance work is:
 
@@ -853,8 +881,8 @@ The ordered implementation and acceptance work is:
 2. [#6524](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6524) — use a complete,
    cross-channel retained-operation snapshot to restore bounded exact-ID reclamation after
    #6523 and the temporary #6520 fix are delivered.
-3. [#6525](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6525) — enforce qualified
-   bytes/inodes and concurrent-writer capacity admission after #6523 provides the supported
+3. [#6525](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6525) — implement qualified
+   capacity admission, concurrent-writer budgeting and alerts after #6523 provides the supported
    producer. Every supported pull path must adopt the resulting guard.
 4. [#6526](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6526) — qualify the exact
    candidate and digest, demonstrate positive and refusal cases on DEV and TEST, verify protected

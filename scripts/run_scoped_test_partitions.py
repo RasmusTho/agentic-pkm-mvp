@@ -26,7 +26,7 @@ from scripts.plan_full_suite_node_shards import (
 )
 
 MAX_PARTITIONS = 4
-MAX_SHARD_TIMEOUT_SECONDS = 3300
+MAX_SHARD_TIMEOUT_SECONDS = 5400
 PROCESS_GROUP_GRACE_SECONDS = 1.0
 COLLECTION_TIMEOUT_SECONDS = 300
 
@@ -419,7 +419,7 @@ def _expand_and_balance_parallel(
 
     # Keep the measured long modules' independently planned units in separate
     # pytest processes. Packing solely by case count can put both halves, or
-    # two distinct long halves, back into one 3300-second partition.
+    # two distinct long halves, back into one long partition.
     heavy = [candidate for candidate in expanded if heavy_module(candidate) is not None]
     other = [candidate for candidate in expanded if heavy_module(candidate) is None]
     assigned_modules: list[set[str]] = [set() for _ in buckets]

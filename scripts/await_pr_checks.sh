@@ -33,7 +33,7 @@ set -uo pipefail
 
 INITIAL_WAIT=180     # bounded initial pause; selected CI workloads have different durations
 INTERVAL=90          # backoff between checks on the tail (floored to 60)
-TIMEOUT=5400         # 75-minute unit step plus setup/queue margin; --timeout overrides
+TIMEOUT=8100         # 120-minute full unit step plus setup/queue margin; --timeout overrides
 CHECK_CODEX=0
 PR=""
 SHA=""
