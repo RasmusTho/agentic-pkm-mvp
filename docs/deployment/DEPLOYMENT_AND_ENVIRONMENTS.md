@@ -720,20 +720,16 @@ output or credentials. Incomplete output still refuses acceptance. The observed 
 inference, not a captured historical exception. Actual equivalent DEV/TEST acceptance is verified by the dated #5675 receipt above.
 Observed selected/pass counts are evidence, not a permanent test-count gate.
 
-Automatic DEV/TEST activation may reclaim at most eight proved unused official application-image
-IDs under the existing native channel lock before the ordinary deployment script runs. The cache
-inventory reads only fixed image/container IDs, references, tags, digests and creation times. Every
-running, stopped or created container image, current/previous and rollback pin, pending-migration
-reference and exact admitted target digest remains protected, including different digests for the
-same source SHA. Reclamation requires an official registry digest in `RepoDigests`; a local tag
-alone does not prove that an image is rebuildable. Images with another-repository aliases or
-unproved provenance are retained. Each
-exact, non-force `--no-prune` removal rechecks the protected snapshot and image metadata,
-retaining untagged parents that were not separately admitted for reclamation. Manual and PROD paths
-perform no cache maintenance, and this path never prunes volumes or touches application, database
-or vault data. Unavailable or malformed inventory, changed snapshots or failed removal stop further
-reclamation with a fixed warning, then continue the unchanged pull and deployment gates. This is
-optional recovery of rebuildable image cache, not a capacity or approval prerequisite.
+Automatic DEV/TEST image-cache reclamation is temporarily paused. A retained operation request can
+reference an image that has no current container, pin, or admitted-target reference, and some
+host-only attempts have no complete native inventory. The optional cleanup emits a fixed warning and
+continues the unchanged deployment and image-pull gates without removing images. Manual and PROD
+paths remain outside this cleanup. This preserves retained attempts, but images can accumulate and
+consume disk space: continue the existing capacity monitoring and use only separately qualified
+operator cleanup. Restore bounded automatic reclamation only after a complete, stable proof covers
+retained host and native attempts, including legacy UNKNOWN operations and source-installation
+attempts whose image was cached before native admission. Do not infer an empty protection set from
+missing native evidence. The mandatory restoration and capacity-proof contract is tracked in #6521.
 
 `app.ops.pg_acceptance_runner` creates an operation/channel-owned pgvector container with a
 network-none namespace and tmpfs database storage. The test container shares only that namespace;
