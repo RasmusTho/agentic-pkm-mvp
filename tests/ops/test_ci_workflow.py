@@ -304,7 +304,7 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
 
 def _run_full_suite_workflow(
     tmp_path: Path, *, failing_shard: str = "", mode: str = "success", deferred_targets: str = "",
-    source_rpc: bool = False,
+    source_rpc: bool = False, operations: bool = False,
 ):
     """Execute the checked-in shell with a fake pytest, including nested tests."""
     files = (
@@ -318,6 +318,8 @@ def _run_full_suite_workflow(
     )
     if source_rpc:
         files += ("tests/deploy/test_bws_source_rpc_assembly.py",)
+    if operations:
+        files += ("tests/operations/test_first.py", "tests/operations/nested/test_second.py")
     for name in files:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -511,6 +513,42 @@ def test_full_suite_shards_cover_test_files_once(tmp_path: Path, deferred_target
     # The host-sensitive tests run after parallel shards and are never duplicated.
     assert executed[-3:] == ["tests/ops/nested/test_host_child.py",
                              "tests/ops/test_host.py",
+                             "tests/invariants/test_vault_multiwriter.py"]
+
+
+@pytest.mark.parametrize("deferred_targets", ["", "tests/deploy"])
+def test_full_suite_prioritizes_operations_without_changing_inventory(
+    tmp_path: Path, deferred_targets: str,
+) -> None:
+    result, files, _job = _run_full_suite_workflow(
+        tmp_path, source_rpc=True, operations=True, deferred_targets=deferred_targets,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "runner/pytest-not-pg-shards"
+    shards = (root / "shards").read_text().splitlines()
+    if deferred_targets:
+        assert shards[0] == "tests/operations"
+        assert shards[1:] == sorted(shards[1:])
+    else:
+        assert shards[:3] == ["tests/deploy/test_bws_source_rpc_assembly.py",
+                             "tests/deploy/test_deploy_channel_script.py", "tests/operations"]
+        assert shards[3:] == sorted(shards[3:])
+    assert shards.count("tests/operations") == 1
+    assert len(shards) == len(set(shards))
+    work_items = (root / "work-items").read_text().splitlines()
+    operations_index = work_items.index("tests/operations")
+    assert all(item.startswith(("source-rpc-node-unit-", "deploy-node-unit-"))
+               for item in work_items[:operations_index])
+    log = (tmp_path / "pytest-not-pg.log").read_text()
+    executed = re.findall(r"^EXECUTED (.+)$", log, re.MULTILINE)
+    node_modules = {"tests/deploy/test_bws_source_rpc_assembly.py",
+                    "tests/deploy/test_deploy_channel_script.py"}
+    expected = [name for name in files if not name.startswith("tests/e2e/")
+                and not (deferred_targets and name.startswith(deferred_targets + "/"))
+                and name not in node_modules]
+    assert sorted(executed) == sorted(expected)
+    assert json.loads((tmp_path / "state.json").read_text())["max_active"] <= 4
+    assert executed[-3:] == ["tests/ops/nested/test_host_child.py", "tests/ops/test_host.py",
                              "tests/invariants/test_vault_multiwriter.py"]
 
 

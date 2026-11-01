@@ -447,6 +447,11 @@ effort improved before adopting further changes.
   partial logs, and status inventory survive cancellation for the always-run artifact upload;
   normal EXIT handling adds final timings/status when the shell can execute it. Actual current-head
   CI completion remains required; the ceiling and fixture receipt alone are not runtime proof.
+  After [run 41304475133](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41304475133/job/124841942852)
+  reached the outer timeout with the operations directory still running near the end of the queue,
+  the full-suite runner schedules that unchanged directory shard immediately after the measured
+  deploy modules. Its inventory, process isolation and existing bounds remain unchanged. Actual
+  full-suite CI timing is still required to demonstrate that the scheduling change gives margin.
   PR #6083's scoped serial job [115940412928](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38531981018/job/115940412928)
   separately reached 93% at the old 35-minute cutoff, with one failed result whose traceback
   was lost. The scoped command keeps the exact selector arguments and adds verbose node IDs,

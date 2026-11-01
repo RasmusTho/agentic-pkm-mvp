@@ -937,15 +937,17 @@ jobs:
               fi
               printf '%s\n' "$shard"
             done |
-            # Start the measured long deploy modules with the first workers,
+            # Start the measured long deploy modules and operations group early,
             # retaining every other discovered path in deterministic order.
             awk '
               $0 == "tests/deploy/test_deploy_channel_script.py" { first = $0; next }
               $0 == "tests/deploy/test_bws_source_rpc_assembly.py" { source_rpc = $0; next }
+              $0 == "tests/operations" { operations = $0; next }
               { remaining[++count] = $0 }
               END {
                 if (source_rpc != "") print source_rpc
                 if (first != "") print first
+                if (operations != "") print operations
                 for (i = 1; i <= count; i++) print remaining[i]
               }
             ' > "$shard_list"
