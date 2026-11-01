@@ -422,11 +422,16 @@ effort improved before adopting further changes.
   [#6311 run 39865892884](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39865892884/job/120127869151)
   then passed all 131 parallel shards in 57m46s, including the deploy group's 1,473 passing cases
   in 51m18s, but again exhausted 75 minutes during serial coverage. The bounded scheduling replan
-  collects node IDs only from the measured `tests/deploy/test_deploy_channel_script.py` module and
+  collects node IDs from the measured `tests/deploy/test_deploy_channel_script.py` module and
   runs those IDs in disjoint process units under the existing four-process cap. The non-shared nodes
   are count-balanced across up to three units; the two tests that temporarily remove the checkout's
   `config/deploy/dev.previous.env` stay together in the small `deploy-node-unit-0`. The planner
-  checks that every collected node appears once. Other file and directory shards remain in the
+  checks that every collected node appears once. The later [#6519 run 41297345631](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41297345631/job/124820859611)
+  spent 3,201 seconds in `tests/deploy/test_bws_source_rpc_assembly.py` before the serial phase
+  timed out at the same outer limit. That module also uses its collected IDs, in two disjoint units
+  with adjacent pairs interleaved across the units to distribute the long test families;
+  its function-scoped protected temporary directories and disposable subprocesses isolate fixture
+  effects. Each module's plan and result logs are checked independently. Other file and directory shards remain in the
   same full-suite inventory. Collection or planning errors fail the lane before execution; node units emit verbose
   per-node results, and a post-run verifier requires one result for every planned node. Per-unit
   logs and the exact node plan are retained with the existing phase receipt.
@@ -469,7 +474,8 @@ effort improved before adopting further changes.
   The measured `tests/deploy/test_deploy_channel_script.py` module reuses the full-suite node
   planner when more than one worker is available. Its two shared-checkout rollback tests remain
   together; its remaining collected nodes form disjoint units within the same four-process cap.
-  Other deploy files remain atomic. The runner authenticates the selected file inventory before
+  The measured source RPC assembly module likewise uses two disjoint collected-node units when
+  more than one worker is available. Other deploy files remain atomic. The runner authenticates the selected file inventory before
   expansion, rejects duplicate collected nodes, and verifies one pytest result for every planned
   node in its executing partition. Missing, duplicate, unexpected, or unrecognized node results
   fail that partition. A single-worker invocation retains file execution.
@@ -587,6 +593,11 @@ effort improved before adopting further changes.
 - The `episodes` owner includes `app/episode_debrief/` and selects `tests/episode_debrief` alongside its existing episode and invariant targets. The selector CLI regression covers source-only trigger/store changes and the mixed runtime/test/spec shape; a similarly named sibling directory remains unowned and refused. PostgreSQL debrief acceptance still requires its explicit disposable-database proof; selecting the module does not claim that the `not pg` lane executed it.
 - Every `builder_system` match includes `tests/architecture/test_builderops_store_boundary.py` as an exact run target, not only as an ownership prefix. Ordinary `app/builderops/**` changes must execute the audited store-access guard so new direct-store sites cannot bypass it while their own subsystem tests remain green.
 - The `outbox_worker` owner includes `app/workers/outbox_binding_gate.py` alongside the worker implementation and `tests/workers/**`; changes to the binding admission/effect-window seam must select the worker regression lane instead of falling through to the fail-closed unowned-path result.
+  Its exact test ownership and target inventory also include
+  `tests/services/test_outbox_envelope_preflight.py`, which covers the worker's
+  upgrade preflight. Direct test edits run the complete module and common CI
+  integrity checks; worker-source edits retain that regression. Similarly named
+  service-test siblings remain unowned and fail closed.
 - `app/services/companion_note.py` is an exact-file owner of `watcher_sync`, `outbox_worker` and `store_ingest`: a helper-only edit runs the existing watcher, worker and ingestion source-boundary suites plus the direct companion-note/write-guard tests. The selector regression exercises the actual CLI and verifies similarly named service files remain unowned and refused.
 - `_is_governance_only`/`_is_docs_only` tolerate a changed `tests/**` path inside `GOVERNANCE_TARGETS`/`DOCS_TARGETS` as scope-neutral so a *pure* governance-only/docs-only PR keeps resolving to that lane. Several of those tolerated directories/files are also real per-subsystem scope signal in `SUBSYSTEMS` (`tests/architecture/test_builderops_store_boundary.py` for `builder_system`, `tests/architecture/test_no_hardcoded_vault_layout.py` for `vault`, `tests/governance/`/`scripts/` for `builder_system`/`ops_deploy`, `tests/ops/` for `ops`) — on a mixed PR that also touches one of those subsystem's owned paths, the selector unions that subsystem's own targets into the governance/docs selection (`_foreign_subsystem_matches`) instead of silently narrowing to the governance/docs-only target set and dropping the other subsystem's real coverage (#4336). `subsystems` then lists every contributing subsystem (e.g. `governance,builder_system`), never just `governance`/`docs` alone, whenever this applies; `tests/scripts/test_select_pr_tests.py`'s mixed-PR cases are the executable proof.
 - The neutral `llm_contract/**` kernel and policy-neutral `app/model_access/**` facade are owned by the `model_access` selector. Changes run the direct Model Access contract/facade suite, the BuilderOps adapter/runner compatibility suites, and the exact neutral-kernel/import-boundary architecture guards.

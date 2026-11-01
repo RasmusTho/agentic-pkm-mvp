@@ -304,6 +304,7 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
 
 def _run_full_suite_workflow(
     tmp_path: Path, *, failing_shard: str = "", mode: str = "success", deferred_targets: str = "",
+    source_rpc: bool = False,
 ):
     """Execute the checked-in shell with a fake pytest, including nested tests."""
     files = (
@@ -315,6 +316,8 @@ def _run_full_suite_workflow(
         "tests/invariants/test_vault_multiwriter.py", "tests/invariants/test_other.py",
         "tests/e2e/test_deferred.py", "tests/e2e/nested/test_also_deferred.py",
     )
+    if source_rpc:
+        files += ("tests/deploy/test_bws_source_rpc_assembly.py",)
     for name in files:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -337,7 +340,10 @@ if "--collect-only" in args:
     if os.environ.get("MODE") == "collect-failure":
         print("synthetic deploy collection failure", file=sys.stderr, flush=True)
         raise SystemExit(2)
-    target = next(arg for arg in args if arg == "tests/deploy/test_deploy_channel_script.py")
+    target = next(arg for arg in args if arg.startswith("tests/deploy/"))
+    if target.endswith("test_bws_source_rpc_assembly.py"):
+        print("\n".join(target + f"::test_source_{index}" for index in range(8)))
+        raise SystemExit(0)
     for node in [
         target + "::test_rollback_dry_run_without_sha_parses_flag_and_skips_writes",
         target + "::test_rollback_with_explicit_sha_still_allows_flags",
@@ -388,9 +394,14 @@ if os.environ.get("MODE") == "deploy-deselected" and targets[0] == "tests/deploy
     sys.exit(5)
 for target in targets:
     if "::" in target:
-        if not (os.environ.get("MODE") == "incomplete-node-result" and "::test_regular_a" in target):
+        if not ((os.environ.get("MODE") == "incomplete-node-result" and "::test_regular_a" in target)
+                or (os.environ.get("MODE") == "incomplete-rpc-result" and "::test_source_0" in target)):
             print(f"EXECUTED_NODE {target}")
             print(f"{target} PASSED [synthetic]")
+            if os.environ.get("MODE") == "duplicate-rpc-result" and "::test_source_0" in target:
+                print(f"{target} PASSED [synthetic]")
+            if os.environ.get("MODE") == "unexpected-rpc-result" and "::test_source_0" in target:
+                print(target.split("::")[0] + "::test_unplanned PASSED")
         continue
     path = Path(target)
     if path.is_dir():
@@ -501,6 +512,32 @@ def test_full_suite_shards_cover_test_files_once(tmp_path: Path, deferred_target
     assert executed[-3:] == ["tests/ops/nested/test_host_child.py",
                              "tests/ops/test_host.py",
                              "tests/invariants/test_vault_multiwriter.py"]
+
+
+def test_required_rpc_assembly_shards_preserve_exact_coverage(tmp_path: Path) -> None:
+    result, _files, _job = _run_full_suite_workflow(tmp_path, source_rpc=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "runner/pytest-not-pg-shards"
+    coverage = json.loads((root / "source-rpc-node-units/coverage.json").read_text())
+    nodes = [node for item in coverage["work_items"] for node in item["nodes"]]
+    assert len(nodes) == len(set(nodes)) == 8
+    assert len(coverage["work_items"]) == 2
+    assert [node.rsplit("_", 1)[-1] for node in coverage["work_items"][0]["nodes"]] == ["0", "1", "4", "5"]
+    log = (tmp_path / "pytest-not-pg.log").read_text()
+    assert all(log.count(f"EXECUTED_NODE {node}\n") == 1 for node in nodes)
+    assert json.loads((tmp_path / "state.json").read_text())["max_active"] <= 4
+
+
+@pytest.mark.parametrize("mode", ["incomplete-rpc-result", "duplicate-rpc-result", "unexpected-rpc-result",
+                                  "pytest-failure"])
+def test_required_rpc_assembly_shards_fail_closed(tmp_path: Path, mode: str) -> None:
+    failing = "tests/deploy/test_bws_source_rpc_assembly.py::test_source_0" if mode == "pytest-failure" else ""
+    result, _files, _job = _run_full_suite_workflow(tmp_path, source_rpc=True, mode=mode, failing_shard=failing)
+    assert result.returncode != 0
+    assert any(message in result.stderr for message in (
+        "node execution evidence incomplete", "unexpected pytest result", "SHARD FAILED",
+    ))
+    assert "tests/ops" not in (tmp_path / "pytest-not-pg.log").read_text()
 
 
 def test_full_suite_node_plan_covers_collected_nodes_once_and_binds_shared_state() -> None:
@@ -1286,13 +1323,15 @@ if "TIMEOUT_SCOPED" in __import__("os").environ:
     assert "incomplete" in incomplete.stderr
 
 
-def _run_scoped_measured_fixture(tmp_path: Path, mode: str = "complete", *, native=False, jobs=4):
-    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, TARGET_MODULE
+def _run_scoped_measured_fixture(tmp_path: Path, mode: str = "complete", *, native=False, jobs=4,
+                                 source_rpc=False):
+    from scripts.plan_full_suite_node_shards import SHARED_CHECKOUT_NODES, SOURCE_RPC_MODULE, TARGET_MODULE
     from scripts.select_pr_tests import SCOPED_DEPLOY_SERIAL_BOUNDARY
 
-    module = "tests/ops/test_native_source_diagnostic_admission.py" if native else TARGET_MODULE
+    module = ("tests/ops/test_native_source_diagnostic_admission.py" if native else
+              SOURCE_RPC_MODULE if source_rpc else TARGET_MODULE)
     nodes = ([f"{module}::test_regular_{index:03}[value with space]" for index in range(394)]
-        if native else [*SHARED_CHECKOUT_NODES, *(
+        if native else [*([] if source_rpc else SHARED_CHECKOUT_NODES), *(
             f"{module}::test_regular_{index}[value with space]" for index in range(9)
         )])
     serial_targets = (list(SCOPED_DEPLOY_SERIAL_BOUNDARY[1:]) if native
@@ -1570,6 +1609,26 @@ def test_native_admission_receipt_rejects_extra_units(tmp_path):
     # but this exact module is admitted to only two work units.
     with pytest.raises(ValueError, match="worker cap"):
         verify_executed_nodes(coverage_path, logs_dir)
+
+
+def test_scoped_rpc_assembly_shards_preserve_exact_coverage(tmp_path):
+    result, state, nodes = _run_scoped_measured_fixture(tmp_path, source_rpc=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    units = [[arg for arg in args if arg in nodes] for args in state["invocations"]]
+    units = [unit for unit in units if unit]
+    assert len(units) == 2
+    assert sorted(node for unit in units for node in unit) == sorted(nodes)
+    assert state["peak"] <= 4 and state["serial_active"] == 1
+    assert all((tmp_path / "aggregate.log").read_text().count(node + " PASSED") == 1 for node in nodes)
+
+
+@pytest.mark.parametrize("mode", ["pytest-failure", "missing", "duplicate", "unexpected"])
+def test_scoped_rpc_assembly_shards_fail_closed(tmp_path, mode):
+    result, state, _nodes = _run_scoped_measured_fixture(tmp_path, mode, source_rpc=True)
+    assert result.returncode == 1
+    assert state["active"] == 0 and state["peak"] <= 4
+    assert "serial_active" not in state
+    assert "SERIAL BOUNDARY NOT RUN:" in result.stdout
 
 
 @pytest.mark.parametrize("mode", ["pytest-failure", "missing", "duplicate", "unexpected"])

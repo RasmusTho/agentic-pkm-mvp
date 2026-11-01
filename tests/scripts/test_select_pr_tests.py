@@ -1199,6 +1199,53 @@ def test_outbox_worker_change_selects_worker_regressions() -> None:
     assert "tests/workers/test_outbox_worker.py" in selection.targets
 
 
+def test_outbox_preflight_module_selects_its_complete_regression_coverage() -> None:
+    path = "tests/services/test_outbox_envelope_preflight.py"
+    selection = select_tests([path])
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert selection.subsystems == ("outbox_worker",)
+    assert path in selection.targets
+    assert set(selector.CI_INTEGRITY_TARGETS) <= set(selection.targets)
+
+    result = subprocess.run(
+        [sys.executable, "scripts/select_pr_tests.py", "--changed-file", path],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "subsystems=outbox_worker" in result.stdout
+    assert path in result.stdout
+    assert "unowned_paths=" not in result.stdout
+
+    worker_selection = select_tests(["app/workers/outbox_worker.py"])
+    assert path in worker_selection.targets
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "tests/services/test_outbox_envelope_preflight.py.backup",
+        "tests/services/test_outbox_envelope_preflight_extra.py",
+    ),
+)
+def test_outbox_preflight_mapping_keeps_unrelated_paths_refused(path: str) -> None:
+    assert select_tests([path]).unowned_paths == (path,)
+
+    result = subprocess.run(
+        [sys.executable, "scripts/select_pr_tests.py", "--changed-file", path],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert f"unowned_paths={path}" in result.stdout
+
+
 def test_outbox_embedding_events_select_shared_regressions() -> None:
     """Embedding-event producers require worker delivery and indexer coverage."""
     selection = select_tests(["app/outbox/events.py"])

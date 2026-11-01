@@ -1239,6 +1239,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/services/test_outbox_idempotency.py",
             "tests/services/test_outbox_conn_binding.py",
             "tests/events",
+            "tests/services/test_outbox_envelope_preflight.py",
             "tests/services/test_companion_note.py",
             "tests/services/test_companion_note_write_guard.py",
         ),
@@ -1472,7 +1473,14 @@ EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
     # existing source-boundary owners without claiming sibling services.
     "watcher_sync": frozenset({"app/services/companion_note.py"}),
     "store_ingest": frozenset({"app/services/companion_note.py"}),
-    "outbox_worker": frozenset({"app/services/companion_note.py"}),
+    "outbox_worker": frozenset(
+        {
+            "app/services/companion_note.py",
+            # The upgrade preflight protects worker activation; own only its
+            # exact regression module, not unrelated service-test siblings.
+            "tests/services/test_outbox_envelope_preflight.py",
+        }
+    ),
     "llm_eval": frozenset(
         {
             "app/components/reasoning/facade.py",
