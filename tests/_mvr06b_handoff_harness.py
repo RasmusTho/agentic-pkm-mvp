@@ -56,11 +56,15 @@ def stub_settings_reload(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     return reloads
 
 
-def handoff_through_cli(runtime, *, legacy_bootstrap_root: Path | None = None) -> dict:
+def handoff_through_cli(
+    runtime, *, legacy_bootstrap_root: Path | None = None, other_runtimes=()
+) -> dict:
     """The shipped handoff command inside a proved stopped window, then finish it."""
 
     legacy_path = runtime.layout.root / "missing-legacy.md"
-    proof, inventory_path = deployment_authority(runtime, legacy_path)
+    proof, inventory_path = deployment_authority(
+        runtime, legacy_path, other_runtimes=other_runtimes
+    )
     args = [
         "background-supervisor-handoff",
         "--channel",

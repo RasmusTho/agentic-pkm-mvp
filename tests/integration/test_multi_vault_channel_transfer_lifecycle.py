@@ -476,3 +476,58 @@ def test_foreground_floor_atomically_qualifies_schema_and_old_reader_refuses(tmp
         with pytest.raises(RuntimeError, match="schema mismatch"):
             module.VaultRegistryStore(runtime.registry.path).read_existing()
         assert runtime.registry.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("mode", ["compatibility", "explicit"])
+def test_post_handoff_transfer_repairs_mvr06_intent_before_restart(tmp_path, monkeypatch, mode):
+    """MVR-06B (#3864): the MVR-06 intent hook replaces the retired bridge hook."""
+    from app.instance.background_supervisor import durable_background_state
+    from app.instance.settings_rebind import SettingsRebindStore, _install_dormant_settings_rebind
+    from tests._mvr06_background_harness import (
+        record_mvr05_floor,
+        run_background_cutover_through_cli,
+    )
+    from tests._mvr06b_handoff_harness import admin, handoff_through_cli, supervisor
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    source, destination, original, lifecycle = transfer_pair(tmp_path, monkeypatch)
+    record_mvr05_floor(source)
+    _install_dormant_settings_rebind(
+        source.registry, binding_id=original.vault_binding_id,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    peers = (destination,)
+    assert run_background_cutover_through_cli(source, other_runtimes=peers)["_exit_code"] == 0
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    assert handoff_through_cli(source, other_runtimes=peers)["_exit_code"] == 0
+    if mode == "explicit":
+        admin(source).add(original.vault_binding_id)
+    before = durable_background_state(source.registry.load())
+    assert before.binding_ids == (original.vault_binding_id,)
+    assert before.mode == mode
+
+    order: list[str] = []
+
+    def fault(phase):
+        order.append(phase)
+        if phase == "compatibility_repaired":
+            # The authoritative intent is repaired before the source is retired.
+            state = durable_background_state(source.registry.load())
+            assert original.vault_binding_id not in state.binding_ids
+            assert original.vault_binding_id in source.registry.load().registrations
+
+    monkeypatch.setattr(transfers, "_fault_point", fault)
+    target = source.transfer_to(destination, original.vault_binding_id, stop_and_prove=lifecycle)
+    assert_transferred(source, destination, original, target)
+
+    after = durable_background_state(source.registry.load())
+    assert after.mode == mode  # compatibility idle/no-vault, or explicit-empty
+    assert after.binding_ids == ()
+    assert after.intent_revision == before.intent_revision + 1
+    record = SettingsRebindStore(source.registry).read()
+    assert record.candidate_binding_id is None
+    # Restart can neither resurrect the transferred binding nor enrol the destination.
+    restarted = reopen(source)
+    assert supervisor(restarted).start().status == "idle"
+    assert target not in (durable_background_state(restarted.registry.load()).binding_ids)
+    assert "backgroundIntent" not in destination.registry.load().extensions

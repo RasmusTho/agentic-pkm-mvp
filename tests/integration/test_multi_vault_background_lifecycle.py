@@ -964,3 +964,128 @@ def test_removed_binding_rehome_preserves_historical_receipt_audit(tmp_path, mon
     runtime.reactivate_removed(root)
     epochs = [item["contentEpoch"] for item in binding_epoch_lineage(runtime.registry.load(), binding)]
     assert epochs == [1, 2, 2, 3]
+
+
+def _watched_default_on_second(tmp_path, monkeypatch):
+    """Watched compatibility binding == instance default == the removable binding."""
+
+    from app.instance.runtime import open_default_vault_service
+
+    runtime, first, second, config = _watched_instance(tmp_path, monkeypatch)
+    drive_watcher_during_waits(monkeypatch, config)
+    open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
+    assert background_ids(runtime) == (second.vault_binding_id,)
+    return runtime, first, second, config
+
+
+def test_default_changing_removal_atomically_rebinds_compatibility_lifecycle(
+    tmp_path, monkeypatch
+) -> None:
+    from app.instance import settings_rebind
+
+    runtime, first, second, config = _watched_default_on_second(tmp_path / "ok", monkeypatch)
+    sup = supervisor(runtime)
+    sup.start()
+    observed: list[tuple] = []
+
+    def observe(name: str) -> None:
+        snapshot = runtime.registry.load()
+        state = durable_background_state(snapshot)
+        observed.append((name, snapshot.default_vault_binding_id, state.binding_ids))
+
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", observe)
+    tombstone = runtime.remove(
+        second.vault_binding_id, replacement_default_binding_id=first.vault_binding_id
+    )
+    assert tombstone.vault_binding_id == second.vault_binding_id
+    # The foreground default and the background binding move in the same generation:
+    # never a new default beside an idle or stale background binding.
+    for name, default, background in observed:
+        assert (default, background) in {
+            (second.vault_binding_id, (second.vault_binding_id,)),
+            (first.vault_binding_id, (first.vault_binding_id,)),
+        }, name
+    record = runtime.open_settings_rebind_store().read()
+    assert record.candidate_binding_id == first.vault_binding_id
+    assert record.reload_revision == record.desired_revision  # replacement resumed
+    assert watcher_receipt(tmp_path / "ok", record.desired_revision).stage == "completed"
+    assert sup.reconcile().binding_id == first.vault_binding_id
+
+    # Without a replacement the enabled watcher persists idle/no-vault.
+    monkeypatch.undo()
+    runtime2, first2, second2, _config = _watched_default_on_second(tmp_path / "idle", monkeypatch)
+    runtime2.remove(second2.vault_binding_id)
+    snapshot = runtime2.registry.load()
+    assert snapshot.default_vault_binding_id is None
+    assert background_ids(runtime2) == ()
+    assert supervisor(runtime2).start().status == "idle"
+
+    # A typed refusal before the commit (the watcher never acknowledges) leaves the
+    # source registration, default, and compatibility lifecycle authoritative.
+    monkeypatch.undo()
+    runtime3, first3, second3, _config = _watched_default_on_second(
+        tmp_path / "refused", monkeypatch
+    )
+    before = runtime3.registry.load()
+    monkeypatch.setattr(
+        settings_rebind.SettingsRebindActivation,
+        "_wait_for_stage",
+        lambda self, record, *, required_stage: (_ for _ in ()).throw(
+            settings_rebind.RegistryError("watcher did not acknowledge")
+        ),
+    )
+    with pytest.raises(settings_rebind.RegistryError, match="did not acknowledge"):
+        runtime3.remove(second3.vault_binding_id)
+    after = runtime3.registry.load()
+    assert after.registrations[second3.vault_binding_id] == before.registrations[
+        second3.vault_binding_id
+    ]
+    assert after.default_vault_binding_id == second3.vault_binding_id
+    assert background_ids(runtime3) == (second3.vault_binding_id,)
+    assert runtime3.open_settings_rebind_store().read().phase != "prepared"
+    assert runtime3.ledger.active_owner(second3.vault_binding_id) is not None
+
+
+def test_direct_filesystem_write_during_removal_is_receipted_before_tombstone(
+    tmp_path, monkeypatch
+) -> None:
+    from app.instance.settings_rebind import SettingsRebindActivation
+    from app.watcher import registry as watcher_registry
+
+    runtime, first, second, config = _watched_default_on_second(tmp_path, monkeypatch)
+    # Re-arm the watcher on the binding being removed (its live compatibility root).
+    monkeypatch.setenv("WATCHER_VAULT_PATH", second.path)
+    watcher_registry.run_registry_once(config)
+    direct = Path(second.path) / "direct-during-removal.md"
+    original = SettingsRebindActivation._wait_for_stage
+
+    def wait(activation, record, *, required_stage):
+        for _ in range(3):
+            watcher_registry.run_registry_once(config)
+        original(activation, record, required_stage=required_stage)
+        if required_stage == "acknowledged":
+            # Racing the drain: after the final pre-commit scan, before the commit.
+            direct.write_text("racing direct write\n", encoding="utf-8")
+
+    monkeypatch.setattr(SettingsRebindActivation, "_wait_for_stage", wait)
+    order: list[str] = []
+
+    def phase(name: str) -> None:
+        order.append(name)
+        if name == "binding-removal:buffer_drained":
+            # The post-commit old-root drain is receipted under the removed binding
+            # while its ownership lease is still held (before the tombstone release).
+            record = runtime.open_settings_rebind_store().read()
+            receipt = watcher_receipt(tmp_path, record.desired_revision)
+            assert receipt.stage == "completed"
+            assert receipt.prior_binding_id == second.vault_binding_id
+            assert direct.name in {item.relative_path for item in receipt.buffer}
+            assert runtime.ledger.active_owner(second.vault_binding_id) is not None
+
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", phase)
+    runtime.remove(second.vault_binding_id, replacement_default_binding_id=first.vault_binding_id)
+    assert order.index("binding-removal:buffer_drained") < order.index(
+        "binding-removal:ownership_released"
+    )
+    assert str(direct) in outbox_paths(tmp_path)
+    assert runtime.ledger.active_owner(second.vault_binding_id) is None

@@ -796,13 +796,16 @@ class DormantSettingsRebindReconciler:
         prior = record.prior_binding_id
         if prior is None:
             return
-        registration = snapshot.registrations.get(prior)
+        registration: object = snapshot.registrations.get(prior)
+        if registration is None:
+            # MVR-06B: a removal-committed prior root stays the bracket's old root.
+            registration = snapshot.removal_tombstones.get(prior)
         if registration is None:
             return
         try:
             if same_filesystem_root(
                 resolve_filesystem_root_identity(cfg.vault_path),
-                resolve_filesystem_root_identity(registration.path),
+                resolve_filesystem_root_identity(registration.path),  # type: ignore[attr-defined]
             ):
                 return
         except FilesystemIdentityError:
@@ -810,7 +813,9 @@ class DormantSettingsRebindReconciler:
         completed = self._latest_completed_receipt(before=record.desired_revision)
         if completed is None or completed.candidate_binding_id != prior:
             return
-        cfg.vault_path = validate_settings_rebind_candidate_root(Path(registration.path))
+        cfg.vault_path = validate_settings_rebind_candidate_root(
+            Path(registration.path)  # type: ignore[attr-defined]
+        )
 
     def cleared_before(self, record: SettingsRebindRecord) -> bool:
         """Return True when durable watcher history ends in a completed CLEAR.
@@ -852,11 +857,16 @@ class DormantSettingsRebindReconciler:
         prior = DormantSettingsRebindReconciler._required_binding(
             record.prior_binding_id or record.candidate_binding_id, name="prior"
         )
-        registration = snapshot.registrations.get(prior)
+        registration: object = snapshot.registrations.get(prior)
+        if registration is None:
+            # MVR-06B removal commits the tombstone before the post-commit old-root
+            # drain; ownership is released only after this bracket completes, so the
+            # tombstone is the durable old root for the reconciler-only scan.
+            registration = snapshot.removal_tombstones.get(prior)
         if registration is None:
             raise RegistryError("settings rebind prior watcher binding is missing")
         configured = resolve_filesystem_root_identity(cfg.vault_path)
-        expected = resolve_filesystem_root_identity(registration.path)
+        expected = resolve_filesystem_root_identity(registration.path)  # type: ignore[attr-defined]
         if not same_filesystem_root(configured, expected):
             raise RegistryError("settings rebind watcher is not bound to the durable prior root")
 
