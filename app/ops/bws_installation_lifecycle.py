@@ -410,11 +410,17 @@ class _ControlPathBinding:
             roots = (self.control, *self.footprint)
             for index, root in enumerate(roots):
                 path = root['path']
-                for other in roots[:index]:
+                for other_index, other in enumerate(roots[:index]):
                     if path == other['path']:
                         refuse('equal', 'roots')
                     if path.startswith(other['path'] + '/'):
-                        refuse('below', 'roots')
+                        # Public schema positions only, selected after the same
+                        # original predicate; never inspect another root pair.
+                        refuse('below', (
+                            ('roots_application_control',),
+                            ('roots_launcher_control', 'roots_launcher_application'),
+                            ('roots_backup_control', 'roots_backup_application', 'roots_backup_launcher'),
+                        )[index - 1][other_index])
                     if other['path'].startswith(path + '/'):
                         refuse('above', 'roots')
                 fd = directory(path, ('control_root', 'application_root', 'launcher_root', 'backup_root')[index])

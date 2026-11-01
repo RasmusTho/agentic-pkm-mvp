@@ -720,20 +720,16 @@ output or credentials. Incomplete output still refuses acceptance. The observed 
 inference, not a captured historical exception. Actual equivalent DEV/TEST acceptance is verified by the dated #5675 receipt above.
 Observed selected/pass counts are evidence, not a permanent test-count gate.
 
-Automatic DEV/TEST activation may reclaim at most eight proved unused official application-image
-IDs under the existing native channel lock before the ordinary deployment script runs. The cache
-inventory reads only fixed image/container IDs, references, tags, digests and creation times. Every
-running, stopped or created container image, current/previous and rollback pin, pending-migration
-reference and exact admitted target digest remains protected, including different digests for the
-same source SHA. Reclamation requires an official registry digest in `RepoDigests`; a local tag
-alone does not prove that an image is rebuildable. Images with another-repository aliases or
-unproved provenance are retained. Each
-exact, non-force `--no-prune` removal rechecks the protected snapshot and image metadata,
-retaining untagged parents that were not separately admitted for reclamation. Manual and PROD paths
-perform no cache maintenance, and this path never prunes volumes or touches application, database
-or vault data. Unavailable or malformed inventory, changed snapshots or failed removal stop further
-reclamation with a fixed warning, then continue the unchanged pull and deployment gates. This is
-optional recovery of rebuildable image cache, not a capacity or approval prerequisite.
+Automatic DEV/TEST image-cache reclamation is temporarily paused. A retained operation request can
+reference an image that has no current container, pin, or admitted-target reference, and some
+host-only attempts have no complete native inventory. The optional cleanup emits a fixed warning and
+continues the unchanged deployment and image-pull gates without removing images. Manual and PROD
+paths remain outside this cleanup. This preserves retained attempts, but images can accumulate and
+consume disk space: continue the existing capacity monitoring and use only separately qualified
+operator cleanup. Restore bounded automatic reclamation only after a complete, stable proof covers
+retained host and native attempts, including legacy UNKNOWN operations and source-installation
+attempts whose image was cached before native admission. Do not infer an empty protection set from
+missing native evidence. The mandatory restoration and capacity-proof contract is tracked in #6521.
 
 #### Planned complete DEV/TEST image retention and capacity admission
 
@@ -1583,7 +1579,8 @@ first original atom, or the original operation whose cause remains UNKNOWN:
 | Every directory/file identity role above | `mount_platform`, `mount_libc_unknown`, `mount_buffer_unknown`, `mount_statx_unknown`, `mount_statx`, `mount_unpack_unknown`, `mount_mask`, `mount_identity` | Qualify supported Linux; or diagnose the fixed libc/buffer/call/unpack operation; or requalify statx success, requested mask or nonzero mount identity. Native cause/errno/mount value is UNKNOWN. No fallback metadata source is used. |
 | `retained` | `retained_version` | Previously held version changed; which member differs is UNKNOWN. Preserve refusal and requalify the complete retained proof. |
 | `footprint` | `tuple_type`, `population`, `member_mapping` | Requalify the manifest producer's exact tuple, population or mapping shape. Real NativePorts constructs the complete three-root tuple; malformed shapes remain direct defensive guards. |
-| `roots` | `equal`, `below`, `above`, `recorded_identity` | Distinguish root equality and each overlap direction, or recorded root identity disagreement. Requalify disjointness or bound root proof; the differing identity member/cause is UNKNOWN. |
+| `roots` | `equal`, `above`, `recorded_identity`; historical `below` remains readable | Distinguish root equality, the earlier root below the current root, or recorded root identity disagreement. Requalify disjointness or bound root proof; the differing identity member/cause is UNKNOWN. |
+| `roots_application_control`, `roots_launcher_control`, `roots_launcher_application`, `roots_backup_control`, `roots_backup_application`, `roots_backup_launcher` | `below` only | The current schema root is below the earlier compared schema root, in the original control/application/launcher/backup order. Requalify disjointness; the public pair alone establishes no safe topology remedy. |
 | `effect_parents` | `tuple_type`, `empty`, `bound`, `member_type`, `duplicate`, `outside_effect` | Requalify the producer's exact tuple, nonempty coverage, bound, string members, uniqueness or confinement to application/launcher effects. No subset can be adopted. |
 | `selected_parent` (`path_selected`) | `equal`, `below`, `above`, `identity_alias` | Distinguish each protected-root relationship from directory identity alias. Requalify footprint disjointness or lookup identity, without exposing a path. |
 | `selected_file` (`path_selected`) | `descriptor_bound`, `open_unknown`, `mount_crossing`, `identity_alias`, `aggregate_size` | Distinguish capacity, unavailable file open, mount crossing, file alias and whole-vector declared-size overflow. Directory alias, per-file size and aggregate size have different decisions. |
@@ -1594,6 +1591,23 @@ first original atom, or the original operation whose cause remains UNKNOWN:
 | `absent_edge` | `stat_unknown`, `appeared` | Diagnose unavailable repeat stat, or requalify an edge that appeared. Absence remains success; no entry type/content is inferred. |
 | `current_edge`; `fresh_edge` | `stat_unknown`, `held_version`, `edge_identity`; `open_unknown`, `version` | Separately requalify current namespace availability, held proof, device/inode edge binding, fresh-open availability or fresh-view agreement. Different recorded members remain UNKNOWN. Fresh FDs retain their original finally-close. |
 | `snapshot`; `walk` | `disagreement`; `unexpected_unknown` | Complete saved snapshot drift, or an otherwise unexpected operation at the fixed revalidation boundary. Preserve refusal/uncertainty and requalify; the changed field or native cause is UNKNOWN. |
+
+The six `roots_<current>_<earlier>` roles are selected only after the original
+`current.startswith(earlier + '/')` predicate has failed disjointness. They admit
+exactly twelve combinations: `path_absent` or `path_selected`, side `unknown`,
+guard `below`, at INITIAL only. There is no additional path read, predicate,
+classification or later-pair inspection. `equal`, `above`, `recorded_identity`,
+original discovery and final empty-control/later-phase exports are unchanged.
+Pairs among the fixed control/launcher/backup roots are defensive under their
+mutually disjoint production constants; synthetic coverage of all six is not a
+claim that every pair can reach this initial branch through prior gates.
+The lower installation manifest still independently requires disjoint roots.
+The verified candidate Source RPC runs the candidate producer and finite readers
+before installation; a refusal leaves the installed OLD validator/source intact.
+Legacy `roots/below` receipts remain readable and reconciliation returns them
+unchanged. Source28's historical role pair and safe compatibility remedy remain
+UNKNOWN; this source support grants no native read/retry, installation, DEV/TEST
+admission, capture or parent closure.
 
 Unless narrowed above, walk roles use `path_absent` or `path_selected`; all sides
 are `unknown`. Symbols never include an index, native path/count/content/digest,
@@ -1607,8 +1621,12 @@ original-handle rules remain mandatory.
 
 Actual owned closes are attempted once; replacement FDs are never closed and
 sticky retained/transient close uncertainty overrides an earlier diagnostic.
-Existing unresolved assembled paths retain fatal exit 78, no stdout/terminal
-receipt and their owner. An `__provenance_unavailable` suffix still means scoped
+Existing unresolved assembled paths retain fatal exit 78, no outer stdout/terminal
+response and their owner. Transient PATH-close uncertainty publishes no terminal
+receipt. The original retained-runtime-close path can retain one inner
+`old_kernel_initial_retained_runtime` fallback with null generation/backup fields;
+that record does not override the outer failure or establish a completed operation.
+An `__provenance_unavailable` suffix still means scoped
 early executed-source comparison was unavailable; no suffix is not final caller,
 loaded-source or FULL proof. Unknown/foreign/subclass/missing/malformed metadata
 keeps the existing family/coarse fallback and legacy absent-field receipts remain

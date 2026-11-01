@@ -10,6 +10,7 @@ import ctypes
 from pathlib import Path
 import stat
 import struct
+import sys
 from types import SimpleNamespace
 
 from app.ops.bws_installation_lifecycle import _control_path_mount as REAL_MOUNT
@@ -86,11 +87,27 @@ PATH_CASES = [
 
 PATH_TOPOLOGY_CASES = [
     ('roots-equal', 'path_selected', 'unknown', 'roots', 'equal'),
-    ('roots-below', 'path_selected', 'unknown', 'roots', 'below'),
+    ('roots-below', 'path_selected', 'unknown', 'roots_backup_control', 'below'),
     ('roots-above', 'path_selected', 'unknown', 'roots', 'above'),
     ('parent-equal', 'path_selected', 'unknown', 'selected_parent', 'equal'),
     ('parent-below', 'path_selected', 'unknown', 'selected_parent', 'below'),
     ('parent-above', 'path_selected', 'unknown', 'selected_parent', 'above'),
+]
+
+
+# Independently authored public schema pairs, including pairs excluded by the
+# real fixed control/launcher/backup constants. No production allowlist input.
+ROOT_BELOW_PAIRS = (
+    ('application', 'control', 'roots_application_control'),
+    ('launcher', 'control', 'roots_launcher_control'),
+    ('launcher', 'application', 'roots_launcher_application'),
+    ('backup', 'control', 'roots_backup_control'),
+    ('backup', 'application', 'roots_backup_application'),
+    ('backup', 'launcher', 'roots_backup_launcher'),
+)
+ROOT_BELOW_CASES = [
+    ('roots-below-' + current + '-' + earlier, 'path_selected', 'unknown', role, 'below')
+    for current, earlier, role in ROOT_BELOW_PAIRS
 ]
 
 
@@ -148,7 +165,7 @@ ABSENT_CASES = [
     ('empty-vector/' + row[0], 'path_absent', *row[2:])
     for row in PATH_CASES + PATH_TOPOLOGY_CASES
     if row[1] == 'path_selected' and row[3] in {
-        'roots', 'loader_app', 'loader_scripts', 'slot_descent', 'slot_census',
+        'roots', 'roots_backup_control', 'loader_app', 'loader_scripts', 'slot_descent', 'slot_census',
         'absent_edge', 'current_edge', 'fresh_edge',
     }
 ]
@@ -175,14 +192,16 @@ ROLE_BATCHES = (len(ROLE_CASES) + 7) // 8
 
 
 def expected_context(name):
-    return next(row[1:] for row in PATH_CASES + PATH_TOPOLOGY_CASES + ROLE_CASES if row[0] == name)
+    return next(row[1:] for row in PATH_CASES + PATH_TOPOLOGY_CASES + ROOT_BELOW_CASES + ROLE_CASES if row[0] == name)
 
 
 def prepare_path_case(module, patch, state, properties, control, selected, case):
     """Install one external-port fault; return independent ownership/call evidence."""
     uncertain = case.endswith('-close')
+    runtime_uncertain = case.endswith('-runtime-close')
     multiple = case == 'grammar-multiple-close'
-    name = case.removesuffix('-close').removesuffix('-multiple')
+    name = (case.removesuffix('-runtime-close') if runtime_uncertain else
+            case.removesuffix('-close').removesuffix('-multiple'))
     role_case = case.split(':') if case.startswith('role:') else None
     if role_case:
         name = role_case[3]
@@ -193,7 +212,7 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
     slot = Path(assignment[5:].split(':')[1])
     evidence = dict(fired=False, trace=[], opened={}, closed=[], reads=[], target=target,
                     original_environment=tuple(environment), open_arguments=[], stat_arguments=[])
-    if name in {row[0] for row in PATH_TOPOLOGY_CASES + RESOURCE_CASES}:
+    if name in {row[0] for row in PATH_TOPOLOGY_CASES + ROOT_BELOW_CASES + RESOURCE_CASES}:
         evidence['fired'] = True
     if name in {'population', 'hints', 'absolute', 'backslash', 'canonical', 'components',
                 'misleading', 'duplicate'}:
@@ -314,9 +333,16 @@ def prepare_path_case(module, patch, state, properties, control, selected, case)
         if path is not None:
             evidence['closed'].append((str(path), fd))
         original_os.close(fd)
-        close_target = control if name == 'dir-fstat' else Path('/') if name == 'fresh-version' else target
+        close_target = (control if name == 'dir-fstat' or name.startswith('roots-below') else
+                        Path('/') if name == 'fresh-version' else target)
         fresh_original = name != 'fresh-version' or path != Path('/') or fd == evidence['opened']['/'][-1]
-        if uncertain and (path == close_target and fresh_original or multiple and path in selected):
+        failed_close = (fd == getattr(state.get('service'), 'runtime_fd', None) if runtime_uncertain else
+                        path == close_target and fresh_original or multiple and path in selected)
+        if uncertain and failed_close:
+            if name.startswith('roots-below-'):
+                failure = sys.exception()
+                evidence['refusal_before_close'] = (failure.root_control
+                    if type(failure) is module._OldQualificationRefusal else None)
             evidence.setdefault('failed_closes', []).append((str(path), fd))
             raise OSError('PRIVATE_CANARY uncertain original close')
     def fstat(fd):
