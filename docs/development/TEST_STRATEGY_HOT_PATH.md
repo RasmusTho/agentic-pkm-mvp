@@ -346,6 +346,9 @@ effort improved before adopting further changes.
 
 ## Current Protection Surface
 
+- The exact CI contract target set includes `tests/architecture/test_module_layout.py` so changes
+  to that source-tree import guard run it instead of failing as unowned. Unknown architecture
+  siblings remain outside this exact route and mixed runtime changes retain their normal ownership.
 - The existing Companion UI browser-runtime gate also executes
   `tests/companion_ui/test_vault_browser_state_runtime.py`: populated, empty,
   partial and error lists crossed with available/unavailable identity at desktop
