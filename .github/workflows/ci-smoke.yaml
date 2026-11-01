@@ -1125,10 +1125,11 @@ jobs:
         # Run 39237406751 needed 38m23s for parallel work and 20m42s for
         # the serial boundary, leaving only 55s below the former 60m ceiling.
         # Run 39249448570 passed every parallel partition in 40m57s, then
-        # hit that ceiling during serial coverage. Match the finite full-lane
-        # margin without changing selection, concurrency, or failure handling.
+        # hit that ceiling during serial coverage. A later partition in run
+        # 41310399802 also reached its 3300s limit at 99%, before serial work.
+        # Extend finite margin without changing selection or failure handling.
         # The 120-second per-test timeout still catches individual hangs.
-        timeout-minutes: 75
+        timeout-minutes: 120
         env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
           PYTHONUNBUFFERED: "1"
@@ -1152,7 +1153,7 @@ jobs:
               --aggregate-log pytest-not-pg.log \
               --jobs 4 \
               --serial-boundary-json "$SCOPED_SERIAL_BOUNDARY_JSON" \
-              --shard-timeout-seconds 3300
+              --shard-timeout-seconds 5400
           fi
 
       - name: Skip unit tests for docs-only PR

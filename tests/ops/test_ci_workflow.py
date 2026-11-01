@@ -694,7 +694,7 @@ def test_not_pg_steps_have_room_for_selected_coverage(step_name: str) -> None:
 def test_scoped_unit_budget_preserves_selected_coverage() -> None:
     job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
     step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
-    assert step["timeout-minutes"] == 75
+    assert step["timeout-minutes"] == 120
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert step["if"] == (
         "steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'"
@@ -714,13 +714,35 @@ def test_scoped_unit_budget_preserves_selected_coverage() -> None:
 
 
 
+def test_scoped_shard_budget_is_finite_and_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from scripts import run_scoped_test_partitions as runner
+
+    seen: list[int] = []
+    monkeypatch.setattr(runner, 'run_partitions', lambda *_args, **kwargs: seen.append(kwargs['timeout_seconds']) or 0)
+    command = ['runner', '--partitions-json', '[["tests/example"]]',
+               '--expected-targets-json', '["tests/example"]', '--log-dir', str(tmp_path / 'logs'),
+               '--aggregate-log', str(tmp_path / 'aggregate.log'), '--shard-timeout-seconds']
+    monkeypatch.setattr(sys, 'argv', [*command, '5400'])
+    assert runner.main() == 0
+    assert seen == [5400]
+    for value in ('0', '5401'):
+        monkeypatch.setattr(sys, 'argv', [*command, value])
+        with pytest.raises(SystemExit) as error:
+            runner.main()
+        assert error.value.code == 2
+        assert '--shard-timeout-seconds must be between 1 and 5400' in capsys.readouterr().err
+    assert seen == [5400]
+
+
 @pytest.mark.parametrize("pytest_exit", [0, 7])
 def test_scoped_unit_budget_preserves_selected_command_and_failure(
     tmp_path: Path, pytest_exit: int,
 ) -> None:
     job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
     step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
-    assert step["timeout-minutes"] == 75
+    assert step["timeout-minutes"] == 120
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert step["env"]["PYTHONUNBUFFERED"] == "1"
     selected = "-q -m 'not pg and not eval' tests/governance tests/scripts/test_publication.py"
@@ -789,7 +811,7 @@ sys.exit(int(os.environ["FIXTURE_PYTEST_EXIT"]))
 def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None:
     job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
     step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
-    assert step["timeout-minutes"] == 75
+    assert step["timeout-minutes"] == 120
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert step["env"]["SCOPED_TARGETS_JSON"] == (
         "${{ steps.select-tests.outputs.pytest_targets_json }}"
@@ -804,7 +826,7 @@ def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None
     assert "--jobs 4" in step["run"]
     assert "--serial-boundary-json" in step["run"]
     assert "--execution-units-json" in step["run"]
-    assert "--shard-timeout-seconds 3300" in step["run"]
+    assert "--shard-timeout-seconds 5400" in step["run"]
     assert "set -euo pipefail" in step["run"]
     upload = next(s for s in job["steps"] if s.get("name") == "Upload scoped partition logs")
     assert upload["if"].startswith("always()")
