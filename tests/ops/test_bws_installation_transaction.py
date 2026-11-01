@@ -3048,6 +3048,7 @@ def test_candidate_preflight_uses_fixed_local_git_and_docker_environment(monkeyp
     port_calls = []
     ports = object.__new__(transaction._NativePorts)
     ports.caller_root = candidate_root
+    ports._source_image_prepared = False
     ports.verify_caller_checkout = lambda selected: port_calls.append(("checkout", selected))
     monkeypatch.setattr(transaction, "_verify_candidate",
                         lambda root, selected: port_calls.append(("candidate", root, selected)))

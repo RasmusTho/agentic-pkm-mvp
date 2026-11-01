@@ -765,15 +765,37 @@ The present deployment path has several distinct authorities:
   Replace that route with a supported repository-owned producer before relying on complete
   accounting; do not promote a transient carrier into a second source of authority.
 
-The supported producer must fsync an immutable, value-free binding of operation ID, channel,
+The supported source pre-pull must fsync an immutable, value-free binding of operation ID, channel,
 revision, official repository, index digest and qualified Docker store into the existing durable
-operation authority **before** the first cache-affecting pull or remote dispatch. The admitted
-native request and source-installation owner/receipt must match that binding. A changed binding,
+operation authority **before** the pull. An ordinary host deploy or source-persistence request
+must bind the same operation and exact image identity before cache-affecting dispatch; its host
+record may leave the store unscoped when the native receiver has not yet qualified it. In that
+case every store the operation could have reached must protect that digest until authenticated
+evidence narrows the scope. Reapply this protection when a possible store is later discovered,
+remounted or cloned; do not limit it to daemons active at the original dispatch. A missing possible
+store, or an unresolved mapping from the digest to image IDs and aliases, prevents reclamation
+wherever protection cannot be proved. Capacity
+admission must separately qualify the actual effect store or reserve every possible affected
+resource before dispatch; an unscoped host record is not a capacity reservation. The admitted
+native request and source-installation owner/receipt must match the image identity. A changed binding,
 including two digests for the same source SHA, is not the same request. A source pull that
 fails, loses transport or has no native receipt retains its binding and its uncertainty; it is
 never automatically replayed. The migration must identify the actual supported callers and
 account for the previously used operator-controlled path, rather than assuming all earlier
 pulls entered a native journal.
+
+The repository-owned source producer retains an image intent before publishing its source owner,
+an image binding before pull, and a pull-completion companion only after a verified response.
+Recovery can close a source installation before backup when its exact intent and absence of a
+channel owner are proved, while retaining the image evidence. A `source_pull_unresolved` refusal
+describes the source installation only: it does not prove that the Docker pull has terminated or
+release its capacity reservation. Inventory must preserve orphan intents and all retained companions
+even after the source owner becomes terminal. A missing or malformed companion cannot establish
+a negative outcome. The new pull is closed by default until the capacity guard is delivered;
+an already cached verified candidate remains usable. Do not retire the existing operational
+pre-pull route or claim live adoption until producer, protection and guard are installed and
+separately verified on each channel. Manual DEV/TEST host deploys require an immutable image
+digest from the verified build before cache-affecting dispatch.
 
 For old host-only or pre-admission UNKNOWN operations without a bound digest, authenticate and
 retain the original operation-bound request or other existing owner evidence if it exists. Record
