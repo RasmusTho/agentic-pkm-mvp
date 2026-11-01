@@ -21,7 +21,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.select_pr_tests import PR_MARKER_EXPRESSION
 from scripts.plan_full_suite_node_shards import (
-    MEASURED_NODE_MODULES, NATIVE_ADMISSION_MODULE, TARGET_MODULE, plan_node_units, verify_node_results,
+    MEASURED_NODE_MODULES, NATIVE_ADMISSION_MODULE, SOURCE_RPC_MODULE, TARGET_MODULE,
+    plan_node_units, verify_node_results,
 )
 
 MAX_PARTITIONS = 4
@@ -368,8 +369,8 @@ def _expand_and_balance_parallel(
             deploy_units: list[tuple[str, ...]] = []
             for file_path in files:
                 file_nodes = tuple(node for node in nodes if _target_file(node) == file_path)
-                if file_path == TARGET_MODULE and file_nodes and jobs > 1:
-                    units = plan_node_units(file_nodes, TARGET_MODULE, max_workers=jobs)
+                if file_path in (TARGET_MODULE, SOURCE_RPC_MODULE) and file_nodes and jobs > 1:
+                    units = plan_node_units(file_nodes, file_path, max_workers=jobs)
                     deploy_units.extend(units)
                     for unit in units:
                         node_weight[unit[0]] = len(unit)

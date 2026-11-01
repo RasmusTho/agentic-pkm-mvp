@@ -422,11 +422,16 @@ effort improved before adopting further changes.
   [#6311 run 39865892884](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39865892884/job/120127869151)
   then passed all 131 parallel shards in 57m46s, including the deploy group's 1,473 passing cases
   in 51m18s, but again exhausted 75 minutes during serial coverage. The bounded scheduling replan
-  collects node IDs only from the measured `tests/deploy/test_deploy_channel_script.py` module and
+  collects node IDs from the measured `tests/deploy/test_deploy_channel_script.py` module and
   runs those IDs in disjoint process units under the existing four-process cap. The non-shared nodes
   are count-balanced across up to three units; the two tests that temporarily remove the checkout's
   `config/deploy/dev.previous.env` stay together in the small `deploy-node-unit-0`. The planner
-  checks that every collected node appears once. Other file and directory shards remain in the
+  checks that every collected node appears once. The later [#6519 run 41297345631](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41297345631/job/124820859611)
+  spent 3,201 seconds in `tests/deploy/test_bws_source_rpc_assembly.py` before the serial phase
+  timed out at the same outer limit. That module also uses its collected IDs, in two disjoint units
+  with adjacent pairs interleaved across the units to distribute the long test families;
+  its function-scoped protected temporary directories and disposable subprocesses isolate fixture
+  effects. Each module's plan and result logs are checked independently. Other file and directory shards remain in the
   same full-suite inventory. Collection or planning errors fail the lane before execution; node units emit verbose
   per-node results, and a post-run verifier requires one result for every planned node. Per-unit
   logs and the exact node plan are retained with the existing phase receipt.
@@ -469,7 +474,8 @@ effort improved before adopting further changes.
   The measured `tests/deploy/test_deploy_channel_script.py` module reuses the full-suite node
   planner when more than one worker is available. Its two shared-checkout rollback tests remain
   together; its remaining collected nodes form disjoint units within the same four-process cap.
-  Other deploy files remain atomic. The runner authenticates the selected file inventory before
+  The measured source RPC assembly module likewise uses two disjoint collected-node units when
+  more than one worker is available. Other deploy files remain atomic. The runner authenticates the selected file inventory before
   expansion, rejects duplicate collected nodes, and verifies one pytest result for every planned
   node in its executing partition. Missing, duplicate, unexpected, or unrecognized node results
   fail that partition. A single-worker invocation retains file execution.
