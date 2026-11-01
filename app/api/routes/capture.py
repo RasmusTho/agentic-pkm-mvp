@@ -284,6 +284,7 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
                     idempotency_key=derive_idempotency_key(
                         outbox_evt.event, outbox_evt.event_id, EVENT_ID_FINGERPRINT
                     ),
+                    producer="capture.appended",
                 )
                 emitted = emitted or bool(stored_id)
             except Exception as exc:

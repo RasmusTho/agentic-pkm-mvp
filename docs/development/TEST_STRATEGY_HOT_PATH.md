@@ -183,9 +183,12 @@ An additional closed source-installation profile permits only
 `app/ops/bws_installation_lifecycle.py`, `tests/ops/test_bws_installation_lifecycle.py`,
 `app/ops/bws_installation_admission.py`, `tests/ops/test_bws_installation_admission.py`,
 `tests/ops/test_bws_installation_transaction.py`, `tests/ops/test_bws_control_installation.py`,
+`tests/ops/bws_control_path_diagnostic_cases.py`,
 `tests/deploy/test_bws_source_rpc_assembly.py`, `docs/OPERATIONS.md`,
 the exact test-data path `tests/ops/fixtures/host_secret_contract_legacy.json`, and
-`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, with at least one transaction or Linux-deploy source changed and
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, plus exact inputset-repair cochanges to
+`scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py` and this owner document,
+with at least one transaction or Linux-deploy source changed and
 regular nonsymlink inputs. It omits only `test_dormant_ownership_initialization.py`;
 all other Ops modules and seven serial boundaries remain. Unknown cochanges retain broad
 coverage. The pre-existing native deployment-control profile below has precedence.
@@ -197,6 +200,12 @@ Subsystem labels and deferred targets remain unchanged. The full RPC file stays 
 inventory with its per-case temporary roots and disposable resource-limited subprocess; all seven
 existing serial suites still follow successful parallel work and node-evidence validation.
 Unknown production paths and shared-fixture cochanges retain normal routing.
+
+The exact synthetic diagnostic helper retains all four whole admission/lifecycle/transaction/RPC
+consumer modules. Selector-repair cochanges retain their complete governance and CI coverage.
+These paths are allowed cochanges, not additional qualifying sources or a general helper policy;
+missing or symlinked inputs fail closed. Existing bounded execution, seven serial guards,
+120-second per-test limits and the finite scoped-step limit remain in effect.
 
 With explicit baseline evidence, an additional ordinary test module can be a neutral cochange
 only when the unchanged closed BWS paths already qualify and their retained selection covers
@@ -311,9 +320,9 @@ success without executing the selected tests.
 
 ## CI wait budgets
 
-`scripts/await_pr_checks.sh` allows 90 minutes by default around the existing 75-minute unit-step
+`scripts/await_pr_checks.sh` allows 135 minutes by default around the 120-minute full unit-step
 ceiling, with the existing 180-second initial pause and 90-second REST cadence. Callers may select a
-shorter `--timeout` for a known workload. The read-only stall classifier uses 90 minutes for a running
+shorter `--timeout` for a known workload. The read-only stall classifier uses 135 minutes for a running
 `Unit tests (not pg)` check and 30 minutes for queued/other checks, unless the caller overrides the
 budget. An elapsed budget or missing timestamp calls for inspecting progress and diagnostics;
 neither establishes a hang or justifies a rerun. This fixes waiting guidance and does not speed up
@@ -361,6 +370,9 @@ effort improved before adopting further changes.
 
 ## Current Protection Surface
 
+- The exact CI contract target set includes `tests/architecture/test_module_layout.py` so changes
+  to that source-tree import guard run it instead of failing as unowned. Unknown architecture
+  siblings remain outside this exact route and mixed runtime changes retain their normal ownership.
 - The existing Companion UI browser-runtime gate also executes
   `tests/companion_ui/test_vault_browser_state_runtime.py`: populated, empty,
   partial and error lists crossed with available/unavailable identity at desktop
@@ -414,11 +426,12 @@ effort improved before adopting further changes.
   seed copies and require failure for missing/malformed metric input, failed gates and missing
   thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
   unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
-- The full and scoped non-PG unit steps both retain finite 75-minute outer ceilings. The scoped step's
+- The full and scoped non-PG unit steps retain finite outer ceilings of 120 minutes each. The scoped step's
   former 35-minute ceiling cut off #6091 / PR #6092 at 91% without a reported assertion failure
   ([job 116083429844](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38631158811/job/116083429844));
   its six selected subsystem groups run serially. Additional outer margin does not prove completion
-  or promise a speedup: current-head substantive CI must still pass. Both retain the 120-second per-test thread watchdog,
+  or promise a speedup: current-head substantive CI must still pass. Both retain the default 120-second per-test thread watchdog
+  with the one cross-surface exception described below,
   every target, marker, required check, assertion and failure handler. #6084 records two independent
   35-minute cutoffs: [#6074 job 115700746542](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38514333873/job/115700746542)
   and [#6075 job 115693481077](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38515571086/job/115693481077).
@@ -427,26 +440,31 @@ effort improved before adopting further changes.
   minutes for serial coverage at the old ceiling. Current-head #6187 run 39100438771 later proved
   that repository growth can extend the full lane's parallel phase to 51m35s (including a 45m51s
   deploy shard), after which the host-sensitive serial boundary was cancelled at the 60-minute
-  ceiling despite every parallel shard passing. The full lane's 75-minute bound restores finite
+  ceiling despite every parallel shard passing. The full lane's subsequent 75-minute bound restored finite
   serial-phase margin. The scoped lane later completed [#6222 run 39237406751](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39237406751/job/118009713887)
   in 59m05s: 38m23s of parallel work followed by 20m42s of serial coverage, leaving only 55 seconds
   below its former 60-minute ceiling. [#6224 run 39249448570](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39249448570/job/118049350845)
   passed all four parallel partitions in 40m57s, then reached that ceiling after 372 of 984 serial
-  cases passed, without a reported assertion failure. Its 75-minute bound now matches the full
-  lane's finite envelope; neither the failed run nor that larger ceiling proves completion.
+  cases passed, without a reported assertion failure. Its subsequent 75-minute bound remained finite;
+  neither the failed run nor that larger ceiling proves completion.
   [#6311 run 39865892884](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39865892884/job/120127869151)
   then passed all 131 parallel shards in 57m46s, including the deploy group's 1,473 passing cases
   in 51m18s, but again exhausted 75 minutes during serial coverage. The bounded scheduling replan
-  collects node IDs only from the measured `tests/deploy/test_deploy_channel_script.py` module and
+  collects node IDs from the measured `tests/deploy/test_deploy_channel_script.py` module and
   runs those IDs in disjoint process units under the existing four-process cap. The non-shared nodes
   are count-balanced across up to three units; the two tests that temporarily remove the checkout's
   `config/deploy/dev.previous.env` stay together in the small `deploy-node-unit-0`. The planner
-  checks that every collected node appears once. Other file and directory shards remain in the
+  checks that every collected node appears once. The later [#6519 run 41297345631](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41297345631/job/124820859611)
+  spent 3,201 seconds in `tests/deploy/test_bws_source_rpc_assembly.py` before the serial phase
+  timed out at the same outer limit. That module also uses its collected IDs, in two disjoint units
+  with adjacent pairs interleaved across the units to distribute the long test families;
+  its function-scoped protected temporary directories and disposable subprocesses isolate fixture
+  effects. Each module's plan and result logs are checked independently. Other file and directory shards remain in the
   same full-suite inventory. Collection or planning errors fail the lane before execution; node units emit verbose
   per-node results, and a post-run verifier requires one result for every planned node. Per-unit
   logs and the exact node plan are retained with the existing phase receipt.
   The host-sensitive serial boundary still starts after every parallel unit exits. This replan uses
-  the measured module's collected-node inventory and preserves the 75-minute ceiling, marker,
+  the measured module's collected-node inventory and previously preserved the 75-minute ceiling, marker,
   watchdog, and serial boundary rather than changing selector coverage or timeout margin.
   Four-process concurrency remains unchanged; host-sensitive tests still start only after all
   parallel processes exit. The earlier changes supply execution margin,
@@ -457,6 +475,20 @@ effort improved before adopting further changes.
   partial logs, and status inventory survive cancellation for the always-run artifact upload;
   normal EXIT handling adds final timings/status when the shell can execute it. Actual current-head
   CI completion remains required; the ceiling and fixture receipt alone are not runtime proof.
+  After [run 41304475133](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41304475133/job/124841942852)
+  reached the outer timeout with the operations directory still running near the end of the queue,
+  the full-suite runner schedules that unchanged directory shard immediately after the measured
+  deploy modules. Its inventory and process isolation remain unchanged. Actual
+  full-suite CI timing is still required to demonstrate that the scheduling change gives margin.
+  Because reordering can move the last finishing work item rather than leave enough serial-phase
+  time, the full-suite ceiling is temporarily 120 minutes; the default 120-second individual-test watchdog,
+  complete-coverage accounting and serial boundary remain in place. This is additional execution
+  margin, not proof of completion or a speedup; current-head full-suite CI remains required.
+  The four cases of `test_all_operation_families_share_owner_native_semantics` have a finite
+  300-second test-local watchdog: they exercise a long cross-surface operation corpus, and one
+  reached 120 seconds in [run 41314149080](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41314149080/job/124870538215)
+  after showing request progress. The MCP harness retains its separate 30-second bound per request;
+  this margin does not prove that a request cannot stall or that a future CI run will complete.
   PR #6083's scoped serial job [115940412928](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38531981018/job/115940412928)
   separately reached 93% at the old 35-minute cutoff, with one failed result whose traceback
   was lost. The scoped command keeps the exact selector arguments and adds verbose node IDs,
@@ -478,16 +510,29 @@ effort improved before adopting further changes.
   run with bounded parallelism; the bounded host-process/writer-census ops modules start only
   after every parallel process exits in a separate serial boundary. Every pytest process retains
   the PR marker expression and 120-second per-test thread watchdog; each work unit remains within
-  the unchanged 3300-second shard budget, and per-unit plus aggregate logs are retained. Any
+  the 5400-second shard budget, and per-unit plus aggregate logs are retained. Any
   failed, timed-out, missing, duplicate, incomplete, or serial-boundary failure stays red under the
   single required `Unit tests (not pg)` verdict.
   The measured `tests/deploy/test_deploy_channel_script.py` module reuses the full-suite node
   planner when more than one worker is available. Its two shared-checkout rollback tests remain
   together; its remaining collected nodes form disjoint units within the same four-process cap.
-  Other deploy files remain atomic. The runner authenticates the selected file inventory before
+  The measured source RPC assembly module likewise uses two disjoint collected-node units when
+  more than one worker is available. Other deploy files remain atomic. The runner authenticates the selected file inventory before
   expansion, rejects duplicate collected nodes, and verifies one pytest result for every planned
   node in its executing partition. Missing, duplicate, unexpected, or unrecognized node results
   fail that partition. A single-worker invocation retains file execution.
+  The later [#6522 run 41304571659](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41304571659/job/124842227894)
+  showed that count-only packing could place both source RPC units alongside native-admission nodes
+  in one pytest process; it hit the scoped timeout even though the other processes completed. The
+  runner now assigns the measured source RPC and native-admission units to different processes
+  before packing other targets. Sibling units of either module never share a process; with four
+  available processes all four long units start in different processes. This preserves the selected
+  inventory and existing bounds; an actual current-head CI result remains the timing evidence.
+  A later [#6522 run 41310399802](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41310399802)
+  reached the previous 3300-second partition limit at 99%, leaving the serial boundary unrun.
+  The 5400-second per-partition limit within a 120-minute scoped step adds finite execution margin;
+  collection and the subsequent serial boundary also consume that step budget. The added margin
+  is not a speedup or proof that an actual run completes.
   Each completed failed partition emits its diagnostic log immediately, before waiting for other
   workers or the serial boundary. The final aggregate retains every partition's log, and remaining
   parallel coverage still runs. After every parallel child exits, any failed pytest, timeout or
@@ -602,6 +647,11 @@ effort improved before adopting further changes.
 - The `episodes` owner includes `app/episode_debrief/` and selects `tests/episode_debrief` alongside its existing episode and invariant targets. The selector CLI regression covers source-only trigger/store changes and the mixed runtime/test/spec shape; a similarly named sibling directory remains unowned and refused. PostgreSQL debrief acceptance still requires its explicit disposable-database proof; selecting the module does not claim that the `not pg` lane executed it.
 - Every `builder_system` match includes `tests/architecture/test_builderops_store_boundary.py` as an exact run target, not only as an ownership prefix. Ordinary `app/builderops/**` changes must execute the audited store-access guard so new direct-store sites cannot bypass it while their own subsystem tests remain green.
 - The `outbox_worker` owner includes `app/workers/outbox_binding_gate.py` alongside the worker implementation and `tests/workers/**`; changes to the binding admission/effect-window seam must select the worker regression lane instead of falling through to the fail-closed unowned-path result.
+  Its exact test ownership and target inventory also include
+  `tests/services/test_outbox_envelope_preflight.py`, which covers the worker's
+  upgrade preflight. Direct test edits run the complete module and common CI
+  integrity checks; worker-source edits retain that regression. Similarly named
+  service-test siblings remain unowned and fail closed.
 - `app/services/companion_note.py` is an exact-file owner of `watcher_sync`, `outbox_worker` and `store_ingest`: a helper-only edit runs the existing watcher, worker and ingestion source-boundary suites plus the direct companion-note/write-guard tests. The selector regression exercises the actual CLI and verifies similarly named service files remain unowned and refused.
 - `_is_governance_only`/`_is_docs_only` tolerate a changed `tests/**` path inside `GOVERNANCE_TARGETS`/`DOCS_TARGETS` as scope-neutral so a *pure* governance-only/docs-only PR keeps resolving to that lane. Several of those tolerated directories/files are also real per-subsystem scope signal in `SUBSYSTEMS` (`tests/architecture/test_builderops_store_boundary.py` for `builder_system`, `tests/architecture/test_no_hardcoded_vault_layout.py` for `vault`, `tests/governance/`/`scripts/` for `builder_system`/`ops_deploy`, `tests/ops/` for `ops`) — on a mixed PR that also touches one of those subsystem's owned paths, the selector unions that subsystem's own targets into the governance/docs selection (`_foreign_subsystem_matches`) instead of silently narrowing to the governance/docs-only target set and dropping the other subsystem's real coverage (#4336). `subsystems` then lists every contributing subsystem (e.g. `governance,builder_system`), never just `governance`/`docs` alone, whenever this applies; `tests/scripts/test_select_pr_tests.py`'s mixed-PR cases are the executable proof.
 - The neutral `llm_contract/**` kernel and policy-neutral `app/model_access/**` facade are owned by the `model_access` selector. Changes run the direct Model Access contract/facade suite, the BuilderOps adapter/runner compatibility suites, and the exact neutral-kernel/import-boundary architecture guards.
@@ -780,6 +830,11 @@ Owner decision (verbal, 2026-10-16, recorded in #6154): heavy test sets do not r
 
 The PG acceptance source read of `app/config/database.py` is a deploy retention trigger: changes
 to this shared runtime source keep both full-suite selection and deploy coverage on the PR path.
+
+The pre-install candidate Source RPC proof copies and loads
+`app/ops/bws_installation_lifecycle.py`, `app/ops/bws_installation_transaction.py` and
+`app/ops/bws_installation_admission.py`. Each is an exact deploy-retention trigger for
+already-selected coverage, not an independent source-only subsystem owner.
 
 - `scripts/select_pr_tests.py :: HEAVY_PR_DEFERRED_TARGETS` filters heavy targets already selected by subsystem ownership or the full-suite route. It keeps a selected heavy target only when the PR changes a listed input, or a non-test file inside the target (a `conftest.py` or helper). Otherwise the selector drops it and reports it as `deferred_targets` (stdout and `GITHUB_OUTPUT`). The full-suite lane skips the deferred shard and logs `SHARD DEFERRED`. A changed test module inside a deferred directory still runs as its own changed-file target.
 - The only entry today is `tests/deploy`. Its retention triggers cover repo files it reads directly: deploy scripts and `scripts/lib/**`, compose files, requirements files, `Dockerfile`, `ops/**`, `config/deploy/**`, release-channel code (`app/release_channels/**`), and the `app/` modules it loads by path. These include copied fixture inputs, so the inventory is not an independent dependency-owner map. It took ~1497 s of PR #6134's 2287 s unit step and timed out PR #6152, because `ops_deploy` owns all of `scripts/`. A census test keeps the trigger set covering every existing repo file that `tests/deploy` references (#6155 review). The rolling channel-bug workflow (`.github/workflows/postmerge-channel-bug.yml`) and receiver (`scripts/postmerge_channel_bug.py`) are direct deploy-test inputs; the workflow also has exact `ops_deploy` ownership so a workflow-only edit selects that coverage alongside governance checks. Add a target only with a timing receipt.

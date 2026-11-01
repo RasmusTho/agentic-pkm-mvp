@@ -254,6 +254,7 @@ def _emit_default_mutation_event(receipt: DefaultVaultReceipt) -> str:
         idempotency_key=idempotency_key,
         vault_binding_id=OUTBOX_GLOBAL_BINDING_ID,
         required_db=False,
+        producer="shared.instance.default_vault",
     )
 
 

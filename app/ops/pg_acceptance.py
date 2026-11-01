@@ -131,6 +131,7 @@ NIGHTLY_SELECTORS = (
     'tests/migrations/test_outbox_schema_parity.py',
     'tests/migrations/test_multi_vault_outbox_upgrade.py',
     'tests/services/test_multi_vault_outbox_dual_key_dedup.py',
+    'tests/services/test_multi_vault_outbox_idempotency.py',
     'tests/migrations/test_yss01_source_registry_schema_parity.py::test_yss01_migration_bootstrap_parity_and_legacy_repair',
     'tests/services/test_outbox_bootstrap_assert_only.py',
     'tests/instance/test_file_state_binding_key.py',

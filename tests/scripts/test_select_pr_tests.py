@@ -438,6 +438,25 @@ def test_ci_smoke_workflow_change_selects_governance_contract_tests() -> None:
     assert "tests/deploy" not in selection.targets
 
 
+def test_module_layout_guard_has_exact_ci_owner() -> None:
+    guard = "tests/architecture/test_module_layout.py"
+    selection = select_tests([guard])
+    assert selection.unowned_paths == ()
+    assert selection.full_suite is False
+    assert guard in selection.targets
+
+    unknown = "tests/architecture/test_module_layout_extra.py"
+    assert select_tests([unknown]).unowned_paths == (unknown,)
+    assert unknown in select_tests([guard, unknown]).unowned_paths
+    mixed_unknown = select_tests([guard, "app/new_unowned_surface.py"])
+    assert "app/new_unowned_surface.py" in mixed_unknown.unowned_paths
+    mixed_owned = select_tests([guard, "app/services/vault_sync.py"])
+    assert mixed_owned.unowned_paths == ()
+    assert "vault" in mixed_owned.subsystems
+    assert guard in mixed_owned.targets
+    assert "tests/services/test_vault_sync_lifecycle.py" in mixed_owned.targets
+
+
 def test_scoped_deploy_ci_repair_shape_avoids_full_suite_self_validation() -> None:
     selection = select_tests(
         [
@@ -1197,6 +1216,53 @@ def test_outbox_worker_change_selects_worker_regressions() -> None:
     assert "tests/services/test_outbox_idempotency.py" in selection.targets
     assert "tests/events" in selection.targets
     assert "tests/workers/test_outbox_worker.py" in selection.targets
+
+
+def test_outbox_preflight_module_selects_its_complete_regression_coverage() -> None:
+    path = "tests/services/test_outbox_envelope_preflight.py"
+    selection = select_tests([path])
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert selection.subsystems == ("outbox_worker",)
+    assert path in selection.targets
+    assert set(selector.CI_INTEGRITY_TARGETS) <= set(selection.targets)
+
+    result = subprocess.run(
+        [sys.executable, "scripts/select_pr_tests.py", "--changed-file", path],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "subsystems=outbox_worker" in result.stdout
+    assert path in result.stdout
+    assert "unowned_paths=" not in result.stdout
+
+    worker_selection = select_tests(["app/workers/outbox_worker.py"])
+    assert path in worker_selection.targets
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "tests/services/test_outbox_envelope_preflight.py.backup",
+        "tests/services/test_outbox_envelope_preflight_extra.py",
+    ),
+)
+def test_outbox_preflight_mapping_keeps_unrelated_paths_refused(path: str) -> None:
+    assert select_tests([path]).unowned_paths == (path,)
+
+    result = subprocess.run(
+        [sys.executable, "scripts/select_pr_tests.py", "--changed-file", path],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert f"unowned_paths={path}" in result.stdout
 
 
 def test_outbox_embedding_events_select_shared_regressions() -> None:
@@ -3071,6 +3137,20 @@ def test_deploy_heavy_triggers_cover_scripts_referenced_by_deploy_tests() -> Non
     assert uncovered == []
 
 
+@pytest.mark.parametrize('path', [
+    'app/ops/bws_installation_admission.py',
+    'app/ops/bws_installation_lifecycle.py',
+    'app/ops/bws_installation_transaction.py',
+])
+def test_preinstall_source_rpc_module_inputs_retain_deploy_coverage(path: str) -> None:
+    assert path in selector.HEAVY_PR_DEFERRED_TARGETS['tests/deploy']
+    # Retention is not source-only subsystem ownership. Exercise the real CI
+    # helper companion route, as in this PR, that already selects deploy proof.
+    selection = select_tests([path, 'scripts/select_pr_tests.py'])
+    assert 'tests/deploy' in selection.targets
+    assert 'tests/deploy' not in selection.deferred_targets
+
+
 def test_post_merge_heavy_workflow_runs_selector_heavy_targets() -> None:
     import yaml
 
@@ -3353,7 +3433,7 @@ def test_bws_source_profile_requires_complete_regular_source_inputs(failure, mon
 
 
 @pytest.mark.parametrize("qualifying_source", sorted(selector.BWS_SOURCE_INSTALLATION_SOURCES))
-@pytest.mark.parametrize("cochange", ["admission", "rpc", "docs", "all"])
+@pytest.mark.parametrize("cochange", ["admission", "rpc", "docs", "helper", "all"])
 def test_bws_source_receipt_cochange_preserves_scoped_execution(qualifying_source, cochange, monkeypatch):
     from scripts.run_scoped_test_partitions import _serial_safe_candidates, validate_execution_units, validate_inventory
 
@@ -3368,6 +3448,7 @@ def test_bws_source_receipt_cochange_preserves_scoped_execution(qualifying_sourc
         "admission": ["app/ops/bws_installation_admission.py", "tests/ops/test_bws_installation_admission.py"],
         "rpc": ["tests/deploy/test_bws_source_rpc_assembly.py"],
         "docs": ["docs/OPERATIONS.md"],
+        "helper": ["tests/ops/bws_control_path_diagnostic_cases.py"],
     }
     changed.extend(path for name, paths in additions.items() if cochange in {name, "all"} for path in paths)
     with monkeypatch.context() as context:
@@ -3409,20 +3490,30 @@ def test_bws_source_receipt_cochange_preserves_scoped_execution(qualifying_sourc
         assert (rpc,) in candidates
         assert rpc not in serial
         assert actual.subsystems == ("ops", "ops_deploy")
+        # The real RPC fixture now reads these source modules, so both source
+        # routes truthfully retain the complete selected deploy inventory.
+        assert "tests/deploy" in actual.targets
+        assert "tests/deploy" not in actual.deferred_targets
         if qualifying_source == "app/ops/bws_installation_transaction.py":
-            assert "tests/deploy" in actual.deferred_targets
+            # Retain the no-deploy profile's reason guard as an explicitly
+            # synthetic deferred input, not a claim about today's source reads.
+            deferred = replace(actual,
+                targets=tuple(path for path in actual.targets if path != "tests/deploy"),
+                deferred_targets=("tests/deploy",))
+            assert selector.scoped_deploy_partitions(deferred)
+            assert selector.scoped_deploy_execution_units(deferred)
             for reason in (baseline.reason, actual.reason + " unrelated"):
-                unqualified = replace(actual, reason=reason)
+                unqualified = replace(deferred, reason=reason)
                 assert selector.scoped_deploy_partitions(unqualified) == ()
                 assert selector.scoped_deploy_execution_units(unqualified) == ()
-        else:
-            assert "tests/deploy" in actual.targets
 
 
 @pytest.mark.parametrize("failure", [
-    "no-source", "unknown-source", "unknown-test", "shared-fixture",
+    "no-source", "unknown-source", "unknown-test", "unknown-helper", "shared-fixture",
     "missing-admission", "symlink-admission", "missing-test", "symlink-test",
     "missing-rpc", "symlink-rpc", "missing-doc", "symlink-doc",
+    "missing-helper", "symlink-helper", "missing-selector", "symlink-selector",
+    "missing-selector-test", "symlink-selector-test", "missing-owner-doc", "symlink-owner-doc",
 ])
 def test_bws_source_receipt_cochange_fails_closed(failure, monkeypatch):
     guarded = {
@@ -3430,14 +3521,19 @@ def test_bws_source_receipt_cochange_fails_closed(failure, monkeypatch):
         "test": "tests/ops/test_bws_installation_admission.py",
         "rpc": "tests/deploy/test_bws_source_rpc_assembly.py",
         "doc": "docs/OPERATIONS.md",
+        "helper": "tests/ops/bws_control_path_diagnostic_cases.py",
+        "selector": "scripts/select_pr_tests.py",
+        "selector-test": "tests/scripts/test_select_pr_tests.py",
+        "owner-doc": "docs/development/TEST_STRATEGY_HOT_PATH.md",
     }
     changed = ["app/ops/bws_installation_transaction.py", *guarded.values()]
     if failure == "no-source":
         changed = changed[1:]
-    elif failure in {"unknown-source", "unknown-test", "shared-fixture"}:
+    elif failure in {"unknown-source", "unknown-test", "unknown-helper", "shared-fixture"}:
         extra = {
             "unknown-source": "app/ops/bws_new_diagnostics.py",
             "unknown-test": "tests/ops/test_bws_new_diagnostics.py",
+            "unknown-helper": "tests/ops/bws_other_diagnostic_cases.py",
             "shared-fixture": "tests/conftest.py",
         }[failure]
         changed.append(extra)
@@ -3454,8 +3550,112 @@ def test_bws_source_receipt_cochange_fails_closed(failure, monkeypatch):
         context.setattr(selector, "_bws_source_installation_selection", lambda selection, paths: selection)
         baseline = select_tests(changed)
     assert select_tests(changed) == baseline
-    assert selector.scoped_deploy_partitions(baseline) == ()
-    assert selector.scoped_deploy_execution_units(baseline) == ()
+    assert not baseline.reason.endswith("; BWS source installation scope")
+    if "tests/deploy" in baseline.targets:
+        # Retention can use the generic deploy runner, but must not omit any
+        # ops module. The old deferred profile must still reject this input.
+        from dataclasses import replace
+
+        assert "tests/ops" in baseline.targets
+        deferred = replace(baseline,
+            targets=tuple(path for path in baseline.targets if path != "tests/deploy"),
+            deferred_targets=("tests/deploy",))
+    else:
+        deferred = baseline
+    assert selector.scoped_deploy_partitions(deferred) == ()
+    assert selector.scoped_deploy_execution_units(deferred) == ()
+
+
+def test_bws_retained_deploy_fallback_preserves_complete_serial_inventory():
+    from scripts.run_scoped_test_partitions import _serial_safe_candidates, validate_execution_units, validate_inventory
+
+    selection = select_tests([
+        "app/ops/bws_installation_transaction.py", "app/ops/bws_installation_admission.py",
+        "tests/deploy/test_bws_source_rpc_assembly.py", "tests/api/test_status_api.py",
+    ])
+    assert not selection.reason.endswith("; BWS source installation scope")
+    assert "tests/deploy" in selection.targets and "tests/ops" in selection.targets
+    assert "tests/api/test_status_api.py" in selection.targets
+    partitions = selector.scoped_deploy_partitions(selection)
+    units = selector.scoped_deploy_execution_units(selection)
+    assert validate_inventory([list(part) for part in partitions], list(selection.targets)) == partitions
+    assert validate_execution_units([list(unit) for unit in units], list(selection.targets)) == units
+    boundary = selector.SCOPED_DEPLOY_SERIAL_BOUNDARY
+    assert len(boundary) == 8
+    assert "tests/ops/test_dormant_ownership_initialization.py" in boundary
+    candidates, serial = _serial_safe_candidates(tuple(path for unit in units for path in unit), boundary)
+    assert serial == boundary
+    assert any(candidate[0] == "tests/ops" for candidate in candidates)
+    assert not set(boundary).intersection(candidate[0] for candidate in candidates)
+    assert all(f"--ignore={path}" in next(candidate for candidate in candidates
+               if candidate[0] == "tests/ops") for path in boundary)
+
+
+def test_bws_diagnostic_ci_repair_preserves_complete_scoped_inventory(monkeypatch):
+    from scripts.run_scoped_test_partitions import _serial_safe_candidates, validate_execution_units, validate_inventory
+
+    changed = [
+        "app/ops/bws_installation_transaction.py", "app/ops/bws_installation_admission.py",
+        "app/ops/bws_installation_lifecycle.py", "tests/ops/test_bws_control_installation.py",
+        "tests/ops/test_bws_installation_admission.py", "tests/ops/test_bws_installation_lifecycle.py",
+        "tests/ops/test_bws_installation_transaction.py", "tests/ops/bws_control_path_diagnostic_cases.py",
+        "tests/deploy/test_bws_source_rpc_assembly.py", "scripts/select_pr_tests.py",
+        "tests/scripts/test_select_pr_tests.py", "docs/development/TEST_STRATEGY_HOT_PATH.md",
+        "docs/OPERATIONS.md", "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+    ]
+    with monkeypatch.context() as context:
+        context.setattr(selector, "_bws_source_installation_selection", lambda selection, paths: selection)
+        baseline = select_tests(changed)
+    actual = select_tests(changed)
+    dormant = "tests/ops/test_dormant_ownership_initialization.py"
+    expected = tuple(dict.fromkeys(
+        item for target in baseline.targets
+        for item in (selector._ops_test_files() if target == "tests/ops" else (target,))
+        if item != dormant
+    ))
+    assert actual.targets == expected
+    assert actual.subsystems == baseline.subsystems == ("governance", "ops", "ops_deploy")
+    assert actual.deferred_targets == baseline.deferred_targets
+    assert actual.reason.endswith("; BWS source installation scope")
+    assert "tests/governance" in actual.targets and "tests/scripts" in actual.targets
+    consumers = {
+        "tests/ops/test_bws_installation_admission.py", "tests/ops/test_bws_installation_lifecycle.py",
+        "tests/ops/test_bws_installation_transaction.py", "tests/deploy/test_bws_source_rpc_assembly.py",
+    }
+    assert consumers <= set(actual.targets)
+    partitions = selector.scoped_deploy_partitions(actual)
+    units = selector.scoped_deploy_execution_units(actual)
+    assert partitions and 0 < len(units) <= selector.SCOPED_EXECUTION_MAX_WORK_UNITS == 4
+    assert validate_inventory([list(part) for part in partitions], list(actual.targets)) == partitions
+    assert validate_execution_units([list(unit) for unit in units], list(actual.targets)) == units
+    serial = tuple(path for path in selector.SCOPED_DEPLOY_SERIAL_BOUNDARY if path != dormant)
+    assert len(serial) == 7
+    assert "tests/deploy" in actual.targets and "tests/deploy" not in actual.deferred_targets
+    candidates, boundary = _serial_safe_candidates(tuple(target for unit in units for target in unit), serial)
+    assert boundary == serial
+    assert not set(serial).intersection(target for candidate in candidates for target in candidate)
+    assert ("tests/deploy/test_bws_source_rpc_assembly.py",) in candidates
+    assert selector.requires_runtime_checks(changed)
+
+
+def test_bws_diagnostic_helper_complete_consumer_inventory():
+    helper = Path("tests/ops/bws_control_path_diagnostic_cases.py")
+    module = "tests.ops." + helper.stem
+    consumers = set()
+    for path in Path("tests").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if helper.stem not in source:
+            continue
+        if any(
+            isinstance(node, ast.ImportFrom) and node.module == module
+            or isinstance(node, ast.Constant) and node.value == module
+            for node in ast.walk(ast.parse(source))
+        ):
+            consumers.add(str(path))
+    assert consumers == {
+        "tests/ops/test_bws_installation_admission.py", "tests/ops/test_bws_installation_lifecycle.py",
+        "tests/ops/test_bws_installation_transaction.py", "tests/deploy/test_bws_source_rpc_assembly.py",
+    }
 
 
 def test_ops_only_shared_configuration_keeps_broad_execution():
@@ -3524,7 +3724,8 @@ def test_bws_existing_neutral_test_cochange(monkeypatch):
     effective = _effective_targets(flat)
     assert 'tests/scripts' in effective and BWS_NEUTRAL_PROBE not in effective
     boundary = tuple(path for path in selector.SCOPED_DEPLOY_SERIAL_BOUNDARY if path != dormant)
-    assert len(boundary) == 7 and units[-1] == boundary
+    assert len(boundary) == 7
+    assert 'tests/deploy' in actual.targets and 'tests/deploy' not in actual.deferred_targets
     candidates, serial = _serial_safe_candidates(flat, boundary)
     assert serial == boundary
     assert ('tests/deploy/test_bws_source_rpc_assembly.py',) in candidates
@@ -3559,8 +3760,14 @@ def test_bws_neutral_cochange_refusals(failure, monkeypatch):
             'config': 'tests/scripts/pytest.ini',
             'dormant': 'tests/ops/test_dormant_ownership_initialization.py',
             'unknown-prod': 'app/ops/new_bws_neutral.py',
-            'self-enrollment': 'tests/deploy/test_ci_image_build.py',
+            'self-enrollment': 'tests/api/test_status_api.py',
         }[failure]
+        if failure == 'self-enrollment':
+            # Deploy is now genuinely covered by the core source reads. Keep
+            # this negative fixture outside that independently selected cone.
+            retained = select_tests(BWS_RECEIPT_CHANGES)
+            assert not any(extra == target or extra.startswith(target + '/')
+                           for target in retained.targets)
         changed[-1] = extra
         original = Path.is_file
         monkeypatch.setattr(Path, 'is_file', lambda path: str(path) == extra or original(path))
@@ -3647,4 +3854,9 @@ def test_bws_cli_baseline_evidence(evidence, tmp_path, monkeypatch):
                               else ['diff-base...HEAD'])
     assert fields['full_suite'] == ('true' if evidence == 'unknown-diff' else 'false')
     assert fields['reason'].endswith('; BWS source installation scope') == (evidence in {'existing', 'moving-refs'})
-    assert bool(json.loads(fields['scoped_execution_units_json'])) == (evidence in {'existing', 'moving-refs'})
+    # Missing baseline proof still refuses the BWS omission. The now-retained
+    # deploy target independently permits complete generic scoped execution.
+    assert bool(json.loads(fields['scoped_execution_units_json'])) == (evidence != 'unknown-diff')
+    if evidence not in {'existing', 'moving-refs', 'unknown-diff'}:
+        assert 'tests/ops' in fields['pytest_args'].split()
+        assert 'tests/deploy' in fields['pytest_args'].split()

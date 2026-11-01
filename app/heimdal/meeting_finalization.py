@@ -675,6 +675,7 @@ def _emit_finalized_event(
                         str(payload.get("finalization_state", "")),
                     ),
                     vault_binding_id=vault_binding_id,
+                    producer="heimdal.meeting.finalized",
                 )
                 emitted = True
             except Exception as exc:

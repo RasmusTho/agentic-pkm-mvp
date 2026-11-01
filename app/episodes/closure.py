@@ -340,6 +340,7 @@ def close_episode(
         event,
         idempotency_key=idempotency_key,
         required_db=True,
+        producer="shared.episodes.closed",
     )
     _sync_projection_closed(candidate.episode_id)
     return EpisodeCloseResult(episode_id=candidate.episode_id, event_emitted=bool(inserted_id))

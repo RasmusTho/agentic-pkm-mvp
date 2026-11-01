@@ -166,7 +166,11 @@ def emit_settings_write_receipt(
             envelope.event_id,
             EVENT_ID_FINGERPRINT,
         )
-        write_outbox_event(envelope, idempotency_key=idempotency_key)
+        write_outbox_event(
+            envelope,
+            idempotency_key=idempotency_key,
+            producer="shared.settings.write_receipt",
+        )
     except Exception:
         logger.debug("settings.write.receipt db outbox write skipped/failed", exc_info=True)
 

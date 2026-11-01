@@ -166,7 +166,7 @@ def test_fixture_day_full_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         closure_module,
         "write_outbox_event",
-        lambda event, *, idempotency_key, required_db=False: (
+        lambda event, *, idempotency_key, required_db=False, producer=None: (
             emitted.append((event, idempotency_key, required_db)) or idempotency_key
         ),
     )

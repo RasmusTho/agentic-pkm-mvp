@@ -21,11 +21,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.select_pr_tests import PR_MARKER_EXPRESSION
 from scripts.plan_full_suite_node_shards import (
-    MEASURED_NODE_MODULES, NATIVE_ADMISSION_MODULE, TARGET_MODULE, plan_node_units, verify_node_results,
+    MEASURED_NODE_MODULES, NATIVE_ADMISSION_MODULE, SOURCE_RPC_MODULE, TARGET_MODULE,
+    plan_node_units, verify_node_results,
 )
 
 MAX_PARTITIONS = 4
-MAX_SHARD_TIMEOUT_SECONDS = 3300
+MAX_SHARD_TIMEOUT_SECONDS = 5400
 PROCESS_GROUP_GRACE_SECONDS = 1.0
 COLLECTION_TIMEOUT_SECONDS = 300
 
@@ -368,8 +369,8 @@ def _expand_and_balance_parallel(
             deploy_units: list[tuple[str, ...]] = []
             for file_path in files:
                 file_nodes = tuple(node for node in nodes if _target_file(node) == file_path)
-                if file_path == TARGET_MODULE and file_nodes and jobs > 1:
-                    units = plan_node_units(file_nodes, TARGET_MODULE, max_workers=jobs)
+                if file_path in (TARGET_MODULE, SOURCE_RPC_MODULE) and file_nodes and jobs > 1:
+                    units = plan_node_units(file_nodes, file_path, max_workers=jobs)
                     deploy_units.extend(units)
                     for unit in units:
                         node_weight[unit[0]] = len(unit)
@@ -411,7 +412,30 @@ def _expand_and_balance_parallel(
         positional = next(target for target in candidate if not target.startswith("-"))
         return node_weight.get(positional, 1)
 
-    for candidate in sorted(expanded, key=lambda item: (-candidate_weight(item), item)):
+    def heavy_module(candidate: tuple[str, ...]) -> str | None:
+        first = next(target for target in candidate if not target.startswith("-"))
+        return next((module for module in (SOURCE_RPC_MODULE, NATIVE_ADMISSION_MODULE)
+                     if first.startswith(module + "::")), None)
+
+    # Keep the measured long modules' independently planned units in separate
+    # pytest processes. Packing solely by case count can put both halves, or
+    # two distinct long halves, back into one long partition.
+    heavy = [candidate for candidate in expanded if heavy_module(candidate) is not None]
+    other = [candidate for candidate in expanded if heavy_module(candidate) is None]
+    assigned_modules: list[set[str]] = [set() for _ in buckets]
+    for candidate in sorted(heavy, key=lambda item: (-candidate_weight(item), item)):
+        module = heavy_module(candidate)
+        if module is None:
+            raise ValueError("measured node unit lost its module identity")
+        eligible = [index for index in range(len(buckets)) if module not in assigned_modules[index]]
+        if not eligible:
+            raise ValueError("measured node units cannot be assigned to distinct processes")
+        index = min(eligible, key=lambda item: (bool(buckets[item]), weights[item], item))
+        buckets[index].extend(candidate)
+        weights[index] += candidate_weight(candidate)
+        assigned_modules[index].add(module)
+
+    for candidate in sorted(other, key=lambda item: (-candidate_weight(item), item)):
         index = min(range(len(buckets)), key=lambda item: (weights[item], item))
         buckets[index].extend(candidate)
         weights[index] += candidate_weight(candidate)

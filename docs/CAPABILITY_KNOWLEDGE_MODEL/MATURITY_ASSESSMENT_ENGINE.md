@@ -15,6 +15,16 @@ can_parallelize_with: [Semantic Evidence Association]
 
 Compute the load-bearing output of the CKM: an explainable maturity assessment per capability. Explainability is the whole design (NFR-1): the vector is the judgment; any scalar is a labeled convenience.
 
+## Consumer and Decision-Use Boundary
+
+This task defines the CKM-07 calculation. The accepted post-MVP policy for exposing and using
+structured measurements lives in [CKM Measurement & Access](../CKM_MEASUREMENT_AND_ACCESS/README.md):
+an aggregate may appear only as `human_advisory_only`, alongside the vector, citations, freshness,
+confidence, evidence composition, limitations, and Goodhart warnings. It must not appear alone or
+drive machine ranking, gating, prioritization, agent scoring, automation, or action. Missing,
+unassessed, unsupported, and measured-zero values remain distinct. This consumer policy does not
+change the seven CKM-07 dimensions or their calculation.
+
 ## What This Task Does
 
 - Implements `app/builderops/ckm/assess.py` computing, per capability, seven dimension scores in [0,1] from capability-specific evidence edges — **pure transparent functions over edge counts/kinds/polarity, no LLM**. A shared SBS boundary is only a linker candidate pool: it never causes sibling capabilities to inherit the same evidence. Functional source evidence requires an exact capability-selected source citation; incidental imports in a cited test are not evidence. The assessment layer does not use capability names or planned maturity labels as hidden priors.

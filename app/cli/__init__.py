@@ -771,6 +771,7 @@ def pipe(source: str, as_json: bool, trace_id: Optional[str]) -> None:
                     str(normalize_res["object_id"]),
                     payload_fingerprint(db_payload),
                 ),
+                producer="ingest.cli.pipe",
             )
         except Exception as exc:
             click.echo(f"WARNING: pipe DB outbox emit failed: {exc}", err=True)

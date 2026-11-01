@@ -36,6 +36,13 @@ except ImportError:
     instance_default_vault_router = None
 
 try:
+    from app.api.routes.instance_background_bindings import (
+        router as instance_background_bindings_router,
+    )
+except ImportError:
+    instance_background_bindings_router = None
+
+try:
     from app.api.routes.active_context_selection import (
         router as active_context_selection_router,
     )
@@ -424,6 +431,8 @@ def _create_app() -> FastAPI:
         application.include_router(companion_router, prefix="/api")
     if instance_default_vault_router is not None:
         application.include_router(instance_default_vault_router, prefix="/api")
+    if instance_background_bindings_router is not None:
+        application.include_router(instance_background_bindings_router, prefix="/api")
     if active_context_selection_router is not None:
         application.include_router(active_context_selection_router, prefix="/api")
     if vault_dimensions_router is not None:

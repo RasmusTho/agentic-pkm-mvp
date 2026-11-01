@@ -64,6 +64,52 @@ longer use `legacy-compatibility-binding`; that value remains readable only for 
 the scalar schema. Definitionally vault-independent work uses the explicit `explicitly-global`
 binding identity. The quarantine identity is evidence-only and never authorizes emission.
 
+### Binding/context envelope (MVR-05D, shipped)
+
+Every DB-outbox row is written by the one choke point,
+`app/services/outbox.py::write_outbox_event`, with the versioned binding/context envelope
+`mvr05.outbox-envelope.v1` in the serialized event `meta`. No call site can write a row without
+it:
+
+- `meta.outbox_envelope` — the envelope version, `mvr05.outbox-envelope.v1`.
+- `meta.routing_class` — `vault_bound` for work owned by one stable vault binding, or `global`
+  for definitionally vault-independent work (`explicitly-global` binding; no vault is invented).
+- `meta.vault_binding_id` — the stable binding, equal to the row's `vault_binding_id` column. A
+  vault-bound row resolved through a live binding runtime also carries `binding_authority`,
+  `binding_authorization_epoch`, `binding_revision`, and `vault_root`. Binding facts copied from a
+  re-emitted source event are discarded and re-derived; they never survive into a new row.
+- `meta.producer_context` — the producer context identity captured at emission:
+  `{kind, context_id, context_generation}`. A stored row never changes it; a worker re-emission
+  (retry, dead-letter, consumer signal) is a new emission and records the worker's own context. `active_context` carries the request
+  `ActiveContextSet` id and generation for an emission inside a governed write window
+  (`app/instance/context_bound_write.py::context_bound_write_window`); such an emission may only
+  route to that window's one target binding and otherwise fails before insert.
+  `binding_runtime` marks a background or compatibility producer resolved through the live scalar
+  binding runtime, `global` marks global work, and `no_binding_runtime` marks a process without
+  instance binding authority (unit/non-runtime environments only).
+- `meta.idempotency` — `{legacy_key, binding_scoped_key}`: the unchanged producer key (also the
+  `legacy_key` column) and the row `id` derived from `(topic, vault_binding_id, legacy_key)`.
+- `meta.outbox_producer` — the registered producer id of the emitting call site.
+
+Producers are a closed, registered set. `app/services/outbox_producers.py::PRODUCERS` enumerates
+every production call site of `write_outbox_event` / `insert_object_and_outbox` (watcher, API,
+ingest, capture, Heimdal, shared services, and worker re-emissions) with its family and routing
+class: `vault_bound`, `global`, or `inherited` for worker retry/dead-letter/consumer-signal
+re-emissions that keep their source row's stored binding. Each call site passes its literal
+`producer=` id. An unknown id fails loud, and an emission whose resolved binding contradicts its
+registered routing class is refused before insert.
+`tests/architecture/test_multi_vault_context_boundaries.py::test_vault_bound_outbox_producers_cannot_emit_legacy_envelopes`
+fails on an unregistered call site, an id registered for another location, a stale registry
+entry, or a seam alias that would hide a call site.
+
+Compatibility posture: existing single-binding producers that omit `vault_binding_id` keep the
+MVR-05A choke-point translation to the live scalar binding and now stamp the complete envelope. A
+producer that knows its own binding passes it explicitly (for example an `ObjectStore` opened for
+one binding, the Heimdal meeting finalizer, and the episode-debrief trigger). Producers that read
+their own committed row back match the producer `legacy_key` under any non-quarantine binding
+instead of the retired compatibility marker. Multi-binding background lifecycles remain MVR-06
+work; this contract does not remove the compatibility translator.
+
 Notes:
 
 - Producers MAY add additional top-level fields for compatibility or convenience; consumers MUST ignore unknown fields (see `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`).
@@ -107,6 +153,11 @@ path.
   fail-safe collision evidence. New scoped rows do not collide merely because two bindings share a
   `legacy_key`. The fixed `OUTBOX_IDEMPOTENCY_NAMESPACE` is not rotated; both derivations use its
   existing literal promise, and no stored key is rewritten.
+- Vault-bound idempotency is binding-keyed (MVR-05D): the same logical identity emitted in two
+  bindings persists as two independent rows, while a same-binding retry (pending or delivered)
+  deduplicates to the existing row. Both keys are recorded in `meta.idempotency`, and the row `id`
+  always equals `meta.idempotency.binding_scoped_key`. PostgreSQL proof:
+  `tests/services/test_multi_vault_outbox_idempotency.py::test_duplicate_identity_events_are_deduplicated_per_binding`.
 - Per-topic fingerprints are chosen deliberately: vault-sync and watcher ingest events key on
   `(topic, object uuid/path, content fingerprint + observation marker)`, where the observation
   marker is the observed file stat mtime (vault-sync passes it as a fingerprint-only component; the
@@ -211,6 +262,30 @@ Current consumer expectations:
   pending while a later explicitly-global row stays eligible and the heartbeat reports
   `blocked_pending_mvr06`; revocation/rotation takes the
   corresponding exclusive lease and therefore cannot cross an in-flight effect window.
+- Since MVR-05D every vault-bound producer writes the versioned envelope, so the worker consumes a
+  live-binding row only when it carries the complete `mvr05.outbox-envelope.v1` envelope:
+  `routing_class=vault_bound`, a `binding_runtime` or `active_context` producer context, and
+  `meta.idempotency` keys equal to the row's `id` and `legacy_key`. The durable poll and the
+  deferred-row count apply the same predicate in PostgreSQL, and the worker re-checks it under the
+  shared binding lease. A legacy-shaped, corrupt, mismatched, or ambiguous row keeps the MVR-05A
+  fail-closed treatment: it stays pending and unacknowledged, counts toward
+  `blocked_pending_mvr06`, and never blocks later `explicitly-global` work. Pre-MVR-05D rows that
+  carry only the MVR-05A binding stamp are in this class. Rollout precondition (fail-loud):
+  before its first poll, the worker (`app/workers/outbox_worker.py::run`) calls
+  `app/services/outbox_envelope_preflight.py::require_upgrade_drained` with its live binding stamp
+  and refuses to start while any pending row on that binding still matches the live 05A stamp but
+  lacks the envelope, i.e. work the previous image could deliver and this one never will. Rows the
+  previous worker could not deliver either (stale or foreign stamps), compatibility, global, and
+  quarantined rows are not counted, so they never wedge activation. The remedy is to run the
+  previous image until its worker drains those rows, then redeploy; the check is read-only and never
+  rewrites or acknowledges a row. Residual window: deploys without a migration do not stop old
+  producers before the new worker starts, so a row an old producer writes after that check stays
+  pending (fail-closed) and the next worker start refuses until it is drained, which also holds
+  `explicitly-global` delivery until rollback-drain-redeploy (KD-A42F26A9AD87). A transient failure to
+  evaluate the gate is logged and does not refuse activation.
+  `python -m app.services.outbox_envelope_preflight` evaluates the same gate as an operator probe.
+  Scalar-era rows migrated to
+  `legacy-compatibility-binding` keep their MVR-05A consume-time translation.
 - Worker handlers propagate `trace_id` from the event envelope or payload into downstream spans and
   emitted retry events.
 - Consumer idempotency is keyed by `event_id`; duplicate event ids are skipped without replaying

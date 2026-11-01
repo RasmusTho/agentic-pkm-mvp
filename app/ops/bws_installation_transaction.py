@@ -126,6 +126,92 @@ _ROOT_CONTROL_REFINEMENT_GATES = frozenset(
     "old_kernel_" + stage + "_root_control__" + "__".join(context)
     for stage in ("initial", "empty_control") for context in _ROOT_CONTROL_REFINEMENTS
 )
+# The later retained-PATH vocabulary is initial-only. Do not cross-product it
+# into the legacy initial/empty-control discovery vocabulary above.
+_PATH_SLOT_GUARDS = (
+    "path_population", "non_path_hint", "hint_bound", "path_absolute", "path_backslash",
+    "path_nul", "path_canonical", "component_bound", "misleading_hint", "slot_absent",
+    "duplicate_components",
+)
+_PATH_DIRECTORY_GUARDS = (
+    "directory_fstat_unknown", "directory_type", "directory_mode", "directory_owner",
+    "directory_inheritable_unknown", "directory_inheritable",
+)
+_PATH_FILE_GUARDS = (
+    "file_fstat_unknown", "file_type", "file_link", "file_owner", "file_mode",
+    "file_size_positive", "file_size_bound", "file_inheritable_unknown", "file_inheritable",
+    "file_access_unknown", "file_access",
+)
+_PATH_MOUNT_GUARDS = (
+    "mount_platform", "mount_libc_unknown", "mount_buffer_unknown", "mount_statx_unknown",
+    "mount_statx", "mount_unpack_unknown", "mount_mask", "mount_identity",
+)
+_PATH_DIRECTORY_ROLES = (
+    "ancestor", "control_root", "application_root", "launcher_root", "backup_root",
+    "effect_parent", "selected_parent", "slot_descent", "slot_census",
+)
+_INITIAL_PATH_CONTEXTS = (
+    (("path_environment",), ("unknown",), ("loaded_slots",), _PATH_SLOT_GUARDS),
+    (("path_selected",), ("unknown",), ("parsed_slots",), _PATH_SLOT_GUARDS),
+    (("path_environment",), ("unknown",), ("path_hints",), ("environment_files",)),
+    (("path_environment",), ("old", "proposed"), ("path_hints",), ("launcher_hint",)),
+    (("path_environment",), ("unknown",), ("binding",), ("branch_changed",)),
+    (("path_absent", "path_selected"), ("unknown",), ("config_footprint",),
+     ("population", "application", "launcher_parent", "construction_unknown")),
+    (("path_absent", "path_selected"), ("unknown",), ("binding",),
+     ("construction_unknown", "slots_changed", "selection_changed")),
+    (("path_selected",), ("unknown",), ("binding",), ("loaded_assignment",)),
+    (("path_absent", "path_selected"), ("unknown",), _PATH_DIRECTORY_ROLES,
+     _PATH_DIRECTORY_GUARDS + _PATH_MOUNT_GUARDS
+     + ("directory_absolute", "directory_component_bound", "directory_canonical",
+        "descriptor_bound", "open_unknown", "mount_crossing")),
+    (("path_absent", "path_selected"), ("unknown",),
+     ("retained_directory", "current_directory", "fresh_directory"),
+     _PATH_DIRECTORY_GUARDS + _PATH_MOUNT_GUARDS),
+    (("path_selected",), ("unknown",),
+     ("selected_input", "content_input", "retained_input", "current_input", "fresh_input"),
+     _PATH_FILE_GUARDS + _PATH_MOUNT_GUARDS),
+    (("path_absent", "path_selected"), ("unknown",), ("retained",), ("retained_version",)),
+    (("path_absent", "path_selected"), ("unknown",), ("footprint",),
+     ("tuple_type", "population", "member_mapping")),
+    (("path_absent", "path_selected"), ("unknown",), ("roots",),
+     ("equal", "below", "above", "recorded_identity")),
+    (("path_absent", "path_selected"), ("unknown",),
+     ("roots_application_control", "roots_launcher_control", "roots_launcher_application",
+      "roots_backup_control", "roots_backup_application", "roots_backup_launcher"), ("below",)),
+    (("path_absent", "path_selected"), ("unknown",), ("effect_parents",),
+     ("tuple_type", "empty", "bound", "member_type", "duplicate", "outside_effect")),
+    (("path_selected",), ("unknown",), ("selected_parent",),
+     ("equal", "below", "above", "identity_alias")),
+    (("path_selected",), ("unknown",), ("selected_file",),
+     ("descriptor_bound", "open_unknown", "mount_crossing", "identity_alias", "aggregate_size")),
+    (("path_selected",), ("unknown",), ("selected_content",),
+     ("pread_unknown", "returned_length", "post_read_version", "grammar", "assignment_disagreement")),
+    (("path_absent", "path_selected"), ("unknown",), ("loader_app", "loader_scripts"),
+     ("stat_unknown", "present")),
+    (("path_absent", "path_selected"), ("unknown",), ("slot_descent",),
+     ("stat_unknown", "not_directory")),
+    (("path_absent", "path_selected"), ("unknown",), ("slot_census",),
+     ("before_fstat_unknown", "scandir_open_unknown", "scandir_iteration_unknown",
+      "scandir_exit_unknown", "entry_stat_unknown", "entry_bound", "entry_owner",
+      "entry_mode", "entry_type", "entry_executable", "entry_link", "after_fstat_unknown",
+      "directory_time_drift")),
+    (("path_absent", "path_selected"), ("unknown",), ("absent_edge",), ("stat_unknown", "appeared")),
+    (("path_absent", "path_selected"), ("unknown",), ("current_edge",),
+     ("stat_unknown", "held_version", "edge_identity")),
+    (("path_absent", "path_selected"), ("unknown",), ("fresh_edge",), ("open_unknown", "version")),
+    (("path_absent", "path_selected"), ("unknown",), ("snapshot",), ("disagreement",)),
+    (("path_absent", "path_selected"), ("unknown",), ("walk",), ("unexpected_unknown",)),
+)
+_INITIAL_PATH_REFINEMENTS = frozenset(
+    (mode, side, role, guard)
+    for modes, sides, roles, guards in _INITIAL_PATH_CONTEXTS
+    for mode in modes for side in sides for role in roles for guard in guards
+)
+_ROOT_CONTROL_REFINEMENT_GATES |= frozenset(
+    "old_kernel_initial_root_control__" + "__".join(context)
+    for context in _INITIAL_PATH_REFINEMENTS
+)
 # Source symbols only. Value cases are existing unit-property predicates;
 # launcher/process/cleanup/root semantic refusals retain their own families.
 _UNIT_PROPERTY_VALUE_SITES = frozenset(
@@ -163,6 +249,9 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "channel_owner_check",
     "caller_census",
     "current_writer_snapshot",
+    "source_pull_unresolved",
+    "source_pull_complete_before_backup",
+    "source_pull_not_started",
     "authority_cutover",
     "candidate_verification",
     "old_disk_state",
@@ -1894,11 +1983,7 @@ def _verify_candidate_checkout(root: Path, revision: str) -> None:
         _refuse()
 
 
-def _verify_candidate(candidate_root: Path, request: dict[str, str]) -> None:
-    from app.ops.pg_acceptance import IMAGE_REPOSITORY
-    from app.ops.bws_installation_lifecycle import ENV as _LIFECYCLE_ENV
-    from app.ops.postgres_deploy_linux import _command
-
+def _verify_candidate_git(candidate_root: Path, request: dict[str, str]) -> None:
     try:
         if not isinstance(candidate_root, Path) or not candidate_root.is_absolute():
             _refuse()
@@ -1919,6 +2004,16 @@ def _verify_candidate(candidate_root: Path, request: dict[str, str]) -> None:
                    and isinstance(node.value, ast.Constant) and node.value.value == 1
                    for node in protocol.body):
             _refuse()
+    except Exception:
+        _refuse()
+
+
+def _verify_candidate_image(request: dict[str, str]) -> None:
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+    from app.ops.bws_installation_lifecycle import ENV as _LIFECYCLE_ENV
+    from app.ops.postgres_deploy_linux import _command
+
+    try:
         image_ref = IMAGE_REPOSITORY + "@" + request["image_digest"]
         rows = json.loads(_command(
             ["docker", "--host", "unix:///var/run/docker.sock", "image", "inspect", image_ref],
@@ -1931,6 +2026,11 @@ def _verify_candidate(candidate_root: Path, request: dict[str, str]) -> None:
             _refuse()
     except Exception:
         _refuse()
+
+
+def _verify_candidate(candidate_root: Path, request: dict[str, str]) -> None:
+    _verify_candidate_git(candidate_root, request)
+    _verify_candidate_image(request)
 
 
 def _require_writer_snapshot(value: object, request: dict[str, str]) -> _WriterSnapshot:
@@ -2331,6 +2431,8 @@ class _NativePorts:
         self._caller_profile_sent = False
         self._caller_source_modules: list[dict[str, object]] | None = None
         self._verified_candidate_sha: str | None = None
+        self._source_image_pull_required = False
+        self._source_image_prepared = False
         self.early_refusal_sources_bound = False
         caller_root = getattr(sys, "_yggdrasil_bws_candidate_checkout", None)
         self.caller_root = Path(caller_root) if type(caller_root) is str else None
@@ -2353,6 +2455,7 @@ class _NativePorts:
             channel, mode="exclusive", operation_id=request["operation_id"],
             candidate_sha=request["candidate_sha"], image_digest=request["image_digest"],
             bundle_name=request["bundle_name"], caller_checkout=self.caller_root,
+            image_pull=self._source_image_pull_required,
         )
 
     def verify_caller_checkout(self, request: dict[str, str]) -> None:
@@ -2366,8 +2469,29 @@ class _NativePorts:
         self.verify_caller_checkout(request)
         if self.caller_root is None:
             _refuse()
-        _verify_candidate(self.caller_root, request)
+        if self._source_image_prepared:
+            _verify_candidate_git(self.caller_root, request)
+        else:
+            _verify_candidate(self.caller_root, request)
         self._verified_candidate_sha = request["candidate_sha"]
+
+    def preflight_source_image(self, request: dict[str, str]) -> None:
+        """Keep the existing cached path working; reject unavailable pull guard early."""
+        if self.caller_root is None:
+            _refuse()
+        _verify_candidate_git(self.caller_root, request)
+        try:
+            _verify_candidate_image(request)
+        except Exception:
+            from app.ops.bws_source_image_cache import require_capacity_guard
+            require_capacity_guard()
+            self._source_image_pull_required = True
+
+    def prepare_source_image(self, owner: Any, request: dict[str, str]) -> None:
+        if self._source_image_pull_required:
+            from app.ops.bws_source_image_cache import prepare_image
+            prepare_image(owner, request["candidate_sha"], request["image_digest"])
+            self._source_image_prepared = True
 
     def verify_caller_sources(self, request: dict[str, str]) -> None:
         """Bind already imported caller modules to the exact candidate before any backup write."""
@@ -2522,6 +2646,9 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
     verify_checkout = getattr(ports, "verify_caller_checkout", None)
     if callable(verify_checkout):
         verify_checkout(request)
+    preflight_source_image = getattr(ports, "preflight_source_image", None)
+    if callable(preflight_source_image):
+        preflight_source_image(request)
     config = ports.configuration(channel)
     if config.channel != channel:
         _refuse()
@@ -2551,6 +2678,9 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
     prebackup_gate = "channel_lock_entry"
 
     with ports.admission(channel, request) as admission:
+        prepare_source_image = getattr(ports, "prepare_source_image", None)
+        if callable(prepare_source_image):
+            prepare_source_image(admission, request)
         def publish_terminal_receipt() -> None:
             nonlocal terminal_receipt_attempted, terminal_receipt_published
             if receipt is None:
@@ -2661,7 +2791,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                             if (subgate == "root_control" and type(refinement) is tuple
                                     and len(refinement) == 4
                                     and all(type(value) is str for value in refinement)
-                                    and refinement in _ROOT_CONTROL_REFINEMENTS):
+                                    and refinement in (_ROOT_CONTROL_REFINEMENTS | _INITIAL_PATH_REFINEMENTS)):
                                 refined = classified + "__" + "__".join(refinement)
                                 if refined in _PREBACKUP_REFUSAL_GATES:
                                     refusal_gate = refined
@@ -3030,4 +3160,10 @@ def reconcile_source_installation(channel: str, request: object) -> dict[str, ob
             if terminal:
                 effects.retire_reconciled_channel_lock(handle, expected_owner=expected_owner)
 
-    return reconcile_installation_operation(channel, request, retire=close_transaction_lock)
+    def prove_before_backup(_owner: dict[str, object]) -> None:
+        config = LinuxConfig.load(channel)
+        if config.channel != channel or LinuxEffects(config).channel_lock_owner() is not None:
+            raise RuntimeError("bws_source_installation_recovery_refused")
+
+    return reconcile_installation_operation(channel, request, retire=close_transaction_lock,
+                                            prove_before_backup=prove_before_backup)

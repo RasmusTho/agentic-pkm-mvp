@@ -880,6 +880,7 @@ def _persist_disposition_authority_receipt(
                         EVENT_ID_FINGERPRINT,
                     ),
                     required_db=backend == "pg" or bool(db_url),
+                    producer="shared.eval.disposition_receipt",
                 )
                 emitted = emitted or bool(stored_id)
             except Exception:

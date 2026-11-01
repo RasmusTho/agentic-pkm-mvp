@@ -8,6 +8,7 @@ from urllib.parse import quote
 import pytest
 
 from tests._production_batch_harness import batch_command, production_batch_host
+from tests.operations import _surface_harness
 from tests.operations._surface_harness import ExternalMcpClient, SurfaceCalls, companion_http, direct, runtime_http
 
 pytestmark = pytest.mark.usefixtures('product_model_access_gateway')
@@ -22,6 +23,25 @@ def _command(host, kind, request_id, arguments=None, targets=None):
         arguments=arguments or {})
 
 
+def test_cross_surface_watchdog_preserves_request_limit(monkeypatch):
+    marks = getattr(test_all_operation_families_share_owner_native_semantics, 'pytestmark', [])
+    assert [mark.args for mark in marks if mark.name == 'timeout'] == [(300,)]
+
+    waits = []
+
+    class NeverCompletes:
+        def result(self, timeout):
+            waits.append(timeout)
+            raise TimeoutError('request did not complete')
+
+    monkeypatch.setattr(_surface_harness, 'Future', NeverCompletes)
+    client = ExternalMcpClient('http://127.0.0.1', {})
+    with pytest.raises(TimeoutError, match='request did not complete'):
+        client._request('call', 'example', {})
+    assert waits == [30]
+
+
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize('initiator', ['direct', 'http', 'companion', 'mcp'])
 def test_all_operation_families_share_owner_native_semantics(tmp_path, monkeypatch, initiator):
     host, sources = production_batch_host(tmp_path, monkeypatch)

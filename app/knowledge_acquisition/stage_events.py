@@ -198,7 +198,13 @@ def emit_stage_completed(
     # contract forbids that: `acquire.py` calls require_configured_database_url()
     # precisely so an acquisition cannot land without a lineage trail. A supplied
     # connection still bypasses the policy and owns its transaction.
-    return write_outbox_event(event, conn=conn, idempotency_key=key, required_db=True)
+    return write_outbox_event(
+        event,
+        conn=conn,
+        idempotency_key=key,
+        required_db=True,
+        producer="ingest.knowledge_acquisition.stage_completed",
+    )
 
 
 def emit_stage_dead_letter(
@@ -257,7 +263,13 @@ def emit_stage_dead_letter(
     # contract forbids that: `acquire.py` calls require_configured_database_url()
     # precisely so an acquisition cannot land without a lineage trail. A supplied
     # connection still bypasses the policy and owns its transaction.
-    return write_outbox_event(event, conn=conn, idempotency_key=key, required_db=True)
+    return write_outbox_event(
+        event,
+        conn=conn,
+        idempotency_key=key,
+        required_db=True,
+        producer="ingest.knowledge_acquisition.stage_dead_letter",
+    )
 
 
 @dataclass(frozen=True)

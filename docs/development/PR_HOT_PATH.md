@@ -216,7 +216,7 @@ Classifier output is advisory coordination evidence only:
 - `wait`: pending checks are still within the bounded threshold; keep waiting with the REST/backoff
   path.
 - `stalled`: a pending check exceeded its wait budget or lacks timing evidence; inspect job progress
-  and diagnostics. Defaults are 90 minutes for the running required unit gate and 30 minutes for
+  and diagnostics. Defaults are 135 minutes for the running required unit gate and 30 minutes for
   queued/other checks; an explicit caller threshold overrides both. Elapsed age alone justifies
   neither a rerun nor a terminal CI-pending handoff;
   apply `GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss` before suspending delivery.

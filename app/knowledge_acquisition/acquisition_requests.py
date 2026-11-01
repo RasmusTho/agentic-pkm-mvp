@@ -1544,7 +1544,12 @@ class AcquisitionRequests:
         self, topic: str, payload: dict[str, Any], *, key: str, trace_id: str | None, conn: Any
     ) -> None:
         event = new_event(event_type=topic, payload=payload, trace_id=trace_id, source=EVENT_SOURCE)
-        write_outbox_event(event, conn=conn, idempotency_key=key)
+        write_outbox_event(
+            event,
+            conn=conn,
+            idempotency_key=key,
+            producer="ingest.knowledge_acquisition.request",
+        )
 
 
 # --- Drain adapter ------------------------------------------------------------
