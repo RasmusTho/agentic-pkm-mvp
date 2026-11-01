@@ -393,6 +393,10 @@ operation, original private native request/PG acceptance, actual running API/UI 
 immutable image, baked Git resources and exact executing producer bytes. It separately checks the
 installed sidecar, official SDK, Python runtime, Playwright and browser resource hashes against
 that candidate. Core-flow capture activation or web resource inventory alone cannot qualify it.
+The browser probe reads Playwright's installation dry-run metadata for the headless-shell payload
+provisioned by the native bootstrap, then hashes its unique installed executable. The journey
+rechecks and explicitly launches that exact executable. Missing, ambiguous, symlinked or foreign
+payloads refuse; qualification never downloads, installs or starts a browser.
 
 The existing instance registry must already contain one initialized, isolated binding whose
 `native-operations-acceptance.v1` extension declares only its native `operation_id`. This declaration

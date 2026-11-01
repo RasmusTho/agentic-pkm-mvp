@@ -52,13 +52,30 @@ print(json.dumps({'distribution':d.metadata['Name'],'version':d.version,'files':
  'platform':sys.platform,'machine':platform.machine(),'abi':sysconfig.get_config_var('SOABI')}}))
 '''
 BROWSER_PROBE = r'''
-import hashlib,importlib.metadata as m,json,pathlib
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
- executable=pathlib.Path(p.chromium.executable_path)
- if executable.is_symlink() or not executable.is_file() or executable.stat().st_size>1024**3: raise ValueError('native browser unavailable')
- with executable.open('rb') as stream: measured=hashlib.file_digest(stream,'sha256').hexdigest()
- print(json.dumps({'playwright':m.version('playwright'),'executable':str(executable),'executable_sha256':measured}))
+import hashlib,importlib.metadata as m,json,os,pathlib,re,subprocess,sys
+# Ask the installed Playwright CLI for the same payload the native bootstrap
+# provisions. Dry-run neither downloads nor installs, and starts no browser.
+metadata=subprocess.run([sys.executable,'-I','-m','playwright','install','--dry-run','--only-shell','chromium'],
+ capture_output=True,text=True,check=True,timeout=20).stdout
+if len(metadata)>2*1024**2: raise ValueError('native browser metadata unavailable')
+locations=[pathlib.Path(value.strip()) for value in re.findall(r'(?m)^[ \t]*Install location:[ \t]+([^\n]+)$',metadata)]
+shells=[path for path in locations if re.fullmatch(r'chromium_headless_shell-[0-9]+',path.name)]
+if len(shells)!=1: raise ValueError('native browser payload ambiguous')
+root=shells[0]
+if root.parent!=pathlib.Path(os.environ['PLAYWRIGHT_BROWSERS_PATH']) or root.is_symlink() or not root.is_dir():
+ raise ValueError('native browser payload unavailable')
+executables=[]
+for count,path in enumerate(root.rglob('*')):
+ if count>=10000: raise ValueError('native browser resource budget exceeded')
+ if path.name in {'headless_shell','chrome-headless-shell'} and (path.is_file() or path.is_symlink()):
+  executables.append(path)
+if len(executables)!=1: raise ValueError('native browser executable ambiguous')
+executable=executables[0]
+if any(path.is_symlink() for path in (executable,*executable.parents) if path==root or root in path.parents):
+ raise ValueError('native browser unavailable')
+if not executable.is_file() or executable.stat().st_size>1024**3: raise ValueError('native browser unavailable')
+with executable.open('rb') as stream: measured=hashlib.file_digest(stream,'sha256').hexdigest()
+print(json.dumps({'playwright':m.version('playwright'),'executable':str(executable),'executable_sha256':measured}))
 '''
 
 
