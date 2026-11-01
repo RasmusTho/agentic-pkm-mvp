@@ -857,7 +857,7 @@ jobs:
         # tests/deploy in 45m51s, before the serial boundary hit the 60m ceiling.
         # Run 39865892884 then passed all 131 parallel shards but exhausted
         # this 75m bound during serial coverage; its deploy group took 51m18s.
-        # Split the measured deploy module by collected node IDs under the existing four-worker cap.
+        # Split the two measured deploy modules by collected node IDs under the existing four-worker cap.
         # The 120-second per-test timeout still catches individual hangs.
         timeout-minutes: 75
         env:
@@ -875,7 +875,7 @@ jobs:
           # fixtures intentionally retain process-global state. Run each
           # deploy module, other directory, or root-level module in its own
           # process with bounded concurrency. Split only the measured long
-          # deploy module by collected node IDs; its two shared-checkout pin
+          # deploy modules by collected node IDs; the channel module's shared-checkout pin
           # tests remain together in one process. Run the host/FD boundary only
           # after every parallel process has exited.
           marker='not pg and not alpha_llm and not alpha_llm_live and not panel_llm_e2e and not eval and not browser_runtime and not human_uat and not uat_integrated_runtime'
@@ -937,12 +937,14 @@ jobs:
               fi
               printf '%s\n' "$shard"
             done |
-            # Start the measured long deploy module with the first workers,
+            # Start the measured long deploy modules with the first workers,
             # retaining every other discovered path in deterministic order.
             awk '
               $0 == "tests/deploy/test_deploy_channel_script.py" { first = $0; next }
+              $0 == "tests/deploy/test_bws_source_rpc_assembly.py" { source_rpc = $0; next }
               { remaining[++count] = $0 }
               END {
+                if (source_rpc != "") print source_rpc
                 if (first != "") print first
                 for (i = 1; i <= count; i++) print remaining[i]
               }
@@ -976,10 +978,37 @@ jobs:
             fi
           fi
 
+          source_rpc_module='tests/deploy/test_bws_source_rpc_assembly.py'
+          source_rpc_dir="$shard_root/source-rpc-node-units"
+          source_rpc_ready=0
+          if grep -Fxq "$source_rpc_module" "$shard_list"; then
+            collection_log="$shard_root/source-rpc-node-collection.log"
+            set +e
+            python -m pytest --collect-only -q -m "$marker" "$source_rpc_module" \
+              --ignore=tests/invariants/test_vault_multiwriter.py > "$collection_log" 2>&1
+            collection_status=$?
+            set -e
+            if (( collection_status == 0 )); then
+              python3 scripts/plan_full_suite_node_shards.py \
+                --collected-output "$collection_log" --target "$source_rpc_module" \
+                --output-dir "$source_rpc_dir" --max-workers 4
+              source_rpc_ready=1
+            elif (( collection_status == 5 )) && \
+              grep -Eq 'no tests ran|[0-9]+ deselected' "$collection_log"; then
+              echo "Source RPC collection selected no tests; retaining file-level deselection handling." >&2
+            else
+              echo "Source RPC node collection failed ($collection_status): $source_rpc_module" >&2
+              cat "$collection_log" >&2
+              exit 1
+            fi
+          fi
+
           execution_list="$shard_root/work-items"
           : > "$execution_list"
           while IFS= read -r shard; do
-            if [[ "$shard" == "$deploy_node_module" ]] && (( node_plan_ready )); then
+            if [[ "$shard" == "$source_rpc_module" ]] && (( source_rpc_ready )); then
+              cat "$source_rpc_dir/work-items" >> "$execution_list"
+            elif [[ "$shard" == "$deploy_node_module" ]] && (( node_plan_ready )); then
               cat "$deploy_node_work_items" >> "$execution_list"
             else
               printf '%s\n' "$shard" >> "$execution_list"
@@ -992,15 +1021,21 @@ jobs:
             exit 1
           fi
 
-          export marker log_dir status_file deploy_node_dir node_plan_ready
+          export marker log_dir status_file deploy_node_dir node_plan_ready source_rpc_dir source_rpc_ready
           set +e
           xargs -r -n 1 -P 4 bash -c '
             work_item="$1"
             safe="${work_item//\//_}"
             log="$log_dir/$safe.log"
             pytest_targets=("$work_item")
-            if [[ "$work_item" == deploy-node-unit-* ]]; then
-              if [[ "${node_plan_ready:-0}" != 1 ]]; then
+            if [[ "$work_item" == deploy-node-unit-* || "$work_item" == source-rpc-node-unit-* ]]; then
+              unit_dir="$deploy_node_dir"
+              plan_ready="${node_plan_ready:-0}"
+              if [[ "$work_item" == source-rpc-node-unit-* ]]; then
+                unit_dir="$source_rpc_dir"
+                plan_ready="${source_rpc_ready:-0}"
+              fi
+              if [[ "$plan_ready" != 1 ]]; then
                 echo "Missing authenticated node plan for $work_item" > "$log"
                 printf "1 %s\n" "$work_item" >> "$status_file"
                 exit 0
@@ -1009,7 +1044,7 @@ jobs:
               pytest_targets=()
               while IFS= read -r node_target; do
                 [[ -n "$node_target" ]] && pytest_targets+=("$node_target")
-              done < "$deploy_node_dir/$work_item.targets"
+              done < "$unit_dir/$work_item.targets"
               if (( ${#pytest_targets[@]} == 0 )); then
                 echo "Empty collected-node work unit: $work_item" > "$log"
                 printf "1 %s\n" "$work_item" >> "$status_file"
@@ -1055,6 +1090,13 @@ jobs:
           if (( node_plan_ready )) && (( failed == 0 )); then
             if ! python3 scripts/plan_full_suite_node_shards.py \
               --verify-coverage "$deploy_node_dir/coverage.json" \
+              --logs-dir "$log_dir"; then
+              failed=1
+            fi
+          fi
+          if (( source_rpc_ready )) && (( failed == 0 )); then
+            if ! python3 scripts/plan_full_suite_node_shards.py \
+              --verify-coverage "$source_rpc_dir/coverage.json" \
               --logs-dir "$log_dir"; then
               failed=1
             fi

@@ -731,6 +731,110 @@ retained host and native attempts, including legacy UNKNOWN operations and sourc
 attempts whose image was cached before native admission. Do not infer an empty protection set from
 missing native evidence. The mandatory restoration and capacity-proof contract is tracked in #6521.
 
+#### Planned complete DEV/TEST image retention and capacity admission
+
+**Target contract, not installed behavior.** The change in
+[#6520](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6520) pauses automatic removal
+only after its source is installed. Preserve that pause until the producer, inventory and
+capacity changes below are delivered and the separate DEV and TEST adoption proof passes.
+This plan does not establish installed source, a successful deployment, the outcome of an old
+operation, or permission to remove any current image.
+
+The present deployment path has several distinct authorities:
+
+- The host's `HostSecretOperation` journal records operation, kind, target and lifecycle stage,
+  but an older deployment entry does not itself bind a complete image plan or digest.
+  `deploy_from_host` holds the existing host controller lock while sending the plan; loss of
+  the reply is not evidence that the native receiver did nothing.
+- The native `DeployJournal` retains per-operation requests and, where admitted, UNKNOWN
+  tombstones containing a validated plan and fingerprint. Source installation uses its separate
+  source-installation owner and receipt namespace. The source transaction's `_verify_candidate`
+  **inspects** an already cached image; it does not perform the preceding cache pull.
+- `scripts/deploy_channel.sh::pull_channel_images` performs the ordinary Compose pull after
+  candidate and previous-pin handling. Native activation also sees all Docker containers and
+  the existing current, previous and migration pins. The current optional reclamation census
+  does not prove the complete retained-operation set.
+- An operator-controlled source-recovery carrier has also pulled an immutable public image
+  directly before its Source RPC ([source-attempt evidence](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6170#issuecomment-6490153505)).
+  That observed carrier is session-owned, not a checked-in
+  deployment producer. Its history cannot be reconstructed from absence of a native receipt.
+  Replace that route with a supported repository-owned producer before relying on complete
+  accounting; do not promote a transient carrier into a second source of authority.
+
+The supported producer must fsync an immutable, value-free binding of operation ID, channel,
+revision, official repository, index digest and qualified Docker store into the existing durable
+operation authority **before** the first cache-affecting pull or remote dispatch. The admitted
+native request and source-installation owner/receipt must match that binding. A changed binding,
+including two digests for the same source SHA, is not the same request. A source pull that
+fails, loses transport or has no native receipt retains its binding and its uncertainty; it is
+never automatically replayed. The migration must identify the actual supported callers and
+account for the previously used operator-controlled path, rather than assuming all earlier
+pulls entered a native journal.
+
+For old host-only or pre-admission UNKNOWN operations without a bound digest, authenticate and
+retain the original operation-bound request or other existing owner evidence if it exists. Record
+any resulting compatibility evidence through the existing authority without rewriting historical
+outcomes. If the original digest cannot be proved, its possible image set is unbounded: automatic
+deletion remains disabled on the affected store, or on every possible store if its store binding
+is also unknown. A list of images currently present is not proof that a missing unknown
+digest cannot be pulled later. This restriction is separate from a replay fence, which can prevent
+replay without determining the old outcome.
+
+The future reclaimer must identify each actual Docker daemon and data-root store, then construct
+a complete protection snapshot for all channels and writers that really share that store. DEV
+and TEST have been observed on separate guests with separate local Docker daemons; do not infer
+a shared Docker store from their potentially shared underlying Proxmox thin pool. For each
+store, include all retained host/native operation bindings and source attempts, native requests
+and tombstones, source owners and receipts, admitted candidate, current/previous and
+pending-migration pins, rollback references and every running, stopped or created container.
+It must authenticate provenance, prove inventory completeness, retain same-SHA/different-digest
+identities and bind the snapshot to the daemon and lock generation. Existing shared source
+reservations exclude a source installer taking the exclusive reservation, but shared reservations
+alone do **not** exclude another ordinary caller. The implementation must coordinate every
+participating writer in a fixed lock order or use an equivalent fenced snapshot through each
+removal. A pre-pull-to-Source handoff may release a lock only after the intent is durable and
+visible to the reclaimer; it must not deadlock by recursively taking the installer's lock.
+
+Missing, malformed, partial, unauthenticated, changing or cross-channel-inconsistent evidence,
+an unaccounted producer, a changed store or an unknown lock state yields a finite skipped result
+and no removal. Once the complete snapshot is proved, the positive path may remove no more than
+eight exact, unused official image IDs in one pass, each by non-force `--no-prune`, with a fresh
+protection and image-identity check under the same fence. A tag alone, a different-repository
+alias or a stale inventory is insufficient. No volume, application, database, vault, pin or
+retained receipt is a cleanup target. The normal deployment must continue when optional cleanup
+is safely skipped; a real pull or deployment error remains a failure.
+
+Capacity admission is a separate precondition for each governed pre-pull and deployment pull.
+Qualify the actual Docker data-root, each affected root or tmpfs filesystem, any shared
+underlying storage pool and the writers sharing each resource. Bind its byte and inode floors,
+pool data/metadata limits, and a finite upper bound on the effect's incremental demand. Preserve each
+channel's explicitly configured, qualified policy; do not apply DEV's observed 30-GiB operational
+margin as an implicit TEST default. A free-space sample alone is not a reservation. Participating
+DEV/TEST writers must use a common enforceable reservation, quota or equivalent capacity
+mechanism and release only their own reservation after a terminal result; prove how concurrent
+writers and failures preserve the configured headroom. If the store, budget, policy, reservation
+or participating-writer coverage is unknown, refuse that cache effect before dispatch and report
+an actionable finite reason. Unmanaged external writers cannot be made safe by a repository
+snapshot; detect or exclude them through the actual host enforcement boundary and report the
+residual limitation. Operators retain a documented path to add capacity or make an explicitly
+qualified, exact-image recovery without deleting retained evidence.
+
+The ordered implementation and acceptance work is:
+
+1. [#6523](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6523) — bind and retain exact
+   source-preparation and host deployment identities before pull or dispatch, including legacy
+   compatibility and the cutover of the external pre-pull producer.
+2. [#6524](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6524) — use a complete,
+   cross-channel retained-operation snapshot to restore bounded exact-ID reclamation after
+   #6523 and the temporary #6520 fix are delivered.
+3. [#6525](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6525) — enforce qualified
+   bytes/inodes and concurrent-writer capacity admission after #6523 provides the supported
+   producer. Every supported pull path must adopt the resulting guard.
+4. [#6526](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6526) — qualify the exact
+   candidate and digest, demonstrate positive and refusal cases on DEV and TEST, verify protected
+   images and service health, and record operation-bound adoption evidence before retiring the
+   pause. Current-head unit tests or a health response alone are not this acceptance.
+
 `app.ops.pg_acceptance_runner` creates an operation/channel-owned pgvector container with a
 network-none namespace and tmpfs database storage. The test container shares only that namespace;
 PostgreSQL is loopback-only, with no published port or route to persistent channel resources. The
