@@ -181,7 +181,7 @@ The exact synthetic diagnostic helper retains all four whole admission/lifecycle
 consumer modules. Selector-repair cochanges retain their complete governance and CI coverage.
 These paths are allowed cochanges, not additional qualifying sources or a general helper policy;
 missing or symlinked inputs fail closed. Existing bounded execution, seven serial guards,
-120-second per-test limits and the 75-minute scoped-step limit remain unchanged.
+120-second per-test limits and the finite scoped-step limit remain in effect.
 
 With explicit baseline evidence, an additional ordinary test module can be a neutral cochange
 only when the unchanged closed BWS paths already qualify and their retained selection covers
@@ -402,7 +402,7 @@ effort improved before adopting further changes.
   seed copies and require failure for missing/malformed metric input, failed gates and missing
   thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
   unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
-- The full and scoped non-PG unit steps retain finite outer ceilings of 120 and 75 minutes respectively. The scoped step's
+- The full and scoped non-PG unit steps retain finite outer ceilings of 120 minutes each. The scoped step's
   former 35-minute ceiling cut off #6091 / PR #6092 at 91% without a reported assertion failure
   ([job 116083429844](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38631158811/job/116083429844));
   its six selected subsystem groups run serially. Additional outer margin does not prove completion
@@ -420,7 +420,7 @@ effort improved before adopting further changes.
   in 59m05s: 38m23s of parallel work followed by 20m42s of serial coverage, leaving only 55 seconds
   below its former 60-minute ceiling. [#6224 run 39249448570](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39249448570/job/118049350845)
   passed all four parallel partitions in 40m57s, then reached that ceiling after 372 of 984 serial
-  cases passed, without a reported assertion failure. Its 75-minute bound remains finite;
+  cases passed, without a reported assertion failure. Its subsequent 75-minute bound remained finite;
   neither the failed run nor that larger ceiling proves completion.
   [#6311 run 39865892884](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39865892884/job/120127869151)
   then passed all 131 parallel shards in 57m46s, including the deploy group's 1,473 passing cases
@@ -480,7 +480,7 @@ effort improved before adopting further changes.
   run with bounded parallelism; the bounded host-process/writer-census ops modules start only
   after every parallel process exits in a separate serial boundary. Every pytest process retains
   the PR marker expression and 120-second per-test thread watchdog; each work unit remains within
-  the unchanged 3300-second shard budget, and per-unit plus aggregate logs are retained. Any
+  the 5400-second shard budget, and per-unit plus aggregate logs are retained. Any
   failed, timed-out, missing, duplicate, incomplete, or serial-boundary failure stays red under the
   single required `Unit tests (not pg)` verdict.
   The measured `tests/deploy/test_deploy_channel_script.py` module reuses the full-suite node
@@ -498,6 +498,11 @@ effort improved before adopting further changes.
   before packing other targets. Sibling units of either module never share a process; with four
   available processes all four long units start in different processes. This preserves the selected
   inventory and existing bounds; an actual current-head CI result remains the timing evidence.
+  A later [#6522 run 41310399802](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41310399802)
+  reached the previous 3300-second partition limit at 99%, leaving the serial boundary unrun.
+  The 5400-second per-partition limit within a 120-minute scoped step adds finite execution margin;
+  collection and the subsequent serial boundary also consume that step budget. The added margin
+  is not a speedup or proof that an actual run completes.
   Each completed failed partition emits its diagnostic log immediately, before waiting for other
   workers or the serial boundary. The final aggregate retains every partition's log, and remaining
   parallel coverage still runs. After every parallel child exits, any failed pytest, timeout or
