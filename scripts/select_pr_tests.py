@@ -193,6 +193,9 @@ CI_CONTRACT_TARGETS = (
     "tests/architecture/test_ci_smoke_contract.py",
     "tests/architecture/test_companion_ui_sys_path.py",
     "tests/architecture/test_import_boundary.py",
+    # This architecture guard scans the checked-out source tree; its direct
+    # test-only changes need an exact CI owner and must execute the guard.
+    "tests/architecture/test_module_layout.py",
     "tests/architecture/test_pr_hot_path_governance.py",
     "tests/architecture/test_pr_test_selection.py",
     "tests/architecture/test_requirements_consistency.py",
@@ -2291,6 +2294,20 @@ def select_tests(changed_files: list[str], *, baseline: str | None = None) -> Se
             FULL_SUITE_REASONS[2],
             unowned_runtime_code,
         )
+
+    # This exact guard is CI-owned; it must not make an otherwise unowned
+    # architecture sibling appear owned merely by accompanying it.
+    if "tests/architecture/test_module_layout.py" in paths:
+        unowned_architecture = tuple(
+            path for path in paths
+            if path.startswith("tests/architecture/")
+            and not any(
+                _subsystem_owns_path(path, name, prefixes)
+                for name, prefixes, _targets in SUBSYSTEMS
+            )
+        )
+        if unowned_architecture:
+            return Selection(False, ("unowned",), (), FULL_SUITE_REASONS[2], unowned_architecture)
 
     ci_contract_only = _is_ci_contract_only(paths)
     pr_intake_contract_only = _is_pr_intake_contract_only(paths)
