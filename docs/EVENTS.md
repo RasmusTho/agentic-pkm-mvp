@@ -983,6 +983,28 @@ Interpretation:
   registry revision only, never a content-root path, vault name, filesystem identity,
   or any other raw binding payload.
 
+### `instance.background_intent.changed`
+
+Idempotent wake-up hint for one durable background-intent revision (MVR-06B, #3864).
+Producer: `app/instance/background_supervisor.py::emit_background_intent_event`, called after
+the registry generation that committed the revision: the compatibility bridge handoff, a
+post-handoff compatibility picker/default rebind, a governed background add/remove, the MVR-06
+channel-transfer repair hook, or a production registration removal.
+
+Payload (registered schema `schemas/events/instance.background_intent.changed.v1.schema.json`):
+- `event_version` (`integer`, always `1`)
+- `intent_revision` (`integer`) — the durable intent revision announced
+- `registry_revision` (`integer`) — the registry generation that committed it
+- `mode` (`compatibility` | `explicit`)
+- `vault_binding_ids` (`string[]`, at most one in MVR-06B) — the bindings the supervisor runs
+- `reason` — which producer committed the revision
+
+Interpretation:
+- lineage only — no `_dispatch_topic` branch; the supervisor reconciles the durable registry
+  revision and auth epoch, so a lost or duplicated hint never changes truth,
+- the idempotency key is derived from the intent revision,
+- **redaction is part of the contract**: binding identity and revisions only.
+
 ### `index.embedding.requested`
 
 Requests that the indexer compute and upsert an embedding for an existing object.

@@ -229,6 +229,27 @@ Fields returned under `authority_spine`:
 All values are bounded status strings; no raw state, path, secret, token, or traceback is exposed. The sanitization gate in `_sanitize_health_value()` applies to `authority_spine` exactly as it does to every other health field.
 
 The `write_guard` field reflects the current cached `HealthContract` state without evaluating the WriteGuard or running the full health contract diagnostics. It transitions to `blocked` whenever the runtime enters a `safe_mode` or `unhealthy` state (see `app/health_contract.py:WRITE_BLOCKED_STATES`).
+## Runtime health
+
+### Background lifecycle supervisor (shipped, MVR-06B / #3864)
+
+`BackgroundLifecycleSupervisor.health()` (`app/instance/background_supervisor.py`) is the
+truthful health projection of the singleton/explicit-empty background supervisor in each
+watcher/worker/settings process. It reports one entry per supervised lifecycle with
+`binding_id`, `generation`, `status`, `intent_revision`, `registry_revision`, `auth_epoch`,
+`context_id`, `capability_digest`, and `failure` — never a host path or binding payload.
+
+| `status` | Meaning |
+| --- | --- |
+| `running` | The durable singleton binding is registered, not sealed, owned by this channel's active ledger lease for its canonical root, and authorized by GOV under the current background-role auth epoch. |
+| `idle` | Durable explicit-empty or compatibility no-vault intent. Healthy and truthful; the worker reports `no_vault` instead of polling. Never a silent fallback to the default. |
+| `failed` | Loud failure with a bounded reason: binding unregistered, `draining_removal` or `reactivating` (sealed until its rebuild receipt), ownership lease missing/pending/foreign/changed, or authorization revoked/stale. A failed binding never masquerades as healthy and never redirects to another binding. |
+
+A new durable intent revision, binding revision, or auth epoch rotates the lifecycle into the
+next `generation` after draining in-flight shared effects; a reactivated binding stays `failed`
+(degraded) until its rebuild receipt clears the reservation. MVR-06B does not report or start
+more than one binding; zero/one/many health is MVR-06C/06D.
+
 <!-- SECTION:HEALTH:END -->
 
 ## Outbox and dead-letter signals

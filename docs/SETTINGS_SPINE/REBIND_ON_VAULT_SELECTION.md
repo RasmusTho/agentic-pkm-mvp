@@ -80,6 +80,24 @@ Those substrate and registry responsibilities are owned by MVR-01:
   handoff window is stranded.
 - Makes `ingest_binding` report binding, schema, phase, desired/applied revision, and failure posture
   truthfully. Display-only fields in `runtime/settings/instance.yaml` never decide a binding.
+- **Bridge retirement (shipped, MVR-06B / #3864).** The MVR-06B compatibility bridge handoff
+  (`background-supervisor-handoff`) retires this record as the watcher *binding authority* in one
+  atomic registry generation: the live candidate becomes durable background intent
+  `compatibility_binding_id` and the `backgroundSupervisor` receipt names `settings_rebind.v1` as
+  the retired bridge. The record itself, its watcher reconciler, and its SETTINGS-01 reload stay
+  the one production two-phase drain/rebind journal; nothing forks it. After the handoff:
+  - a compatibility-mode picker choose/open or MVR-02 default set/clear still runs this exact
+    prepare → watcher quiescent ack → commit → post-commit old-root drain → resume → reload
+    transaction, and its commit also writes the next background-intent revision (provenance
+    `compatibility_handoff` or `compatibility_default`) in the same generation, so the
+    supervisor never resolves, reloads, or effects the candidate before commit; pre-commit
+    failure resumes the old binding, post-commit failure rolls forward from durable phase and
+    revision truth even when every wake-up hint is lost;
+  - governed background add/remove, production registration removal, and the MVR-06 channel
+    transfer hook drive the same journal toward the new running binding without moving picker
+    history;
+  - once intent is `explicit`, picker choose/open is foreground selection only and default
+    changes never rebind the watcher.
 
 ## Concretely
 

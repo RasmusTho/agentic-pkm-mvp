@@ -305,7 +305,11 @@ background intent (`docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md`).
   `backgroundIntent`. The wrapper always passes `--bootstrap-kind existing-install`; channel and
   native bootstrap are operator-run invocations of the same command with `--bootstrap-kind
   channel|native` (no wrapper wires them yet). Without the opt-in the wrapper runs nothing new and
-  the channel stays at MVR-05.
+  the channel stays at MVR-05. **MVR-06B (#3864):** immediately after the cutover, in the same
+  stopped window, the wrapper runs `background-supervisor-handoff`, which retires the #3163 picker
+  bridge into the singleton/explicit-empty background supervisor in one registry generation
+  (idempotent once complete; a failure leaves the bridge authoritative and keeps the window
+  stopped for repair).
 - **Operator preflight.** Before opting in: the MVR-03 principal must exist (run the
   `MVR03_PRINCIPAL_CUTOVER=1` deployment first); the MVR-05 floor must be recorded; and, per
   KD-A42F26A9AD87 from #3862, the outbox must be drained or its writers stopped before any DEV/TEST
