@@ -412,7 +412,30 @@ def _expand_and_balance_parallel(
         positional = next(target for target in candidate if not target.startswith("-"))
         return node_weight.get(positional, 1)
 
-    for candidate in sorted(expanded, key=lambda item: (-candidate_weight(item), item)):
+    def heavy_module(candidate: tuple[str, ...]) -> str | None:
+        first = next(target for target in candidate if not target.startswith("-"))
+        return next((module for module in (SOURCE_RPC_MODULE, NATIVE_ADMISSION_MODULE)
+                     if first.startswith(module + "::")), None)
+
+    # Keep the measured long modules' independently planned units in separate
+    # pytest processes. Packing solely by case count can put both halves, or
+    # two distinct long halves, back into one 3300-second partition.
+    heavy = [candidate for candidate in expanded if heavy_module(candidate) is not None]
+    other = [candidate for candidate in expanded if heavy_module(candidate) is None]
+    assigned_modules: list[set[str]] = [set() for _ in buckets]
+    for candidate in sorted(heavy, key=lambda item: (-candidate_weight(item), item)):
+        module = heavy_module(candidate)
+        if module is None:
+            raise ValueError("measured node unit lost its module identity")
+        eligible = [index for index in range(len(buckets)) if module not in assigned_modules[index]]
+        if not eligible:
+            raise ValueError("measured node units cannot be assigned to distinct processes")
+        index = min(eligible, key=lambda item: (bool(buckets[item]), weights[item], item))
+        buckets[index].extend(candidate)
+        weights[index] += candidate_weight(candidate)
+        assigned_modules[index].add(module)
+
+    for candidate in sorted(other, key=lambda item: (-candidate_weight(item), item)):
         index = min(range(len(buckets)), key=lambda item: (weights[item], item))
         buckets[index].extend(candidate)
         weights[index] += candidate_weight(candidate)

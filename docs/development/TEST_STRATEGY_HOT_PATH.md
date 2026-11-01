@@ -479,6 +479,13 @@ effort improved before adopting further changes.
   expansion, rejects duplicate collected nodes, and verifies one pytest result for every planned
   node in its executing partition. Missing, duplicate, unexpected, or unrecognized node results
   fail that partition. A single-worker invocation retains file execution.
+  The later [#6522 run 41304571659](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41304571659/job/124842227894)
+  showed that count-only packing could place both source RPC units alongside native-admission nodes
+  in one pytest process; it hit the scoped timeout even though the other processes completed. The
+  runner now assigns the measured source RPC and native-admission units to different processes
+  before packing other targets. Sibling units of either module never share a process; with four
+  available processes all four long units start in different processes. This preserves the selected
+  inventory and existing bounds; an actual current-head CI result remains the timing evidence.
   Each completed failed partition emits its diagnostic log immediately, before waiting for other
   workers or the serial boundary. The final aggregate retains every partition's log, and remaining
   parallel coverage still runs. After every parallel child exits, any failed pytest, timeout or
