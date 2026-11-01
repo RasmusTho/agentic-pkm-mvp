@@ -18,7 +18,10 @@ with the #5989 / PR #6057 outbox repair. The [proof on #3859](https://github.com
 records the exact candidate and complete target/result inventory. MVR-05A is delivered: stage hub
 #3859 is reconciled and closed, and its stage receipt is posted to #2143. MVR-05B onward remains incomplete, so no
 global "multi-vault delivered" claim is allowed: full production request-carrier propagation and
-background lifecycle binding are still target state.
+background lifecycle binding are still target state. MVR-06A (#3863) adds only the staged substrate
+for the latter: the opt-in `minimumRuntimeSchema=mvr-06` floor, the delegated least-privilege
+background-runtime role, and a read-only staged background intent whose add/remove commands fail
+`capability_not_ready`; the legacy picker bridge remains the authoritative watcher owner until 06B.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 

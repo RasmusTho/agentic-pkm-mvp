@@ -20,6 +20,10 @@ from uuid import uuid4
 import yaml
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.instance.background_authority import (
+        BackgroundIntentAdminService,
+        BackgroundRuntimeRoleStore,
+    )
     from app.instance.vault_dimensions import VaultDimensionService
 
 from app.instance import channel_transfer as _channel_transfer
@@ -1660,6 +1664,11 @@ def _preflight_runtime(
     )
     runtime.registry.require_no_scalar_rollback_session()
     _require_runtime_floor(runtime.registry.load(), scalar_runtime=False)
+    if consumer in _background_consumers():
+        # MVR-06A: once the MVR-06 floor is recorded, a background consumer may start
+        # only under one complete, valid delegated background-role and intent lineage.
+        # Before the floor this returns None and the legacy path is unchanged.
+        _require_background_authority(layout.registry_path)
     ledger = runtime.ledger.require_existing()
     if not ledger.legacy_bootstrap_complete:
         raise RegistryError("host-global legacy owner inventory bootstrap is incomplete")
@@ -5133,6 +5142,154 @@ def _default_vault_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _background_consumers() -> frozenset[str]:
+    from app.instance.background_authority import BACKGROUND_CONSUMERS
+
+    return BACKGROUND_CONSUMERS
+
+
+def open_background_role_store(registry_path: Path) -> "BackgroundRuntimeRoleStore":
+    """Open the MVR-06A delegated background-role store beside the registry."""
+
+    from app.instance.background_authority import (
+        BackgroundRuntimeRoleStore,
+        background_role_path,
+    )
+
+    return BackgroundRuntimeRoleStore(background_role_path(Path(registry_path)))
+
+
+def open_background_intent_admin_service(
+    registry_path: Path,
+) -> "BackgroundIntentAdminService":
+    """The one staged background-intent service behind the API router and the CLI."""
+
+    from app.instance.background_authority import BackgroundIntentAdminService
+
+    return BackgroundIntentAdminService(VaultRegistryStore(Path(registry_path)))
+
+
+def _require_background_authority(registry_path: Path) -> object:
+    from app.instance.background_authority import require_background_runtime_authority
+
+    return require_background_runtime_authority(
+        VaultRegistryStore(Path(registry_path)),
+        principal_store=open_local_operator_principal_store(Path(registry_path)),
+        role_store=open_background_role_store(Path(registry_path)),
+    )
+
+
+BACKGROUND_COMMANDS = (
+    "background-authority-cutover",
+    "background-authority-show",
+    "background-role-revoke",
+    "background-role-redelegate",
+    "background-binding-list",
+    "background-binding-inspect",
+    "background-binding-add",
+    "background-binding-remove",
+)
+
+
+def _background_command(args: argparse.Namespace) -> int:
+    """Headless MVR-06A producers and the staged background-intent admin surface.
+
+    The cutover is the only producer of the MVR-06 floor, the delegated background role,
+    and the staged intent; it runs inside MVR-01B's proved stopped window. Receipts are
+    redaction-safe: opaque role ids, scopes, epoch, revisions, and binding ids only --
+    never a host path, credential, or binding payload.
+    """
+
+    from app.instance.background_authority import (
+        BOOTSTRAP_PROVENANCES,
+        BackgroundAuthorityPreflightError,
+        BackgroundIntentNotReadyError,
+        mvr06_floor_recorded,
+        run_background_authority_cutover,
+    )
+
+    registry_path = Path(args.registry_path)
+    registry = VaultRegistryStore(registry_path)
+    role_store = open_background_role_store(registry_path)
+    payload: dict[str, object]
+    try:
+        if args.command == "background-authority-cutover":
+            layout = InstanceStateLayout(
+                root=registry_path.parent,
+                channel_id=args.channel,
+                registry_path=registry_path,
+            )
+            layout.require_existing()
+            with _deployment_admission_locked(args.host_global_root):
+                with _producer_transition_locked(layout):
+                    proof = json.loads(
+                        args.quiescence_proof_path.read_text(encoding="utf-8")
+                    )
+                    _require_proved_deployment_lease(
+                        host_global_root=args.host_global_root,
+                        channel=args.channel,
+                        nonce=proof.get("nonce"),
+                    )
+                    receipt = run_background_authority_cutover(
+                        registry,
+                        principal_store=open_local_operator_principal_store(
+                            registry_path
+                        ),
+                        role_store=role_store,
+                        delegation_provenance=BOOTSTRAP_PROVENANCES[args.bootstrap_kind],
+                        _capability=local_operator_storage_capability(),
+                    )
+            payload = receipt.as_dict()
+        elif args.command == "background-authority-show":
+            payload = role_store.require().receipt()
+        elif args.command == "background-role-revoke":
+            payload = role_store.revoke(
+                _capability=local_operator_storage_capability()
+            ).receipt()
+        elif args.command == "background-role-redelegate":
+            payload = role_store.redelegate(
+                delegator=open_local_operator_principal_store(registry_path).require(),
+                floor_guard=lambda: mvr06_floor_recorded(registry.read_existing()),
+                _capability=local_operator_storage_capability(),
+            ).receipt()
+        else:
+            service = open_background_intent_admin_service(registry_path)
+            if args.command == "background-binding-list":
+                payload = service.list()
+            elif args.command == "background-binding-inspect":
+                payload = service.inspect(args.vault_binding_id)
+            elif args.command == "background-binding-add":
+                payload = service.add(args.vault_binding_id)
+            else:
+                payload = service.remove(args.vault_binding_id)
+    except BackgroundIntentNotReadyError as exc:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "consumer": args.consumer,
+                    "error": BackgroundIntentNotReadyError.error_code,
+                    "detail": str(exc),
+                },
+                sort_keys=True,
+            )
+        )
+        return 2
+    except (BackgroundAuthorityPreflightError, RegistryError, OSError, ValueError) as exc:
+        detail: dict[str, object] = {
+            "ok": False,
+            "consumer": args.consumer,
+            "error": str(exc),
+        }
+        action = getattr(exc, "provisioning_action", None)
+        if action:
+            detail["provisioning_action"] = action
+        print(json.dumps(detail, sort_keys=True))
+        return 1
+    print(json.dumps({"ok": True, "consumer": args.consumer, **payload}, sort_keys=True))
+    return 0
+
+
 DIMENSION_COMMANDS = (
     "dimension-list",
     "dimension-create",
@@ -6060,6 +6217,25 @@ def _main(argv: list[str] | None = None) -> int:
             command.add_argument("--vault-binding-id-value", required=True)
         if name == "dimension-recover-malformed":
             command.add_argument("--expected-registry-revision", type=int, required=True)
+    for name in BACKGROUND_COMMANDS:
+        command = subparsers.add_parser(name)
+        command.add_argument("--registry-path", type=Path, required=True)
+        command.add_argument("--consumer", default=None)
+        if name == "background-authority-cutover":
+            command.add_argument("--channel", required=True)
+            command.add_argument("--host-global-root", type=Path, required=True)
+            command.add_argument("--quiescence-proof-path", type=Path, required=True)
+            command.add_argument(
+                "--bootstrap-kind",
+                choices=("existing-install", "channel", "native"),
+                required=True,
+            )
+        if name in {
+            "background-binding-inspect",
+            "background-binding-add",
+            "background-binding-remove",
+        }:
+            command.add_argument("--vault-binding-id", required=True)
     for name in PRINCIPAL_COMMANDS:
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
@@ -6182,6 +6358,8 @@ def _main(argv: list[str] | None = None) -> int:
         return _dimension_command(args)
     if args.command in set(PRINCIPAL_COMMANDS):
         return _principal_command(args)
+    if args.command in set(BACKGROUND_COMMANDS):
+        return _background_command(args)
     if args.command == "read-revision":
         return _read_revision(args.registry_path, args.consumer)
     if args.command == "mvr05-record-floor":
