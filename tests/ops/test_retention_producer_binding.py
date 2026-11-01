@@ -990,9 +990,27 @@ def test_legacy_noncurrent_terminal_readback_never_replays(monkeypatch, tmp_path
     receipt = persistence._receipt(operation_id, "dev", revision, persistence.IdentityInventory(0, 0, 0, 0, 0),
                                    producer_kind=producer_kind)
     available = {"request": native_request, "receipt": receipt}
-    config = SimpleNamespace(channel="dev", journal=SimpleNamespace(directory=tmp_path))
+    config = SimpleNamespace(channel="dev", root=tmp_path, journal=SimpleNamespace(directory=tmp_path))
     supervisor = linux.DeploymentSupervisor(config)
     supervisor._require_current_config = lambda: None
+    lock = tmp_path / 'config/deploy/dev.env.lock'
+    lock.mkdir(mode=0o700, parents=True)
+    owner = {'kind': 'source-identity-persistence', 'channel': 'dev', 'operation_id': operation_id}
+    if producer_kind == 'registry':
+        owner['producer_kind'] = producer_kind
+    owner_file = lock / 'bws-owner'
+    owner_file.write_text(json.dumps(owner, sort_keys=True) + '\n')
+    owner_file.chmod(0o600)
+    runtime = SimpleNamespace(installed_fingerprint='1' * 64, container_root='/app/vault',
+                              vault_overlay='docker-compose.legacy-vault.yml',
+                              existing_writers=native_request['writers'], running_writers=[])
+    calls = []
+    monkeypatch.setattr(linux.LinuxEffects, 'qualify_source_identity_authority', lambda *_: None)
+    monkeypatch.setattr(linux.LinuxEffects, 'source_identity_runtime_snapshot', lambda *_, **__: runtime)
+    monkeypatch.setattr(linux.LinuxEffects, 'compose',
+                        lambda self, *args, **kwargs: calls.append(args))
+    from app.ops import native_source_bootstrap
+    monkeypatch.setattr(native_source_bootstrap, 'quiesce_owned_container', lambda *_args, **_kwargs: True)
 
     def read_private(path):
         if path.name.endswith(".request.json"):
@@ -1022,9 +1040,70 @@ def test_legacy_noncurrent_terminal_readback_never_replays(monkeypatch, tmp_path
     changed = list(args)
     changed[changed.index("--image-digest") + 1] = "sha256:" + "c" * 64
     assert host.main(changed) == 78
+    assert lock.is_dir()
     saved = available.pop("receipt")
     assert host.main(args) == 78
+    assert lock.is_dir()
     available["receipt"] = saved
     assert host.main(args) == 0
     assert actions == ["source-identity-persistence-readback"] * 3
+    assert calls == [('start', *native_request['writers'])]
+    assert not lock.exists()
     assert "source_image_binding" not in (controller.directory / "operations.jsonl").read_text()
+
+
+@pytest.mark.parametrize(('matching_owner', 'producer_exists', 'legacy_allowed'), [
+    (True, False, True), (True, True, False), (False, False, False),
+])
+def test_terminal_readback_fences_retained_cleanup(monkeypatch, tmp_path, matching_owner,
+                                                   producer_exists, legacy_allowed):
+    from app.ops import native_source_bootstrap, native_source_identity_persistence as persistence
+    from app.ops import postgres_deploy_linux as linux
+
+    operation_id = str(uuid4())
+    revision, digest = 'a' * 40, 'sha256:' + 'b' * 64
+    selected = AuthorityCutover('selection', '/private/source', '/private/owner')
+    request = {
+        'contract': 'native-source-identity-persistence-request.v2',
+        'operation_id': operation_id, 'channel': 'dev', 'revision': revision, 'image_digest': digest,
+        'authority_cutover': {'binding_id': selected.binding_id, 'root': selected.root,
+                              'ownership_root': selected.ownership_root},
+        'installed_fingerprint': '1' * 64, 'execution_fingerprint': '2' * 64,
+        'writers': ['api', 'worker', 'watcher'], 'container_root': '/app/vault',
+        'vault_overlay': 'docker-compose.legacy-vault.yml',
+    }
+    receipt = persistence._receipt(operation_id, 'dev', revision, persistence.IdentityInventory(0, 0, 0, 0, 0),
+                                    producer_error_count=1, reason='source_operation_conflict')
+    lock = tmp_path / 'config/deploy/dev.env.lock'
+    lock.mkdir(mode=0o700, parents=True)
+    owner = {'kind': 'source-identity-persistence', 'channel': 'dev',
+             'operation_id': operation_id if matching_owner else str(uuid4())}
+    marker = lock / 'bws-owner'
+    marker.write_text(json.dumps(owner, sort_keys=True) + '\n')
+    marker.chmod(0o600)
+    if producer_exists:
+        (tmp_path / f'dev-source-identity-{operation_id}.producer.json').touch()
+    monkeypatch.setattr(linux, '_private_json',
+                        lambda path: request if path.name.endswith('.request.json') else receipt)
+    runtime = SimpleNamespace(installed_fingerprint='1' * 64, container_root='/app/vault',
+                              vault_overlay='docker-compose.legacy-vault.yml',
+                              existing_writers=request['writers'], running_writers=[])
+    effects = linux.LinuxEffects(SimpleNamespace(channel='dev', root=tmp_path,
+                                                  journal=SimpleNamespace(directory=tmp_path)))
+    monkeypatch.setattr(effects, 'qualify_source_identity_authority', lambda *_: None)
+    monkeypatch.setattr(effects, 'source_identity_runtime_snapshot', lambda *_, **__: runtime)
+    calls = []
+    monkeypatch.setattr(effects, 'compose', lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(native_source_bootstrap, 'quiesce_owned_container', lambda *_args, **_kwargs: True)
+    original = effects.reconcile_source_identity_cleanup
+    flags = []
+
+    def capture(*args, **kwargs):
+        flags.append(kwargs['allow_legacy_mount_order'])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(effects, 'reconcile_source_identity_cleanup', capture)
+    assert effects.readback_source_identity(operation_id, revision, digest, selected, 'vault-alpha') == receipt
+    assert flags == [legacy_allowed]
+    assert lock.exists() is not matching_owner
+    assert calls == ([('start', *request['writers'])] if matching_owner else [])

@@ -775,8 +775,8 @@ evidence narrows the scope. Reapply this protection when a possible store is lat
 remounted or cloned; do not limit it to daemons active at the original dispatch. A missing possible
 store, or an unresolved mapping from the digest to image IDs and aliases, prevents reclamation
 wherever protection cannot be proved. Capacity
-admission must separately qualify the actual effect store or reserve every possible affected
-resource before dispatch; an unscoped host record is not a capacity reservation. The admitted
+admission must separately qualify the actual effect store and all potentially affected resources
+before dispatch; an unscoped host record does not establish capacity admission. The admitted
 native request and source-installation owner/receipt must match the image identity. A changed binding,
 including two digests for the same source SHA, is not the same request. A source pull that
 fails, loses transport or has no native receipt retains its binding and its uncertainty; it is
@@ -789,7 +789,7 @@ an image binding before pull, and a pull-completion companion only after a verif
 Recovery can close a source installation before backup when its exact intent and absence of a
 channel owner are proved, while retaining the image evidence. A `source_pull_unresolved` refusal
 describes the source installation only: it does not prove that the Docker pull has terminated or
-release its capacity reservation. Inventory must preserve orphan intents and all retained companions
+permit its possible capacity budget to be removed from admission accounting. Inventory must preserve orphan intents and all retained companions
 even after the source owner becomes terminal. A missing or malformed companion cannot establish
 a negative outcome. The new pull is closed by default until the capacity guard is delivered;
 an already cached verified candidate remains usable. Do not retire the existing operational

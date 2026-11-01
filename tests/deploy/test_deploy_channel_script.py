@@ -3868,7 +3868,9 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
         directory = tmp_path
 
         @contextmanager
-        def source_persistence_operation(self, channel, *, operation_id, source_image_binding):
+        def source_persistence_operation(self, channel, *, operation_id, source_image_binding,
+                                         allow_legacy_cleanup):
+            assert allow_legacy_cleanup is True
             binding = json.loads(source_image_binding)
             assert binding['channel'] == channel
             assert binding['image_digest'] == 'sha256:' + '1' * 64
@@ -4179,6 +4181,10 @@ def test_source_identity_admitted_failed_operation_can_finish_retained_cleanup(
     class Remote:
         def __init__(self, hostname):
             assert hostname == "ygg-test"
+
+        def readback_source_identity(self, requested_id, revision, digest, selected, producer_kind):
+            assert producer_kind == "vault-alpha"
+            return self.persist_source_identity(requested_id, revision, digest, selected)
 
         def persist_source_identity(self, requested_id, revision, _digest, _selected):
             assert requested_id == operation_id

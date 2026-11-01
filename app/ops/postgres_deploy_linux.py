@@ -1536,7 +1536,7 @@ class LinuxEffects:
         self, operation_id: str, revision: str, image_digest: str,
         selected: AuthorityCutover, producer_kind: str,
     ) -> dict[str, Any]:
-        """Read one exact terminal legacy request without acquiring or replaying it."""
+        """Read one exact terminal request and finish its retained cleanup only."""
         from app.ops.native_source_identity_persistence import validate_receipt
 
         try:
@@ -1566,8 +1566,32 @@ class LinuxEffects:
                     or receipt['operation_id'] != operation_id or receipt['channel'] != self.config.channel
                     or receipt['revision'] != revision
                     or (producer_kind == 'registry' and receipt.get('producer_kind') != producer_kind)
-                    or (producer_kind == 'vault-alpha' and 'producer_kind' in receipt)):
+                    or (producer_kind == 'vault-alpha' and 'producer_kind' in receipt)
+                    or any(not isinstance(request.get(key), str)
+                           or re.fullmatch(r'[0-9a-f]{64}', request[key]) is None
+                           for key in ('installed_fingerprint', 'execution_fingerprint'))
+                    or not isinstance(request.get('writers'), list)
+                    or any(service not in {'api', 'worker', 'watcher', 'heimdal-capture-watch', 'companion-ui'}
+                           for service in request['writers'])
+                    or len(set(request['writers'])) != len(request['writers'])
+                    or request.get('container_root') not in {selected.root, '/app/vault'}
+                    or request.get('vault_overlay') not in {
+                        'docker-compose.full-host-vault.yml', 'docker-compose.legacy-vault.yml',
+                    }):
                 raise PostgresDeployError()
+            owner = {'kind': 'source-identity-persistence', 'channel': self.config.channel,
+                     'operation_id': operation_id}
+            if producer_kind == 'registry':
+                owner['producer_kind'] = producer_kind
+            owns_lock = self.channel_lock_owner() == (json.dumps(owner, sort_keys=True) + '\n').encode()
+            self.reconcile_source_identity_cleanup(
+                operation_id, revision, image_digest, selected, owner, list(request['writers']),
+                request['installed_fingerprint'], request['container_root'], request['vault_overlay'],
+                allow_legacy_mount_order=_legacy_mount_cleanup_allowed(
+                    receipt, producer_exists=os.path.lexists(Path(str(stem) + '.producer.json')),
+                    owns_lock=owns_lock,
+                ),
+            )
             return receipt
         except Exception:
             raise PostgresDeployError() from None
