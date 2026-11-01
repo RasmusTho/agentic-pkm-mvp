@@ -159,9 +159,12 @@ An additional closed source-installation profile permits only
 `app/ops/bws_installation_lifecycle.py`, `tests/ops/test_bws_installation_lifecycle.py`,
 `app/ops/bws_installation_admission.py`, `tests/ops/test_bws_installation_admission.py`,
 `tests/ops/test_bws_installation_transaction.py`, `tests/ops/test_bws_control_installation.py`,
+`tests/ops/bws_control_path_diagnostic_cases.py`,
 `tests/deploy/test_bws_source_rpc_assembly.py`, `docs/OPERATIONS.md`,
 the exact test-data path `tests/ops/fixtures/host_secret_contract_legacy.json`, and
-`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, with at least one transaction or Linux-deploy source changed and
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, plus exact inputset-repair cochanges to
+`scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py` and this owner document,
+with at least one transaction or Linux-deploy source changed and
 regular nonsymlink inputs. It omits only `test_dormant_ownership_initialization.py`;
 all other Ops modules and seven serial boundaries remain. Unknown cochanges retain broad
 coverage. The pre-existing native deployment-control profile below has precedence.
@@ -173,6 +176,12 @@ Subsystem labels and deferred targets remain unchanged. The full RPC file stays 
 inventory with its per-case temporary roots and disposable resource-limited subprocess; all seven
 existing serial suites still follow successful parallel work and node-evidence validation.
 Unknown production paths and shared-fixture cochanges retain normal routing.
+
+The exact synthetic diagnostic helper retains all four whole admission/lifecycle/transaction/RPC
+consumer modules. Selector-repair cochanges retain their complete governance and CI coverage.
+These paths are allowed cochanges, not additional qualifying sources or a general helper policy;
+missing or symlinked inputs fail closed. Existing bounded execution, seven serial guards,
+120-second per-test limits and the 75-minute scoped-step limit remain unchanged.
 
 With explicit baseline evidence, an additional ordinary test module can be a neutral cochange
 only when the unchanged closed BWS paths already qualify and their retained selection covers

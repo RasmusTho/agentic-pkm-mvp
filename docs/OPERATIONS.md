@@ -179,8 +179,8 @@ validated before content reads, rejects duplicate paths/names and aliased identi
 and shares one 4096-byte accepted /4097-byte returned-content budget per walk,
 including failures. Complete Environment bytes/order remain bound. Null output streams,
 UMask 0077, canonical encrypted-credential metadata and empty plain credentials are
-checked without credential payload/file reads; pending reload refuses. These added
-checks use existing coarse/family diagnostics and disclose no selected path, content,
+checked without credential payload/file reads; pending reload refuses. The six loaded-property
+checks retain their existing coarse/family diagnostics and disclose no selected path, content,
 metadata, effective value, digest or backend exception.
 
 The complete preserved file/ancestor/mount vector is disjoint from application, control,
@@ -194,6 +194,68 @@ historical loaded-unit bytes. `NeedDaemonReload=false` is supplementary, and BWS
 reservation does not exclude arbitrary root writers or external manager reloads.
 Repository support does not qualify actual private input or authorize native/parent
 acceptance. Unsupported formats retain their refusal boundary.
+
+Initial retained-PATH refusals additionally use
+`old_kernel_initial_root_control__<mode>__<side>__<role>__<guard>` in that existing
+optional field. `path_environment` means the PATH branch was reached before
+selection; `path_absent` and `path_selected` mean the original complete selector
+returned empty or nonempty. Neither reports a count or input identity. Side is
+`old` or `proposed` only for `path_hints/launcher_hint`, otherwise `unknown`.
+These combinations are **initial-only**; final empty-control and later phases keep
+their family/phase outcomes. The original discovery vocabulary is unchanged.
+
+The following is the complete added finite vocabulary. Each guard names the
+first original atom, or the original operation whose cause remains UNKNOWN:
+
+| Source role | Exact guard symbols | Minimum decision or explicit residual |
+| --- | --- | --- |
+| `loaded_slots` (`path_environment`); `parsed_slots` (`path_selected`) | `path_population`, `non_path_hint`, `hint_bound`, `path_absolute`, `path_backslash`, `path_nul`, `path_canonical`, `component_bound`, `misleading_hint`, `slot_absent`, `duplicate_components` | Requalify respectively the sole-PATH population, other control hint, 16-component bound, absolute form, forbidden backslash/NUL, canonical components, 32-component path bound, misleading root substring, control-slot presence or uniqueness. Which empty/dot/parent component failed is UNKNOWN; no second inspection. Branch/typing/regex-excluded rows are defensive, not claimed reachable initial failures. |
+| `path_hints` (`path_environment`) | `environment_files`; `launcher_hint` (separate `old`/`proposed`) | Requalify the named unsupported hint source before DropInPaths; no unit edit/removal is authorized. |
+| `config_footprint` | `population`, `application`, `launcher_parent`, `construction_unknown` | Requalify the manifest footprint population, application binding or launcher-parent binding respectively. Malformed/unexpected construction is UNKNOWN at this fixed config site. |
+| `binding` | `construction_unknown`, `slots_changed`, `selection_changed`; `loaded_assignment` (`path_selected`); `branch_changed` (`path_environment`) | Unknown initial construction; saved slot drift; complete selection drift; disk/loaded sole-PATH disagreement; or departure from the supported branch. Each requires its named binding to be requalified. A fresh initial service starts without a saved binding. |
+| `ancestor`, `control_root`, `application_root`, `launcher_root`, `backup_root`, `effect_parent`, `selected_parent`, `slot_descent`, `slot_census`; also `retained_directory`, `current_directory`, `fresh_directory` | `directory_fstat_unknown`, `directory_type`, `directory_mode`, `directory_owner`, `directory_inheritable_unknown`, `directory_inheritable` | At the static caller role, distinguish unavailable fstat, required directory type, writable-mode predicate, accepted owner pair, unavailable inheritance query and inheritable FD. Requalify that invariant; unavailable operations have UNKNOWN OS cause. No metadata value is disclosed. |
+| The first nine directory roles above | `directory_absolute`, `directory_component_bound`, `directory_canonical`, `descriptor_bound`, `open_unknown`, `mount_crossing` | Requalify representation/bounds, descriptor capacity, unavailable no-follow open, or same-mount proof respectively. No alternative lookup or retry is implied. Ancestor is the original recursive ancestry, not an inferred private path. |
+| `selected_input`, `content_input`, `retained_input`, `current_input`, `fresh_input` (`path_selected`) | `file_fstat_unknown`, `file_type`, `file_link`, `file_owner`, `file_mode`, `file_size_positive`, `file_size_bound`, `file_inheritable_unknown`, `file_inheritable`, `file_access_unknown`, `file_access` | Requalify the selected file's regular type, single link, exact owner, original forbidden mode mask, positive size, per-file ceiling, noninheritance or read-only access as named; query failures retain UNKNOWN cause. The original mode mask is one predicate, not a guessed individual bit. |
+| Every directory/file identity role above | `mount_platform`, `mount_libc_unknown`, `mount_buffer_unknown`, `mount_statx_unknown`, `mount_statx`, `mount_unpack_unknown`, `mount_mask`, `mount_identity` | Qualify supported Linux; or diagnose the fixed libc/buffer/call/unpack operation; or requalify statx success, requested mask or nonzero mount identity. Native cause/errno/mount value is UNKNOWN. No fallback metadata source is used. |
+| `retained` | `retained_version` | Previously held version changed; which member differs is UNKNOWN. Preserve refusal and requalify the complete retained proof. |
+| `footprint` | `tuple_type`, `population`, `member_mapping` | Requalify the manifest producer's exact tuple, population or mapping shape. Real NativePorts constructs the complete three-root tuple; malformed shapes remain direct defensive guards. |
+| `roots` | `equal`, `below`, `above`, `recorded_identity` | Distinguish root equality and each overlap direction, or recorded root identity disagreement. Requalify disjointness or bound root proof; the differing identity member/cause is UNKNOWN. |
+| `effect_parents` | `tuple_type`, `empty`, `bound`, `member_type`, `duplicate`, `outside_effect` | Requalify the producer's exact tuple, nonempty coverage, bound, string members, uniqueness or confinement to application/launcher effects. No subset can be adopted. |
+| `selected_parent` (`path_selected`) | `equal`, `below`, `above`, `identity_alias` | Distinguish each protected-root relationship from directory identity alias. Requalify footprint disjointness or lookup identity, without exposing a path. |
+| `selected_file` (`path_selected`) | `descriptor_bound`, `open_unknown`, `mount_crossing`, `identity_alias`, `aggregate_size` | Distinguish capacity, unavailable file open, mount crossing, file alias and whole-vector declared-size overflow. Directory alias, per-file size and aggregate size have different decisions. |
+| `selected_content` (`path_selected`) | `pread_unknown`, `returned_length`, `post_read_version`, `grammar`, `assignment_disagreement` | Requalify unavailable bounded read, length proof, post-read version, supported two-line syntax, or agreement across all selected assignments. A regex refusal has UNKNOWN internal syntax reason; a version comparison has UNKNOWN changed member. No classifier is run afterward. |
+| `loader_app`, `loader_scripts` | `stat_unknown`, `present` | Diagnose unavailable no-follow stat, or requalify the named captured-empty loader slot. Missing remains successful absence. Presence establishes neither type/content nor safe removal. |
+| `slot_descent` | `stat_unknown`, `not_directory` | Diagnose the unavailable edge or requalify unsupported lookup topology. A missing edge still stops descent successfully. |
+| `slot_census` | `before_fstat_unknown`, `scandir_open_unknown`, `scandir_iteration_unknown`, `scandir_exit_unknown`, `entry_stat_unknown`, `entry_bound`, `entry_owner`, `entry_mode`, `entry_type`, `entry_executable`, `entry_link`, `after_fstat_unknown`, `directory_time_drift` | Unknown operations stay separate at their fixed sites. Other guards separately require bounded direct population, exact owner, nonwritable mode, supported directory/regular type, nonexecutable regular file, single link or stable directory times. Which timestamp changed is UNKNOWN. Direct subdirectories are still accepted without recursion/content reads. |
+| `absent_edge` | `stat_unknown`, `appeared` | Diagnose unavailable repeat stat, or requalify an edge that appeared. Absence remains success; no entry type/content is inferred. |
+| `current_edge`; `fresh_edge` | `stat_unknown`, `held_version`, `edge_identity`; `open_unknown`, `version` | Separately requalify current namespace availability, held proof, device/inode edge binding, fresh-open availability or fresh-view agreement. Different recorded members remain UNKNOWN. Fresh FDs retain their original finally-close. |
+| `snapshot`; `walk` | `disagreement`; `unexpected_unknown` | Complete saved snapshot drift, or an otherwise unexpected operation at the fixed revalidation boundary. Preserve refusal/uncertainty and requalify; the changed field or native cause is UNKNOWN. |
+
+Unless narrowed above, walk roles use `path_absent` or `path_selected`; all sides
+are `unknown`. Symbols never include an index, native path/count/content/digest,
+mode/owner value, environment, argv, exception/type/errno or stack information.
+The same original call supplies the diagnostic: no extra OS read, predicate,
+parser, census or walk is introduced. Whole-vector metadata still precedes any
+content, with the unchanged 4096 accepted /4097 returned-byte budget including
+failures. Full typed Environment order, six loaded-property checks, FD envelopes,
+source/target C/D and exact Git launcher binding, generation/compensation and
+original-handle rules remain mandatory.
+
+Actual owned closes are attempted once; replacement FDs are never closed and
+sticky retained/transient close uncertainty overrides an earlier diagnostic.
+Existing unresolved assembled paths retain fatal exit 78, no stdout/terminal
+receipt and their owner. An `__provenance_unavailable` suffix still means scoped
+early executed-source comparison was unavailable; no suffix is not final caller,
+loaded-source or FULL proof. Unknown/foreign/subclass/missing/malformed metadata
+keeps the existing family/coarse fallback and legacy absent-field receipts remain
+readable.
+
+This source support does not identify Source27's native failure site, cause or
+profile fit. Source27 remains one closed initial refusal with no backup/stop or
+installation; it proves no later PATH or loaded check passed. Changed source bytes
+need their natural matched image and a separately applicable native decision.
+Same-image DEV, TEST and parent acceptance remain separate and open; these symbols
+authorize no native observation, repair, replay or subsequent operation.
 
 Initial unit-property diagnostics additionally use
 `old_kernel_initial_unit_properties__<site>__<kind>` from the **original** read or

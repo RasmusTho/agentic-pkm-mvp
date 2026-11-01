@@ -126,6 +126,89 @@ _ROOT_CONTROL_REFINEMENT_GATES = frozenset(
     "old_kernel_" + stage + "_root_control__" + "__".join(context)
     for stage in ("initial", "empty_control") for context in _ROOT_CONTROL_REFINEMENTS
 )
+# The later retained-PATH vocabulary is initial-only. Do not cross-product it
+# into the legacy initial/empty-control discovery vocabulary above.
+_PATH_SLOT_GUARDS = (
+    "path_population", "non_path_hint", "hint_bound", "path_absolute", "path_backslash",
+    "path_nul", "path_canonical", "component_bound", "misleading_hint", "slot_absent",
+    "duplicate_components",
+)
+_PATH_DIRECTORY_GUARDS = (
+    "directory_fstat_unknown", "directory_type", "directory_mode", "directory_owner",
+    "directory_inheritable_unknown", "directory_inheritable",
+)
+_PATH_FILE_GUARDS = (
+    "file_fstat_unknown", "file_type", "file_link", "file_owner", "file_mode",
+    "file_size_positive", "file_size_bound", "file_inheritable_unknown", "file_inheritable",
+    "file_access_unknown", "file_access",
+)
+_PATH_MOUNT_GUARDS = (
+    "mount_platform", "mount_libc_unknown", "mount_buffer_unknown", "mount_statx_unknown",
+    "mount_statx", "mount_unpack_unknown", "mount_mask", "mount_identity",
+)
+_PATH_DIRECTORY_ROLES = (
+    "ancestor", "control_root", "application_root", "launcher_root", "backup_root",
+    "effect_parent", "selected_parent", "slot_descent", "slot_census",
+)
+_INITIAL_PATH_CONTEXTS = (
+    (("path_environment",), ("unknown",), ("loaded_slots",), _PATH_SLOT_GUARDS),
+    (("path_selected",), ("unknown",), ("parsed_slots",), _PATH_SLOT_GUARDS),
+    (("path_environment",), ("unknown",), ("path_hints",), ("environment_files",)),
+    (("path_environment",), ("old", "proposed"), ("path_hints",), ("launcher_hint",)),
+    (("path_environment",), ("unknown",), ("binding",), ("branch_changed",)),
+    (("path_absent", "path_selected"), ("unknown",), ("config_footprint",),
+     ("population", "application", "launcher_parent", "construction_unknown")),
+    (("path_absent", "path_selected"), ("unknown",), ("binding",),
+     ("construction_unknown", "slots_changed", "selection_changed")),
+    (("path_selected",), ("unknown",), ("binding",), ("loaded_assignment",)),
+    (("path_absent", "path_selected"), ("unknown",), _PATH_DIRECTORY_ROLES,
+     _PATH_DIRECTORY_GUARDS + _PATH_MOUNT_GUARDS
+     + ("directory_absolute", "directory_component_bound", "directory_canonical",
+        "descriptor_bound", "open_unknown", "mount_crossing")),
+    (("path_absent", "path_selected"), ("unknown",),
+     ("retained_directory", "current_directory", "fresh_directory"),
+     _PATH_DIRECTORY_GUARDS + _PATH_MOUNT_GUARDS),
+    (("path_selected",), ("unknown",),
+     ("selected_input", "content_input", "retained_input", "current_input", "fresh_input"),
+     _PATH_FILE_GUARDS + _PATH_MOUNT_GUARDS),
+    (("path_absent", "path_selected"), ("unknown",), ("retained",), ("retained_version",)),
+    (("path_absent", "path_selected"), ("unknown",), ("footprint",),
+     ("tuple_type", "population", "member_mapping")),
+    (("path_absent", "path_selected"), ("unknown",), ("roots",),
+     ("equal", "below", "above", "recorded_identity")),
+    (("path_absent", "path_selected"), ("unknown",), ("effect_parents",),
+     ("tuple_type", "empty", "bound", "member_type", "duplicate", "outside_effect")),
+    (("path_selected",), ("unknown",), ("selected_parent",),
+     ("equal", "below", "above", "identity_alias")),
+    (("path_selected",), ("unknown",), ("selected_file",),
+     ("descriptor_bound", "open_unknown", "mount_crossing", "identity_alias", "aggregate_size")),
+    (("path_selected",), ("unknown",), ("selected_content",),
+     ("pread_unknown", "returned_length", "post_read_version", "grammar", "assignment_disagreement")),
+    (("path_absent", "path_selected"), ("unknown",), ("loader_app", "loader_scripts"),
+     ("stat_unknown", "present")),
+    (("path_absent", "path_selected"), ("unknown",), ("slot_descent",),
+     ("stat_unknown", "not_directory")),
+    (("path_absent", "path_selected"), ("unknown",), ("slot_census",),
+     ("before_fstat_unknown", "scandir_open_unknown", "scandir_iteration_unknown",
+      "scandir_exit_unknown", "entry_stat_unknown", "entry_bound", "entry_owner",
+      "entry_mode", "entry_type", "entry_executable", "entry_link", "after_fstat_unknown",
+      "directory_time_drift")),
+    (("path_absent", "path_selected"), ("unknown",), ("absent_edge",), ("stat_unknown", "appeared")),
+    (("path_absent", "path_selected"), ("unknown",), ("current_edge",),
+     ("stat_unknown", "held_version", "edge_identity")),
+    (("path_absent", "path_selected"), ("unknown",), ("fresh_edge",), ("open_unknown", "version")),
+    (("path_absent", "path_selected"), ("unknown",), ("snapshot",), ("disagreement",)),
+    (("path_absent", "path_selected"), ("unknown",), ("walk",), ("unexpected_unknown",)),
+)
+_INITIAL_PATH_REFINEMENTS = frozenset(
+    (mode, side, role, guard)
+    for modes, sides, roles, guards in _INITIAL_PATH_CONTEXTS
+    for mode in modes for side in sides for role in roles for guard in guards
+)
+_ROOT_CONTROL_REFINEMENT_GATES |= frozenset(
+    "old_kernel_initial_root_control__" + "__".join(context)
+    for context in _INITIAL_PATH_REFINEMENTS
+)
 # Source symbols only. Value cases are existing unit-property predicates;
 # launcher/process/cleanup/root semantic refusals retain their own families.
 _UNIT_PROPERTY_VALUE_SITES = frozenset(
@@ -2661,7 +2744,7 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
                             if (subgate == "root_control" and type(refinement) is tuple
                                     and len(refinement) == 4
                                     and all(type(value) is str for value in refinement)
-                                    and refinement in _ROOT_CONTROL_REFINEMENTS):
+                                    and refinement in (_ROOT_CONTROL_REFINEMENTS | _INITIAL_PATH_REFINEMENTS)):
                                 refined = classified + "__" + "__".join(refinement)
                                 if refined in _PREBACKUP_REFUSAL_GATES:
                                     refusal_gate = refined
