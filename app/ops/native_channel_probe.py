@@ -114,4 +114,3 @@ def validate_native_gateway(
     } - {None, ""}
     if not resolved or set(resolved) != addresses:
         raise refusal_type("native_gateway_resolves_another_backend")
-
