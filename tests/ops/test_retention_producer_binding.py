@@ -689,6 +689,54 @@ def test_source_reconciliation_does_not_require_cached_image_or_capacity_guard(m
     assert postgres_deploy_linux.rpc("dev", request) == {"readback": ("dev", request)}
 
 
+def test_source_engine_sock_diag_accepts_integer_enum_family(monkeypatch):
+    from enum import IntEnum
+
+    class Family(IntEnum):
+        NETLINK = 16
+
+    client, peer = socket.socketpair()
+    client_inode = os.fstat(client.fileno()).st_ino
+    sent = []
+
+    class Diagnostic:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def settimeout(self, seconds):
+            assert seconds == 5
+
+        def send(self, request):
+            sent.append(request)
+
+        def recv(self, limit):
+            assert limit == 8192
+            return (struct.pack('=IHHII', 40, 20, 0, 1, 0)
+                    + struct.pack('=BBBBIII', socket.AF_UNIX, 1, 1, 0, client_inode, 0, 0)
+                    + struct.pack('=HHI', 8, 2, 12345))
+
+    try:
+        monkeypatch.setattr(cache.socket, 'AF_NETLINK', Family.NETLINK, raising=False)
+        monkeypatch.setattr(cache.socket, 'socket', lambda family, kind, protocol: (
+            Diagnostic() if (family, kind, protocol) == (Family.NETLINK, socket.SOCK_RAW, 4)
+            else pytest.fail('unexpected socket')))
+        assert cache._connected_peer_inode(client) == 12345
+        assert len(sent) == 1
+    finally:
+        client.close()
+        peer.close()
+
+
+@pytest.mark.parametrize('family', [None, True, False, 0, -1, '16'])
+def test_source_engine_sock_diag_refuses_invalid_family(monkeypatch, family):
+    monkeypatch.setattr(cache.socket, 'AF_NETLINK', family, raising=False)
+    with pytest.raises(cache.SourceImageCacheRefused):
+        cache._connected_peer_inode(None)
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux SOCK_DIAG integration")
 def test_source_engine_sock_diag_identifies_the_actual_accepted_peer(tmp_path):
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

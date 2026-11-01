@@ -88,7 +88,7 @@ def _root_identity(path: str) -> tuple[int, int]:
 def _connected_peer_inode(stream: socket.socket) -> int:
     """Use Linux SOCK_DIAG to identify the other end of this exact socket."""
     family = getattr(socket, "AF_NETLINK", None)
-    if type(family) is not int:
+    if not isinstance(family, int) or isinstance(family, bool) or family <= 0:
         raise SourceImageCacheRefused()
     client_inode = os.fstat(stream.fileno()).st_ino
     request = struct.pack("=BBHIIIII", socket.AF_UNIX, 0, 0, 0xFFFFFFFF,
