@@ -304,7 +304,7 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
 
 def _run_full_suite_workflow(
     tmp_path: Path, *, failing_shard: str = "", mode: str = "success", deferred_targets: str = "",
-    source_rpc: bool = False,
+    source_rpc: bool = False, operations: bool = False,
 ):
     """Execute the checked-in shell with a fake pytest, including nested tests."""
     files = (
@@ -318,6 +318,8 @@ def _run_full_suite_workflow(
     )
     if source_rpc:
         files += ("tests/deploy/test_bws_source_rpc_assembly.py",)
+    if operations:
+        files += ("tests/operations/test_first.py", "tests/operations/nested/test_second.py")
     for name in files:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -514,6 +516,42 @@ def test_full_suite_shards_cover_test_files_once(tmp_path: Path, deferred_target
                              "tests/invariants/test_vault_multiwriter.py"]
 
 
+@pytest.mark.parametrize("deferred_targets", ["", "tests/deploy"])
+def test_full_suite_prioritizes_operations_without_changing_inventory(
+    tmp_path: Path, deferred_targets: str,
+) -> None:
+    result, files, _job = _run_full_suite_workflow(
+        tmp_path, source_rpc=True, operations=True, deferred_targets=deferred_targets,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "runner/pytest-not-pg-shards"
+    shards = (root / "shards").read_text().splitlines()
+    if deferred_targets:
+        assert shards[0] == "tests/operations"
+        assert shards[1:] == sorted(shards[1:])
+    else:
+        assert shards[:3] == ["tests/deploy/test_bws_source_rpc_assembly.py",
+                             "tests/deploy/test_deploy_channel_script.py", "tests/operations"]
+        assert shards[3:] == sorted(shards[3:])
+    assert shards.count("tests/operations") == 1
+    assert len(shards) == len(set(shards))
+    work_items = (root / "work-items").read_text().splitlines()
+    operations_index = work_items.index("tests/operations")
+    assert all(item.startswith(("source-rpc-node-unit-", "deploy-node-unit-"))
+               for item in work_items[:operations_index])
+    log = (tmp_path / "pytest-not-pg.log").read_text()
+    executed = re.findall(r"^EXECUTED (.+)$", log, re.MULTILINE)
+    node_modules = {"tests/deploy/test_bws_source_rpc_assembly.py",
+                    "tests/deploy/test_deploy_channel_script.py"}
+    expected = [name for name in files if not name.startswith("tests/e2e/")
+                and not (deferred_targets and name.startswith(deferred_targets + "/"))
+                and name not in node_modules]
+    assert sorted(executed) == sorted(expected)
+    assert json.loads((tmp_path / "state.json").read_text())["max_active"] <= 4
+    assert executed[-3:] == ["tests/ops/nested/test_host_child.py", "tests/ops/test_host.py",
+                             "tests/invariants/test_vault_multiwriter.py"]
+
+
 def test_required_rpc_assembly_shards_preserve_exact_coverage(tmp_path: Path) -> None:
     result, _files, _job = _run_full_suite_workflow(tmp_path, source_rpc=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -626,7 +664,7 @@ def test_required_unit_full_suite_phase_budget_preserves_complete_coverage(tmp_p
                 "Run shared not-pg unit tests in process shards")
     # Run 39100438771 completed every parallel shard in 51m35s, including the
     # 45m51s deploy shard, then timed out during the serial host boundary.
-    assert step["timeout-minutes"] == 75
+    assert step["timeout-minutes"] == 120
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert "xargs -r -n 1 -P 4 bash -c" in step["run"]
     receipt = json.loads((tmp_path / "runner/pytest-not-pg-shards/phase-margin.json").read_text())
@@ -1620,6 +1658,52 @@ def test_scoped_rpc_assembly_shards_preserve_exact_coverage(tmp_path):
     assert sorted(node for unit in units for node in unit) == sorted(nodes)
     assert state["peak"] <= 4 and state["serial_active"] == 1
     assert all((tmp_path / "aggregate.log").read_text().count(node + " PASSED") == 1 for node in nodes)
+
+
+@pytest.mark.parametrize("jobs", [2, 4])
+def test_scoped_heavy_node_units_stay_in_distinct_processes(tmp_path, monkeypatch, jobs):
+    """The real scoped scheduler must not repack both halves into one pytest."""
+    import scripts.run_scoped_test_partitions as runner
+    from scripts.plan_full_suite_node_shards import (
+        NATIVE_ADMISSION_MODULE, SHARED_CHECKOUT_NODES, SOURCE_RPC_MODULE, TARGET_MODULE,
+    )
+
+    source = tuple(f"{SOURCE_RPC_MODULE}::test_case[{i}]" for i in range(574))
+    native = tuple(f"{NATIVE_ADMISSION_MODULE}::test_case[{i}]" for i in range(394))
+    deploy = (*SHARED_CHECKOUT_NODES, *(f"{TARGET_MODULE}::test_case[{i}]" for i in range(698)))
+    other = tuple(f"tests/scripts/test_other.py::test_case[{i}]" for i in range(1900))
+    collected = (*source, *native, *deploy, *other)
+    serial = ("tests/ops/test_native_journaling_acceptance.py",)
+    targets = (SOURCE_RPC_MODULE, NATIVE_ADMISSION_MODULE, TARGET_MODULE, "tests/scripts", *serial)
+    calls = []
+    monkeypatch.setattr(runner, "_collect_parallel_nodes", lambda _targets: collected)
+
+    def execute(index, selected, *, log_dir, timeout_seconds):
+        calls.append(tuple(selected))
+        log = log_dir / f"partition-{index}.log"
+        log.write_text("".join(f"{node} PASSED\n" for node in selected if node in collected))
+        return index, 0, log, False
+
+    monkeypatch.setattr(runner, "_run_partition", execute)
+    assert runner.run_partitions(
+        tuple((target,) for target in targets), log_dir=tmp_path / "logs",
+        aggregate_log=tmp_path / "aggregate.log", jobs=jobs, timeout_seconds=10,
+        serial_last=False, serial_boundary=serial,
+        execution_units=tuple((target,) for target in targets), expected_targets=targets,
+    ) == 0
+    assert calls[-1] == serial
+    parallel = calls[:-1]
+    assert len(parallel) == jobs
+    for nodes in (source, native):
+        owners = [unit for unit in parallel if any(node in unit for node in nodes)]
+        assert len(owners) == 2
+        assert sorted(node for unit in owners for node in unit if node in nodes) == sorted(nodes)
+    assert sorted(node for unit in parallel for node in unit if node in deploy) == sorted(deploy)
+    assert sum(set(SHARED_CHECKOUT_NODES) <= set(unit) for unit in parallel) == 1
+    if jobs == 4:
+        assert not any(any(node in unit for node in source) and any(node in unit for node in native)
+                       for unit in parallel)
+    assert sum("tests/scripts" in unit for unit in parallel) == 1
 
 
 @pytest.mark.parametrize("mode", ["pytest-failure", "missing", "duplicate", "unexpected"])
