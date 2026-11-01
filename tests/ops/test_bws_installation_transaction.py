@@ -4088,3 +4088,69 @@ def test_initial_control_path_diagnostics_preserve_privacy_provenance_and_fallba
                                                'backup_manifest_sha256'))
     assert 'PRIVATE_CANARY' not in repr(result)
     assert not {'stop_old', 'apply', 'start_new'} & set(events)
+
+
+@pytest.mark.parametrize('metadata', ['valid', 'unbound', 'missing', 'list', 'member', 'unknown',
+    'foreign', 'subclass', 'reversed', 'self', 'mode', 'side', 'guard', 'extra', 'final', 'nonprebackup'])
+def test_initial_roots_below_role_pairs_preserve_privacy_and_fallback(metadata):
+    from app.ops import bws_installation_lifecycle as lifecycle
+    request, ports, admission, service, events, *_ = _transaction_fixture()
+    context = ('path_selected', 'unknown', 'roots_backup_control', 'below')
+    class Foreign(RuntimeError):
+        root_control = context
+        subgate = 'root_control'
+    class Unsupported(lifecycle._OldQualificationRefusal):
+        pass
+    class PrivateString(str):
+        pass
+    def refuse(**_kwargs):
+        failure = lifecycle._OldQualificationRefusal('root_control', root_control=context)
+        if metadata == 'missing':
+            del failure.root_control
+        elif metadata == 'list':
+            failure.root_control = list(context)
+        elif metadata == 'member':
+            failure.root_control = (*context[:2], PrivateString(context[2]), context[3])
+        elif metadata == 'unknown':
+            failure.root_control = (*context[:2], 'roots_PRIVATE_CANARY_control', context[3])
+        elif metadata == 'foreign':
+            raise Foreign('PRIVATE_CANARY')
+        elif metadata == 'subclass':
+            raise Unsupported('root_control', root_control=context)
+        elif metadata in {'reversed', 'self', 'mode', 'side', 'guard'}:
+            field, value = {'reversed': (2, 'roots_control_backup'), 'self': (2, 'roots_backup_backup'),
+                'mode': (0, 'path_environment'), 'side': (1, 'old'), 'guard': (3, 'equal')}[metadata]
+            values = list(context)
+            values[field] = value
+            failure.root_control = tuple(values)
+        elif metadata == 'extra':
+            failure.root_control = (*context, 'PRIVATE_CANARY')
+        raise failure
+    if metadata == 'unbound':
+        ports.early_refusal_sources_bound = False
+    if metadata == 'final':
+        service.control_inventory_empty = True
+        service.revalidate_empty_control_configuration = refuse
+    elif metadata == 'nonprebackup':
+        service.require_old_kernel = refuse
+    else:
+        service.qualify_old = refuse
+    if metadata == 'nonprebackup':
+        with pytest.raises(lifecycle._OldQualificationRefusal):
+            transaction._execute_source_installation('dev', request, ports)
+        assert admission.receipt is None
+        return
+    result = transaction._execute_source_installation('dev', request, ports)['source_installation']
+    if metadata in {'foreign', 'subclass'}:
+        expected = 'old_kernel_qualification'
+    elif metadata == 'final':
+        expected = 'old_kernel_empty_control_root_control'
+    elif metadata in {'valid', 'unbound'}:
+        expected = 'old_kernel_initial_root_control__' + '__'.join(context)
+        if metadata == 'unbound':
+            expected += '__provenance_unavailable'
+    else:
+        expected = 'old_kernel_initial_root_control'
+    _assert_old_refusal({'source_installation': result}, events, expected)
+    assert result['prebackup_gate'] == expected
+    assert 'PRIVATE_CANARY' not in repr(result)

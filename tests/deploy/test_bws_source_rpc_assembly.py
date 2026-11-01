@@ -28,7 +28,10 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
               batch: int | None = None, input_count: int = 1, input_index: int = 0) -> None:
     """Run in a disposable interpreter; no native configuration is consulted."""
     scenario = fault.split(':')[1] if fault.startswith('path-diagnostic:') else ''
+    topology_scenario = scenario.removesuffix('-runtime-close').removesuffix('-close')
     application_fixture_root = base / 'checkout'
+    if topology_scenario == 'roots-below-application-control':
+        application_fixture_root = base / 'control' / 'nested_application'
     if scenario == 'deep-application':
         application_fixture_root = base / 'deep_application'
         while len(application_fixture_root.parts) - 1 < 33:
@@ -162,6 +165,13 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                         installed / "config/secrets/host_secret_contract.json")
         old_source = installed / "app/ops/bws_control_installation.py"
         old_source.write_bytes(b"# synthetic previous generation\n" + old_source.read_bytes())
+        old_validator = installed / 'app/ops/bws_installation_lifecycle.py'
+        if topology_scenario.startswith('roots-below-'):
+            # A distinct installed OLD validator must neither execute nor be
+            # replaced before the verified candidate's real preinstall refusal.
+            old_validator.write_bytes(b'# synthetic installed OLD validator sentinel\n'
+                                      b'raise AssertionError("installed OLD validator executed")\n')
+            state['old_validator'] = old_validator.read_bytes()
         control_root, backups, launchers, receipts = (base / name for name in (
             "control", "backup", "launcher", "receipts",
         ))
@@ -173,6 +183,14 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         elif topology == 'roots-above':
             backups = base / 'control_parent'
             control_root = backups / 'control'
+        elif topology_scenario in {'roots-below-launcher-control', 'roots-below-launcher-application'}:
+            launchers = (control_root if topology_scenario.endswith('-control') else installed) / 'nested_launcher'
+        elif topology_scenario in {'roots-below-backup-control', 'roots-below-backup-application',
+                                  'roots-below-backup-launcher'}:
+            parent = {'roots-below-backup-control': control_root,
+                      'roots-below-backup-application': installed,
+                      'roots-below-backup-launcher': launchers}[topology_scenario]
+            backups = parent / 'nested_backup'
         elif topology == 'parent-equal':
             control_root = base / 'systemd' / f'yggdrasil-bws-deploy@{channel}.service.d'
         elif topology == 'parent-above':
@@ -492,7 +510,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                             all_original_closes_once=opened == closed,
                             no_owned_fds=not evidence['owned'],
                             failed_closes=len(evidence.get('failed_closes', [])),
-                            uncertain=state['service'].control_path_binding.close_uncertain,
+                            uncertain=(state['service'].control_path_binding.close_uncertain
+                                       or not state['service'].runtime_close_completed),
                             resources_closed=owned_resources_closed,
                             initial=state['service'].phase == 'qualifying',
                             selected_reads=len(selected_reads),
@@ -502,6 +521,11 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                             actions=[event for event in state['events'] if event in {'prepare', 'stop', 'start'}],
                         )
                         (base / 'diagnostic-close-proof.json').write_text(json.dumps(proof))
+                        if 'refusal_before_close' in evidence:
+                            (base / 'retained-refusal-before-close.json').write_text(json.dumps(
+                                evidence['refusal_before_close']))
+                        if topology_scenario.startswith('roots-below-'):
+                            state['preinstall_candidate_proof']()
                     finally:
                         original_envelope_close(envelope, owned_resources_closed=owned_resources_closed)
                 patch.setattr(control._SourceDescriptorEnvelope, 'close', diagnostic_envelope_close)
@@ -584,6 +608,30 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             patch.setattr(transaction._NativePorts, 'compensate', compensate)
             state['old_source'] = old_source.read_bytes()
             state['old_launcher'] = public_launcher.read_bytes()
+            if topology_scenario.startswith('roots-below-'):
+                def preinstall_candidate_proof():
+                    assert old_validator.read_bytes() == state['old_validator']
+                    assert old_source.read_bytes() == state['old_source']
+                    assert public_launcher.read_bytes() == state['old_launcher']
+                    for module, relative in (
+                        (lifecycle, 'app/ops/bws_installation_lifecycle.py'),
+                        (transaction, 'app/ops/bws_installation_transaction.py'),
+                        (admission, 'app/ops/bws_installation_admission.py'),
+                    ):
+                        candidate_source = checkout / relative
+                        assert Path(module.__file__) == candidate_source
+                        assert getattr(module, transaction._SOURCE_HASH_ATTRIBUTE) == transaction._sha(candidate_source.read_bytes())
+                    assert lifecycle._ControlPathBinding.revalidate.__code__.co_filename == str(
+                        checkout / 'app/ops/bws_installation_lifecycle.py')
+                    assert state['early_sources_bound'] is True
+                    assert state['events'].index('early_source_binding') < state['events'].index('service')
+                    assert not {'prepare', 'stop', 'start', 'caller_source_binding'} & set(state['events'])
+                    assert not (backups / 'assembled').exists()
+                    proof = dict(candidate_executed_before_install=True, old_validator_unchanged=True,
+                                 old_source_unchanged=True, old_launcher_unchanged=True,
+                                 early_sources_bound=True, no_effects=True)
+                    (base / 'preinstall-candidate-proof.json').write_text(json.dumps(proof))
+                state['preinstall_candidate_proof'] = preinstall_candidate_proof
         else:
             lifecycle.FixedBwsService = Service
 
@@ -838,6 +886,12 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                               source_only=sys.pycache_prefix == '/dev/null')))
         return
     status = namespace["run"]()
+    if topology_scenario.startswith('roots-below-') and scenario.endswith('-runtime-close'):
+        # With no changed resource envelope run() can return the existing fatal
+        # CLI status instead of _exit; preserve that actual status at this child
+        # entrypoint, exactly as the launcher would, without a terminal receipt.
+        assert status == 78 and output.getvalue() == ''
+        raise SystemExit(status)
     if fault in {'path-preserved-prestop', 'path-preserved-after-start',
                  'path-preserved-closing', 'path-preserved-restored-drift'}:
         # Existing RPC semantics preserve unresolved ownership without a public
@@ -888,6 +942,8 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         evidence = state['path_diagnostic']
         assert evidence['fired'] and not evidence['owned']
         assert 'PRIVATE_CANARY' not in output.getvalue()
+        if topology_scenario.startswith('roots-below-'):
+            state['preinstall_candidate_proof']()
     elif fault.startswith('path-preserved-'):
         mode = fault.removeprefix('path-preserved-')
         assert 'PRIVATE_CANARY' not in output.getvalue()
@@ -1074,16 +1130,30 @@ def exercise_control_path_transaction(base, channel, slot, *, input_count=1, inp
         assert completed.returncode == 78 and completed.stdout == '', completed.stderr
         owner = json.loads((base / 'receipts' / (channel + '.source-installation.lock')).read_text())
         assert owner['operation_id'] == '65752d22-1a9b-48df-a0cc-5e1087595b22'
-        assert not list((base / 'receipts').glob('*.receipt.json'))
+        receipts = list((base / 'receipts').glob('*.receipt.json'))
+        if slot.startswith('diagnostic:roots-below-') and slot.endswith('-runtime-close'):
+            # Same original boundary as exercise_unit_property_close: an inner
+            # fallback is durable, but outer exit 78/no response retains UNKNOWN.
+            assert len(receipts) == 1
+            retained = json.loads(receipts[0].read_text())
+            assert retained['prebackup_gate'] == 'old_kernel_initial_retained_runtime'
+            assert all(retained[key] is None for key in (
+                'old_generation_sha256', 'new_generation_sha256', 'backup_manifest_sha256'))
+        else:
+            assert not receipts
         if slot.startswith('diagnostic:'):
             case = slot.split(':')[1]
             assert json.loads((base / 'diagnostic-close-proof.json').read_text()) == dict(
                 fault_reached=True, all_original_closes_once=True, no_owned_fds=True,
                 failed_closes=4 if case == 'grammar-multiple-close' else 1,
                 uncertain=True, resources_closed=False, initial=True,
-                selected_reads=0 if case == 'dir-fstat-close' else 4,
+                selected_reads=0 if case == 'dir-fstat-close' or case.startswith('roots-below-') else 4,
                 loader_reached=case == 'fresh-version-close', actions=[],
             )
+            if case.startswith('roots-below-'):
+                from tests.ops.bws_control_path_diagnostic_cases import expected_context
+                context = expected_context(case.removesuffix('-runtime-close').removesuffix('-close'))
+                assert json.loads((base / 'retained-refusal-before-close.json').read_text()) == list(context)
         if slot in {'preserved-prestop', 'preserved-after-start', 'preserved-closing', 'preserved-restored-drift'}:
             assert json.loads((base / 'preserved-drift-proof.json').read_text()) == {
                 'mode': 'path-' + slot, 'drifted': True,
@@ -1291,3 +1361,30 @@ def test_initial_control_path_diagnostics_preserve_source_binding(secure_tmp_pat
     result = exercise_control_path_transaction(secure_tmp_path, channel,
                                                'diagnostic-' + provenance + ':grammar', input_count=4)
     assert result['prebackup_gate'].endswith('__provenance_unavailable')
+
+
+def _assert_preinstall_candidate_proof(base):
+    assert json.loads((base / 'preinstall-candidate-proof.json').read_text()) == dict(
+        candidate_executed_before_install=True, old_validator_unchanged=True,
+        old_source_unchanged=True, old_launcher_unchanged=True, early_sources_bound=True, no_effects=True)
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('input_count', [0, 4], ids=['absent', 'selected'])
+@pytest.mark.parametrize('case', __import__('tests.ops.bws_control_path_diagnostic_cases',
+    fromlist=['ROOT_BELOW_CASES']).ROOT_BELOW_CASES, ids=lambda row: row[0])
+def test_initial_roots_below_role_pairs_cross_preinstall_candidate_source_rpc(secure_tmp_path, channel, input_count, case):
+    result = exercise_control_path_transaction(secure_tmp_path, channel, 'diagnostic:' + case[0],
+                                               input_count=input_count)
+    expected = ('path_selected' if input_count else 'path_absent', *case[2:])
+    assert result['prebackup_gate'] == 'old_kernel_initial_root_control__' + '__'.join(expected)
+    _assert_preinstall_candidate_proof(secure_tmp_path)
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+@pytest.mark.parametrize('close', ['close', 'runtime-close'], ids=['transient', 'retained-runtime'])
+def test_initial_roots_below_role_pairs_preserve_uncertain_owner(secure_tmp_path, channel, close):
+    result = exercise_control_path_transaction(secure_tmp_path, channel,
+        'diagnostic:roots-below-backup-control-' + close, input_count=4)
+    assert result['status'] == 'unknown'
+    _assert_preinstall_candidate_proof(secure_tmp_path)
