@@ -3490,14 +3490,22 @@ def test_bws_source_receipt_cochange_preserves_scoped_execution(qualifying_sourc
         assert (rpc,) in candidates
         assert rpc not in serial
         assert actual.subsystems == ("ops", "ops_deploy")
+        # The real RPC fixture now reads these source modules, so both source
+        # routes truthfully retain the complete selected deploy inventory.
+        assert "tests/deploy" in actual.targets
+        assert "tests/deploy" not in actual.deferred_targets
         if qualifying_source == "app/ops/bws_installation_transaction.py":
-            assert "tests/deploy" in actual.deferred_targets
+            # Retain the no-deploy profile's reason guard as an explicitly
+            # synthetic deferred input, not a claim about today's source reads.
+            deferred = replace(actual,
+                targets=tuple(path for path in actual.targets if path != "tests/deploy"),
+                deferred_targets=("tests/deploy",))
+            assert selector.scoped_deploy_partitions(deferred)
+            assert selector.scoped_deploy_execution_units(deferred)
             for reason in (baseline.reason, actual.reason + " unrelated"):
-                unqualified = replace(actual, reason=reason)
+                unqualified = replace(deferred, reason=reason)
                 assert selector.scoped_deploy_partitions(unqualified) == ()
                 assert selector.scoped_deploy_execution_units(unqualified) == ()
-        else:
-            assert "tests/deploy" in actual.targets
 
 
 @pytest.mark.parametrize("failure", [
@@ -3542,8 +3550,45 @@ def test_bws_source_receipt_cochange_fails_closed(failure, monkeypatch):
         context.setattr(selector, "_bws_source_installation_selection", lambda selection, paths: selection)
         baseline = select_tests(changed)
     assert select_tests(changed) == baseline
-    assert selector.scoped_deploy_partitions(baseline) == ()
-    assert selector.scoped_deploy_execution_units(baseline) == ()
+    assert not baseline.reason.endswith("; BWS source installation scope")
+    if "tests/deploy" in baseline.targets:
+        # Retention can use the generic deploy runner, but must not omit any
+        # ops module. The old deferred profile must still reject this input.
+        from dataclasses import replace
+
+        assert "tests/ops" in baseline.targets
+        deferred = replace(baseline,
+            targets=tuple(path for path in baseline.targets if path != "tests/deploy"),
+            deferred_targets=("tests/deploy",))
+    else:
+        deferred = baseline
+    assert selector.scoped_deploy_partitions(deferred) == ()
+    assert selector.scoped_deploy_execution_units(deferred) == ()
+
+
+def test_bws_retained_deploy_fallback_preserves_complete_serial_inventory():
+    from scripts.run_scoped_test_partitions import _serial_safe_candidates, validate_execution_units, validate_inventory
+
+    selection = select_tests([
+        "app/ops/bws_installation_transaction.py", "app/ops/bws_installation_admission.py",
+        "tests/deploy/test_bws_source_rpc_assembly.py", "tests/api/test_status_api.py",
+    ])
+    assert not selection.reason.endswith("; BWS source installation scope")
+    assert "tests/deploy" in selection.targets and "tests/ops" in selection.targets
+    assert "tests/api/test_status_api.py" in selection.targets
+    partitions = selector.scoped_deploy_partitions(selection)
+    units = selector.scoped_deploy_execution_units(selection)
+    assert validate_inventory([list(part) for part in partitions], list(selection.targets)) == partitions
+    assert validate_execution_units([list(unit) for unit in units], list(selection.targets)) == units
+    boundary = selector.SCOPED_DEPLOY_SERIAL_BOUNDARY
+    assert len(boundary) == 8
+    assert "tests/ops/test_dormant_ownership_initialization.py" in boundary
+    candidates, serial = _serial_safe_candidates(tuple(path for unit in units for path in unit), boundary)
+    assert serial == boundary
+    assert any(candidate[0] == "tests/ops" for candidate in candidates)
+    assert not set(boundary).intersection(candidate[0] for candidate in candidates)
+    assert all(f"--ignore={path}" in next(candidate for candidate in candidates
+               if candidate[0] == "tests/ops") for path in boundary)
 
 
 def test_bws_diagnostic_ci_repair_preserves_complete_scoped_inventory(monkeypatch):
@@ -3584,7 +3629,8 @@ def test_bws_diagnostic_ci_repair_preserves_complete_scoped_inventory(monkeypatc
     assert validate_inventory([list(part) for part in partitions], list(actual.targets)) == partitions
     assert validate_execution_units([list(unit) for unit in units], list(actual.targets)) == units
     serial = tuple(path for path in selector.SCOPED_DEPLOY_SERIAL_BOUNDARY if path != dormant)
-    assert len(serial) == 7 and units[-1] == serial
+    assert len(serial) == 7
+    assert "tests/deploy" in actual.targets and "tests/deploy" not in actual.deferred_targets
     candidates, boundary = _serial_safe_candidates(tuple(target for unit in units for target in unit), serial)
     assert boundary == serial
     assert not set(serial).intersection(target for candidate in candidates for target in candidate)
@@ -3678,7 +3724,8 @@ def test_bws_existing_neutral_test_cochange(monkeypatch):
     effective = _effective_targets(flat)
     assert 'tests/scripts' in effective and BWS_NEUTRAL_PROBE not in effective
     boundary = tuple(path for path in selector.SCOPED_DEPLOY_SERIAL_BOUNDARY if path != dormant)
-    assert len(boundary) == 7 and units[-1] == boundary
+    assert len(boundary) == 7
+    assert 'tests/deploy' in actual.targets and 'tests/deploy' not in actual.deferred_targets
     candidates, serial = _serial_safe_candidates(flat, boundary)
     assert serial == boundary
     assert ('tests/deploy/test_bws_source_rpc_assembly.py',) in candidates
@@ -3713,8 +3760,14 @@ def test_bws_neutral_cochange_refusals(failure, monkeypatch):
             'config': 'tests/scripts/pytest.ini',
             'dormant': 'tests/ops/test_dormant_ownership_initialization.py',
             'unknown-prod': 'app/ops/new_bws_neutral.py',
-            'self-enrollment': 'tests/deploy/test_ci_image_build.py',
+            'self-enrollment': 'tests/api/test_status_api.py',
         }[failure]
+        if failure == 'self-enrollment':
+            # Deploy is now genuinely covered by the core source reads. Keep
+            # this negative fixture outside that independently selected cone.
+            retained = select_tests(BWS_RECEIPT_CHANGES)
+            assert not any(extra == target or extra.startswith(target + '/')
+                           for target in retained.targets)
         changed[-1] = extra
         original = Path.is_file
         monkeypatch.setattr(Path, 'is_file', lambda path: str(path) == extra or original(path))
@@ -3801,4 +3854,9 @@ def test_bws_cli_baseline_evidence(evidence, tmp_path, monkeypatch):
                               else ['diff-base...HEAD'])
     assert fields['full_suite'] == ('true' if evidence == 'unknown-diff' else 'false')
     assert fields['reason'].endswith('; BWS source installation scope') == (evidence in {'existing', 'moving-refs'})
-    assert bool(json.loads(fields['scoped_execution_units_json'])) == (evidence in {'existing', 'moving-refs'})
+    # Missing baseline proof still refuses the BWS omission. The now-retained
+    # deploy target independently permits complete generic scoped execution.
+    assert bool(json.loads(fields['scoped_execution_units_json'])) == (evidence != 'unknown-diff')
+    if evidence not in {'existing', 'moving-refs', 'unknown-diff'}:
+        assert 'tests/ops' in fields['pytest_args'].split()
+        assert 'tests/deploy' in fields['pytest_args'].split()
