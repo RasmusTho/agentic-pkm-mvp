@@ -288,6 +288,45 @@ This document is the canonical spec that epic #2655 (deployment + environment-se
 - **Full-environment downtime is authorized for the cutover** (S7). The cutover from the shared-checkout bind-mount model to pinned images may take all channels down briefly.
 - **Auth↔topology** is reconciled by treating the local reverse proxy / bridge hop as a **trusted proxy** (trusted `X-Forwarded-For`) or by using host networking, while **untrusted callers stay rejected** (#2223 intent). The tactical fix already shipped in PR #2665; this document formalizes it (see §Auth↔topology decision).
 
+## MVR-06 background-authority floor (MVR-06A, #3863)
+
+Repository support is shipped; no channel has been advanced by this change. The floor is the
+irreversible compatibility boundary for the delegated background-runtime role and the staged
+background intent (`docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md`).
+
+- **Producer and order.** With `MVR06_BACKGROUND_CUTOVER=1`,
+  `scripts/lib/instance_state_deployment.sh` runs
+  `python -m app.instance.runtime background-authority-cutover --bootstrap-kind existing-install`
+  in `instance-state-init`, last inside the proved stopped deployment window: after
+  `principal-cutover` (MVR-03, the delegator), `mvr05-record-floor` (the MVR-05 channel fence it
+  advances from), and `settings-rebind-install-dormant`, and before `deployment-finish`. The
+  command refuses outside that window. It commits the `minimumRuntimeSchema=mvr-06` floor with
+  registry schema v3 first, then the private `background-runtime-role.json` record, then the staged
+  `backgroundIntent`. The wrapper always passes `--bootstrap-kind existing-install`; channel and
+  native bootstrap are operator-run invocations of the same command with `--bootstrap-kind
+  channel|native` (no wrapper wires them yet). Without the opt-in the wrapper runs nothing new and
+  the channel stays at MVR-05.
+- **Operator preflight.** Before opting in: the MVR-03 principal must exist (run the
+  `MVR03_PRINCIPAL_CUTOVER=1` deployment first); the MVR-05 floor must be recorded; and, per
+  KD-A42F26A9AD87 from #3862, the outbox must be drained or its writers stopped before any DEV/TEST
+  rollout. After the cutover, `background-authority-show` and `background-binding-list` print the
+  redacted role and staged-intent receipts.
+- **Startup gate.** After the floor, the compose `watcher` and `worker` preflight require a complete,
+  valid role and intent lineage before the process starts; the `api` preflight does not. Every
+  pre-MVR-06 image refuses the v3 registry at its schema gate before registry or auth access.
+- **Compatible rollback / roll-forward images.** Only an image that contains
+  `app/instance/background_authority.py` (this change or later) may run a floored channel, in either
+  direction. Rolling back to MVR-05D (`92e6740a4`) or older leaves API, watcher, and worker stopped at
+  preflight; the floor is never lowered by a rollback and there is no database rollback.
+- **Recovery.** Every cutover failure keeps the stopped window, because the wrapper cannot tell a
+  compensated failure from an ambiguous one. A failure before the intent commits has already
+  compensated its own role and floor, so the operator reruns the deploy or runs
+  `deployment-release`. A killed cutover leaves a floor-qualified partial lineage that only a rerun of
+  `background-authority-cutover` (idempotent, reusing any role it already wrote) completes. An output
+  naming "compensation is unproven" means the registry and role state must be inspected before any
+  release. A revoked background role (`background-role-revoke`) blocks the next background start
+  until `background-role-redelegate`.
+
 ## Environment matrix
 
 The contract spans three channels: `dev`, `test`, and `prod`. The local Compose fallback can run them in
@@ -720,20 +759,170 @@ output or credentials. Incomplete output still refuses acceptance. The observed 
 inference, not a captured historical exception. Actual equivalent DEV/TEST acceptance is verified by the dated #5675 receipt above.
 Observed selected/pass counts are evidence, not a permanent test-count gate.
 
-Automatic DEV/TEST activation may reclaim at most eight proved unused official application-image
-IDs under the existing native channel lock before the ordinary deployment script runs. The cache
-inventory reads only fixed image/container IDs, references, tags, digests and creation times. Every
-running, stopped or created container image, current/previous and rollback pin, pending-migration
-reference and exact admitted target digest remains protected, including different digests for the
-same source SHA. Reclamation requires an official registry digest in `RepoDigests`; a local tag
-alone does not prove that an image is rebuildable. Images with another-repository aliases or
-unproved provenance are retained. Each
-exact, non-force `--no-prune` removal rechecks the protected snapshot and image metadata,
-retaining untagged parents that were not separately admitted for reclamation. Manual and PROD paths
-perform no cache maintenance, and this path never prunes volumes or touches application, database
-or vault data. Unavailable or malformed inventory, changed snapshots or failed removal stop further
-reclamation with a fixed warning, then continue the unchanged pull and deployment gates. This is
-optional recovery of rebuildable image cache, not a capacity or approval prerequisite.
+Automatic DEV/TEST image-cache reclamation is temporarily paused. A retained operation request can
+reference an image that has no current container, pin, or admitted-target reference, and some
+host-only attempts have no complete native inventory. The optional cleanup emits a fixed warning and
+continues the unchanged deployment and image-pull gates without removing images. Manual and PROD
+paths remain outside this cleanup. This preserves retained attempts, but images can accumulate and
+consume disk space: continue the existing capacity monitoring and use only separately qualified
+operator cleanup. Restore bounded automatic reclamation only after a complete, stable proof covers
+retained host and native attempts, including legacy UNKNOWN operations and source-installation
+attempts whose image was cached before native admission. Do not infer an empty protection set from
+missing native evidence. The mandatory restoration and capacity-proof contract is tracked in #6521.
+
+#### Planned complete DEV/TEST image retention and capacity admission
+
+**Target contract, not installed behavior.** The change in
+[#6520](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6520) pauses automatic removal
+only after its source is installed. Preserve that pause until the producer, inventory and
+capacity changes below are delivered and the separate DEV and TEST adoption proof passes.
+This plan does not establish installed source, a successful deployment, the outcome of an old
+operation, or permission to remove any current image.
+
+The present deployment path has several distinct authorities:
+
+- The host's `HostSecretOperation` journal records operation, kind, target and lifecycle stage,
+  but an older deployment entry does not itself bind a complete image plan or digest.
+  `deploy_from_host` holds the existing host controller lock while sending the plan; loss of
+  the reply is not evidence that the native receiver did nothing.
+- The native `DeployJournal` retains per-operation requests and, where admitted, UNKNOWN
+  tombstones containing a validated plan and fingerprint. Source installation uses its separate
+  source-installation owner and receipt namespace. The source transaction's `_verify_candidate`
+  **inspects** an already cached image; it does not perform the preceding cache pull.
+- `scripts/deploy_channel.sh::pull_channel_images` performs the ordinary Compose pull after
+  candidate and previous-pin handling. Native activation also sees all Docker containers and
+  the existing current, previous and migration pins. The current optional reclamation census
+  does not prove the complete retained-operation set.
+- An operator-controlled source-recovery carrier has also pulled an immutable public image
+  directly before its Source RPC ([source-attempt evidence](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6170#issuecomment-6490153505)).
+  That observed carrier is session-owned, not a checked-in
+  deployment producer. Its history cannot be reconstructed from absence of a native receipt.
+  Replace that route with a supported repository-owned producer before relying on complete
+  accounting; do not promote a transient carrier into a second source of authority.
+
+The supported source pre-pull must fsync an immutable, value-free binding of operation ID, channel,
+revision, official repository, index digest and qualified Docker store into the existing durable
+operation authority **before** the pull. An ordinary host deploy or source-persistence request
+must bind the same operation and exact image identity before cache-affecting dispatch; its host
+record may leave the store unscoped when the native receiver has not yet qualified it. In that
+case every store the operation could have reached must protect that digest until authenticated
+evidence narrows the scope. Reapply this protection when a possible store is later discovered,
+remounted or cloned; do not limit it to daemons active at the original dispatch. A missing possible
+store, or an unresolved mapping from the digest to image IDs and aliases, prevents reclamation
+wherever protection cannot be proved. Capacity
+admission must separately qualify the actual effect store and all potentially affected resources
+before dispatch; an unscoped host record does not establish capacity admission. The admitted
+native request and source-installation owner/receipt must match the image identity. A changed binding,
+including two digests for the same source SHA, is not the same request. A source pull that
+fails, loses transport or has no native receipt retains its binding and its uncertainty; it is
+never automatically replayed. The migration must identify the actual supported callers and
+account for the previously used operator-controlled path, rather than assuming all earlier
+pulls entered a native journal.
+
+The repository-owned source producer retains an image intent before publishing its source owner,
+an image binding before pull, and a pull-completion companion only after a verified response.
+Recovery can close a source installation before backup when its exact intent and absence of a
+channel owner are proved, while retaining the image evidence. A `source_pull_unresolved` refusal
+describes the source installation only: it does not prove that the Docker pull has terminated or
+permit its possible capacity budget to be removed from admission accounting. Inventory must preserve orphan intents and all retained companions
+even after the source owner becomes terminal. A missing or malformed companion cannot establish
+a negative outcome. The new pull is closed by default until the capacity guard is delivered;
+an already cached verified candidate remains usable. Do not retire the existing operational
+pre-pull route or claim live adoption until producer, protection and guard are installed and
+separately verified on each channel. Manual DEV/TEST host deploys require an immutable image
+digest from the verified build before cache-affecting dispatch.
+
+For old host-only or pre-admission UNKNOWN operations without a bound digest, authenticate and
+retain the original operation-bound request or other existing owner evidence if it exists. Record
+any resulting compatibility evidence through the existing authority without rewriting historical
+outcomes. If the original digest cannot be proved, its possible image set is unbounded: automatic
+deletion remains disabled on the affected store, or on every possible store if its store binding
+is also unknown. A list of images currently present is not proof that a missing unknown
+digest cannot be pulled later. This restriction is separate from a replay fence, which can prevent
+replay without determining the old outcome.
+
+The future reclaimer must identify each actual Docker daemon and data-root store, then construct
+a complete protection snapshot for all channels and writers that really share that store. DEV
+and TEST have been observed on separate guests with separate local Docker daemons; do not infer
+a shared Docker store from their potentially shared underlying Proxmox thin pool. For each
+store, include all retained host/native operation bindings and source attempts, native requests
+and tombstones, source owners and receipts, admitted candidate, current/previous and
+pending-migration pins, rollback references and every running, stopped or created container.
+It must authenticate provenance, prove inventory completeness, retain same-SHA/different-digest
+identities and bind the snapshot to the daemon and lock generation. Existing shared source
+reservations exclude a source installer taking the exclusive reservation, but shared reservations
+alone do **not** exclude another ordinary caller. The implementation must coordinate every
+participating writer in a fixed lock order or use an equivalent fenced snapshot through each
+removal. A pre-pull-to-Source handoff may release a lock only after the intent is durable and
+visible to the reclaimer; it must not deadlock by recursively taking the installer's lock.
+
+Missing, malformed, partial, unauthenticated, changing or cross-channel-inconsistent evidence,
+an unaccounted producer, a changed store or an unknown lock state yields a finite skipped result
+and no removal. Once the complete snapshot is proved, the positive path may remove no more than
+eight exact, unused official image IDs in one pass, each by non-force `--no-prune`, with a fresh
+protection and image-identity check under the same fence. A tag alone, a different-repository
+alias or a stale inventory is insufficient. No volume, application, database, vault, pin or
+retained receipt is a cleanup target. The normal deployment must continue when optional cleanup
+is safely skipped; a real pull or deployment error remains a failure.
+
+The future capacity guard must admit each governed DEV/TEST cache-affecting pull before it starts:
+source pre-pull, deployment, source-persistence, source diagnostic and operator restoration.
+Qualify the actual Docker and containerd stores and staging locations, affected root and tmpfs
+filesystems, and the shared pool's data and metadata. Configure byte and inode floors separately
+for each channel, together with a conservative per-pull budget based on measured image and
+unpacking demand plus margin. Qualify these values against actual candidates and hosts; DEV's
+observed 30-GiB operating margin is not an implicit TEST default.
+
+Coordinate participating pull writers through the existing operation authorities and a common
+per-guest admission fence with a documented lock order. A guest-local fence does not exclude the
+other guest. For the shared pool, each admission must account for the configured budgets of all
+pulls that could overlap, including unresolved pulls, in addition to a pool margin. The two-guest
+case may conservatively count one full configured budget for each guest at every admission, if all
+participating paths are limited to one pull per guest and both guests can obtain fresh authenticated
+pool data and metadata measurements for the same qualified pool. Configure and enforce a finite
+maximum measurement age. This avoids a separate capacity registry; another mechanism
+must demonstrate equivalent coordination. If the relevant store, writer coverage, measurements,
+policy or budget cannot be qualified, refuse the new effect before dispatch with a finite,
+actionable reason. Bootstrap and configuration producers must supply the policy before this guard
+is enabled.
+
+Measure and alert on low guest bytes/inodes, low pool data/metadata headroom and unavailable or
+stale measurements even when no new pull is requested. Stop admitting new pulls when the policy cannot be met; retain existing
+operation evidence and provide a documented way to add capacity or perform a qualified exact-image
+recovery. After a lost pull response, its possible capacity use must remain accounted for until
+authenticated quiescence is established: closing a client or retiring a source-only owner does
+not prove dockerd stopped. The one-pull-per-guest limit must survive client, supervisor
+and host restarts: retain and check existing durable operation evidence, and admit no subsequent
+pull on that guest until authenticated quiescence proves the earlier work no longer writes. Verify a crash with a
+continuing Docker pull, a new request and restart. Provide a bounded, documented operator recovery
+that can establish this quiescence without replay, for example a qualified daemon restart and cache
+consistency check when those also prove any containerd/snapshotter work ended. Quiescence can end
+the capacity charge but does not establish whether the image pull succeeded or changed the cache;
+retain UNKNOWN effect status and digest protection until independently resolved. Cached, already
+verified source images must remain usable.
+
+This is a coordinated admission and early-warning policy, not a hard storage reservation or quota.
+Measured image demand is an estimate, and unmanaged writers, unexpected unpacking growth, a changed
+store or pool, and already-running effects can cross a margin between observations. State these
+limits in diagnostics and live acceptance; do not claim that the policy prevents every disk-full
+condition. It changes neither the complete retained-image protection requirement nor the pause on
+unsafe reclamation. This target is not yet installed or adopted.
+
+The ordered implementation and acceptance work is:
+
+1. [#6523](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6523) — bind and retain exact
+   source-preparation and host deployment identities before pull or dispatch, including legacy
+   compatibility and the cutover of the external pre-pull producer.
+2. [#6524](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6524) — use a complete,
+   cross-channel retained-operation snapshot to restore bounded exact-ID reclamation after
+   #6523 and the temporary #6520 fix are delivered.
+3. [#6525](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6525) — implement qualified
+   capacity admission, concurrent-writer budgeting and alerts after #6523 provides the supported
+   producer. Every supported pull path must adopt the resulting guard.
+4. [#6526](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6526) — qualify the exact
+   candidate and digest, demonstrate positive and refusal cases on DEV and TEST, verify protected
+   images and service health, and record operation-bound adoption evidence before retiring the
+   pause. Current-head unit tests or a health response alone are not this acceptance.
 
 `app.ops.pg_acceptance_runner` creates an operation/channel-owned pgvector container with a
 network-none namespace and tmpfs database storage. The test container shares only that namespace;
@@ -1404,6 +1593,90 @@ owned close is attempted once. Unsupported or malformed claims keep the existing
 family/coarse fallback; old absent-field, family and non-prebackup receipts retain
 their compatibility rules. A first failure does not disclose later latent defects
 or grant repair authority.
+
+Initial retained-PATH refusals additionally use
+`old_kernel_initial_root_control__<mode>__<side>__<role>__<guard>` in that existing
+optional field. `path_environment` means the PATH branch was reached before
+selection; `path_absent` and `path_selected` mean the original complete selector
+returned empty or nonempty. Neither reports a count or input identity. Side is
+`old` or `proposed` only for `path_hints/launcher_hint`, otherwise `unknown`.
+These combinations are **initial-only**; final empty-control and later phases keep
+their family/phase outcomes. The original discovery vocabulary is unchanged.
+
+The following is the complete added finite vocabulary. Each guard names the
+first original atom, or the original operation whose cause remains UNKNOWN:
+
+| Source role | Exact guard symbols | Minimum decision or explicit residual |
+| --- | --- | --- |
+| `loaded_slots` (`path_environment`); `parsed_slots` (`path_selected`) | `path_population`, `non_path_hint`, `hint_bound`, `path_absolute`, `path_backslash`, `path_nul`, `path_canonical`, `component_bound`, `misleading_hint`, `slot_absent`, `duplicate_components` | Requalify respectively the sole-PATH population, other control hint, 16-component bound, absolute form, forbidden backslash/NUL, canonical components, 32-component path bound, misleading root substring, control-slot presence or uniqueness. Which empty/dot/parent component failed is UNKNOWN; no second inspection. Branch/typing/regex-excluded rows are defensive, not claimed reachable initial failures. |
+| `path_hints` (`path_environment`) | `environment_files`; `launcher_hint` (separate `old`/`proposed`) | Requalify the named unsupported hint source before DropInPaths; no unit edit/removal is authorized. |
+| `config_footprint` | `population`, `application`, `launcher_parent`, `construction_unknown` | Requalify the manifest footprint population, application binding or launcher-parent binding respectively. Malformed/unexpected construction is UNKNOWN at this fixed config site. |
+| `binding` | `construction_unknown`, `slots_changed`, `selection_changed`; `loaded_assignment` (`path_selected`); `branch_changed` (`path_environment`) | Unknown initial construction; saved slot drift; complete selection drift; disk/loaded sole-PATH disagreement; or departure from the supported branch. Each requires its named binding to be requalified. A fresh initial service starts without a saved binding. |
+| `ancestor`, `control_root`, `application_root`, `launcher_root`, `backup_root`, `effect_parent`, `selected_parent`, `slot_descent`, `slot_census`; also `retained_directory`, `current_directory`, `fresh_directory` | `directory_fstat_unknown`, `directory_type`, `directory_mode`, `directory_owner`, `directory_inheritable_unknown`, `directory_inheritable` | At the static caller role, distinguish unavailable fstat, required directory type, writable-mode predicate, accepted owner pair, unavailable inheritance query and inheritable FD. Requalify that invariant; unavailable operations have UNKNOWN OS cause. No metadata value is disclosed. |
+| The first nine directory roles above | `directory_absolute`, `directory_component_bound`, `directory_canonical`, `descriptor_bound`, `open_unknown`, `mount_crossing` | Requalify representation/bounds, descriptor capacity, unavailable no-follow open, or same-mount proof respectively. No alternative lookup or retry is implied. Ancestor is the original recursive ancestry, not an inferred private path. |
+| `selected_input`, `content_input`, `retained_input`, `current_input`, `fresh_input` (`path_selected`) | `file_fstat_unknown`, `file_type`, `file_link`, `file_owner`, `file_mode`, `file_size_positive`, `file_size_bound`, `file_inheritable_unknown`, `file_inheritable`, `file_access_unknown`, `file_access` | Requalify the selected file's regular type, single link, exact owner, original forbidden mode mask, positive size, per-file ceiling, noninheritance or read-only access as named; query failures retain UNKNOWN cause. The original mode mask is one predicate, not a guessed individual bit. |
+| Every directory/file identity role above | `mount_platform`, `mount_libc_unknown`, `mount_buffer_unknown`, `mount_statx_unknown`, `mount_statx`, `mount_unpack_unknown`, `mount_mask`, `mount_identity` | Qualify supported Linux; or diagnose the fixed libc/buffer/call/unpack operation; or requalify statx success, requested mask or nonzero mount identity. Native cause/errno/mount value is UNKNOWN. No fallback metadata source is used. |
+| `retained` | `retained_version` | Previously held version changed; which member differs is UNKNOWN. Preserve refusal and requalify the complete retained proof. |
+| `footprint` | `tuple_type`, `population`, `member_mapping` | Requalify the manifest producer's exact tuple, population or mapping shape. Real NativePorts constructs the complete three-root tuple; malformed shapes remain direct defensive guards. |
+| `roots` | `equal`, `above`, `recorded_identity`; historical `below` remains readable | Distinguish root equality, the earlier root below the current root, or recorded root identity disagreement. Requalify disjointness or bound root proof; the differing identity member/cause is UNKNOWN. |
+| `roots_application_control`, `roots_launcher_control`, `roots_launcher_application`, `roots_backup_control`, `roots_backup_application`, `roots_backup_launcher` | `below` only | The current schema root is below the earlier compared schema root, in the original control/application/launcher/backup order. Requalify disjointness; the public pair alone establishes no safe topology remedy. |
+| `effect_parents` | `tuple_type`, `empty`, `bound`, `member_type`, `duplicate`, `outside_effect` | Requalify the producer's exact tuple, nonempty coverage, bound, string members, uniqueness or confinement to application/launcher effects. No subset can be adopted. |
+| `selected_parent` (`path_selected`) | `equal`, `below`, `above`, `identity_alias` | Distinguish each protected-root relationship from directory identity alias. Requalify footprint disjointness or lookup identity, without exposing a path. |
+| `selected_file` (`path_selected`) | `descriptor_bound`, `open_unknown`, `mount_crossing`, `identity_alias`, `aggregate_size` | Distinguish capacity, unavailable file open, mount crossing, file alias and whole-vector declared-size overflow. Directory alias, per-file size and aggregate size have different decisions. |
+| `selected_content` (`path_selected`) | `pread_unknown`, `returned_length`, `post_read_version`, `grammar`, `assignment_disagreement` | Requalify unavailable bounded read, length proof, post-read version, supported two-line syntax, or agreement across all selected assignments. A regex refusal has UNKNOWN internal syntax reason; a version comparison has UNKNOWN changed member. No classifier is run afterward. |
+| `loader_app`, `loader_scripts` | `stat_unknown`, `present` | Diagnose unavailable no-follow stat, or requalify the named captured-empty loader slot. Missing remains successful absence. Presence establishes neither type/content nor safe removal. |
+| `slot_descent` | `stat_unknown`, `not_directory` | Diagnose the unavailable edge or requalify unsupported lookup topology. A missing edge still stops descent successfully. |
+| `slot_census` | `before_fstat_unknown`, `scandir_open_unknown`, `scandir_iteration_unknown`, `scandir_exit_unknown`, `entry_stat_unknown`, `entry_bound`, `entry_owner`, `entry_mode`, `entry_type`, `entry_executable`, `entry_link`, `after_fstat_unknown`, `directory_time_drift` | Unknown operations stay separate at their fixed sites. Other guards separately require bounded direct population, exact owner, nonwritable mode, supported directory/regular type, nonexecutable regular file, single link or stable directory times. Which timestamp changed is UNKNOWN. Direct subdirectories are still accepted without recursion/content reads. |
+| `absent_edge` | `stat_unknown`, `appeared` | Diagnose unavailable repeat stat, or requalify an edge that appeared. Absence remains success; no entry type/content is inferred. |
+| `current_edge`; `fresh_edge` | `stat_unknown`, `held_version`, `edge_identity`; `open_unknown`, `version` | Separately requalify current namespace availability, held proof, device/inode edge binding, fresh-open availability or fresh-view agreement. Different recorded members remain UNKNOWN. Fresh FDs retain their original finally-close. |
+| `snapshot`; `walk` | `disagreement`; `unexpected_unknown` | Complete saved snapshot drift, or an otherwise unexpected operation at the fixed revalidation boundary. Preserve refusal/uncertainty and requalify; the changed field or native cause is UNKNOWN. |
+
+The six `roots_<current>_<earlier>` roles are selected only after the original
+`current.startswith(earlier + '/')` predicate has failed disjointness. They admit
+exactly twelve combinations: `path_absent` or `path_selected`, side `unknown`,
+guard `below`, at INITIAL only. There is no additional path read, predicate,
+classification or later-pair inspection. `equal`, `above`, `recorded_identity`,
+original discovery and final empty-control/later-phase exports are unchanged.
+Pairs among the fixed control/launcher/backup roots are defensive under their
+mutually disjoint production constants; synthetic coverage of all six is not a
+claim that every pair can reach this initial branch through prior gates.
+The lower installation manifest still independently requires disjoint roots.
+The verified candidate Source RPC runs the candidate producer and finite readers
+before installation; a refusal leaves the installed OLD validator/source intact.
+Legacy `roots/below` receipts remain readable and reconciliation returns them
+unchanged. Source28's historical role pair and safe compatibility remedy remain
+UNKNOWN; this source support grants no native read/retry, installation, DEV/TEST
+admission, capture or parent closure.
+
+Unless narrowed above, walk roles use `path_absent` or `path_selected`; all sides
+are `unknown`. Symbols never include an index, native path/count/content/digest,
+mode/owner value, environment, argv, exception/type/errno or stack information.
+The same original call supplies the diagnostic: no extra OS read, predicate,
+parser, census or walk is introduced. Whole-vector metadata still precedes any
+content, with the unchanged 4096 accepted /4097 returned-byte budget including
+failures. Full typed Environment order, six loaded-property checks, FD envelopes,
+source/target C/D and exact Git launcher binding, generation/compensation and
+original-handle rules remain mandatory.
+
+Actual owned closes are attempted once; replacement FDs are never closed and
+sticky retained/transient close uncertainty overrides an earlier diagnostic.
+Existing unresolved assembled paths retain fatal exit 78, no outer stdout/terminal
+response and their owner. Transient PATH-close uncertainty publishes no terminal
+receipt. The original retained-runtime-close path can retain one inner
+`old_kernel_initial_retained_runtime` fallback with null generation/backup fields;
+that record does not override the outer failure or establish a completed operation.
+An `__provenance_unavailable` suffix still means scoped
+early executed-source comparison was unavailable; no suffix is not final caller,
+loaded-source or FULL proof. Unknown/foreign/subclass/missing/malformed metadata
+keeps the existing family/coarse fallback and legacy absent-field receipts remain
+readable.
+
+This source support does not identify Source27's native failure site, cause or
+profile fit. Source27 remains one closed initial refusal with no backup/stop or
+installation; it proves no later PATH or loaded check passed. Changed source bytes
+need their natural matched image and a separately applicable native decision.
+Same-image DEV, TEST and parent acceptance remain separate and open; these symbols
+authorize no native observation, repair, replay or subsequent operation.
 
 Initial unit-property failures can refine the same field to
 `old_kernel_initial_unit_properties__<site>__<kind>`; the closed method/property

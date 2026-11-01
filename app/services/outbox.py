@@ -29,6 +29,20 @@ from app.instance.binding_ids import (
     OUTBOX_QUARANTINE_BINDING_ID,
 )
 from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
+from app.services.outbox_producers import (
+    CONTEXT_ACTIVE,
+    CONTEXT_BINDING_RUNTIME,
+    CONTEXT_GLOBAL,
+    CONTEXT_NO_BINDING_RUNTIME,
+    DISPATCHABLE_VAULT_BOUND_CONTEXT_KINDS,
+    OUTBOX_ENVELOPE_VERSION,
+    ROUTING_GLOBAL,
+    ROUTING_VAULT_BOUND,
+    EmissionContext,
+    OutboxProducerRoutingError,
+    current_emission_context,
+    require_registered_producer,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -866,6 +880,115 @@ def payload_fingerprint(payload: Mapping[str, Any] | None, *, exclude: tuple[str
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+_BINDING_STAMP_KEYS = (
+    "vault_binding_id",
+    "binding_authority",
+    "binding_authorization_epoch",
+    "binding_revision",
+    "vault_root",
+)
+
+
+def _binding_context_envelope_meta(
+    meta: Mapping[str, Any] | None,
+    *,
+    routing_class: str,
+    resolved_binding_id: str,
+    binding_runtime: Any,
+    emission_context: EmissionContext | None,
+    producer: str | None,
+    legacy_key: str,
+    scoped_key: str,
+) -> dict[str, Any]:
+    """Build the MVR-05D versioned envelope over a copy of the event meta.
+
+    Binding facts inherited from a re-emitted source event are discarded and
+    re-derived here, so a stale stamp can never survive into a new row.
+    """
+    stamped = {
+        key: value for key, value in dict(meta or {}).items() if key not in _BINDING_STAMP_KEYS
+    }
+    stamped["vault_binding_id"] = resolved_binding_id
+    if binding_runtime is not None:
+        stamped.update(
+            {
+                "vault_binding_id": binding_runtime.vault_binding_id,
+                "binding_authority": binding_runtime.authority,
+                "binding_authorization_epoch": binding_runtime.authorization_epoch,
+                "binding_revision": binding_runtime.binding_revision,
+                "vault_root": str(binding_runtime.root),
+            }
+        )
+    if routing_class == ROUTING_GLOBAL:
+        context: dict[str, Any] = {
+            "kind": CONTEXT_GLOBAL,
+            "context_id": None,
+            "context_generation": None,
+        }
+    elif emission_context is not None:
+        context = {
+            "kind": CONTEXT_ACTIVE,
+            "context_id": emission_context.context_id,
+            "context_generation": emission_context.context_generation,
+        }
+    else:
+        context = {
+            "kind": (
+                CONTEXT_BINDING_RUNTIME
+                if binding_runtime is not None
+                else CONTEXT_NO_BINDING_RUNTIME
+            ),
+            "context_id": None,
+            "context_generation": None,
+        }
+    stamped.update(
+        {
+            "outbox_envelope": OUTBOX_ENVELOPE_VERSION,
+            "routing_class": routing_class,
+            "outbox_producer": producer,
+            "producer_context": context,
+            "idempotency": {
+                "legacy_key": _canonical_uuid_text(legacy_key),
+                "binding_scoped_key": scoped_key,
+            },
+        }
+    )
+    return stamped
+
+
+def _canonical_uuid_text(value: str) -> str:
+    """The ``legacy_key::text`` form PostgreSQL compares the envelope against."""
+    try:
+        return str(uuid_module.UUID(value))
+    except ValueError:
+        return value
+
+
+def binding_envelope_is_dispatchable(message: Mapping[str, Any]) -> bool:
+    """Whether a polled vault-bound row carries a complete MVR-05D envelope.
+
+    Mirrors the SQL predicate in :func:`poll_outbox_one`; the worker re-checks
+    it under the shared binding lease as defense in depth.
+    """
+    event = message.get("event")
+    meta = getattr(event, "meta", None)
+    if not isinstance(meta, Mapping):
+        return False
+    context = meta.get("producer_context")
+    idempotency = meta.get("idempotency")
+    row_binding = str(message.get("vault_binding_id") or "")
+    return (
+        meta.get("outbox_envelope") == OUTBOX_ENVELOPE_VERSION
+        and meta.get("routing_class") == ROUTING_VAULT_BOUND
+        and meta.get("vault_binding_id") == row_binding
+        and isinstance(context, Mapping)
+        and context.get("kind") in DISPATCHABLE_VAULT_BOUND_CONTEXT_KINDS
+        and isinstance(idempotency, Mapping)
+        and idempotency.get("binding_scoped_key") == str(message.get("id") or "")
+        and bool(idempotency.get("legacy_key"))
+    )
+
+
 def _validate_and_stamp_schema(envelope: Event, payload_schema: str | None) -> Event:
     """Validate a registered-topic payload before insert and stamp its schema ref.
 
@@ -899,8 +1022,17 @@ def write_outbox_event(
     vault_binding_id: str | None = None,
     required_db: bool = False,
     payload_schema: str | None = None,
+    producer: str | None = None,
 ) -> str:
     """Insert one event into the DB outbox, keyed by a mandatory idempotency key.
+
+    MVR-05D: every row is written with the versioned binding/context envelope
+    (:data:`app.services.outbox_producers.OUTBOX_ENVELOPE_VERSION`) — routing
+    class, stable binding, captured producer context, and both idempotency
+    keys — so no call site can write a legacy envelope. ``producer`` names the
+    registered production call site; an unknown id fails loud, and a producer
+    whose resolved binding contradicts its registered routing class is refused
+    before insert. Every production call site passes it (architecture gate).
 
     ``idempotency_key`` is required (keyless calls are a ``TypeError`` at the
     signature level) and becomes the row ``id`` with ``ON CONFLICT (id) DO
@@ -932,28 +1064,51 @@ def write_outbox_event(
     """
     if not isinstance(idempotency_key, str) or not idempotency_key.strip():
         raise ValueError(f"write_outbox_event requires a non-empty idempotency_key, got {idempotency_key!r}")
+    registered = require_registered_producer(producer) if producer is not None else None
     envelope = _coerce_event(event)
     resolved_binding_id = _resolve_outbox_vault_binding_id(vault_binding_id)
-    if resolved_binding_id != OUTBOX_GLOBAL_BINDING_ID:
-        binding_runtime = resolve_scalar_binding_runtime(
-            requested_binding_id=resolved_binding_id
+    routing_class = (
+        ROUTING_GLOBAL if resolved_binding_id == OUTBOX_GLOBAL_BINDING_ID else ROUTING_VAULT_BOUND
+    )
+    if registered is not None and registered.routing not in ("inherited", routing_class):
+        raise OutboxProducerRoutingError(
+            f"outbox producer {registered.producer_id!r} is registered "
+            f"{registered.routing!r} but resolved to {routing_class!r}"
         )
-        if binding_runtime is not None:
-            stamped_meta = dict(envelope.meta or {})
-            stamped_meta.update(
-                {
-                    "vault_binding_id": binding_runtime.vault_binding_id,
-                    "binding_authority": binding_runtime.authority,
-                    "binding_authorization_epoch": binding_runtime.authorization_epoch,
-                    "binding_revision": binding_runtime.binding_revision,
-                    "vault_root": str(binding_runtime.root),
-                }
-            )
-            envelope = envelope.model_copy(update={"meta": stamped_meta})
+    binding_runtime = (
+        resolve_scalar_binding_runtime(requested_binding_id=resolved_binding_id)
+        if routing_class == ROUTING_VAULT_BOUND
+        else None
+    )
+    emission_context = current_emission_context()
+    if (
+        routing_class == ROUTING_VAULT_BOUND
+        and emission_context is not None
+        and emission_context.target_binding_id != resolved_binding_id
+    ):
+        # A governed write window names exactly one target; an emission inside
+        # it can never be routed to another vault binding.
+        raise OutboxProducerRoutingError(
+            "outbox emission binding does not match the governed write target"
+        )
     scoped_key = derive_binding_scoped_idempotency_key(
         envelope.event_type,
         resolved_binding_id,
         idempotency_key,
+    )
+    envelope = envelope.model_copy(
+        update={
+            "meta": _binding_context_envelope_meta(
+                envelope.meta,
+                routing_class=routing_class,
+                resolved_binding_id=resolved_binding_id,
+                binding_runtime=binding_runtime,
+                emission_context=emission_context,
+                producer=producer,
+                legacy_key=idempotency_key,
+                scoped_key=scoped_key,
+            )
+        }
     )
     if is_registered_topic(envelope.event_type):
         envelope = _validate_and_stamp_schema(envelope, payload_schema)
@@ -1096,6 +1251,7 @@ def insert_object_and_outbox(
     observation: str | None = None,
     required_db: bool = False,
     vault_binding_id: str | None = None,
+    producer: str | None = None,
 ) -> str:
     """Helper som bygger ett Event och skickar det till outbox.
 
@@ -1150,6 +1306,7 @@ def insert_object_and_outbox(
         idempotency_key=key,
         vault_binding_id=vault_binding_id,
         required_db=required_db,
+        producer=producer,
     )
 
 
@@ -1170,6 +1327,25 @@ def _coerce_event_from_db(raw_payload: Any, topic: str) -> Event:
     trace_id = payload.get("trace_id")
     source = payload.get("agent")
     return new_event(event_type=event_type, payload=payload, trace_id=trace_id, source=source)
+
+
+# MVR-05D: a current-binding row is dispatchable only with the complete
+# versioned envelope. Mirrors :func:`binding_envelope_is_dispatchable`; rows
+# that fail it stay pending and count toward ``blocked_pending_mvr06``.
+_COMPLETE_ENVELOPE_SQL = (
+    "payload #>> '{meta,outbox_envelope}' = %s "
+    "and payload #>> '{meta,routing_class}' = %s "
+    "and payload #>> '{meta,producer_context,kind}' in ("
+    + ", ".join("%s" for _ in DISPATCHABLE_VAULT_BOUND_CONTEXT_KINDS)
+    + ") "
+    "and payload #>> '{meta,idempotency,binding_scoped_key}' = id::text "
+    "and payload #>> '{meta,idempotency,legacy_key}' = legacy_key::text"
+)
+_COMPLETE_ENVELOPE_PARAMS: tuple[str, ...] = (
+    OUTBOX_ENVELOPE_VERSION,
+    ROUTING_VAULT_BOUND,
+    *DISPATCHABLE_VAULT_BOUND_CONTEXT_KINDS,
+)
 
 
 def poll_outbox_one(
@@ -1210,7 +1386,8 @@ def poll_outbox_one(
                     "and payload #>> '{meta,binding_authority}' = %s "
                     "and payload #>> '{meta,binding_authorization_epoch}' = %s "
                     "and payload #>> '{meta,binding_revision}' = %s "
-                    "and payload #>> '{meta,vault_root}' = %s)) "
+                    "and payload #>> '{meta,vault_root}' = %s "
+                    f"and {_COMPLETE_ENVELOPE_SQL})) "
                 )
                 params = (
                     *params,
@@ -1222,6 +1399,7 @@ def poll_outbox_one(
                     str(required_binding_stamp["binding_authorization_epoch"]),
                     str(required_binding_stamp["binding_revision"]),
                     str(required_binding_stamp["vault_root"]),
+                    *_COMPLETE_ENVELOPE_PARAMS,
                 )
             sql += "order by created_at asc limit 1"
         cur = _exec(conn, sql, params)
@@ -1268,7 +1446,8 @@ def count_deferred_outbox_rows(
             "and payload #>> '{meta,binding_authority}' = %s "
             "and payload #>> '{meta,binding_authorization_epoch}' = %s "
             "and payload #>> '{meta,binding_revision}' = %s "
-            "and payload #>> '{meta,vault_root}' = %s)) is not true",
+            "and payload #>> '{meta,vault_root}' = %s "
+            f"and {_COMPLETE_ENVELOPE_SQL})) is not true",
             (
                 COMPATIBILITY_BINDING_ID,
                 OUTBOX_GLOBAL_BINDING_ID,
@@ -1278,6 +1457,7 @@ def count_deferred_outbox_rows(
                 str(required_binding_stamp["binding_authorization_epoch"]),
                 str(required_binding_stamp["binding_revision"]),
                 str(required_binding_stamp["vault_root"]),
+                *_COMPLETE_ENVELOPE_PARAMS,
             ),
         )
         row = cur.fetchone() if hasattr(cur, "fetchone") else None
@@ -1386,6 +1566,7 @@ def ack_outbox(*args, **kwargs) -> bool:
 
 __all__ = [
     "EVENT_ID_FINGERPRINT",
+    "binding_envelope_is_dispatchable",
     "OUTBOX_DEAD_LETTER_TOPIC",
     "OUTBOX_IDEMPOTENCY_NAMESPACE",
     "dead_letter_stats",

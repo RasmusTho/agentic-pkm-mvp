@@ -21,6 +21,10 @@ from app.instance.binding_ids import (
     OUTBOX_GLOBAL_BINDING_ID,
     OUTBOX_QUARANTINE_BINDING_ID,
 )
+from app.services.outbox import (  # the worker's dispatchable-row predicate
+    _COMPLETE_ENVELOPE_PARAMS,
+    _COMPLETE_ENVELOPE_SQL,
+)
 from app.rebuildability.product_total_loss import (
     ProductReplayRefusal,
     ProductReplayTuple,
@@ -317,7 +321,8 @@ def load_durable_projection_work(
             "and payload #>> '{meta,binding_authority}' = %s "
             "and payload #>> '{meta,binding_authorization_epoch}' = %s "
             "and payload #>> '{meta,binding_revision}' = %s "
-            "and payload #>> '{meta,vault_root}' = %s))"
+            "and payload #>> '{meta,vault_root}' = %s "
+            f"and {_COMPLETE_ENVELOPE_SQL}))"
         )
         params = (
             *params,
@@ -329,6 +334,8 @@ def load_durable_projection_work(
             str(required_binding_stamp["binding_authorization_epoch"]),
             str(required_binding_stamp["binding_revision"]),
             str(required_binding_stamp["vault_root"]),
+            # MVR-05D: only rows the worker could dispatch are durable work.
+            *_COMPLETE_ENVELOPE_PARAMS,
         )
     cursor = conn.cursor()
     try:

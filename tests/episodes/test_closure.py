@@ -187,7 +187,7 @@ def test_close_episode_flips_closed_and_emits_event(
     monkeypatch.setattr(
         closure_module,
         "write_outbox_event",
-        lambda event, *, idempotency_key, required_db=False: (
+        lambda event, *, idempotency_key, required_db=False, producer=None: (
             emitted.append((event, idempotency_key, required_db)) or idempotency_key
         ),
     )
@@ -262,7 +262,7 @@ def test_close_episode_already_closed_note_reconciles_outbox_and_projection(
     monkeypatch.setattr(
         closure_module,
         "write_outbox_event",
-        lambda event, *, idempotency_key, required_db=False: (
+        lambda event, *, idempotency_key, required_db=False, producer=None: (
             emitted.append(idempotency_key) or idempotency_key
         ),
     )
@@ -408,9 +408,14 @@ def test_quiesced_episode_closes_once(tmp_path: Path, monkeypatch: pytest.Monkey
     inserted: list[str] = []
 
     def _fake_write_outbox_event(
-        event: Any, *, idempotency_key: str, required_db: bool = False
+        event: Any,
+        *,
+        idempotency_key: str,
+        required_db: bool = False,
+        producer: str | None = None,
     ) -> str:
         assert required_db is True
+        assert producer == "shared.episodes.closed"
         # Mirrors app.services.outbox.write_outbox_event's real `ON CONFLICT (id) DO NOTHING`
         # semantics: the FIRST insert of a given (fixed) idempotency key lands and returns the
         # key; every later attempt with the SAME key is a deduped no-op returning "".

@@ -224,6 +224,7 @@ def _reconcile(
                 event, idempotency_key=derive_idempotency_key(
                     DEBRIEF_TRIGGER_CREATED, episode.episode_id, _CONTENT_FINGERPRINT,
                 ), vault_binding_id=binding_id, required_db=True,
+                producer="shared.episode_debrief.trigger",
             )
         except (TopicSchemaViolation, ValueError) as exc:
             # A deterministic per-item payload refusal must not suppress healthy

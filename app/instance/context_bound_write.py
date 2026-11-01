@@ -142,9 +142,17 @@ def context_bound_write_window(
             if context.expires_at is not None and context.expires_at <= time.time():
                 raise InvalidDecisionTokenError("active context expired at the source seam")
 
+        from app.services.outbox_producers import active_context_emission
+
         boundary = _WRITE_BOUNDARY.set((root, resource, check))
         try:
-            with frozen_binding_effect(runtime):
+            # MVR-05D: outbox emissions inside this window carry the request
+            # ActiveContextSet identity and may only route to this target.
+            with frozen_binding_effect(runtime), active_context_emission(
+                context_id=context.context_id,
+                context_generation=context.generation,
+                target_binding_id=target_binding_id,
+            ):
                 yield root
         finally:
             _WRITE_BOUNDARY.reset(boundary)

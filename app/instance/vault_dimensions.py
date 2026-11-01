@@ -828,6 +828,7 @@ def emit_dimension_mutation_event(receipt: DimensionReceipt) -> str:
         idempotency_key=idempotency_key,
         vault_binding_id=OUTBOX_GLOBAL_BINDING_ID,
         required_db=False,
+        producer="shared.instance.vault_dimensions",
     )
 
 

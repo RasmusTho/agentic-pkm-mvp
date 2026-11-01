@@ -702,7 +702,12 @@ class EntityRegister:
     def _emit(self, topic: str, *, entity_id: str, fingerprint_scope: str, payload: Mapping[str, Any]) -> str:
         key = derive_idempotency_key(topic, entity_id, fingerprint_scope)
         event = new_event(event_type=topic, payload=dict(payload), source=REGISTER_EVENT_SOURCE)
-        return write_outbox_event(event, conn=self._conn, idempotency_key=key)
+        return write_outbox_event(
+            event,
+            conn=self._conn,
+            idempotency_key=key,
+            producer="heimdal.entity_register",
+        )
 
     # -- v0 operations (§3.2) ------------------------------------------------
 

@@ -285,6 +285,7 @@ def _write_sync_event(topic: str, payload: dict[str, Any], *, run_id: str, bindi
         conn=conn,
         idempotency_key=derive_idempotency_key(topic, binding_id, run_id),
         required_db=_transaction_required(),
+        producer="ingest.knowledge_acquisition.rss_sync",
     )
 
 

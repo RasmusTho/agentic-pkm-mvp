@@ -237,9 +237,13 @@ def test_anchored_policy_defaults_enqueue_through_playlist_discovery(
     reset_memory_acquisition_requests()
     outbox = FakeOutboxConn()
 
-    def emit(event: Any, conn: Any = None, *, idempotency_key: str) -> str:
+    def emit(
+        event: Any, conn: Any = None, *, idempotency_key: str, producer: str | None = None
+    ) -> str:
         del conn
-        return write_outbox_event(event, conn=outbox, idempotency_key=idempotency_key)
+        return write_outbox_event(
+            event, conn=outbox, idempotency_key=idempotency_key, producer=producer
+        )
 
     monkeypatch.setattr(request_module, "write_outbox_event", emit)
     try:

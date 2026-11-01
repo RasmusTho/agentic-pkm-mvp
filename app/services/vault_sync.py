@@ -577,7 +577,14 @@ def _enqueue(
     # an A→B→A content revert (new mtime) emits a new event instead of being
     # swallowed against the original A outbox row.
     trace_id = new_trace_id()
-    insert_object_and_outbox(payload, topic, trace_id, conn=conn, observation=observation)
+    insert_object_and_outbox(
+        payload,
+        topic,
+        trace_id,
+        conn=conn,
+        observation=observation,
+        producer="ingest.vault_sync",
+    )
 
 
 def update_path(uuid_value: str, new_path: str, *, vault_root: Path | None = None) -> None:

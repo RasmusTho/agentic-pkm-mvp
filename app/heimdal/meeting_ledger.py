@@ -799,6 +799,7 @@ def _emit_late_admitted_event(payload: Dict[str, Any], *, trace_id: str) -> None
                         f"{payload.get('session_id', '')}\x1f{payload.get('session_seq', '')}",
                         str(payload.get("content_sha256", "")),
                     ),
+                    producer="heimdal.meeting.late_admitted",
                 )
             except Exception as exc:
                 logger.error(

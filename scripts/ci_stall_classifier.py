@@ -19,7 +19,7 @@ RERUN_CANDIDATE_CONCLUSIONS = frozenset({
     "timed_out",
 })
 DEFAULT_STALL_THRESHOLD_SECONDS = 30 * 60
-RUNNING_UNIT_WAIT_SECONDS = 90 * 60
+RUNNING_UNIT_WAIT_SECONDS = 135 * 60
 
 
 class CiStallClassifierError(ValueError):
@@ -235,7 +235,7 @@ def _wait_budget_seconds(check: CheckRun, override: int | None) -> int:
     if override is not None:
         return override
     if check.status == "in_progress" and check.name == "Unit tests (not pg)":
-        # The test step alone permits 75 minutes. Queue age and unrelated checks
+        # The full test step permits 120 minutes. Queue age and unrelated checks
         # keep their shorter allowance; an explicit caller budget wins everywhere.
         return RUNNING_UNIT_WAIT_SECONDS
     return DEFAULT_STALL_THRESHOLD_SECONDS

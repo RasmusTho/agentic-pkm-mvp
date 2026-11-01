@@ -47,8 +47,8 @@ def production_path(monkeypatch):
     monkeypatch.setattr(acquisition_requests, "_now", lambda now=None: now or clock.now)
     outbox = FakeOutboxConn()
     monkeypatch.setattr(acquisition_requests, "write_outbox_event",
-        lambda event, conn=None, *, idempotency_key: write_outbox_event(
-            event, conn=outbox, idempotency_key=idempotency_key))
+        lambda event, conn=None, *, idempotency_key, producer=None: write_outbox_event(
+            event, conn=outbox, idempotency_key=idempotency_key, producer=producer))
     registry = SourceRegistry.for_runtime()
     account = str(uuid.uuid4())
     binding = registry.register(collection_kind="inbox_playlist", collection_ref="PL_scheduler_fixture",

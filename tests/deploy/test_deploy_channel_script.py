@@ -2736,7 +2736,7 @@ def _bws_host(tmp_path, *, missing=False):
     if not missing:
         provider.seed('test/postgres.password', 'fake-role-password', ('non-prod',))
     admin = SecretAdmin(provider, controller=HostSecretController(tmp_path / 'controller'))
-    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',))
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',), image_digest='sha256:' + 'b' * 64)
 
     class Remote:
         def __init__(self):
@@ -2771,7 +2771,8 @@ def test_admin_parity_preflight_precedes_remote_deploy_mutation(tmp_path):
     admin, provider, _, remote = _bws_host(tmp_path)
     provider.seed('shared/openai.api-key', 'a' * 32, ('non-prod',))
     provider.seed('shared/openai.api-key', 'b' * 32, ('prod',))
-    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db', 'builderops-model-inquiry'))
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db', 'builderops-model-inquiry'),
+                      image_digest='sha256:' + 'b' * 64)
     with pytest.raises(PostgresDeployError):
         deploy_from_host(admin, remote, plan, qualified=lambda: None)
     assert remote.events == []
@@ -3170,7 +3171,7 @@ def test_bws_host_and_vm_preflight_use_active_secret_consumers(tmp_path, monkeyp
 
     admin, _provider, _old_plan, remote = _bws_host(tmp_path)
     plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), image_digest='sha256:' + 'b' * 64)
     assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'committed'
 
     cfg = SimpleNamespace(channel='test', root=tmp_path)
@@ -3840,13 +3841,14 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
 
     monkeypatch.setattr(host, 'deploy_from_host', deploy)
 
-    assert host.main(['test', 'a' * 40]) == 0
+    digest_args = ['--image-digest', 'sha256:' + 'b' * 64]
+    assert host.main(['test', 'a' * 40, *digest_args]) == 0
     assert captured[-1][0].ack_forward_only is False
     assert captured[-1][1] is True
-    assert host.main(['test', 'b' * 40, '--ack-forward-only']) == 0
+    assert host.main(['test', 'b' * 40, '--ack-forward-only', *digest_args]) == 0
     assert captured[-1][0].ack_forward_only is True
     assert captured[-1][1] is True
-    assert host.main(['test', 'c' * 40, '--existing-secrets-only']) == 0
+    assert host.main(['test', 'c' * 40, '--existing-secrets-only', *digest_args]) == 0
     assert captured[-1][1] is False
 
 
@@ -3866,12 +3868,18 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
         directory = tmp_path
 
         @contextmanager
-        def source_persistence_operation(self, channel, *, operation_id):
+        def source_persistence_operation(self, channel, *, operation_id, source_image_binding,
+                                         allow_legacy_cleanup):
+            assert allow_legacy_cleanup is True
+            binding = json.loads(source_image_binding)
+            assert binding['channel'] == channel
+            assert binding['image_digest'] == 'sha256:' + '1' * 64
             calls.append(("host-admit", channel, operation_id))
             operation = SimpleNamespace(
                 operation_id=operation_id,
                 completed_result=None,
                 completed_source=None,
+                mutation_started=False,
                 prepare_mutation=lambda: calls.append(("host-sent", channel, operation_id)),
                 finish=lambda evidence: calls.append(("host-finish", evidence)),
             )
@@ -4044,7 +4052,8 @@ def test_source_identity_absence_proof_retires_only_exact_pending_host_operation
         directory = tmp_path
 
         @contextmanager
-        def source_persistence_operation(self, channel, *, operation_id):
+        def source_persistence_operation(self, channel, *, operation_id, reconciliation_only):
+            assert reconciliation_only is True
             calls.append(("host-admit", channel, operation_id))
             operation = SimpleNamespace(
                 operation_id=operation_id,
@@ -4172,6 +4181,10 @@ def test_source_identity_admitted_failed_operation_can_finish_retained_cleanup(
     class Remote:
         def __init__(self, hostname):
             assert hostname == "ygg-test"
+
+        def readback_source_identity(self, requested_id, revision, digest, selected, producer_kind):
+            assert producer_kind == "vault-alpha"
+            return self.persist_source_identity(requested_id, revision, digest, selected)
 
         def persist_source_identity(self, requested_id, revision, _digest, _selected):
             assert requested_id == operation_id
@@ -6648,7 +6661,7 @@ def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_pat
     assert still_pending is not None and still_pending['operation_id'] == operation_id
 
     assert host.main(['test', 'a' * 40, '--existing-secrets-only']) == 78
-    assert ordinary_retries == [operation_id]
+    assert ordinary_retries == []
     with controller._locked_journal() as descriptor:
         still_pending = controller._pending(descriptor)
     assert still_pending is not None and still_pending['operation_id'] == operation_id
@@ -11630,28 +11643,36 @@ def _cache_activation_harness(tmp_path, monkeypatch, *, channel='test', automati
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
-def test_automatic_cache_cleanup_protects_live_and_recovery_images(tmp_path, monkeypatch, channel):
+def test_retained_request_image_survives_automatic_activation(tmp_path, monkeypatch, channel):
+    from dataclasses import replace
+    from uuid import uuid4
+
     effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch, channel=channel)
-    pins = {path.name: path.read_bytes() for path in (tmp_path / 'config/deploy').glob('*.env')}
+    image_id = f'sha256:{13:064x}'
+    prior = replace(plan, revision=f'{13:040x}', image_digest=image_id)
+    operation_id = str(uuid4())
+    payload = {'operation_id': operation_id, 'plan': json.loads(json.dumps(prior.payload())), 'bootstrap': False}
+    effects.config.journal._store_exact_json(f'{operation_id}.request.json', payload, limit=8192)
     before = set(state['images'])
     with effects.channel_lock():
         effects.activate(plan)
-    removed = {f'sha256:{number:064x}' for number in (13, 14)}
-    assert before - set(state['images']) == removed
-    assert {path.name: path.read_bytes() for path in (tmp_path / 'config/deploy').glob('*.env')} == pins
-    assert {f'sha256:{number:064x}' for number in range(1, 13)} <= set(state['images'])
-    assert [call for call in calls if call[:3] == ('docker', 'image', 'rm')] == [
-        ('docker', 'image', 'rm', '--no-prune', f'sha256:{number:064x}') for number in (13, 14)]
-    assert calls[-1][0] == 'bash' and state['deploy_calls'] == 1
-    assert not warnings and not list((tmp_path / 'secret-handles').iterdir())
+    assert image_id in state['images'] and set(state['images']) == before
+    assert state['deploy_calls'] == 1 and calls[-1][0] == 'bash'
+    assert not [call for call in calls if call[:3] == ('docker', 'image', 'rm')]
+    assert warnings == [
+        b'PRIORITY=4\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        b'MESSAGE=optional image cache recovery skipped: reason=retained_inventory_unproven\n'
+    ]
+    assert not list((tmp_path / 'secret-handles').iterdir())
 
 
-@pytest.mark.parametrize('fault', ['census', 'malformed', 'deletion', 'stale_pin', 'stale_container', 'stale_alias'])
+@pytest.mark.parametrize('channel', ['dev', 'test'])
 @pytest.mark.parametrize('deploy_fails', [False, True])
-def test_optional_cache_cleanup_failure_does_not_gate_deploy(tmp_path, monkeypatch, capsys, fault, deploy_fails):
+def test_incomplete_retention_inventory_skips_automatic_cleanup(tmp_path, monkeypatch, channel, deploy_fails):
     from app.ops.postgres_deploy import PostgresDeployError
-    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
-    state.update(fault=fault, deploy_fails=deploy_fails)
+
+    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch, channel=channel)
+    state['deploy_fails'] = deploy_fails
     before = set(state['images'])
     with effects.channel_lock():
         if deploy_fails:
@@ -11661,9 +11682,8 @@ def test_optional_cache_cleanup_failure_does_not_gate_deploy(tmp_path, monkeypat
             effects.activate(plan)
     assert set(state['images']) == before
     assert state['deploy_calls'] == 1 and calls[-1][0] == 'bash'
-    assert len(warnings) == 1 and warnings[0].startswith(
-        b'PRIORITY=4\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\nMESSAGE=optional image cache recovery skipped: reason=')
-    assert 'private-canary' not in repr(warnings) + repr(capsys.readouterr())
+    assert not any(call[0] == 'docker' for call in calls)
+    assert len(warnings) == 1 and b'reason=retained_inventory_unproven' in warnings[0]
     assert not list((tmp_path / 'secret-handles').iterdir())
 
 
@@ -11679,62 +11699,11 @@ def test_cache_cleanup_excludes_manual_and_prod_paths(tmp_path, monkeypatch, cha
 
 def test_cache_cleanup_requires_existing_native_lock(tmp_path, monkeypatch):
     from app.ops.postgres_deploy import PostgresDeployError
+
     effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
     before = set(state['images'])
     effects._reclaim_image_cache(plan)
     with pytest.raises(PostgresDeployError):
         effects.activate(plan)
     assert set(state['images']) == before and calls == []
-    assert len(warnings) == 1 and b'reason=native_lock_unproven' in warnings[0]
-
-
-def test_cache_cleanup_preserves_unproved_local_application_images(tmp_path, monkeypatch):
-    from app.ops.pg_acceptance import IMAGE_REPOSITORY
-    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
-    # A tag in the digest field also cannot establish a registry-backed image.
-    image_id = f'sha256:{16:064x}'
-    state['images'][image_id] = {
-        'id': image_id, 'tags': [IMAGE_REPOSITORY + ':manual-second'],
-        'digests': [IMAGE_REPOSITORY + ':looks-like-tag'],
-        'created': '2020-01-01T00:00:00Z',
-    }
-    before = set(state['images'])
-    with effects.channel_lock():
-        effects.activate(plan)
-    assert before - set(state['images']) == {f'sha256:{number:064x}' for number in (13, 14)}
-    assert {f'sha256:{number:064x}' for number in (15, 16)} <= set(state['images'])
-    assert state['deploy_calls'] == 1 and calls[-1][0] == 'bash' and not warnings
-
-
-def test_cache_cleanup_caps_exact_nonforce_removal_batch(tmp_path, monkeypatch):
-    from app.ops.pg_acceptance import IMAGE_REPOSITORY
-    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
-    for number in range(20, 31):
-        image_id = f'sha256:{number:064x}'
-        state['images'][image_id] = {
-            'id': image_id, 'tags': [f'{IMAGE_REPOSITORY}:{number:040x}'],
-            'digests': [f'{IMAGE_REPOSITORY}@sha256:{number:064x}'],
-            'created': '2020-01-01T00:00:00Z',
-        }
-    before = set(state['images'])
-    with effects.channel_lock():
-        effects.activate(plan)
-    expected = {f'sha256:{number:064x}' for number in (13, 14, *range(20, 26))}
-    assert before - set(state['images']) == expected
-    assert len([call for call in calls if call[:3] == ('docker', 'image', 'rm')]) == 8
-    assert calls[-1][0] == 'bash' and not warnings
-
-
-def test_cache_cleanup_preserves_unproved_untagged_parents(tmp_path, monkeypatch):
-    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
-    selected = f'sha256:{13:064x}'
-    parent = f'sha256:{12:064x}'
-    # This parent has no tag or registry digest and cannot be reclaimed.
-    state['parents'] = {selected: (parent,)}
-    before = set(state['images'])
-    with effects.channel_lock():
-        effects.activate(plan)
-    assert parent in state['images']
-    assert before - set(state['images']) == {f'sha256:{number:064x}' for number in (13, 14)}
-    assert ('docker', 'image', 'rm', '--no-prune', selected) in calls
-    assert state['deploy_calls'] == 1 and calls[-1][0] == 'bash' and not warnings
+    assert len(warnings) == 1 and b'reason=retained_inventory_unproven' in warnings[0]

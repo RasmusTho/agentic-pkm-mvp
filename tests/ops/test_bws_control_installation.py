@@ -996,11 +996,11 @@ def test_control_path_slot_descriptor_envelope_and_close_uncertainty(monkeypatch
             if close_site == 'first_identity':
                 retained = {record[0] for record in fixture.service.control_path_binding.fds.values()}
                 original_mount = lifecycle._control_path_mount
-                def mount(fd):
+                def mount(fd, **context):
                     info = lifecycle.os.fstat(fd)
                     if fd not in retained and (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
                         raise OSError('synthetic metadata unavailable before retention')
-                    return original_mount(fd)
+                    return original_mount(fd, **context)
                 monkeypatch.setattr(lifecycle, '_control_path_mount', mount)
             if close_site != 'retained':
                 fixture.service.control_path_binding.revalidate()

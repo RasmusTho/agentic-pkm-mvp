@@ -101,6 +101,7 @@ def _write_db_outbox_events(events: Iterable[Any]) -> None:
                 idempotency_key=derive_idempotency_key(
                     outbox_event.event, outbox_event.event_id, EVENT_ID_FINGERPRINT
                 ),
+                producer="shared.panel_agent.runtime",
             )
         except Exception as exc:
             print(f"WARN: failed to enqueue DB outbox event {outbox_event.event}: {exc}")
