@@ -872,3 +872,27 @@ def test_private_ingress_context_loads_ca_and_client_chain(monkeypatch) -> None:
     }
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname is True
+
+
+def test_tailnet_mtls_transport_requires_tailnet_origin_and_identity(monkeypatch) -> None:
+    for endpoint in ("http://100.100.20.30:9443", "https://192.168.1.2:9443", "https://100.128.0.1:9443", "https://host.example:9443", "https://100.100.20.30:9443/path", "https://user:pw@100.100.20.30:9443"):
+        with pytest.raises(ValueError):
+            CodexRemoteTransport(endpoint=endpoint, path_adapter="tailnet_mtls_https", tls_verify="/ca.pem", client_certificate=("/client.pem", "/client.key"))
+    with pytest.raises(ValueError, match="verified mutual TLS"):
+        CodexRemoteTransport(endpoint="https://100.100.20.30:9443", path_adapter="tailnet_mtls_https", tls_verify=True)
+    context = ssl.create_default_context()
+    captured = {}
+    class Transport:
+        def __init__(self, *, verify, retries):
+            captured.update(verify=verify, retries=retries)
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        def close(self):
+            pass
+    monkeypatch.setattr(remote_transport_module, "_private_ingress_ssl_context", lambda **kwargs: context)
+    monkeypatch.setattr(remote_transport_module.httpx, "HTTPTransport", Transport)
+    monkeypatch.setattr(remote_transport_module.httpx, "Client", Client)
+    transport = CodexRemoteTransport(endpoint="https://100.100.20.30:9443", path_adapter="tailnet_mtls_https", tls_verify="/ca.pem", client_certificate=("/client.pem", "/client.key"))
+    transport.close()
+    assert captured == {"verify": context, "retries": 0}

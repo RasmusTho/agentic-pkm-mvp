@@ -685,3 +685,83 @@ def test_deadline_exhaustion_cannot_consume_late_pass_logs(tmp_path, monkeypatch
     assert outcome['result'] == 'refused' and outcome['reason'] == 'journaling_deadline_exceeded'
     assert outcome['cleanup'] == 'confirmed' and not boundary.containers
     assert not runner.marker.exists() and not runner.directory.exists()
+
+
+def test_tailnet_mtls_native_provider_references_and_relay_binding(tmp_path, monkeypatch):
+    certs = {}
+    for key in transport.REFERENCE_KEYS[1:]:
+        path = (tmp_path / key).resolve()
+        path.write_text('synthetic test certificate')
+        path.chmod(0o600)
+        certs[key] = str(path)
+    config = (tmp_path / 'model-access.env').resolve()
+    selected = {
+        transport.SELECTOR_KEY: 'tailnet_mtls',
+        transport.TAILNET_ENDPOINT_KEY: 'https://100.100.20.30:9443',
+        **certs,
+    }
+    def write_config(values):
+        config.write_text(''.join(f'{key}={value}\n' for key, value in values.items()))
+        config.chmod(0o600)
+    write_config(selected)
+    owned = {config, *(Path(value) for value in certs.values())}
+    original_path_stat = Path.stat
+    def root_owned(path, *args, **kwargs):
+        result = original_path_stat(path, *args, **kwargs)
+        if path in owned:
+            fields = list(result)
+            fields[4] = 0
+            return os.stat_result(fields)
+        return result
+    with monkeypatch.context() as scoped:
+        scoped.setattr(transport, 'REFERENCE_FILE', config)
+        scoped.setattr(Path, 'stat', root_owned)
+        assert transport.selected_references() == selected
+        write_config({**selected, transport.TAILNET_ENDPOINT_KEY: 'https://203.0.113.1:9443'})
+        with pytest.raises(web.NativeWebRefusal, match='references_unavailable'):
+            transport.selected_references()
+        write_config({transport.REFERENCE_KEYS[0]: 'https://10.0.0.8:8123', **certs})
+        assert transport.selected_references()[transport.REFERENCE_KEYS[0]] == 'https://10.0.0.8:8123'
+    runner, boundary = _runner(tmp_path, monkeypatch)
+    monkeypatch.setattr(runners, 'selected_references', lambda: selected)
+    native_owner = {'pid': 123, 'boot_id': str(uuid4()), 'start_ticks': '100'}
+    monkeypatch.setattr(runners, 'process_identity', lambda _pid: native_owner)
+    namespace_file = tmp_path / 'namespace-inode'
+    namespace_file.write_text('unit-only namespace inode')
+    original_open, original_stat, original_docker = os.open, os.stat, runner._docker
+    monkeypatch.setattr(runners.os, 'open', lambda path, *args, **kwargs:
+        original_open(namespace_file if path == '/var/run/docker/netns/unit' else path, *args, **kwargs))
+    monkeypatch.setattr(runners.os, 'stat', lambda path, *args, **kwargs:
+        original_stat(namespace_file if path == '/proc/123/ns/net' else path, *args, **kwargs))
+    targets = []
+    class QuietRelay:
+        cleanup_confirmed = False
+        def __init__(self, namespace, endpoint):
+            targets.append(endpoint)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.cleanup_confirmed = True
+    monkeypatch.setattr(runners, 'ProviderRelay', QuietRelay)
+    def docker(*args, timeout=60):
+        if args[:2] == ('start', '--attach'):
+            raise pg.PgAcceptanceDeadlineExceeded()
+        output = original_docker(*args, timeout=timeout)
+        if args[0] == 'create':
+            name = args[args.index('--name') + 1]
+            row = boundary.containers[name]
+            row['HostConfig']['SecurityOpt'] = ['no-new-privileges']
+            if name.endswith('-tests'):
+                row['Config']['Entrypoint'] = ['/usr/bin/env']
+                row['Config']['Cmd'] = list(args[args.index(runner.image) + 1:])
+            else:
+                row['State'] = {'Pid': 123, 'Running': True}
+                row['NetworkSettings'] = {'SandboxKey': '/var/run/docker/netns/unit'}
+        return output
+    monkeypatch.setattr(runner, '_docker', docker)
+    outcome = runner.verify()
+    assert outcome['result'] == 'refused' and outcome['reason'] == 'journaling_deadline_exceeded'
+    assert targets == ['https://100.100.20.30:9443']
+    assert 'MODEL_ACCESS_EXECUTOR_PATH=tailnet_mtls' in runner._candidate_command
+    assert 'MODEL_ACCESS_CODEX_TAILNET_ENDPOINT=https://100.100.20.30:9443' in runner._candidate_command
+    assert outcome['cleanup'] == 'confirmed' and not boundary.containers

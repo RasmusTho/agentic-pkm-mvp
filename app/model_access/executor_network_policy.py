@@ -46,6 +46,8 @@ DEFAULT_EXECUTOR_NETWORK_POLICY_PATH = Path(
     "config/model_access/executor_network_paths.yaml"
 )
 EXECUTOR_NETWORK_PROFILE = "profile.codex_remote_host"
+_TAILNET_MTLS_PROFILE = "profile.codex_tailnet_mtls_host"
+_PATH_SELECTION_ENV = "MODEL_ACCESS_EXECUTOR_PATH"
 _ENV_REFERENCE = re.compile(r"^[A-Z][A-Z0-9_]{1,127}$")
 _REFERENCE = re.compile(r"^host_config\.[a-z][a-z0-9_]*$")
 _PATH_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -99,10 +101,12 @@ class _AuthenticationProfile(_StrictConfig):
 
 
 class _PathProfile(_StrictConfig):
-    adapter: Literal["private_https_ingress", "tailscale_serve_https"]
+    adapter: Literal["private_https_ingress", "tailscale_serve_https", "tailnet_mtls_https"]
     endpoint_ref: str
     authentication_profile_ref: str
-    caller_policy_ref: Literal["policy.vlan_mtls_authenticated_caller"]
+    caller_policy_ref: Literal[
+        "policy.vlan_mtls_authenticated_caller", "policy.tailnet_mtls_authenticated_caller"
+    ]
 
     @model_validator(mode="after")
     def _valid_references(self) -> "_PathProfile":
@@ -145,8 +149,21 @@ class _ExecutorNetworkPolicy(_StrictConfig):
             authentication = self.authentication_profiles.get(auth_key)
             if endpoint is None or authentication is None:
                 raise ValueError("path profile refers to undeclared host configuration")
-            if profile.adapter == "private_https_ingress" and authentication.mode != "mutual_tls":
-                raise ValueError("private VLAN ingress requires mutual TLS")
+            if (
+                profile.adapter in {"private_https_ingress", "tailnet_mtls_https"}
+                and authentication.mode != "mutual_tls"
+            ):
+                raise ValueError("private ingress requires mutual TLS")
+            if (
+                profile.adapter == "tailnet_mtls_https"
+                and profile.caller_policy_ref != "policy.tailnet_mtls_authenticated_caller"
+            ):
+                raise ValueError("Tailnet ingress requires its authenticated caller policy")
+            if (
+                profile.adapter != "tailnet_mtls_https"
+                and profile.caller_policy_ref != "policy.vlan_mtls_authenticated_caller"
+            ):
+                raise ValueError("non-Tailnet ingress requires its authenticated caller policy")
             if (
                 profile.adapter == "tailscale_serve_https"
                 and authentication.mode != "tailscale_serve_app_capability"
@@ -163,7 +180,7 @@ class _ExecutorNetworkPolicy(_StrictConfig):
 @dataclass(frozen=True)
 class ResolvedExecutorPath:
     path_profile: str
-    adapter: Literal["private_https_ingress", "tailscale_serve_https"]
+    adapter: Literal["private_https_ingress", "tailscale_serve_https", "tailnet_mtls_https"]
     endpoint: str = field(repr=False)
     ca_bundle_path: str | None = field(default=None, repr=False)
     client_certificate_path: str | None = field(default=None, repr=False)
@@ -292,11 +309,13 @@ def executor_network_policy_environment_references(
     executor_profile: str = EXECUTOR_NETWORK_PROFILE,
     *,
     policy_path: Path = DEFAULT_EXECUTOR_NETWORK_POLICY_PATH,
+    environment: Mapping[str, str] | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Return host environment references used by an executor and their roles."""
 
     policy = _load_policy(policy_path)
-    executor_policy = policy.executor_path_policies.get(executor_profile)
+    selected_profile = _selected_executor_profile(executor_profile, environment)
+    executor_policy = policy.executor_path_policies.get(selected_profile)
     if executor_policy is None:
         raise ExecutorNetworkConfigurationError("path_policy_missing")
 
@@ -333,6 +352,21 @@ def _required_host_value(
     return value
 
 
+def _selected_executor_profile(
+    executor_profile: str, environment: Mapping[str, str] | None
+) -> str:
+    """Select only an explicit configured path for the existing logical executor."""
+    if executor_profile != EXECUTOR_NETWORK_PROFILE:
+        return executor_profile
+    env = os.environ if environment is None else environment
+    selected = env.get(_PATH_SELECTION_ENV, "").strip()
+    if selected in {"", "vlan"}:
+        return executor_profile
+    if selected == "tailnet_mtls":
+        return _TAILNET_MTLS_PROFILE
+    raise ExecutorNetworkConfigurationError("path_selection_invalid")
+
+
 def _require_file_reference(environment: Mapping[str, str], variable: str) -> str:
     value = _required_host_value(environment, variable)
     if not Path(value).is_file():
@@ -349,7 +383,8 @@ def resolve_executor_paths(
     """Resolve one logical executor's ordered paths without exposing their values."""
 
     policy = _load_policy(policy_path)
-    executor_policy = policy.executor_path_policies.get(executor_profile)
+    selected_profile = _selected_executor_profile(executor_profile, environment)
+    executor_policy = policy.executor_path_policies.get(selected_profile)
     if executor_policy is None:
         raise ExecutorNetworkConfigurationError("path_policy_missing")
     host_environment = os.environ if environment is None else environment

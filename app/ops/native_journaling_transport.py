@@ -27,6 +27,14 @@ DEADLINE = 1800
 REFERENCE_FILE = Path('/etc/yggdrasil/model-access/runtime.env')
 REFERENCE_KEYS = ('MODEL_ACCESS_CODEX_VLAN_ENDPOINT', 'MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE',
                   'MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT', 'MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY')
+SELECTOR_KEY = 'MODEL_ACCESS_EXECUTOR_PATH'
+TAILNET_ENDPOINT_KEY = 'MODEL_ACCESS_CODEX_TAILNET_ENDPOINT'
+
+
+def selected_endpoint(references: dict[str, str]) -> str:
+    """Return the exact endpoint selected by the protected host reference file."""
+    key = TAILNET_ENDPOINT_KEY if references.get(SELECTOR_KEY) == 'tailnet_mtls' else REFERENCE_KEYS[0]
+    return references[key]
 
 
 def process_identity(pid: int) -> dict[str, Any] | None:
@@ -63,7 +71,7 @@ def owner_alive(proof: Any) -> bool:
 
 
 def selected_references() -> dict[str, str]:
-    """The existing protected four-key file only; no shell/env/provider override."""
+    """Read protected Product references without shell, environment or provider overrides."""
     try:
         if REFERENCE_FILE.is_symlink():
             raise ValueError()
@@ -75,18 +83,27 @@ def selected_references() -> dict[str, str]:
             if not line.strip() or line.lstrip().startswith('#'):
                 continue
             key, separator, value = line.partition('=')
-            if not separator or key not in REFERENCE_KEYS or key in values or not value:
+            if (not separator or key not in (*REFERENCE_KEYS, SELECTOR_KEY, TAILNET_ENDPOINT_KEY)
+                or key in values or (not value and key != SELECTOR_KEY)):
                 raise ValueError()
             values[key] = value
-        if set(values) != set(REFERENCE_KEYS):
+        if values.get(SELECTOR_KEY, '') not in {'', 'vlan', 'tailnet_mtls'}:
             raise ValueError()
-        endpoint = urlsplit(values[REFERENCE_KEYS[0]])
-        address = ipaddress.ip_address(endpoint.hostname or '')
-        if (endpoint.scheme != 'https' or address.version != 4 or not address.is_private
-            or address.is_loopback or address.is_unspecified or address.is_multicast
-            or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment
-            or endpoint.path not in {'', '/'} or endpoint.port in {5432, 8000, 8090}):
+        if not set(REFERENCE_KEYS[1:]).issubset(values):
             raise ValueError()
+        selected_endpoint(values)  # Missing selected references fail before any effects.
+        for key in (REFERENCE_KEYS[0], TAILNET_ENDPOINT_KEY):
+            if key not in values:
+                continue
+            endpoint = urlsplit(values[key])
+            address = ipaddress.ip_address(endpoint.hostname or '')
+            valid_address = (address in ipaddress.ip_network('100.64.0.0/10')
+                             if key == TAILNET_ENDPOINT_KEY else address.is_private)
+            if (endpoint.scheme != 'https' or address.version != 4 or not valid_address
+                or address.is_loopback or address.is_unspecified or address.is_multicast
+                or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment
+                or endpoint.path not in {'', '/'} or endpoint.port in {5432, 8000, 8090}):
+                raise ValueError()
         for key in REFERENCE_KEYS[1:]:
             source = Path(values[key])
             if not source.is_absolute() or any(path.is_symlink() for path in (source, *source.parents)):

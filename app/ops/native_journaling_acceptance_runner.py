@@ -16,7 +16,10 @@ from xml.etree import ElementTree
 from app.ops.native_journaling_acceptance import (
     DEADLINE, PROFILE, SELECTION_HASH, WRAPPER, identity, private_json, require_report, require_result,
 )
-from app.ops.native_journaling_transport import ProviderRelay, REFERENCE_KEYS, owner_alive, process_identity, selected_references
+from app.ops.native_journaling_transport import (
+    ProviderRelay, REFERENCE_KEYS, SELECTOR_KEY, TAILNET_ENDPOINT_KEY,
+    owner_alive, process_identity, selected_endpoint, selected_references,
+)
 from app.ops.native_web_acceptance import NativeWebRefusal, hash_json
 from app.ops.native_web_acceptance_runner import NativeWebRunner
 from app.ops.pg_acceptance import POSTGRES_IMAGE, PgAcceptanceDeadlineExceeded, PgAcceptanceError
@@ -105,7 +108,11 @@ class NativeJournalingRunner(NativeWebRunner):
         self.provider_references = references
         target = self.directory / 'provider'
         target.mkdir(mode=0o700)
-        environment = {REFERENCE_KEYS[0]: references[REFERENCE_KEYS[0]]}
+        environment = {
+            key: references[key]
+            for key in (REFERENCE_KEYS[0], SELECTOR_KEY, TAILNET_ENDPOINT_KEY)
+            if key in references
+        }
         self.provider_hashes: dict[str, str] = {}
         for key in REFERENCE_KEYS[1:]:
             source = Path(references[key])
@@ -253,7 +260,7 @@ class NativeJournalingRunner(NativeWebRunner):
                 or reread.get('NetworkSettings', {}).get('SandboxKey') != sandbox):
                 raise NativeWebRefusal('database_namespace_identity_drift')
             self._relay_owner()
-            relay = ProviderRelay(namespace, provider[REFERENCE_KEYS[0]])
+            relay = ProviderRelay(namespace, selected_endpoint(provider))
             try:
                 with relay:
                     try:
