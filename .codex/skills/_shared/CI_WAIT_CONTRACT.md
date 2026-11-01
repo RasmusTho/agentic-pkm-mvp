@@ -23,8 +23,8 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
 
 1. **Never tight-poll, and never poll GraphQL for check state.** Use REST (`gh api`) only.
 2. **Use a bounded initial pause, then inspect with backoff.** Selected workloads have different
-   durations. The default initial pause is 180 seconds; the required unit step can run for 75 minutes,
-   so the helper allows 90 minutes total for tests, setup and queue margin. A caller with a known
+   durations. The default initial pause is 180 seconds; the full required unit step can run for 120 minutes,
+   so the helper allows 135 minutes total for tests, setup and queue margin. A caller with a known
    shorter workload may set `--timeout` explicitly. A wait deadline is an observation limit, not
    proof of a hung job: inspect job progress and diagnostics before any recovery or rerun.
 3. **Back off ≥ 60–120s** between checks on the tail. One PR's wait must not starve the shared bucket.
@@ -93,7 +93,7 @@ it for the merge-gating default, where the head is auto-resolved and re-checked 
 
 It auto-detects the repo from the git remote, resolves the PR head SHA via REST, sleeps `--initial-wait`
 (default 180s) before the first check, then polls the REST **check-runs and classic commit-status**
-endpoints every `--interval` (default 90s, floor 60s) until all complete or `--timeout` (default 5400s),
+endpoints every `--interval` (default 90s, floor 60s) until all complete or `--timeout` (default 8100s),
 failing **closed** on any fetch error (an unverifiable state never reports success). Exit codes:
 
 - `0` — CI passed (with `--codex`, Codex also passed)
@@ -107,7 +107,7 @@ failing **closed** on any fetch error (an unverifiable state never reports succe
 - `64` — required-check configuration is invalid or unavailable for the target repository — configure it before retrying
 
 The read-only `scripts/ci_stall_classifier.py` keeps a 30-minute default for queued and unrelated
-checks, and allows 90 minutes for an in-progress `Unit tests (not pg)` check. An explicit
+checks, and allows 135 minutes for an in-progress `Unit tests (not pg)` check. An explicit
 `--stall-threshold-seconds` overrides both defaults. Each pending check reports its applied
 `wait_budget_seconds`; `threshold_seconds` reports the generic default or caller override.
 Crossing a budget, or lacking a timestamp, recommends `inspect_check_progress`. The legacy
