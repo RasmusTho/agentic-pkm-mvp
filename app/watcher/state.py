@@ -308,6 +308,9 @@ class WatcherState:
     continuation_reason: str | None = None
     observations_invalidated: bool = False
     observation_identity: str | None = None
+    throttle_priority: str | None = None
+    throttle_priority_generation: int | None = None
+    throttle_authority: str | None = None
     checkpoint_load_error: bool = False
     _observation_store: RegistryObservationStore | None = field(
         default=None, repr=False, compare=False
@@ -402,6 +405,26 @@ class WatcherState:
                 str(data["observation_identity"])
                 if data.get("observation_identity")
                 else (str(data["scan_identity"]) if data.get("scan_identity") else None)
+            ),
+            throttle_priority=(
+                str(data["throttle_priority"])
+                if isinstance(data.get("throttle_priority"), str)
+                and data["throttle_priority"]
+                and not Path(data["throttle_priority"]).is_absolute()
+                and ".." not in Path(data["throttle_priority"]).parts
+                else None
+            ),
+            throttle_priority_generation=(
+                data["throttle_priority_generation"]
+                if type(data.get("throttle_priority_generation")) is int
+                and data["throttle_priority_generation"] >= 0
+                else None
+            ),
+            throttle_authority=(
+                str(data["throttle_authority"])
+                if isinstance(data.get("throttle_authority"), str)
+                and data["throttle_authority"]
+                else None
             ),
             checkpoint_load_error=bool(data.get("checkpoint_load_error", False)),
         )
@@ -504,6 +527,9 @@ class WatcherState:
             "continuation_reason": self.continuation_reason,
             "observations_invalidated": self.observations_invalidated,
             "observation_identity": self.observation_identity,
+            "throttle_priority": self.throttle_priority,
+            "throttle_priority_generation": self.throttle_priority_generation,
+            "throttle_authority": self.throttle_authority,
             "checkpoint_load_error": self.checkpoint_load_error,
             "observation_store": (
                 self._observation_store.path.name
@@ -552,10 +578,16 @@ class WatcherState:
 
         self._pending_observations.clear()
         self._pending_deletes.clear()
+        self.throttle_priority = None
+        self.throttle_priority_generation = None
         if self._observation_store is not None:
             self.observations_invalidated = True
         else:
             self.files.clear()
+
+    def clear_throttle_priority(self) -> None:
+        self.throttle_priority = None
+        self.throttle_priority_generation = None
 
     def file_entry(self, rel_path: str) -> dict[str, Any] | None:
         if self._observation_store is not None:
