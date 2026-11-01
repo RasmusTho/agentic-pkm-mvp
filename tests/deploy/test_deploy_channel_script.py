@@ -2736,7 +2736,7 @@ def _bws_host(tmp_path, *, missing=False):
     if not missing:
         provider.seed('test/postgres.password', 'fake-role-password', ('non-prod',))
     admin = SecretAdmin(provider, controller=HostSecretController(tmp_path / 'controller'))
-    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',))
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',), image_digest='sha256:' + 'b' * 64)
 
     class Remote:
         def __init__(self):
@@ -2771,7 +2771,8 @@ def test_admin_parity_preflight_precedes_remote_deploy_mutation(tmp_path):
     admin, provider, _, remote = _bws_host(tmp_path)
     provider.seed('shared/openai.api-key', 'a' * 32, ('non-prod',))
     provider.seed('shared/openai.api-key', 'b' * 32, ('prod',))
-    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db', 'builderops-model-inquiry'))
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db', 'builderops-model-inquiry'),
+                      image_digest='sha256:' + 'b' * 64)
     with pytest.raises(PostgresDeployError):
         deploy_from_host(admin, remote, plan, qualified=lambda: None)
     assert remote.events == []
@@ -3170,7 +3171,7 @@ def test_bws_host_and_vm_preflight_use_active_secret_consumers(tmp_path, monkeyp
 
     admin, _provider, _old_plan, remote = _bws_host(tmp_path)
     plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), image_digest='sha256:' + 'b' * 64)
     assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'committed'
 
     cfg = SimpleNamespace(channel='test', root=tmp_path)
@@ -3840,13 +3841,14 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
 
     monkeypatch.setattr(host, 'deploy_from_host', deploy)
 
-    assert host.main(['test', 'a' * 40]) == 0
+    digest_args = ['--image-digest', 'sha256:' + 'b' * 64]
+    assert host.main(['test', 'a' * 40, *digest_args]) == 0
     assert captured[-1][0].ack_forward_only is False
     assert captured[-1][1] is True
-    assert host.main(['test', 'b' * 40, '--ack-forward-only']) == 0
+    assert host.main(['test', 'b' * 40, '--ack-forward-only', *digest_args]) == 0
     assert captured[-1][0].ack_forward_only is True
     assert captured[-1][1] is True
-    assert host.main(['test', 'c' * 40, '--existing-secrets-only']) == 0
+    assert host.main(['test', 'c' * 40, '--existing-secrets-only', *digest_args]) == 0
     assert captured[-1][1] is False
 
 
@@ -3866,12 +3868,18 @@ def test_source_identity_persistence_operation_is_dev_test_authority_bound(
         directory = tmp_path
 
         @contextmanager
-        def source_persistence_operation(self, channel, *, operation_id):
+        def source_persistence_operation(self, channel, *, operation_id, source_image_binding,
+                                         allow_legacy_cleanup):
+            assert allow_legacy_cleanup is True
+            binding = json.loads(source_image_binding)
+            assert binding['channel'] == channel
+            assert binding['image_digest'] == 'sha256:' + '1' * 64
             calls.append(("host-admit", channel, operation_id))
             operation = SimpleNamespace(
                 operation_id=operation_id,
                 completed_result=None,
                 completed_source=None,
+                mutation_started=False,
                 prepare_mutation=lambda: calls.append(("host-sent", channel, operation_id)),
                 finish=lambda evidence: calls.append(("host-finish", evidence)),
             )
@@ -4044,7 +4052,8 @@ def test_source_identity_absence_proof_retires_only_exact_pending_host_operation
         directory = tmp_path
 
         @contextmanager
-        def source_persistence_operation(self, channel, *, operation_id):
+        def source_persistence_operation(self, channel, *, operation_id, reconciliation_only):
+            assert reconciliation_only is True
             calls.append(("host-admit", channel, operation_id))
             operation = SimpleNamespace(
                 operation_id=operation_id,
@@ -4172,6 +4181,10 @@ def test_source_identity_admitted_failed_operation_can_finish_retained_cleanup(
     class Remote:
         def __init__(self, hostname):
             assert hostname == "ygg-test"
+
+        def readback_source_identity(self, requested_id, revision, digest, selected, producer_kind):
+            assert producer_kind == "vault-alpha"
+            return self.persist_source_identity(requested_id, revision, digest, selected)
 
         def persist_source_identity(self, requested_id, revision, _digest, _selected):
             assert requested_id == operation_id
@@ -6648,7 +6661,7 @@ def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_pat
     assert still_pending is not None and still_pending['operation_id'] == operation_id
 
     assert host.main(['test', 'a' * 40, '--existing-secrets-only']) == 78
-    assert ordinary_retries == [operation_id]
+    assert ordinary_retries == []
     with controller._locked_journal() as descriptor:
         still_pending = controller._pending(descriptor)
     assert still_pending is not None and still_pending['operation_id'] == operation_id

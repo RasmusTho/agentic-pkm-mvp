@@ -60,7 +60,9 @@ def test_populated_registry_corruption_never_reseeds_empty(tmp_path) -> None:
     assert recovered.default_vault_binding_id is None
     assert recovered.extensions["legacyDefaultVaultBindingId"] == "future-default"
     assert recovered.extensions["dimensions"] == {"focus": ["future-default"]}
-    assert recovered.extensions["backgroundIntent"] == {"mode": "explicit"}
+    # MVR-06A: a legacy background intent is lineage, never adopted as intent.
+    assert recovered.extensions["legacyBackgroundIntent"] == {"mode": "explicit"}
+    assert "backgroundIntent" not in recovered.extensions
 
     path.unlink()
     restored_missing_main = VaultRegistryStore(path).load()

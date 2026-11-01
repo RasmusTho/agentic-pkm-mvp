@@ -288,6 +288,45 @@ This document is the canonical spec that epic #2655 (deployment + environment-se
 - **Full-environment downtime is authorized for the cutover** (S7). The cutover from the shared-checkout bind-mount model to pinned images may take all channels down briefly.
 - **Auth↔topology** is reconciled by treating the local reverse proxy / bridge hop as a **trusted proxy** (trusted `X-Forwarded-For`) or by using host networking, while **untrusted callers stay rejected** (#2223 intent). The tactical fix already shipped in PR #2665; this document formalizes it (see §Auth↔topology decision).
 
+## MVR-06 background-authority floor (MVR-06A, #3863)
+
+Repository support is shipped; no channel has been advanced by this change. The floor is the
+irreversible compatibility boundary for the delegated background-runtime role and the staged
+background intent (`docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md`).
+
+- **Producer and order.** With `MVR06_BACKGROUND_CUTOVER=1`,
+  `scripts/lib/instance_state_deployment.sh` runs
+  `python -m app.instance.runtime background-authority-cutover --bootstrap-kind existing-install`
+  in `instance-state-init`, last inside the proved stopped deployment window: after
+  `principal-cutover` (MVR-03, the delegator), `mvr05-record-floor` (the MVR-05 channel fence it
+  advances from), and `settings-rebind-install-dormant`, and before `deployment-finish`. The
+  command refuses outside that window. It commits the `minimumRuntimeSchema=mvr-06` floor with
+  registry schema v3 first, then the private `background-runtime-role.json` record, then the staged
+  `backgroundIntent`. The wrapper always passes `--bootstrap-kind existing-install`; channel and
+  native bootstrap are operator-run invocations of the same command with `--bootstrap-kind
+  channel|native` (no wrapper wires them yet). Without the opt-in the wrapper runs nothing new and
+  the channel stays at MVR-05.
+- **Operator preflight.** Before opting in: the MVR-03 principal must exist (run the
+  `MVR03_PRINCIPAL_CUTOVER=1` deployment first); the MVR-05 floor must be recorded; and, per
+  KD-A42F26A9AD87 from #3862, the outbox must be drained or its writers stopped before any DEV/TEST
+  rollout. After the cutover, `background-authority-show` and `background-binding-list` print the
+  redacted role and staged-intent receipts.
+- **Startup gate.** After the floor, the compose `watcher` and `worker` preflight require a complete,
+  valid role and intent lineage before the process starts; the `api` preflight does not. Every
+  pre-MVR-06 image refuses the v3 registry at its schema gate before registry or auth access.
+- **Compatible rollback / roll-forward images.** Only an image that contains
+  `app/instance/background_authority.py` (this change or later) may run a floored channel, in either
+  direction. Rolling back to MVR-05D (`92e6740a4`) or older leaves API, watcher, and worker stopped at
+  preflight; the floor is never lowered by a rollback and there is no database rollback.
+- **Recovery.** Every cutover failure keeps the stopped window, because the wrapper cannot tell a
+  compensated failure from an ambiguous one. A failure before the intent commits has already
+  compensated its own role and floor, so the operator reruns the deploy or runs
+  `deployment-release`. A killed cutover leaves a floor-qualified partial lineage that only a rerun of
+  `background-authority-cutover` (idempotent, reusing any role it already wrote) completes. An output
+  naming "compensation is unproven" means the registry and role state must be inspected before any
+  release. A revoked background role (`background-role-revoke`) blocks the next background start
+  until `background-role-redelegate`.
+
 ## Environment matrix
 
 The contract spans three channels: `dev`, `test`, and `prod`. The local Compose fallback can run them in
@@ -761,15 +800,37 @@ The present deployment path has several distinct authorities:
   Replace that route with a supported repository-owned producer before relying on complete
   accounting; do not promote a transient carrier into a second source of authority.
 
-The supported producer must fsync an immutable, value-free binding of operation ID, channel,
+The supported source pre-pull must fsync an immutable, value-free binding of operation ID, channel,
 revision, official repository, index digest and qualified Docker store into the existing durable
-operation authority **before** the first cache-affecting pull or remote dispatch. The admitted
-native request and source-installation owner/receipt must match that binding. A changed binding,
+operation authority **before** the pull. An ordinary host deploy or source-persistence request
+must bind the same operation and exact image identity before cache-affecting dispatch; its host
+record may leave the store unscoped when the native receiver has not yet qualified it. In that
+case every store the operation could have reached must protect that digest until authenticated
+evidence narrows the scope. Reapply this protection when a possible store is later discovered,
+remounted or cloned; do not limit it to daemons active at the original dispatch. A missing possible
+store, or an unresolved mapping from the digest to image IDs and aliases, prevents reclamation
+wherever protection cannot be proved. Capacity
+admission must separately qualify the actual effect store and all potentially affected resources
+before dispatch; an unscoped host record does not establish capacity admission. The admitted
+native request and source-installation owner/receipt must match the image identity. A changed binding,
 including two digests for the same source SHA, is not the same request. A source pull that
 fails, loses transport or has no native receipt retains its binding and its uncertainty; it is
 never automatically replayed. The migration must identify the actual supported callers and
 account for the previously used operator-controlled path, rather than assuming all earlier
 pulls entered a native journal.
+
+The repository-owned source producer retains an image intent before publishing its source owner,
+an image binding before pull, and a pull-completion companion only after a verified response.
+Recovery can close a source installation before backup when its exact intent and absence of a
+channel owner are proved, while retaining the image evidence. A `source_pull_unresolved` refusal
+describes the source installation only: it does not prove that the Docker pull has terminated or
+permit its possible capacity budget to be removed from admission accounting. Inventory must preserve orphan intents and all retained companions
+even after the source owner becomes terminal. A missing or malformed companion cannot establish
+a negative outcome. The new pull is closed by default until the capacity guard is delivered;
+an already cached verified candidate remains usable. Do not retire the existing operational
+pre-pull route or claim live adoption until producer, protection and guard are installed and
+separately verified on each channel. Manual DEV/TEST host deploys require an immutable image
+digest from the verified build before cache-affecting dispatch.
 
 For old host-only or pre-admission UNKNOWN operations without a bound digest, authenticate and
 retain the original operation-bound request or other existing owner evidence if it exists. Record

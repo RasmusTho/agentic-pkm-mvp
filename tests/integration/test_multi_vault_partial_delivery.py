@@ -70,6 +70,10 @@ NOT_VAULT_BOUND_MUTATIONS: dict[str, str] = {
         "the instance registry's explicit default, governed by its own MVR-02 authority"
     ),
     "app.api.routes.vault_dimensions": "the instance dimension registry, not a vault write",
+    "app.api.routes.instance_background_bindings": (
+        "the instance registry's staged background intent, not a vault write; every "
+        "mutation answers capability_not_ready until the MVR-06B handoff"
+    ),
     "app.api.routes.builderops": "the BuilderOps record store, not a product vault",
     "app.api.routes.signboard": "the BuilderOps signboard, not a product vault",
     "app.api.routes.devui": "devUI overview synthesis over BuilderOps records",
