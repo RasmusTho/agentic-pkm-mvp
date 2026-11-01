@@ -722,8 +722,18 @@ def test_tailnet_mtls_native_provider_references_and_relay_binding(tmp_path, mon
             transport.selected_references()
         write_config({transport.REFERENCE_KEYS[0]: 'https://10.0.0.8:8123', **certs})
         assert transport.selected_references()[transport.REFERENCE_KEYS[0]] == 'https://10.0.0.8:8123'
-    runner, boundary = _runner(tmp_path, monkeypatch)
     monkeypatch.setattr(runners, 'selected_references', lambda: selected)
+    provider_dir = tmp_path / 'provider-drift-probe'
+    provider_dir.mkdir()
+    probe = SimpleNamespace(directory=provider_dir)
+    runners.NativeJournalingRunner._provider_assets(probe)
+    runners.NativeJournalingRunner._check_provider_assets(probe)
+    ca_file = Path(certs[transport.REFERENCE_KEYS[1]])
+    ca_file.write_text('changed certificate')
+    with pytest.raises(web.NativeWebRefusal, match='reference_drift'):
+        runners.NativeJournalingRunner._check_provider_assets(probe)
+    ca_file.write_text('synthetic test certificate')
+    runner, boundary = _runner(tmp_path, monkeypatch)
     native_owner = {'pid': 123, 'boot_id': str(uuid4()), 'start_ticks': '100'}
     monkeypatch.setattr(runners, 'process_identity', lambda _pid: native_owner)
     namespace_file = tmp_path / 'namespace-inode'
