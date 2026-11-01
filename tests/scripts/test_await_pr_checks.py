@@ -165,10 +165,10 @@ def test_dirty_pr_state_fails_before_false_green(tmp_path: Path) -> None:
 
 def test_default_wait_allows_long_unit_job_to_complete_without_real_sleep(tmp_path: Path) -> None:
     fake_bin = _make_fake_gh(tmp_path)
-    # First date call creates the deadline. The next observes 45 elapsed minutes:
-    # the old 30-minute default exited before observing the successful next poll.
+    # First date call creates the deadline. The next observes 120 elapsed minutes:
+    # the old 90-minute default exited before observing the successful next poll.
     for name, source in {
-        "date": '#!/usr/bin/env bash\nif [ -f "$FAKE_CLOCK_USED" ]; then echo 2700; else touch "$FAKE_CLOCK_USED"; echo 0; fi\n',
+        "date": '#!/usr/bin/env bash\nif [ -f "$FAKE_CLOCK_USED" ]; then echo 7200; else touch "$FAKE_CLOCK_USED"; echo 0; fi\n',
         "sleep": "#!/usr/bin/env bash\nexit 0\n",
     }.items():
         path = fake_bin / name

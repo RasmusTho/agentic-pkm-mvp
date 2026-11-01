@@ -181,7 +181,7 @@ The exact synthetic diagnostic helper retains all four whole admission/lifecycle
 consumer modules. Selector-repair cochanges retain their complete governance and CI coverage.
 These paths are allowed cochanges, not additional qualifying sources or a general helper policy;
 missing or symlinked inputs fail closed. Existing bounded execution, seven serial guards,
-120-second per-test limits and the 75-minute scoped-step limit remain unchanged.
+120-second per-test limits and the finite scoped-step limit remain in effect.
 
 With explicit baseline evidence, an additional ordinary test module can be a neutral cochange
 only when the unchanged closed BWS paths already qualify and their retained selection covers
@@ -296,9 +296,9 @@ success without executing the selected tests.
 
 ## CI wait budgets
 
-`scripts/await_pr_checks.sh` allows 90 minutes by default around the existing 75-minute unit-step
+`scripts/await_pr_checks.sh` allows 135 minutes by default around the 120-minute full unit-step
 ceiling, with the existing 180-second initial pause and 90-second REST cadence. Callers may select a
-shorter `--timeout` for a known workload. The read-only stall classifier uses 90 minutes for a running
+shorter `--timeout` for a known workload. The read-only stall classifier uses 135 minutes for a running
 `Unit tests (not pg)` check and 30 minutes for queued/other checks, unless the caller overrides the
 budget. An elapsed budget or missing timestamp calls for inspecting progress and diagnostics;
 neither establishes a hang or justifies a rerun. This fixes waiting guidance and does not speed up
@@ -346,6 +346,9 @@ effort improved before adopting further changes.
 
 ## Current Protection Surface
 
+- The exact CI contract target set includes `tests/architecture/test_module_layout.py` so changes
+  to that source-tree import guard run it instead of failing as unowned. Unknown architecture
+  siblings remain outside this exact route and mixed runtime changes retain their normal ownership.
 - The existing Companion UI browser-runtime gate also executes
   `tests/companion_ui/test_vault_browser_state_runtime.py`: populated, empty,
   partial and error lists crossed with available/unavailable identity at desktop
@@ -399,7 +402,7 @@ effort improved before adopting further changes.
   seed copies and require failure for missing/malformed metric input, failed gates and missing
   thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
   unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
-- The full and scoped non-PG unit steps both retain finite 75-minute outer ceilings. The scoped step's
+- The full and scoped non-PG unit steps retain finite outer ceilings of 120 minutes each. The scoped step's
   former 35-minute ceiling cut off #6091 / PR #6092 at 91% without a reported assertion failure
   ([job 116083429844](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38631158811/job/116083429844));
   its six selected subsystem groups run serially. Additional outer margin does not prove completion
@@ -412,13 +415,13 @@ effort improved before adopting further changes.
   minutes for serial coverage at the old ceiling. Current-head #6187 run 39100438771 later proved
   that repository growth can extend the full lane's parallel phase to 51m35s (including a 45m51s
   deploy shard), after which the host-sensitive serial boundary was cancelled at the 60-minute
-  ceiling despite every parallel shard passing. The full lane's 75-minute bound restores finite
+  ceiling despite every parallel shard passing. The full lane's subsequent 75-minute bound restored finite
   serial-phase margin. The scoped lane later completed [#6222 run 39237406751](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39237406751/job/118009713887)
   in 59m05s: 38m23s of parallel work followed by 20m42s of serial coverage, leaving only 55 seconds
   below its former 60-minute ceiling. [#6224 run 39249448570](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39249448570/job/118049350845)
   passed all four parallel partitions in 40m57s, then reached that ceiling after 372 of 984 serial
-  cases passed, without a reported assertion failure. Its 75-minute bound now matches the full
-  lane's finite envelope; neither the failed run nor that larger ceiling proves completion.
+  cases passed, without a reported assertion failure. Its subsequent 75-minute bound remained finite;
+  neither the failed run nor that larger ceiling proves completion.
   [#6311 run 39865892884](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/39865892884/job/120127869151)
   then passed all 131 parallel shards in 57m46s, including the deploy group's 1,473 passing cases
   in 51m18s, but again exhausted 75 minutes during serial coverage. The bounded scheduling replan
@@ -436,7 +439,7 @@ effort improved before adopting further changes.
   per-node results, and a post-run verifier requires one result for every planned node. Per-unit
   logs and the exact node plan are retained with the existing phase receipt.
   The host-sensitive serial boundary still starts after every parallel unit exits. This replan uses
-  the measured module's collected-node inventory and preserves the 75-minute ceiling, marker,
+  the measured module's collected-node inventory and previously preserved the 75-minute ceiling, marker,
   watchdog, and serial boundary rather than changing selector coverage or timeout margin.
   Four-process concurrency remains unchanged; host-sensitive tests still start only after all
   parallel processes exit. The earlier changes supply execution margin,
@@ -447,6 +450,15 @@ effort improved before adopting further changes.
   partial logs, and status inventory survive cancellation for the always-run artifact upload;
   normal EXIT handling adds final timings/status when the shell can execute it. Actual current-head
   CI completion remains required; the ceiling and fixture receipt alone are not runtime proof.
+  After [run 41304475133](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41304475133/job/124841942852)
+  reached the outer timeout with the operations directory still running near the end of the queue,
+  the full-suite runner schedules that unchanged directory shard immediately after the measured
+  deploy modules. Its inventory, process isolation and existing bounds remain unchanged. Actual
+  full-suite CI timing is still required to demonstrate that the scheduling change gives margin.
+  Because reordering can move the last finishing work item rather than leave enough serial-phase
+  time, the full-suite ceiling is temporarily 120 minutes; the 120-second individual-test watchdog,
+  complete-coverage accounting and serial boundary remain in place. This is additional execution
+  margin, not proof of completion or a speedup; current-head full-suite CI remains required.
   PR #6083's scoped serial job [115940412928](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38531981018/job/115940412928)
   separately reached 93% at the old 35-minute cutoff, with one failed result whose traceback
   was lost. The scoped command keeps the exact selector arguments and adds verbose node IDs,
@@ -468,7 +480,7 @@ effort improved before adopting further changes.
   run with bounded parallelism; the bounded host-process/writer-census ops modules start only
   after every parallel process exits in a separate serial boundary. Every pytest process retains
   the PR marker expression and 120-second per-test thread watchdog; each work unit remains within
-  the unchanged 3300-second shard budget, and per-unit plus aggregate logs are retained. Any
+  the 5400-second shard budget, and per-unit plus aggregate logs are retained. Any
   failed, timed-out, missing, duplicate, incomplete, or serial-boundary failure stays red under the
   single required `Unit tests (not pg)` verdict.
   The measured `tests/deploy/test_deploy_channel_script.py` module reuses the full-suite node
@@ -486,6 +498,11 @@ effort improved before adopting further changes.
   before packing other targets. Sibling units of either module never share a process; with four
   available processes all four long units start in different processes. This preserves the selected
   inventory and existing bounds; an actual current-head CI result remains the timing evidence.
+  A later [#6522 run 41310399802](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41310399802)
+  reached the previous 3300-second partition limit at 99%, leaving the serial boundary unrun.
+  The 5400-second per-partition limit within a 120-minute scoped step adds finite execution margin;
+  collection and the subsequent serial boundary also consume that step budget. The added margin
+  is not a speedup or proof that an actual run completes.
   Each completed failed partition emits its diagnostic log immediately, before waiting for other
   workers or the serial boundary. The final aggregate retains every partition's log, and remaining
   parallel coverage still runs. After every parallel child exits, any failed pytest, timeout or

@@ -304,7 +304,7 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
 
 def _run_full_suite_workflow(
     tmp_path: Path, *, failing_shard: str = "", mode: str = "success", deferred_targets: str = "",
-    source_rpc: bool = False,
+    source_rpc: bool = False, operations: bool = False,
 ):
     """Execute the checked-in shell with a fake pytest, including nested tests."""
     files = (
@@ -318,6 +318,8 @@ def _run_full_suite_workflow(
     )
     if source_rpc:
         files += ("tests/deploy/test_bws_source_rpc_assembly.py",)
+    if operations:
+        files += ("tests/operations/test_first.py", "tests/operations/nested/test_second.py")
     for name in files:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -514,6 +516,42 @@ def test_full_suite_shards_cover_test_files_once(tmp_path: Path, deferred_target
                              "tests/invariants/test_vault_multiwriter.py"]
 
 
+@pytest.mark.parametrize("deferred_targets", ["", "tests/deploy"])
+def test_full_suite_prioritizes_operations_without_changing_inventory(
+    tmp_path: Path, deferred_targets: str,
+) -> None:
+    result, files, _job = _run_full_suite_workflow(
+        tmp_path, source_rpc=True, operations=True, deferred_targets=deferred_targets,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "runner/pytest-not-pg-shards"
+    shards = (root / "shards").read_text().splitlines()
+    if deferred_targets:
+        assert shards[0] == "tests/operations"
+        assert shards[1:] == sorted(shards[1:])
+    else:
+        assert shards[:3] == ["tests/deploy/test_bws_source_rpc_assembly.py",
+                             "tests/deploy/test_deploy_channel_script.py", "tests/operations"]
+        assert shards[3:] == sorted(shards[3:])
+    assert shards.count("tests/operations") == 1
+    assert len(shards) == len(set(shards))
+    work_items = (root / "work-items").read_text().splitlines()
+    operations_index = work_items.index("tests/operations")
+    assert all(item.startswith(("source-rpc-node-unit-", "deploy-node-unit-"))
+               for item in work_items[:operations_index])
+    log = (tmp_path / "pytest-not-pg.log").read_text()
+    executed = re.findall(r"^EXECUTED (.+)$", log, re.MULTILINE)
+    node_modules = {"tests/deploy/test_bws_source_rpc_assembly.py",
+                    "tests/deploy/test_deploy_channel_script.py"}
+    expected = [name for name in files if not name.startswith("tests/e2e/")
+                and not (deferred_targets and name.startswith(deferred_targets + "/"))
+                and name not in node_modules]
+    assert sorted(executed) == sorted(expected)
+    assert json.loads((tmp_path / "state.json").read_text())["max_active"] <= 4
+    assert executed[-3:] == ["tests/ops/nested/test_host_child.py", "tests/ops/test_host.py",
+                             "tests/invariants/test_vault_multiwriter.py"]
+
+
 def test_required_rpc_assembly_shards_preserve_exact_coverage(tmp_path: Path) -> None:
     result, _files, _job = _run_full_suite_workflow(tmp_path, source_rpc=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -626,7 +664,7 @@ def test_required_unit_full_suite_phase_budget_preserves_complete_coverage(tmp_p
                 "Run shared not-pg unit tests in process shards")
     # Run 39100438771 completed every parallel shard in 51m35s, including the
     # 45m51s deploy shard, then timed out during the serial host boundary.
-    assert step["timeout-minutes"] == 75
+    assert step["timeout-minutes"] == 120
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert "xargs -r -n 1 -P 4 bash -c" in step["run"]
     receipt = json.loads((tmp_path / "runner/pytest-not-pg-shards/phase-margin.json").read_text())
@@ -656,7 +694,7 @@ def test_not_pg_steps_have_room_for_selected_coverage(step_name: str) -> None:
 def test_scoped_unit_budget_preserves_selected_coverage() -> None:
     job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
     step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
-    assert step["timeout-minutes"] == 75
+    assert step["timeout-minutes"] == 120
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert step["if"] == (
         "steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'"
@@ -676,13 +714,35 @@ def test_scoped_unit_budget_preserves_selected_coverage() -> None:
 
 
 
+def test_scoped_shard_budget_is_finite_and_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from scripts import run_scoped_test_partitions as runner
+
+    seen: list[int] = []
+    monkeypatch.setattr(runner, 'run_partitions', lambda *_args, **kwargs: seen.append(kwargs['timeout_seconds']) or 0)
+    command = ['runner', '--partitions-json', '[["tests/example"]]',
+               '--expected-targets-json', '["tests/example"]', '--log-dir', str(tmp_path / 'logs'),
+               '--aggregate-log', str(tmp_path / 'aggregate.log'), '--shard-timeout-seconds']
+    monkeypatch.setattr(sys, 'argv', [*command, '5400'])
+    assert runner.main() == 0
+    assert seen == [5400]
+    for value in ('0', '5401'):
+        monkeypatch.setattr(sys, 'argv', [*command, value])
+        with pytest.raises(SystemExit) as error:
+            runner.main()
+        assert error.value.code == 2
+        assert '--shard-timeout-seconds must be between 1 and 5400' in capsys.readouterr().err
+    assert seen == [5400]
+
+
 @pytest.mark.parametrize("pytest_exit", [0, 7])
 def test_scoped_unit_budget_preserves_selected_command_and_failure(
     tmp_path: Path, pytest_exit: int,
 ) -> None:
     job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
     step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
-    assert step["timeout-minutes"] == 75
+    assert step["timeout-minutes"] == 120
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert step["env"]["PYTHONUNBUFFERED"] == "1"
     selected = "-q -m 'not pg and not eval' tests/governance tests/scripts/test_publication.py"
@@ -751,7 +811,7 @@ sys.exit(int(os.environ["FIXTURE_PYTEST_EXIT"]))
 def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None:
     job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
     step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
-    assert step["timeout-minutes"] == 75
+    assert step["timeout-minutes"] == 120
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert step["env"]["SCOPED_TARGETS_JSON"] == (
         "${{ steps.select-tests.outputs.pytest_targets_json }}"
@@ -766,7 +826,7 @@ def test_scoped_deploy_coverage_is_bounded_and_fail_loud(tmp_path: Path) -> None
     assert "--jobs 4" in step["run"]
     assert "--serial-boundary-json" in step["run"]
     assert "--execution-units-json" in step["run"]
-    assert "--shard-timeout-seconds 3300" in step["run"]
+    assert "--shard-timeout-seconds 5400" in step["run"]
     assert "set -euo pipefail" in step["run"]
     upload = next(s for s in job["steps"] if s.get("name") == "Upload scoped partition logs")
     assert upload["if"].startswith("always()")

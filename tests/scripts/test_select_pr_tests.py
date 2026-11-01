@@ -438,6 +438,25 @@ def test_ci_smoke_workflow_change_selects_governance_contract_tests() -> None:
     assert "tests/deploy" not in selection.targets
 
 
+def test_module_layout_guard_has_exact_ci_owner() -> None:
+    guard = "tests/architecture/test_module_layout.py"
+    selection = select_tests([guard])
+    assert selection.unowned_paths == ()
+    assert selection.full_suite is False
+    assert guard in selection.targets
+
+    unknown = "tests/architecture/test_module_layout_extra.py"
+    assert select_tests([unknown]).unowned_paths == (unknown,)
+    assert unknown in select_tests([guard, unknown]).unowned_paths
+    mixed_unknown = select_tests([guard, "app/new_unowned_surface.py"])
+    assert "app/new_unowned_surface.py" in mixed_unknown.unowned_paths
+    mixed_owned = select_tests([guard, "app/services/vault_sync.py"])
+    assert mixed_owned.unowned_paths == ()
+    assert "vault" in mixed_owned.subsystems
+    assert guard in mixed_owned.targets
+    assert "tests/services/test_vault_sync_lifecycle.py" in mixed_owned.targets
+
+
 def test_scoped_deploy_ci_repair_shape_avoids_full_suite_self_validation() -> None:
     selection = select_tests(
         [
