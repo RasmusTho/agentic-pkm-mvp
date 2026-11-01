@@ -406,7 +406,8 @@ effort improved before adopting further changes.
   former 35-minute ceiling cut off #6091 / PR #6092 at 91% without a reported assertion failure
   ([job 116083429844](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38631158811/job/116083429844));
   its six selected subsystem groups run serially. Additional outer margin does not prove completion
-  or promise a speedup: current-head substantive CI must still pass. Both retain the 120-second per-test thread watchdog,
+  or promise a speedup: current-head substantive CI must still pass. Both retain the default 120-second per-test thread watchdog
+  with the one cross-surface exception described below,
   every target, marker, required check, assertion and failure handler. #6084 records two independent
   35-minute cutoffs: [#6074 job 115700746542](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38514333873/job/115700746542)
   and [#6075 job 115693481077](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38515571086/job/115693481077).
@@ -453,12 +454,17 @@ effort improved before adopting further changes.
   After [run 41304475133](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41304475133/job/124841942852)
   reached the outer timeout with the operations directory still running near the end of the queue,
   the full-suite runner schedules that unchanged directory shard immediately after the measured
-  deploy modules. Its inventory, process isolation and existing bounds remain unchanged. Actual
+  deploy modules. Its inventory and process isolation remain unchanged. Actual
   full-suite CI timing is still required to demonstrate that the scheduling change gives margin.
   Because reordering can move the last finishing work item rather than leave enough serial-phase
-  time, the full-suite ceiling is temporarily 120 minutes; the 120-second individual-test watchdog,
+  time, the full-suite ceiling is temporarily 120 minutes; the default 120-second individual-test watchdog,
   complete-coverage accounting and serial boundary remain in place. This is additional execution
   margin, not proof of completion or a speedup; current-head full-suite CI remains required.
+  The four cases of `test_all_operation_families_share_owner_native_semantics` have a finite
+  300-second test-local watchdog: they exercise a long cross-surface operation corpus, and one
+  reached 120 seconds in [run 41314149080](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41314149080/job/124870538215)
+  after showing request progress. The MCP harness retains its separate 30-second bound per request;
+  this margin does not prove that a request cannot stall or that a future CI run will complete.
   PR #6083's scoped serial job [115940412928](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38531981018/job/115940412928)
   separately reached 93% at the old 35-minute cutoff, with one failed result whose traceback
   was lost. The scoped command keeps the exact selector arguments and adds verbose node IDs,
