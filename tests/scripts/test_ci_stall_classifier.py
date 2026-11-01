@@ -80,28 +80,28 @@ def test_long_running_checks_classify_stalled() -> None:
     ]
 
 
-def test_running_required_unit_gate_keeps_waiting_through_its_75_minute_step() -> None:
-    for observed_at in ("2026-07-09T21:00:00Z", "2026-07-09T21:15:00Z"):
+def test_running_required_unit_gate_keeps_waiting_through_its_120_minute_step() -> None:
+    for observed_at in ("2026-07-09T21:15:00Z", "2026-07-09T22:00:00Z", "2026-07-09T22:15:00Z"):
         result = classify_ci_state(
             [_check("Unit tests (not pg)", status="in_progress")],
             now=observed_at,
         )
 
         assert result.classification == "wait"
-        assert result.pending_checks[0]["wait_budget_seconds"] == 5400
+        assert result.pending_checks[0]["wait_budget_seconds"] == 8100
         assert result.failure is False
 
 
 def test_over_budget_unit_gate_requires_progress_inspection_without_rerun_advice() -> None:
     result = classify_ci_state(
         [_check("Unit tests (not pg)", status="in_progress")],
-        now="2026-07-09T21:30:01Z",
+        now="2026-07-09T22:15:01Z",
     )
 
     assert result.classification == "stalled"
     assert result.recommended_next_action == "inspect_check_progress"
     assert result.failure is False
-    assert result.pending_checks[0]["wait_budget_seconds"] == 5400
+    assert result.pending_checks[0]["wait_budget_seconds"] == 8100
 
 
 def test_queued_unit_and_unrelated_checks_keep_the_shorter_wait_budget() -> None:
