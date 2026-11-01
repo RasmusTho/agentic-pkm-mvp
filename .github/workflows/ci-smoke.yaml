@@ -859,7 +859,9 @@ jobs:
         # this 75m bound during serial coverage; its deploy group took 51m18s.
         # Split the two measured deploy modules by collected node IDs under the existing four-worker cap.
         # The 120-second per-test timeout still catches individual hangs.
-        timeout-minutes: 75
+        # Allow the measured parallel tail and its subsequent serial phase to finish;
+        # this is bounded execution margin, not a speedup or a waiver of failures.
+        timeout-minutes: 120
         env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
           # Heavy targets the selector deferred (#6154); the post-merge heavy
@@ -897,7 +899,7 @@ jobs:
             if [[ "$phase" == serial ]]; then
               serial_seconds=$((SECONDS - serial_started))
             fi
-            printf '{"schema":"required-unit-phase-margin.v1","github_sha":"%s","outer_budget_seconds":4500,"per_test_timeout_seconds":120,"phase":"%s","parallel_seconds":%s,"serial_seconds":%s,"total_seconds":%s,"exit_status":%s}\n' \
+            printf '{"schema":"required-unit-phase-margin.v1","github_sha":"%s","outer_budget_seconds":7200,"per_test_timeout_seconds":120,"phase":"%s","parallel_seconds":%s,"serial_seconds":%s,"total_seconds":%s,"exit_status":%s}\n' \
               "${GITHUB_SHA:-unknown}" "$phase" "$parallel_seconds" "$serial_seconds" \
               "$((SECONDS - run_started))" "$rc" > "$shard_root/phase-margin.json"
           }

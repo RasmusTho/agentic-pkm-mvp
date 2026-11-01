@@ -664,7 +664,7 @@ def test_required_unit_full_suite_phase_budget_preserves_complete_coverage(tmp_p
                 "Run shared not-pg unit tests in process shards")
     # Run 39100438771 completed every parallel shard in 51m35s, including the
     # 45m51s deploy shard, then timed out during the serial host boundary.
-    assert step["timeout-minutes"] == 75
+    assert step["timeout-minutes"] == 120
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert "xargs -r -n 1 -P 4 bash -c" in step["run"]
     receipt = json.loads((tmp_path / "runner/pytest-not-pg-shards/phase-margin.json").read_text())
