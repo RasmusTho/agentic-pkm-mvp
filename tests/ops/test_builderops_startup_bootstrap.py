@@ -226,8 +226,20 @@ def test_builderops_readiness_reports_implicit_store_for_blank_override_after_ac
     variable: str,
 ) -> None:
     from app.builderops import config as builderops_config
+    from app.builderops import cutover_evidence
     from app.ops import builderops_startup
 
+    observed_roots: list[Path] = []
+    discover = cutover_evidence.discover_legacy_stores
+
+    def observe_inventory(participants):
+        roots = [Path(participant['root']).resolve() for participant in participants]
+        observed_roots.extend(roots)
+        assert roots == [tmp_path.resolve()]
+        return discover(participants)
+
+    monkeypatch.setattr(cutover_evidence, 'discover_legacy_stores', observe_inventory)
+    monkeypatch.chdir(tmp_path)
     state_dir = tmp_path / "host-state" / "builderops"
     _write_cutover_ack(state_dir)
     monkeypatch.setattr(builderops_config, "default_state_dir", lambda: state_dir)
@@ -251,6 +263,7 @@ def test_builderops_readiness_reports_implicit_store_for_blank_override_after_ac
     assert receipt["db_path"] == str(state_dir / "builderops.sqlite3")
     assert receipt["record_count"] == 0
     assert result["reasons"] == []
+    assert len(observed_roots) >= 3  # Producer snapshot/recheck and consumer validation.
 
 
 def test_builderops_bootstrap_degrades_without_github_access(tmp_path: Path) -> None:

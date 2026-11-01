@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan bounded process work units for two exact measured test modules."""
+"""Plan bounded process work units for exact measured test modules."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from typing import Sequence
 MAX_WORKERS = 4
 TARGET_MODULE = "tests/deploy/test_deploy_channel_script.py"
 NATIVE_ADMISSION_MODULE = "tests/ops/test_native_source_diagnostic_admission.py"
-MEASURED_NODE_MODULES = (TARGET_MODULE, NATIVE_ADMISSION_MODULE)
+SOURCE_RPC_MODULE = "tests/deploy/test_bws_source_rpc_assembly.py"
+MEASURED_NODE_MODULES = (TARGET_MODULE, NATIVE_ADMISSION_MODULE, SOURCE_RPC_MODULE)
 SHARED_CHECKOUT_NODES = (
     f"{TARGET_MODULE}::test_rollback_dry_run_without_sha_parses_flag_and_skips_writes",
     f"{TARGET_MODULE}::test_rollback_with_explicit_sha_still_allows_flags",
@@ -51,7 +52,7 @@ def plan_node_units(
         raise ValueError(f"node planner only accepts measured modules: {MEASURED_NODE_MODULES}")
     # This module's function-scoped temporary roots and effect ports permit
     # two independent processes; keep its first measured split bounded to two.
-    if target == NATIVE_ADMISSION_MODULE:
+    if target in (NATIVE_ADMISSION_MODULE, SOURCE_RPC_MODULE):
         max_workers = min(max_workers, 2)
     if not nodes:
         return ()
@@ -73,7 +74,15 @@ def plan_node_units(
     units: list[tuple[str, ...]] = []
     if shared:
         units.append(shared)
-    if remaining:
+    if len(remaining) >= 4 and target == SOURCE_RPC_MODULE:
+        # Adjacent DEV/TEST variants tend to be paired. Interleave pairs so the
+        # long diagnostic families are distributed rather than all accumulating
+        # at one end of the collection; actual runtime remains a CI measurement.
+        for bucket in range(2):
+            unit = tuple(node for index, node in enumerate(remaining) if (index // 2) % 2 == bucket)
+            if unit:
+                units.append(unit)
+    elif remaining:
         bucket_count = min(max_workers - int(bool(shared)), len(remaining))
         for index in range(bucket_count):
             start = index * len(remaining) // bucket_count
@@ -99,7 +108,8 @@ def write_plan(
     output_dir.mkdir(parents=True, exist_ok=False)
     work_items: list[str] = []
     for index, unit in enumerate(units):
-        item = f"deploy-node-unit-{index}"
+        prefix = "source-rpc-node-unit" if target == SOURCE_RPC_MODULE else "deploy-node-unit"
+        item = f"{prefix}-{index}"
         work_items.append(item)
         (output_dir / f"{item}.targets").write_text("\n".join(unit) + "\n", encoding="utf-8")
     (output_dir / "work-items").write_text("\n".join(work_items) + "\n", encoding="utf-8")
@@ -177,7 +187,7 @@ def verify_executed_nodes(coverage_path: Path, logs_dir: Path) -> tuple[str, ...
         raise ValueError("collected-node coverage receipt is malformed")
     if not isinstance(max_workers, int) or not 2 <= max_workers <= MAX_WORKERS:
         raise ValueError("collected-node coverage receipt exceeds the worker cap")
-    if target == NATIVE_ADMISSION_MODULE:
+    if target in (NATIVE_ADMISSION_MODULE, SOURCE_RPC_MODULE):
         max_workers = min(max_workers, 2)
 
     expected_by_unit: dict[str, tuple[str, ...]] = {}
@@ -188,7 +198,9 @@ def verify_executed_nodes(coverage_path: Path, logs_dir: Path) -> tuple[str, ...
         nodes = item.get("nodes")
         if (
             not isinstance(identifier, str)
-            or not identifier.startswith("deploy-node-unit-")
+            or not identifier.startswith(
+                "source-rpc-node-unit-" if target == SOURCE_RPC_MODULE else "deploy-node-unit-"
+            )
             or not isinstance(nodes, list)
             or not nodes
             or not all(isinstance(node, str) and node.startswith(f"{target}::") for node in nodes)

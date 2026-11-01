@@ -193,6 +193,9 @@ CI_CONTRACT_TARGETS = (
     "tests/architecture/test_ci_smoke_contract.py",
     "tests/architecture/test_companion_ui_sys_path.py",
     "tests/architecture/test_import_boundary.py",
+    # This architecture guard scans the checked-out source tree; its direct
+    # test-only changes need an exact CI owner and must execute the guard.
+    "tests/architecture/test_module_layout.py",
     "tests/architecture/test_pr_hot_path_governance.py",
     "tests/architecture/test_pr_test_selection.py",
     "tests/architecture/test_requirements_consistency.py",
@@ -427,6 +430,9 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "app/instance/settings_rebind_runtime_capability.json",
         "app/ops/__init__.py",
         "app/ops/bws_control_installation.py",
+        "app/ops/bws_installation_admission.py",
+        "app/ops/bws_installation_lifecycle.py",
+        "app/ops/bws_installation_transaction.py",
         "app/ops/bws_secret_reader.py",
         "app/ops/heavy_acceptance.py",
         "app/ops/heavy_acceptance_runner.py",
@@ -1239,6 +1245,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/services/test_outbox_idempotency.py",
             "tests/services/test_outbox_conn_binding.py",
             "tests/events",
+            "tests/services/test_outbox_envelope_preflight.py",
             "tests/services/test_companion_note.py",
             "tests/services/test_companion_note_write_guard.py",
         ),
@@ -1472,7 +1479,14 @@ EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
     # existing source-boundary owners without claiming sibling services.
     "watcher_sync": frozenset({"app/services/companion_note.py"}),
     "store_ingest": frozenset({"app/services/companion_note.py"}),
-    "outbox_worker": frozenset({"app/services/companion_note.py"}),
+    "outbox_worker": frozenset(
+        {
+            "app/services/companion_note.py",
+            # The upgrade preflight protects worker activation; own only its
+            # exact regression module, not unrelated service-test siblings.
+            "tests/services/test_outbox_envelope_preflight.py",
+        }
+    ),
     "llm_eval": frozenset(
         {
             "app/components/reasoning/facade.py",
@@ -2202,8 +2216,12 @@ BWS_SOURCE_INSTALLATION_PATHS = BWS_SOURCE_INSTALLATION_SOURCES | frozenset({
     "tests/ops/test_bws_installation_lifecycle.py",
     "tests/ops/test_bws_installation_transaction.py",
     "tests/ops/test_bws_control_installation.py",
+    "tests/ops/bws_control_path_diagnostic_cases.py",
     "tests/ops/fixtures/host_secret_contract_legacy.json",
     "tests/deploy/test_bws_source_rpc_assembly.py",
+    "scripts/select_pr_tests.py",
+    "tests/scripts/test_select_pr_tests.py",
+    "docs/development/TEST_STRATEGY_HOT_PATH.md",
     "docs/OPERATIONS.md",
     "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
 })
@@ -2279,6 +2297,20 @@ def select_tests(changed_files: list[str], *, baseline: str | None = None) -> Se
             FULL_SUITE_REASONS[2],
             unowned_runtime_code,
         )
+
+    # This exact guard is CI-owned; it must not make an otherwise unowned
+    # architecture sibling appear owned merely by accompanying it.
+    if "tests/architecture/test_module_layout.py" in paths:
+        unowned_architecture = tuple(
+            path for path in paths
+            if path.startswith("tests/architecture/")
+            and not any(
+                _subsystem_owns_path(path, name, prefixes)
+                for name, prefixes, _targets in SUBSYSTEMS
+            )
+        )
+        if unowned_architecture:
+            return Selection(False, ("unowned",), (), FULL_SUITE_REASONS[2], unowned_architecture)
 
     ci_contract_only = _is_ci_contract_only(paths)
     pr_intake_contract_only = _is_pr_intake_contract_only(paths)

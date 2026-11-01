@@ -225,9 +225,13 @@ def _memory_backends(monkeypatch: pytest.MonkeyPatch):
 def outbox(monkeypatch: pytest.MonkeyPatch) -> FakeOutboxConn:
     conn = FakeOutboxConn()
 
-    def emit(event: Any, conn: Any = None, *, idempotency_key: str) -> str:
+    def emit(
+        event: Any, conn: Any = None, *, idempotency_key: str, producer: str | None = None
+    ) -> str:
         del conn
-        return write_outbox_event(event, conn=outbox_conn, idempotency_key=idempotency_key)
+        return write_outbox_event(
+            event, conn=outbox_conn, idempotency_key=idempotency_key, producer=producer
+        )
 
     outbox_conn = conn
     monkeypatch.setattr(request_module, "write_outbox_event", emit)

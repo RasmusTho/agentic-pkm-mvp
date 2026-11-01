@@ -498,6 +498,16 @@ prepare_instance_state_deployment() {
       return 78
       ;;
   esac
+  # MVR-06A: the background-authority floor (registry schema v3 and
+  # minimumRuntimeSchema=mvr-06) is irreversible for older images, so deploying a
+  # capable image never activates it. Validate the opt-in before any stop.
+  case "${MVR06_BACKGROUND_CUTOVER:-0}" in
+    0|1) ;;
+    *)
+      echo "instance state deployment: MVR06_BACKGROUND_CUTOVER must be a boolean" >&2
+      return 78
+      ;;
+  esac
 
   # The host-global state dir is resolved and prepared by the caller before
   # this producer runs (deploy_channel.sh calls prepare_instance_ownership_host_state_dir
@@ -1026,6 +1036,27 @@ PY
       "${compose_function}" "${channel}" "${runtime_user}" \
       "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
+  fi
+
+  # MVR-06A runs last in the same proved stopped window, after the MVR-03
+  # principal and the MVR-05 floor it is delegated from and advances. The
+  # command compensates its own pre-intent failures, but this wrapper cannot
+  # tell a compensated failure from an ambiguous one, so every failure keeps
+  # the window stopped for an operator rerun or explicit deployment-release.
+  if [ "${MVR06_BACKGROUND_CUTOVER:-0}" = "1" ]; then
+    "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+      python -m app.instance.runtime background-authority-cutover \
+        --channel "${channel}" \
+        --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
+        --host-global-root /app/instance-ownership \
+        --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
+        --bootstrap-kind existing-install \
+        --consumer bootstrap-init
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      echo "instance state deployment: background authority cutover requires stopped-window repair" >&2
+      return "${inventory_rc}"
+    fi
   fi
 
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \

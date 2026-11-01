@@ -1568,8 +1568,16 @@ def test_transfer_drains_source_bound_rows_before_destination_id_activation(tmp_
         if not pending:
             return None
         runtime = resolve_scalar_binding_runtime(vault_root=Path(original.path))
+        # MVR-05D: a source-bound row carries the complete binding/context envelope.
+        meta = {**dict(required_worker_binding_stamp(runtime)),
+                "outbox_envelope": "mvr05.outbox-envelope.v1", "routing_class": "vault_bound",
+                "outbox_producer": "ingest.vault_sync",
+                "producer_context": {"kind": "binding_runtime", "context_id": None,
+                                     "context_generation": None},
+                "idempotency": {"legacy_key": "original-operation",
+                                "binding_scoped_key": pending[0]["id"]}}
         event = new_event(event_type="test.source.effect", payload=pending[0]["payload"],
-                          meta=dict(required_worker_binding_stamp(runtime)))
+                          meta=meta)
         return {**pending[0], "topic": "test.source.effect", "event": event}
     monkeypatch.setattr(worker, "poll_outbox_one", poll)
     effects = []

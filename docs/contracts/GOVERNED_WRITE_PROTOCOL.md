@@ -185,6 +185,40 @@ decision terminal until both are queryable. An HKA artifact alone cannot be used
 missing governed mutation receipt; that state fails closed for explicit remediation. This integration
 does not claim that unrelated runtime write paths implement the full protocol.
 
+### Delegated background-runtime authority (MVR-06A, shipped)
+
+Background lifecycles act under a distinct delegated principal rather than an identity they mint:
+
+- **Producer.** `background-authority-cutover` (`app/instance/background_authority.py`, reached
+  through `python -m app.instance.runtime`) is the only producer of the
+  `background_runtime_role_id`. It runs inside the proved stopped deployment window and commits, in
+  order: the `minimumRuntimeSchema=mvr-06` floor with registry schema v3, the private role record
+  delegated from the MVR-03 `local_operator_role_id`, then the staged background intent. The role
+  write samples the floor under its own lock; the intent cannot be represented without the floor.
+- **Least-privilege scope.** The role holds exactly `queue.claim_ack`, `receipt.write`,
+  `settings.reload`, `watcher.ingest`, and `worker.dispatch`. It cannot exceed its delegator and
+  holds no content governed-write, intent-administration, or principal-management scope, so it
+  never substitutes for a DecisionToken. Each later lifecycle operation still passes its own action,
+  write class, and permission to GOV.
+- **Durable authority state.** Schema, revision, delegator role id, scopes, `auth_epoch`, status,
+  and delegation provenance are private versioned instance state; the staged
+  `backgroundIntent` record (`compatibility` mode, handoff `pending`, nothing materialized) lives
+  in the same locked, revision-checked registry generation as the floor's successor.
+- **Startup preflight.** With the floor recorded, the `watcher`/`worker` preflight refuses a
+  missing, stale, ambiguous, over-broad, partial, or revoked delegation, or an incomplete lineage,
+  before the process starts, so nothing dispatches under it.
+- **Auth-epoch revocation.** GOV revocation (`background-role-revoke`) advances `auth_epoch` and
+  revokes the role; only governed redelegation at the next epoch restores it. In MVR-06A the
+  effect lands at the next background start; draining running lifecycles before their next effect
+  is the MVR-06B supervisor's obligation.
+- **Staged intent mutation.** Request/session selection never writes background intent, and every
+  intent add/remove API or CLI command fails `capability_not_ready` without any write until the
+  MVR-06B handoff, so durable intent cannot diverge from the still-authoritative legacy watcher.
+- **Failure atomicity.** A cutover failure before the intent commits compensates only this
+  attempt's role and floor; unproven compensation keeps the deployment stopped. A killed cutover
+  leaves a floor-qualified partial lineage that older images refuse at their schema gate, MVR-06
+  background consumers refuse at preflight, and a rerun completes.
+
 ### Partial-failure states
 
 Every authority-bearing producer and consumer must preserve one of these explicit states; no state
