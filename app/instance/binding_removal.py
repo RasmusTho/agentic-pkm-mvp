@@ -537,10 +537,13 @@ class BindingRemovalCoordinator:
 
 # -- derived-state invalidation inventory ----------------------------------------------
 
-#: Every binding-keyed derived table introduced by the MVR-05A binding-key migrations
-#: (`app/alembic/versions/*mvr05a*`). Reactivation invalidates all of them before a
-#: rebuilt binding may serve reads or effects.
-PG_BINDING_KEYED_TABLES: tuple[str, ...] = (
+#: Every binding-keyed table introduced by the MVR-05A binding-key migrations
+#: (`app/alembic/versions/*mvr05a*`) is classified exactly once. Derived projections
+#: (object/file/vector/index/retrieval/episode/standing-question rows) are invalidated in
+#: FK-safe order before a reactivated binding may serve reads or effects; retained tables
+#: are historical receipts, queue rows, or governed authority that keep the retired
+#: epoch's attribution and are never rewritten here.
+PG_BINDING_KEYED_DERIVED_TABLES: tuple[str, ...] = (
     "store_vector_index",
     "store_relation_memberships",
     "store_relations",
@@ -549,17 +552,21 @@ PG_BINDING_KEYED_TABLES: tuple[str, ...] = (
     "embeddings",
     "relations",
     "membership",
+    "sets",
     "store_objects",
-    "objects",
-    "agent_memories",
-    "file_state",
     "episode_artifact_binding",
     "episode_engine_state",
-    "episodes",
     "standing_questions",
-    "decision_outcomes",
+    "episodes",
+    "file_state",
+    "objects",
+)
+PG_BINDING_KEYED_RETAINED_TABLES: tuple[str, ...] = (
+    "outbox",
+    "audit",
     "decisions",
-    "sets",
+    "decision_outcomes",
+    "agent_memories",
     "heimdal_meeting_finalization_receipt",
 )
 
@@ -576,7 +583,7 @@ def _invalidate_pg_tables(binding_id: str, root: Path) -> dict[str, Any]:
     cleared: list[str] = []
     with _connect() as conn:
         with conn.cursor() as cur:
-            for table in PG_BINDING_KEYED_TABLES:
+            for table in PG_BINDING_KEYED_DERIVED_TABLES:
                 cur.execute("SELECT to_regclass(%s)", (f"public.{table}",))
                 row = cur.fetchone()
                 if not row or row[0] is None:
@@ -833,7 +840,8 @@ class BindingReactivationCoordinator:
 __all__ = [
     "BINDING_LINEAGE_KEY",
     "DERIVED_PROJECTION_FAMILIES",
-    "PG_BINDING_KEYED_TABLES",
+    "PG_BINDING_KEYED_DERIVED_TABLES",
+    "PG_BINDING_KEYED_RETAINED_TABLES",
     "REACTIVATION_PHASES",
     "REMOVAL_PHASES",
     "BindingReactivationCoordinator",

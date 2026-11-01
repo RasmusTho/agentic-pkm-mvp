@@ -237,3 +237,209 @@ def test_background_service_role_is_bootstrapped_delegated_and_least_privilege(
     assert outside["_exit_code"] == 1
     assert runtime.registry.load().revision == revision_before
     assert record_path.read_bytes() == role_before
+
+
+# -- MVR-06B (#3864): compatibility bridge handoff and the singleton supervisor ---------
+
+from app.instance.background_supervisor import (  # noqa: E402
+    BackgroundLifecycleError,
+    durable_background_state,
+)
+from app.instance.vault_registry import CapabilityNotReadyError  # noqa: E402
+from tests._mvr06b_handoff_harness import (  # noqa: E402
+    admin,
+    background_ids,
+    bind_runtime_env,
+    configure_watcher,
+    drive_watcher_during_waits,
+    handoff_through_cli,
+    mvr06a_instance,
+    mvr06b_instance,
+    outbox_paths,
+    pick,
+    stub_settings_reload,
+    supervisor,
+    watcher_receipt,
+)
+
+
+def _watcher_owner(runtime) -> str:
+    """Exactly one owner: the bridge before the handoff generation, the supervisor after."""
+
+    return "supervisor" if durable_background_state(runtime.registry.load()) else "bridge"
+
+
+def _watched_instance(tmp_path, monkeypatch, *, handoff: bool = True):
+    from app.watcher import registry as watcher_registry
+
+    runtime, first, (second,) = mvr06a_instance(tmp_path)
+    bind_runtime_env(monkeypatch, runtime, watcher=True)
+    config = configure_watcher(monkeypatch, tmp_path, runtime, Path(first.path))
+    stub_settings_reload(monkeypatch)
+    watcher_registry.run_registry_once(config)
+    if handoff:
+        assert handoff_through_cli(runtime)["_exit_code"] == 0
+    return runtime, first, second, config
+
+
+@pytest.mark.parametrize("fault", ["drain", "before_commit", "registry_write"])
+def test_settings_spine_bridge_handoff_is_atomic(tmp_path, monkeypatch, fault) -> None:
+    from app.watcher import registry as watcher_registry
+
+    runtime, first, second, config = _watched_instance(tmp_path, monkeypatch, handoff=False)
+    journal_before = runtime.registry.load().settings_rebind
+    assert _watcher_owner(runtime) == "bridge"
+
+    if fault == "registry_write":
+        original = runtime.registry.__class__._write_locked
+
+        def failing(self, snapshot):
+            if "backgroundSupervisor" in snapshot.extensions:
+                raise OSError("injected registry write failure")
+            return original(self, snapshot)
+
+        monkeypatch.setattr(runtime.registry.__class__, "_write_locked", failing)
+    else:
+        def fail(stage: str) -> None:
+            if stage == fault:
+                raise RuntimeError("injected handoff failure")
+
+        monkeypatch.setattr("app.instance.background_supervisor._handoff_fault_point", fail)
+    with pytest.raises(Exception):
+        refused = handoff_through_cli(runtime)
+        assert refused["_exit_code"] != 0
+        raise RuntimeError("refused")
+    monkeypatch.undo()
+    bind_runtime_env(monkeypatch, runtime, watcher=True)
+    config = configure_watcher(monkeypatch, tmp_path, runtime, Path(first.path))
+    stub_settings_reload(monkeypatch)
+    # The old bridge stays authoritative: one owner, journal untouched, supervisor sealed.
+    assert _watcher_owner(runtime) == "bridge"
+    assert runtime.registry.load().settings_rebind == journal_before
+    with pytest.raises(CapabilityNotReadyError):
+        supervisor(runtime).start()
+    watcher_registry.run_registry_once(config)
+
+    # The retried handoff imports the live bridge binding and seats the supervisor.
+    receipt = handoff_through_cli(runtime)
+    assert receipt["_exit_code"] == 0, receipt
+    assert _watcher_owner(runtime) == "supervisor"
+    assert background_ids(runtime) == (first.vault_binding_id,)
+    lifecycle = supervisor(runtime).start()
+    assert lifecycle.status == "running" and lifecycle.binding_id == first.vault_binding_id
+    # Bridge retirement is idempotent and never re-imports.
+    assert handoff_through_cli(runtime)["handed_off"] is False
+    note = Path(first.path) / "after-handoff.md"
+    note.write_text("still watched\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config)
+    assert str(note) in outbox_paths(tmp_path)
+
+
+def test_picker_rebinds_only_compatibility_mode_after_bridge_handoff(tmp_path, monkeypatch) -> None:
+    runtime, first, second, config = _watched_instance(tmp_path, monkeypatch)
+    sup = supervisor(runtime)
+    assert sup.start().binding_id == first.vault_binding_id
+    drive_watcher_during_waits(monkeypatch, config)
+
+    record = pick(runtime, second.vault_binding_id)
+    assert record.phase == "committed"
+    receipt = watcher_receipt(tmp_path, record.desired_revision)
+    assert receipt.stage == "completed"
+    assert receipt.prior_binding_id == first.vault_binding_id
+    assert receipt.candidate_binding_id == second.vault_binding_id
+    assert background_ids(runtime) == (second.vault_binding_id,)
+    rotated = sup.reconcile()
+    assert rotated.binding_id == second.vault_binding_id and rotated.generation == 2
+
+    # Generic scoped selection never changes background intent.
+    from app.instance.default_vault import resolve_vault_selection
+
+    before = durable_background_state(runtime.registry.load())
+    resolve_vault_selection(runtime.registry.load(), request_override=first.vault_binding_id)
+    assert durable_background_state(runtime.registry.load()) == before
+
+    # After the explicit-mode transition every picker event leaves intent unchanged.
+    admin(runtime).add(second.vault_binding_id)
+    explicit = durable_background_state(runtime.registry.load())
+    from app.instance.settings_rebind import SettingsRebindCandidatePolicyError
+
+    with pytest.raises(SettingsRebindCandidatePolicyError):
+        pick(runtime, first.vault_binding_id)
+    from app.vault.manager import VaultManager
+
+    context = VaultManager().validate_vault(Path(first.path))
+    assert VaultManager()._settings_rebind_selection(context, Path(first.path)) is None
+    assert durable_background_state(runtime.registry.load()) == explicit
+    assert sup.reconcile().binding_id == second.vault_binding_id
+
+
+@pytest.mark.parametrize(
+    "stage", ["prepare", "acknowledge", "commit", "reload", "reload_complete"]
+)
+def test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity(
+    tmp_path, monkeypatch, stage
+) -> None:
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    sup = supervisor(runtime)
+    sup.start()
+    # Every wake-up hint is lost: only durable phase/revision truth may converge.
+    from app.services import outbox as outbox_module
+
+    monkeypatch.setattr(
+        outbox_module, "write_outbox_event",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("hint lost")),
+    )
+    tripped = False
+
+    def fail_once(point: str) -> None:
+        nonlocal tripped
+        if point == stage and not tripped:
+            tripped = True
+            raise RuntimeError(f"injected {point} fault")
+
+    monkeypatch.setattr("app.instance.settings_rebind._activation_fault_point", fail_once)
+    with pytest.raises(RuntimeError, match=f"injected {stage} fault"):
+        pick(runtime, second.vault_binding_id)
+    pre_commit = stage in {"prepare", "acknowledge"}
+    if pre_commit:
+        # Pre-commit recovery resumes the old binding; no candidate effect happened.
+        assert background_ids(runtime) == (first.vault_binding_id,)
+        assert runtime.open_settings_rebind_store().read().phase != "prepared"
+        assert sup.reconcile().binding_id == first.vault_binding_id
+        with sup.effect() as lifecycle:
+            assert lifecycle.binding_id == first.vault_binding_id
+    else:
+        # Post-commit recovery rolls forward from the durable revision.
+        assert background_ids(runtime) == (second.vault_binding_id,)
+        assert sup.reconcile().binding_id == second.vault_binding_id
+    pick(runtime, second.vault_binding_id)
+    record = runtime.open_settings_rebind_store().read()
+    assert record.candidate_binding_id == second.vault_binding_id
+    assert record.reload_revision == record.desired_revision
+    assert background_ids(runtime) == (second.vault_binding_id,)
+    with sup.effect() as lifecycle:
+        assert lifecycle.binding_id == second.vault_binding_id
+
+
+def test_handoff_buffers_direct_filesystem_write_through_commit(tmp_path, monkeypatch) -> None:
+    runtime, first, second, config = _watched_instance(tmp_path, monkeypatch)
+    direct = Path(first.path) / "direct-between-scan-and-commit.md"
+
+    def write_after_final_scan(record) -> None:
+        # After the pre-commit reconciliation scan, before the compatibility commit;
+        # no filesystem event hint is delivered (the watcher only polls).
+        direct.write_text("old root remains authoritative\n", encoding="utf-8")
+
+    drive_watcher_during_waits(monkeypatch, config, after_acknowledged=write_after_final_scan)
+    candidate = Path(second.path) / "candidate-before-load.md"
+    candidate.write_text("candidate\n", encoding="utf-8")
+    record = pick(runtime, second.vault_binding_id)
+    receipt = watcher_receipt(tmp_path, record.desired_revision)
+    assert receipt.stage == "completed"
+    assert receipt.prior_binding_id == first.vault_binding_id
+    buffered = {item.relative_path for item in receipt.buffer}
+    assert direct.name in buffered  # receipted under A
+    assert candidate.name not in buffered
+    assert str(direct) in outbox_paths(tmp_path)
+    assert background_ids(runtime) == (second.vault_binding_id,)

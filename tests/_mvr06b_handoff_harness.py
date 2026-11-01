@@ -163,6 +163,107 @@ def pick(runtime, binding_id: str, **activation_kwargs) -> SettingsRebindRecord:
     )
 
 
+def configure_watcher(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runtime, root: Path
+) -> Path:
+    """The production registry watcher env for one running compatibility root."""
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app.briefing.compose import briefing_note_path
+    from app.briefing.config import BRIEFING_TIMEZONE
+    from app.vault.manager import VaultContext
+
+    config_path = tmp_path / "watchers.yaml"
+    config_path.write_text(
+        "watchers:\n"
+        "  - name: ingest\n"
+        "    scope_glob: '*.md,**/*.md'\n"
+        "    debounce_ms: 0\n"
+        "    rate_limit_per_min: 1000\n"
+        "    backoff_seconds: 0\n"
+        "    emit_event: ingest.vault.changed\n",
+        encoding="utf-8",
+    )
+    for registration in runtime.registry.load().registrations.values():
+        # Keep the unrelated scheduled briefing hook out of the watcher fixture.
+        context = VaultContext(status="selected", active_vault_path=registration.path)
+        note = briefing_note_path(
+            vault_context=context, for_date=datetime.now(ZoneInfo(BRIEFING_TIMEZONE)).date()
+        )
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text("fixture sentinel\n", encoding="utf-8")
+    env = {
+        "PKM_SETTINGS_PROFILE": "lab",
+        "WATCHER_ENABLE": "1",
+        "WATCHER_VAULT_PATH": str(root),
+        "WATCHER_DEBOUNCE_MS": "0",
+        "WATCHER_RATE_LIMIT_PER_MIN": "1000",
+        "WATCHER_STATE_DIR": str(tmp_path / "watcher-state"),
+        "WATCHER_HEARTBEAT_PATH": str(tmp_path / "watcher-heartbeat.json"),
+        "WATCHER_STOP_FILE": str(tmp_path / "watcher.stop"),
+        "WATCHER_TICK_LOG_PATH": str(tmp_path / "watcher-ticks.jsonl"),
+        "WATCHER_RUN_LOG_PATH": str(tmp_path / "watcher-runs.jsonl"),
+        "WATCHER_TICK_SLEEP_SECONDS": "0",
+        "WATCHER_SUMMARY_INTERVAL": "0",
+        "INDEX_OUTBOX_PATH": str(tmp_path / "index-outbox.jsonl"),
+        "SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS": "1",
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    return config_path
+
+
+def drive_watcher_during_waits(
+    monkeypatch: pytest.MonkeyPatch,
+    config_path: Path,
+    *,
+    after_acknowledged=None,
+) -> None:
+    """Run the separately running production watcher from inside each stage wait.
+
+    ``after_acknowledged`` runs once the watcher has published its quiescent pre-commit
+    acknowledgement, i.e. after the old-root final scan and before the commit.
+    """
+
+    from app.watcher import registry as watcher_registry
+
+    original = SettingsRebindActivation._wait_for_stage
+
+    def wait_for_stage(activation, record, *, required_stage):
+        for _ in range(3):
+            watcher_registry.run_registry_once(config_path)
+        original(activation, record, required_stage=required_stage)
+        if required_stage == "acknowledged" and after_acknowledged is not None:
+            after_acknowledged(record)
+
+    monkeypatch.setattr(SettingsRebindActivation, "_wait_for_stage", wait_for_stage)
+
+
+def watcher_receipt(tmp_path: Path, revision: int):
+    from app.watcher.settings_rebind import (
+        load_settings_rebind_watcher_receipt,
+        settings_rebind_watcher_receipt_path,
+    )
+
+    return load_settings_rebind_watcher_receipt(
+        settings_rebind_watcher_receipt_path(tmp_path / "watcher-state", revision)
+    )
+
+
+def outbox_paths(tmp_path: Path) -> list[str]:
+    import json
+
+    path = tmp_path / "index-outbox.jsonl"
+    if not path.exists():
+        return []
+    return [
+        str((json.loads(line).get("payload") or {}).get("vault_path") or "")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+
+
 def background_ids(runtime) -> tuple[str, ...]:
     state = durable_background_state(runtime.registry.load())
     assert state is not None
@@ -170,6 +271,10 @@ def background_ids(runtime) -> tuple[str, ...]:
 
 
 __all__ = [
+    "configure_watcher",
+    "drive_watcher_during_waits",
+    "outbox_paths",
+    "watcher_receipt",
     "admin",
     "background_ids",
     "bind_runtime_env",
