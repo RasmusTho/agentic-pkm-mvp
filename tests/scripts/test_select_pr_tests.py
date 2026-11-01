@@ -3353,7 +3353,7 @@ def test_bws_source_profile_requires_complete_regular_source_inputs(failure, mon
 
 
 @pytest.mark.parametrize("qualifying_source", sorted(selector.BWS_SOURCE_INSTALLATION_SOURCES))
-@pytest.mark.parametrize("cochange", ["admission", "rpc", "docs", "all"])
+@pytest.mark.parametrize("cochange", ["admission", "rpc", "docs", "helper", "all"])
 def test_bws_source_receipt_cochange_preserves_scoped_execution(qualifying_source, cochange, monkeypatch):
     from scripts.run_scoped_test_partitions import _serial_safe_candidates, validate_execution_units, validate_inventory
 
@@ -3368,6 +3368,7 @@ def test_bws_source_receipt_cochange_preserves_scoped_execution(qualifying_sourc
         "admission": ["app/ops/bws_installation_admission.py", "tests/ops/test_bws_installation_admission.py"],
         "rpc": ["tests/deploy/test_bws_source_rpc_assembly.py"],
         "docs": ["docs/OPERATIONS.md"],
+        "helper": ["tests/ops/bws_control_path_diagnostic_cases.py"],
     }
     changed.extend(path for name, paths in additions.items() if cochange in {name, "all"} for path in paths)
     with monkeypatch.context() as context:
@@ -3420,9 +3421,11 @@ def test_bws_source_receipt_cochange_preserves_scoped_execution(qualifying_sourc
 
 
 @pytest.mark.parametrize("failure", [
-    "no-source", "unknown-source", "unknown-test", "shared-fixture",
+    "no-source", "unknown-source", "unknown-test", "unknown-helper", "shared-fixture",
     "missing-admission", "symlink-admission", "missing-test", "symlink-test",
     "missing-rpc", "symlink-rpc", "missing-doc", "symlink-doc",
+    "missing-helper", "symlink-helper", "missing-selector", "symlink-selector",
+    "missing-selector-test", "symlink-selector-test", "missing-owner-doc", "symlink-owner-doc",
 ])
 def test_bws_source_receipt_cochange_fails_closed(failure, monkeypatch):
     guarded = {
@@ -3430,14 +3433,19 @@ def test_bws_source_receipt_cochange_fails_closed(failure, monkeypatch):
         "test": "tests/ops/test_bws_installation_admission.py",
         "rpc": "tests/deploy/test_bws_source_rpc_assembly.py",
         "doc": "docs/OPERATIONS.md",
+        "helper": "tests/ops/bws_control_path_diagnostic_cases.py",
+        "selector": "scripts/select_pr_tests.py",
+        "selector-test": "tests/scripts/test_select_pr_tests.py",
+        "owner-doc": "docs/development/TEST_STRATEGY_HOT_PATH.md",
     }
     changed = ["app/ops/bws_installation_transaction.py", *guarded.values()]
     if failure == "no-source":
         changed = changed[1:]
-    elif failure in {"unknown-source", "unknown-test", "shared-fixture"}:
+    elif failure in {"unknown-source", "unknown-test", "unknown-helper", "shared-fixture"}:
         extra = {
             "unknown-source": "app/ops/bws_new_diagnostics.py",
             "unknown-test": "tests/ops/test_bws_new_diagnostics.py",
+            "unknown-helper": "tests/ops/bws_other_diagnostic_cases.py",
             "shared-fixture": "tests/conftest.py",
         }[failure]
         changed.append(extra)
@@ -3456,6 +3464,72 @@ def test_bws_source_receipt_cochange_fails_closed(failure, monkeypatch):
     assert select_tests(changed) == baseline
     assert selector.scoped_deploy_partitions(baseline) == ()
     assert selector.scoped_deploy_execution_units(baseline) == ()
+
+
+def test_bws_diagnostic_ci_repair_preserves_complete_scoped_inventory(monkeypatch):
+    from scripts.run_scoped_test_partitions import _serial_safe_candidates, validate_execution_units, validate_inventory
+
+    changed = [
+        "app/ops/bws_installation_transaction.py", "app/ops/bws_installation_admission.py",
+        "app/ops/bws_installation_lifecycle.py", "tests/ops/test_bws_control_installation.py",
+        "tests/ops/test_bws_installation_admission.py", "tests/ops/test_bws_installation_lifecycle.py",
+        "tests/ops/test_bws_installation_transaction.py", "tests/ops/bws_control_path_diagnostic_cases.py",
+        "tests/deploy/test_bws_source_rpc_assembly.py", "scripts/select_pr_tests.py",
+        "tests/scripts/test_select_pr_tests.py", "docs/development/TEST_STRATEGY_HOT_PATH.md",
+        "docs/OPERATIONS.md", "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+    ]
+    with monkeypatch.context() as context:
+        context.setattr(selector, "_bws_source_installation_selection", lambda selection, paths: selection)
+        baseline = select_tests(changed)
+    actual = select_tests(changed)
+    dormant = "tests/ops/test_dormant_ownership_initialization.py"
+    expected = tuple(dict.fromkeys(
+        item for target in baseline.targets
+        for item in (selector._ops_test_files() if target == "tests/ops" else (target,))
+        if item != dormant
+    ))
+    assert actual.targets == expected
+    assert actual.subsystems == baseline.subsystems == ("governance", "ops", "ops_deploy")
+    assert actual.deferred_targets == baseline.deferred_targets
+    assert actual.reason.endswith("; BWS source installation scope")
+    assert "tests/governance" in actual.targets and "tests/scripts" in actual.targets
+    consumers = {
+        "tests/ops/test_bws_installation_admission.py", "tests/ops/test_bws_installation_lifecycle.py",
+        "tests/ops/test_bws_installation_transaction.py", "tests/deploy/test_bws_source_rpc_assembly.py",
+    }
+    assert consumers <= set(actual.targets)
+    partitions = selector.scoped_deploy_partitions(actual)
+    units = selector.scoped_deploy_execution_units(actual)
+    assert partitions and 0 < len(units) <= selector.SCOPED_EXECUTION_MAX_WORK_UNITS == 4
+    assert validate_inventory([list(part) for part in partitions], list(actual.targets)) == partitions
+    assert validate_execution_units([list(unit) for unit in units], list(actual.targets)) == units
+    serial = tuple(path for path in selector.SCOPED_DEPLOY_SERIAL_BOUNDARY if path != dormant)
+    assert len(serial) == 7 and units[-1] == serial
+    candidates, boundary = _serial_safe_candidates(tuple(target for unit in units for target in unit), serial)
+    assert boundary == serial
+    assert not set(serial).intersection(target for candidate in candidates for target in candidate)
+    assert ("tests/deploy/test_bws_source_rpc_assembly.py",) in candidates
+    assert selector.requires_runtime_checks(changed)
+
+
+def test_bws_diagnostic_helper_complete_consumer_inventory():
+    helper = Path("tests/ops/bws_control_path_diagnostic_cases.py")
+    module = "tests.ops." + helper.stem
+    consumers = set()
+    for path in Path("tests").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if helper.stem not in source:
+            continue
+        if any(
+            isinstance(node, ast.ImportFrom) and node.module == module
+            or isinstance(node, ast.Constant) and node.value == module
+            for node in ast.walk(ast.parse(source))
+        ):
+            consumers.add(str(path))
+    assert consumers == {
+        "tests/ops/test_bws_installation_admission.py", "tests/ops/test_bws_installation_lifecycle.py",
+        "tests/ops/test_bws_installation_transaction.py", "tests/deploy/test_bws_source_rpc_assembly.py",
+    }
 
 
 def test_ops_only_shared_configuration_keeps_broad_execution():
