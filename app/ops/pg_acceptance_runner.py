@@ -241,7 +241,8 @@ class PgAcceptanceRunner:
     def _create(self, suffix: str, arguments: list[str]) -> str:
         labels = [argument for key, value in self.labels.items() for argument in ('--label', key + '=' + value)]
         identifier = self._docker('create', '--name', self.name + '-' + suffix,
-                                  *labels, *arguments).decode().strip()
+                                  *labels, '--log-driver', 'json-file', '--log-opt', 'max-size=50m',
+                                  '--log-opt', 'max-file=3', *arguments).decode().strip()
         row = self._owned(suffix)
         if row is None or row['Id'] != identifier:
             raise PgAcceptanceError()

@@ -1373,6 +1373,18 @@ does not establish a usable answer path.
 
 The deploy procedure is the same shape for every channel; only the pin target and the migration-ack posture differ (`prod` is the strictest). It assumes the build-once/promote model above.
 
+The DEV and TEST channel overlays configure Docker's `json-file` driver with a
+`50m` maximum file size and three files for each base Compose service. The
+post-merge PG and heavy acceptance runners apply the same policy to their own
+disposable containers. This finite retention discards older container logs;
+preserve any required diagnostics through the normal evidence workflow before
+they rotate. Docker applies the settings when a container is created: existing
+containers retain their previous settings until a separately authorized,
+controlled recreation. This describes repository configuration, not live
+adoption. It does not cover standalone rerun containers, separate Karakeep or
+scalar-rollback-only services, application-owned files, or accumulated images.
+The PROD configuration and Docker daemon defaults are unchanged.
+
 ### Explicit native principal cutover (DEV/TEST)
 
 The native BWS host entrypoint accepts `--principal-cutover` for an explicitly initiated

@@ -1,5 +1,15 @@
+x-channel-logging: &channel-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
+  source-identity-db-witness:
+    logging: *channel-logging
+
   instance-state-init:
+    logging: *channel-logging
     volumes:
       - "runtime-tmp:/app/tmp-test"
     environment:
@@ -8,6 +18,7 @@ services:
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
 
   migrate:
+    logging: *channel-logging
     environment:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
@@ -21,6 +32,7 @@ services:
       PROD_MIGRATION_FORWARD_ONLY_ACK: !reset null
 
   db:
+    logging: *channel-logging
     environment:
       POSTGRES_DB: app_test
     volumes:
@@ -29,10 +41,12 @@ services:
       - "15434:5432"
 
   ollama:
+    logging: *channel-logging
     ports: !override
       - "11435:11434"
 
   api:
+    logging: *channel-logging
     ports: !override
       - "18002:8000"
     # #2991: test channel writes heartbeat/state/outbox artifacts under
@@ -78,6 +92,7 @@ services:
       VAULT_DESK_DIR_REL: "🛠️ Workbench"
 
   worker:
+    logging: *channel-logging
     volumes:
       - "runtime-tmp:/app/tmp-test"
       - type: bind
@@ -110,6 +125,7 @@ services:
       VAULT_DESK_DIR_REL: "🛠️ Workbench"
 
   watcher:
+    logging: *channel-logging
     volumes:
       - "runtime-tmp:/app/tmp-test"
       - type: bind
@@ -142,6 +158,7 @@ services:
       VAULT_DESK_DIR_REL: "🛠️ Workbench"
 
   heimdal-capture-watch:
+    logging: *channel-logging
     volumes:
       - "runtime-tmp:/app/tmp-test"
     environment:
@@ -157,6 +174,7 @@ services:
       # scripts/export_runtime_env.sh's test-channel branch instead.
 
   companion-ui:
+    logging: *channel-logging
     ports: !override
       - "${COMPANION_UI_BIND_HOST:-127.0.0.1}:8112:8112"
     environment:
