@@ -341,3 +341,22 @@ def test_background_context_has_explicit_workspace_and_capability_identity(
         with sup.effect():
             pass
     assert held.context is not None and held.context.selection_capability_digest
+
+
+def test_background_consumer_preflight_starts_supervisor_from_durable_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.instance.runtime import _preflight_runtime
+
+    runtime, first, _extra = mvr06b_instance(tmp_path, monkeypatch)
+    for consumer in ("watcher", "worker"):
+        assert (
+            _preflight_runtime(
+                channel=runtime.layout.channel_id,
+                instance_state_root=runtime.layout.root.parent,
+                host_global_root=runtime.ledger.root,
+                consumer=consumer,
+            )
+            == 0
+        )
+    assert background_ids(runtime) == (first.vault_binding_id,)

@@ -1707,6 +1707,8 @@ def _preflight_runtime(
     ledger = runtime.ledger.require_existing()
     if not ledger.legacy_bootstrap_complete:
         raise RegistryError("host-global legacy owner inventory bootstrap is incomplete")
+    if consumer in _background_consumers():
+        _start_background_supervisor(runtime, consumer)
     known_roots = [Path(item.path) for item in runtime.registry.load().registrations.values()]
     validate_registry_disjoint_from_content(
         layout.registry_path,
@@ -5202,6 +5204,47 @@ def open_background_intent_admin_service(
     from app.instance.background_authority import BackgroundIntentAdminService
 
     return BackgroundIntentAdminService(VaultRegistryStore(Path(registry_path)))
+
+
+def _start_background_supervisor(runtime: InstanceRegistryRuntime, consumer: str) -> None:
+    """MVR-06B: after the bridge handoff, start the supervisor from durable intent.
+
+    The shared phase journal must agree with durable intent (a stable journal whose
+    candidate differs would be a second binding authority). A failed lifecycle is
+    reported loudly in the startup log and health; it never redirects to another binding.
+    """
+
+    import logging
+
+    from app.instance.background_supervisor import (
+        BackgroundLifecycleSupervisor,
+        durable_background_state,
+    )
+    from app.instance.settings_rebind import SettingsRebindRecord
+
+    snapshot = runtime.registry.load()
+    state = durable_background_state(snapshot)
+    if state is None:
+        return
+    if snapshot.settings_rebind is not None:
+        record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
+        running = tuple(item for item in state.binding_ids if item in snapshot.registrations)
+        journal = () if record.candidate_binding_id is None else (record.candidate_binding_id,)
+        if record.phase != "prepared" and journal != running:
+            raise RegistryError(
+                "the settings rebind phase journal disagrees with durable background intent"
+            )
+    lifecycle = BackgroundLifecycleSupervisor.for_runtime(
+        registry_path=runtime.layout.registry_path,
+        ownership_root=runtime.ledger.root,
+        channel_id=runtime.layout.channel_id,
+        consumer=consumer,
+    ).start()
+    log = logging.getLogger(__name__)
+    if lifecycle.status == "failed":
+        log.error("background lifecycle failed at startup: %s", lifecycle.health())
+    else:
+        log.info("background lifecycle started: %s", lifecycle.health())
 
 
 def _require_background_authority(registry_path: Path) -> object:
