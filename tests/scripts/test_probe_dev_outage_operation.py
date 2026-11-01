@@ -344,7 +344,9 @@ def unit_metadata(binding, clock):
         FinalKillSignal="9",
         TimeoutStopFailureMode="terminate",
         RuntimeDirectory="yggdrasil-host-probe-dev",
+        RuntimeDirectoryMode="0700",
         StateDirectory="yggdrasil-host-probe-dev",
+        StateDirectoryMode="0700",
         LoadCredentialEncrypted=":".join(target.DEV_CREDENTIAL),
         StandardOutput="journal",
         StandardError="journal",
@@ -4567,6 +4569,7 @@ def whole_native_call(
     original_service_inactive=False,
     api_publication=None,
     publication_refused=False,
+    directory_mode_drift=None,
 ):
     """Current local entry -> serialized program -> first preflight -> real drill."""
     import contextlib, io
@@ -4612,6 +4615,10 @@ def whole_native_call(
                 ExecStopPost="",
                 Type="",
                 Environment="",
+                StateDirectory="",
+                StateDirectoryMode="0755",
+                RuntimeDirectory="",
+                RuntimeDirectoryMode="0755",
             )
         kernel.unit.update(
             ActiveState="inactive",
@@ -4692,9 +4699,12 @@ def whole_native_call(
             stages.append("foreign-state-before-first-start")
             raise SDKExited(78)
         except module.Refusal:
-            if not unhealthy_before_install:
+            if directory_mode_drift:
+                stages.append("directory-mode-before-first-start")
+            elif unhealthy_before_install:
+                stages.append("unhealthy-before-installation")
+            else:
                 raise
-            stages.append("unhealthy-before-installation")
             raise SDKExited(78)
         stages.append("qualified-worker-complete")
         raise SDKExited()
@@ -4842,6 +4852,20 @@ def whole_native_call(
             for line in unit_bytes.splitlines():
                 if "=" in line and not line.startswith("#"):
                     key, value = line.split("=", 1)
+                    # exec_directory_done resets mode as well as directory
+                    # names; a preceding template mode does not survive this.
+                    if (
+                        key
+                        in {
+                            "StateDirectory",
+                            "RuntimeDirectory",
+                            "CacheDirectory",
+                            "LogsDirectory",
+                            "ConfigurationDirectory",
+                        }
+                        and not value
+                    ):
+                        values[key + "Mode"] = "0755"
                     values[key] = value
             selected = replace(
                 kernel.scope.binding,
@@ -4866,7 +4890,11 @@ def whole_native_call(
                 DropInPaths="",
                 Environment="PYTHONPATH=" + selected.package,
                 StateDirectory=values["StateDirectory"],
+                StateDirectoryMode=values["StateDirectoryMode"],
+                RuntimeDirectoryMode=values["RuntimeDirectoryMode"],
             )
+            if directory_mode_drift:
+                projected[directory_mode_drift] = "0755"
             markers = [path for path in kernel.os.files if "/99-ygg-dev-owner-" in path]
             projected["DropInPaths"] = " ".join([*temporary_dropins, *markers])
             if markers:
@@ -4894,7 +4922,16 @@ def whole_native_call(
                 target.parse_config(kernel.os.files[configured])["PROBE_STATE_FILE"],
             )
             case.assertTrue(stat.S_ISDIR(kernel.os.meta[state].st_mode))
-            kernel.os.add(runtime_parent, directory=True, mode=0o700)
+            # The manager applies the effective mode even to an existing state
+            # directory. Model that effect rather than trusting its creator.
+            effective = int(kernel.unit["StateDirectoryMode"], 8)
+            metadata = kernel.os.meta[state]
+            if stat.S_IMODE(metadata.st_mode) != effective:
+                metadata.st_mode = stat.S_IFDIR | effective
+                metadata.st_ctime_ns += 1
+            kernel.os.add(
+                runtime_parent, directory=True, mode=int(kernel.unit["RuntimeDirectoryMode"], 8)
+            )
             kernel.os.add(runtime_parent + "/secret-runtime.env", b"DO_NOT_READ_WEBHOOK")
             kernel.unit["ControlGroup"] = (
                 "/system.slice/system-yggdrasil\\x2dhost\\x2dprobe.slice/" + target.UNIT
@@ -4946,7 +4983,10 @@ def whole_native_call(
             )
         case.assertEqual(
             78
-            if unhealthy_before_install or foreign_state_after_guard or publication_refused
+            if unhealthy_before_install
+            or foreign_state_after_guard
+            or publication_refused
+            or directory_mode_drift
             else 0,
             code,
         )
@@ -5009,6 +5049,8 @@ def whole_native_call(
         if unhealthy_before_install
         else "foreign-state-before-first-start"
         if foreign_state_after_guard
+        else "directory-mode-before-first-start"
+        if directory_mode_drift
         else "qualified-worker-complete"
     )
     case.assertEqual(
@@ -5016,7 +5058,8 @@ def whole_native_call(
         stages,
     )
     case.assertEqual(
-        0 if unhealthy_before_install or foreign_state_after_guard else 2, len(case.h.deliveries)
+        0 if unhealthy_before_install or foreign_state_after_guard or directory_mode_drift else 2,
+        len(case.h.deliveries),
     )
     if unhealthy_before_install:
         case.assertNotIn(root + "/probe-state", kernel.os.meta)
@@ -5039,7 +5082,7 @@ def whole_native_call(
             )
         )
         case.assertEqual("not-found", kernel.unit["LoadState"])
-    if temporary_install and not foreign_state_after_guard:
+    if temporary_install and not foreign_state_after_guard and not directory_mode_drift:
         case.assertEqual(target.unit_profile(original_unit), target.unit_profile(kernel.unit))
         if original_state_directory_present:
             case.assertEqual(original_state_identity, kernel.os.meta[state_parent])
@@ -5062,6 +5105,21 @@ def whole_native_call(
         )
         case.assertEqual(98765, kernel.os.meta[changed_state].st_ino)
         case.assertFalse(any(argv == target.systemd("start") for argv in calls))
+    if directory_mode_drift:
+        case.assertEqual("REFUSED", result["status"])
+        case.assertFalse(result["live_acceptance"])
+        case.assertNotIn(root + "/probe-state", kernel.os.meta)
+        case.assertNotIn(runtime_parent, kernel.os.meta)
+        case.assertTrue(any(path.startswith(root + "/source/") for path in kernel.os.files))
+        case.assertEqual(1, calls.count(target.systemd("reload_for_temporary_dev")))
+        case.assertFalse(
+            any(
+                argv in {target.systemd("start"), target.systemd("stop")}
+                or argv[0] == "/usr/bin/systemd-run"
+                and "--watch-dev-operation" in argv
+                for argv in calls
+            )
+        )
     case.assertIsNone(kernel.os.files.get(kernel.scope.binding.state_file))
     case.assertFalse(
         any(
@@ -5194,6 +5252,24 @@ def test_actual_temporary_dev_installation_restores_original_directory_absence()
     finally:
         case.doCleanups()
         case.tearDown()
+
+
+def test_actual_temporary_dev_refuses_wrong_directory_modes_before_first_start():
+    for field in ("StateDirectoryMode", "RuntimeDirectoryMode"):
+        case = NativeBindingTests()
+        case.setUp()
+        try:
+            with case.subTest(field=field):
+                result, _ = whole_native_call(
+                    case, temporary_install=True, directory_mode_drift=field
+                )
+                case.assertEqual("qualified_worker", result["phase"])
+                case.assertEqual(
+                    "normal_runtime_state_hardening_or_stream_unqualified", result["reason"]
+                )
+        finally:
+            case.doCleanups()
+            case.tearDown()
 
 
 def test_actual_temporary_directory_owner_loss_is_unknown_before_first_start():

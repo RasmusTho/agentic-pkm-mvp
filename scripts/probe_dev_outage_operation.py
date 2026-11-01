@@ -98,7 +98,9 @@ UNIT_KEYS = (
     "FinalKillSignal",
     "TimeoutStopFailureMode",
     "RuntimeDirectory",
+    "RuntimeDirectoryMode",
     "StateDirectory",
+    "StateDirectoryMode",
     "LoadCredentialEncrypted",
     "StandardOutput",
     "StandardError",
@@ -1047,7 +1049,9 @@ def normal_unit(unit: dict[str, str], binding: Binding) -> None:
         "PrivateDevices": "yes",
         "NoNewPrivileges": "yes",
         "RuntimeDirectory": "yggdrasil-host-probe-dev",
+        "RuntimeDirectoryMode": "0700",
         "StateDirectory": normal_state_directory(binding),
+        "StateDirectoryMode": "0700",
         "UMask": "0077",
     }.items():
         if unit[key] != value:
@@ -2456,6 +2460,8 @@ class TemporaryDevInstallation:
             + self.selected.config
             + "\nStateDirectory=\nStateDirectory="
             + normal_state_directory(self.selected)
+            # systemd's empty directory-list assignment also resets its mode.
+            + "\nStateDirectoryMode=0700"
             + "\nExecStart=\nExecStart="
             + self.binding.sdk
             + " "
