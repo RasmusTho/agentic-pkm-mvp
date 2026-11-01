@@ -82,6 +82,7 @@ from app.instance.filesystem_identity import (
 )
 from app.instance.vault_registry import (
     DEFAULT_PROVENANCE_EXPLICIT,
+    RegistryDefaultConflict,
     RegistrySnapshot,
     RemovalTombstone,
     VaultRegistration,
@@ -244,6 +245,14 @@ class BindingRemovalCoordinator:
             raise RegistryError(f"unknown vault_binding_id: {binding_id}")
         if registration.extensions.get(LIFECYCLE_STATE_KEY) is not None:
             raise RegistryError("binding already has a lifecycle reservation")
+        floor = snapshot.extensions.get("scalarRollback")
+        if isinstance(floor, dict) and floor.get("targetVaultBindingId") == binding_id:
+            # Refused before any reservation: retargeting the MVR-01C rollback floor
+            # belongs to its owner, never to a removal.
+            raise RegistryDefaultConflict(
+                "removing the MVR-01C scalar rollback target requires an explicit "
+                "authorized floor retarget"
+            )
         removes_default = snapshot.default_vault_binding_id == binding_id
         if replacement is not None:
             if not removes_default:
@@ -322,6 +331,7 @@ class BindingRemovalCoordinator:
             self.journal.save(intent, "final_scanned")
         if before(intent, "committed"):
             self._commit(intent, source)
+            self._leases().retire_binding_state(binding_id)
             self.journal.save(intent, "committed")
         if before(intent, "buffer_drained"):
             if activation is not None and intent.get("journal_moves"):
@@ -353,6 +363,15 @@ class BindingRemovalCoordinator:
         if tombstone is None:
             raise RegistryError("binding removal completed without its tombstone")
         return tombstone
+
+    def _leases(self) -> Any:
+        from app.instance.binding_effect_lease import BindingEffectLeaseManager
+
+        return BindingEffectLeaseManager.for_runtime(
+            registry_store=self.runtime.registry,
+            ownership_root=self.runtime.ledger.root,
+            state_root=self.runtime.layout.root / "binding-effect-leases",
+        )
 
     def _reserve(self, intent: dict[str, Any], source: VaultRegistration) -> None:
         registry = self.runtime.registry
@@ -726,6 +745,13 @@ class BindingReactivationCoordinator:
                 raise RegistryError("reactivated ownership diverged to another channel")
             self.journal.save(intent, "ownership_reactivated")
         if before(intent, "registered_reactivating"):
+            from app.instance.binding_effect_lease import BindingEffectLeaseManager
+
+            BindingEffectLeaseManager.for_runtime(
+                registry_store=runtime.registry,
+                ownership_root=runtime.ledger.root,
+                state_root=runtime.layout.root / "binding-effect-leases",
+            ).retire_binding_state(binding_id)
             self._register_reactivating(intent, tombstone)
             self.journal.save(intent, "registered_reactivating")
         if before(intent, "derived_invalidated"):

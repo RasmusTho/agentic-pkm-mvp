@@ -443,3 +443,524 @@ def test_handoff_buffers_direct_filesystem_write_through_commit(tmp_path, monkey
     assert candidate.name not in buffered
     assert str(direct) in outbox_paths(tmp_path)
     assert background_ids(runtime) == (second.vault_binding_id,)
+
+
+def test_lifecycle_requires_matching_channel_ownership_lease(tmp_path, monkeypatch) -> None:
+    import shutil
+
+    from app.instance.background_supervisor import BackgroundLifecycleSupervisor
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    assert supervisor(runtime).start().status == "running"
+
+    # A lifecycle in another release channel cannot self-claim this channel's lease.
+    foreign = BackgroundLifecycleSupervisor.for_runtime(
+        registry_path=runtime.layout.registry_path,
+        ownership_root=runtime.ledger.root,
+        channel_id="test" if runtime.layout.channel_id != "test" else "dev",
+        consumer="watcher",
+    )
+    refused = foreign.start()
+    assert refused.status == "failed" and "another release channel" in refused.failure
+
+    # Relocation of the physical root (a different directory now at the path) is refused
+    # at start, at rebind, and after restart.
+    root = Path(first.path)
+    moved = tmp_path / "moved-away"
+    shutil.move(str(root), moved)
+    root.mkdir()
+    for attempt in (supervisor(runtime).start(), supervisor(runtime).reconcile()):
+        assert attempt.status == "failed"
+        assert "ownership lease" in attempt.failure
+    from tests._mvr_default_vault_harness import reopen_runtime
+
+    restarted = reopen_runtime(runtime, tmp_path)
+    assert supervisor(restarted).start().status == "failed"
+    shutil.rmtree(root)
+    shutil.move(str(moved), root)
+    assert supervisor(restarted).start().status == "running"
+
+    # A binding whose lease is retired (removed) is never started.
+    admin(restarted).remove(first.vault_binding_id)
+    admin(restarted).add(second.vault_binding_id)
+    restarted.remove(second.vault_binding_id)
+    failed = supervisor(restarted).start()
+    assert failed.status == "failed" and failed.binding_id == second.vault_binding_id
+
+
+def test_default_mutation_rebinds_only_compatibility_lifecycle(tmp_path, monkeypatch) -> None:
+    from app.instance.runtime import open_default_vault_service
+
+    runtime, first, second, config = _watched_instance(tmp_path, monkeypatch)
+    drive_watcher_during_waits(monkeypatch, config)
+    defaults = open_default_vault_service(runtime.layout.registry_path)
+    sup = supervisor(runtime)
+    sup.start()
+
+    # Replacing the default runs the full prepare/quiesce/commit/resume protocol.
+    defaults.set(second.vault_binding_id)
+    record = runtime.open_settings_rebind_store().read()
+    assert record.phase == "committed" and record.candidate_binding_id == second.vault_binding_id
+    assert watcher_receipt(tmp_path, record.desired_revision).stage == "completed"
+    state = durable_background_state(runtime.registry.load())
+    assert state.binding_ids == (second.vault_binding_id,)
+    assert state.intent_provenance == "compatibility_default"
+    assert sup.reconcile().binding_id == second.vault_binding_id
+
+    # Clearing falls back to the registered legacy bootstrap before no-vault, so
+    # foreground and background resolution stay identical.
+    from app.instance.default_vault import resolve_vault_selection
+
+    defaults.clear()
+    snapshot = runtime.registry.load()
+    foreground = resolve_vault_selection(snapshot, legacy_bootstrap_vault_root=Path(first.path))
+    assert foreground.vault_binding_id == first.vault_binding_id
+    assert background_ids(runtime) == (first.vault_binding_id,)
+    monkeypatch.delenv("WATCHER_VAULT_PATH")
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    defaults.set(second.vault_binding_id)
+    defaults.clear()
+    assert background_ids(runtime) == ()  # no bootstrap configured: truthful no-vault
+
+    # Explicit intent is never rebound by a default mutation.
+    admin(runtime).add(second.vault_binding_id)
+    defaults.set(first.vault_binding_id)
+    defaults.clear()
+    assert background_ids(runtime) == (second.vault_binding_id,)
+
+
+def test_rebind_reuses_settings_spine_and_is_generation_clean(tmp_path, monkeypatch) -> None:
+    import threading
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    reloads = stub_settings_reload(monkeypatch)
+    sup = supervisor(runtime)
+    old = sup.start()
+    held = threading.Event()
+    release = threading.Event()
+    finished: list[str] = []
+
+    def in_flight() -> None:
+        with sup.effect() as lifecycle:
+            held.set()
+            release.wait(10)
+            finished.append(lifecycle.binding_id)
+
+    worker = threading.Thread(target=in_flight)
+    worker.start()
+    assert held.wait(5)
+    # The rebind goes through #3163's production two-phase journal and SETTINGS-01 reload.
+    pick(runtime, second.vault_binding_id)
+    assert reloads[-1] == Path(second.path)
+    rotated: dict = {}
+    rotation = threading.Thread(target=lambda: rotated.update(lifecycle=sup.reconcile()))
+    rotation.start()
+    rotation.join(0.5)
+    assert rotation.is_alive()  # draining the old generation's in-flight effect
+    release.set()
+    worker.join(10)
+    rotation.join(10)
+    assert finished == [first.vault_binding_id]  # in-flight work completed on its binding
+    new = rotated["lifecycle"]
+    assert new.binding_id == second.vault_binding_id
+    assert new.generation == old.generation + 1
+    assert new.context.context_id != old.context.context_id
+    assert new.context.selection_capability_digest != old.context.selection_capability_digest
+    with sup.effect() as lifecycle:
+        assert lifecycle.binding_id == second.vault_binding_id
+
+
+def test_registry_revision_rebinds_and_closes_event_crash_window(tmp_path, monkeypatch) -> None:
+    from dataclasses import replace as dc_replace
+
+    from app.instance.background_supervisor import BackgroundLifecycleStale
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    sup = supervisor(runtime)
+    gen1 = sup.start()
+
+    # The producer crashes after the registry commit but before event publication.
+    from app.services import outbox as outbox_module
+
+    def crash(*args, **kwargs):
+        raise SystemExit("producer crashed before event publication")
+
+    monkeypatch.setattr(outbox_module, "write_outbox_event", crash)
+    monkeypatch.setattr(
+        "app.instance.background_supervisor.emit_background_intent_event",
+        lambda *a, **k: None,
+    )
+    pick(runtime, second.vault_binding_id)
+    # The held generation cannot accept later work against the stale binding.
+    with pytest.raises(BackgroundLifecycleStale):
+        with sup.effect_leases.shared_effect(
+            gen1.binding_id, channel_id=sup.channel_id, root=gen1.root
+        ):
+            if sup._cursor_changed(gen1):
+                raise BackgroundLifecycleStale("stale")
+    gen2 = sup.reconcile()  # converges from the durable revision cursor alone
+    assert gen2.binding_id == second.vault_binding_id and gen2.generation == 2
+    monkeypatch.setattr(outbox_module, "write_outbox_event", lambda *a, **k: "hint")
+
+    # An authority-relevant provenance change rotates and re-authorizes.
+    snapshot = runtime.registry.load()
+    registration = snapshot.registrations[second.vault_binding_id]
+    runtime.registry.commit_state(
+        registrations={
+            **snapshot.registrations,
+            second.vault_binding_id: dc_replace(
+                registration,
+                extensions={**registration.extensions, "bindingRevision": snapshot.revision + 1},
+            ),
+        },
+        expected_revision=snapshot.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    gen3 = sup.reconcile()
+    assert gen3.generation == 3 and gen3.binding_revision == snapshot.revision + 1
+
+    # Removing the running binding rotates it off the removed binding: compatibility
+    # adopts the post-removal MVR-02 default, never the stale binding.
+    runtime.remove(second.vault_binding_id)
+    rebound = sup.reconcile()
+    assert rebound.binding_id == first.vault_binding_id and rebound.generation == 4
+    with sup.effect() as lifecycle:
+        assert lifecycle.binding_id == first.vault_binding_id
+
+
+def test_background_effect_fence_closes_authorization_race_window(tmp_path, monkeypatch) -> None:
+    import threading
+
+    from app.instance.background_supervisor import revoke_background_role_fenced
+    from app.instance.runtime import open_background_role_store
+
+    runtime, first, _extra = mvr06b_instance(tmp_path, monkeypatch)
+    sup = supervisor(runtime)
+    sup.start()
+    role_store = open_background_role_store(runtime.layout.registry_path)
+    epoch = role_store.require().auth_epoch
+    held = threading.Event()
+    release = threading.Event()
+    observed: list[int] = []
+
+    def authorized_effect() -> None:
+        with sup.effect():
+            held.set()
+            release.wait(10)
+            # Still inside the shared lease: the revocation has not landed yet.
+            observed.append(role_store.require().auth_epoch)
+
+    effect = threading.Thread(target=authorized_effect)
+    effect.start()
+    assert held.wait(5)
+    revoked: dict = {}
+    revoker = threading.Thread(
+        target=lambda: revoked.update(
+            record=revoke_background_role_fenced(
+                registry=runtime.registry,
+                role_store=role_store,
+                ownership_root=runtime.ledger.root,
+                channel_id=runtime.layout.channel_id,
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
+        )
+    )
+    revoker.start()
+    revoker.join(0.5)
+    assert revoker.is_alive()  # the exclusive lease waits for the authorized effect
+    release.set()
+    effect.join(10)
+    revoker.join(10)
+    assert observed == [epoch]
+    assert revoked["record"].auth_epoch == epoch + 1
+    # After the revocation the next effect is blocked before any I/O.
+    with pytest.raises(Exception):
+        with sup.effect():
+            raise AssertionError("an effect ran after revocation")
+    assert sup.lifecycle.status == "failed"
+
+    # The production CLI uses the same fenced order and refuses an unfenced revoke.
+    from tests._mvr06_background_harness import cli
+
+    unfenced = cli(
+        "background-role-revoke", "--registry-path", str(runtime.layout.registry_path),
+        "--consumer", "cli",
+    )
+    assert unfenced["_exit_code"] != 0 and "drain the affected lifecycles" in unfenced["error"]
+
+
+# -- MVR-06B production removal / reactivation -------------------------------------------
+
+
+class _ProcessCrash(BaseException):
+    """A simulated process death: no in-process compensation may run."""
+
+
+def _shared_refused(runtime, binding_id: str, root: Path) -> bool:
+    from app.instance.binding_effect_lease import (
+        BindingEffectLeaseError,
+        BindingEffectLeaseManager,
+    )
+
+    leases = BindingEffectLeaseManager.for_runtime(
+        registry_store=runtime.registry,
+        ownership_root=runtime.ledger.root,
+        state_root=runtime.layout.root / "binding-effect-leases",
+    )
+    try:
+        with leases.shared_effect(
+            binding_id, channel_id=runtime.layout.channel_id, root=root, timeout=0.5
+        ):
+            return False
+    except BindingEffectLeaseError:
+        return True
+
+
+def test_registration_removal_activates_after_all_consumer_floors(tmp_path, monkeypatch) -> None:
+    import threading
+
+    from app.instance.binding_effect_lease import BindingEffectLeaseManager
+
+    # Before the MVR-06B background floor, production removal stays sealed.
+    staged, staged_first, _ = mvr06a_instance(tmp_path / "staged")
+    before = staged.registry.load()
+    with pytest.raises(CapabilityNotReadyError, match="MVR-06B consumer drain floor"):
+        staged.remove(staged_first.vault_binding_id)
+    assert staged.registry.load() == before
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path / "live", monkeypatch)
+    stub_settings_reload(monkeypatch)
+    leases = BindingEffectLeaseManager.for_runtime(
+        registry_store=runtime.registry,
+        ownership_root=runtime.ledger.root,
+        state_root=runtime.layout.root / "binding-effect-leases",
+    )
+    holding = threading.Event()
+    release = threading.Event()
+
+    def foreground_effect() -> None:
+        with leases.shared_effect(
+            second.vault_binding_id, channel_id=runtime.layout.channel_id, root=Path(second.path)
+        ):
+            holding.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=foreground_effect)
+    holder.start()
+    assert holding.wait(5)
+    result: dict = {}
+    remover = threading.Thread(
+        target=lambda: result.update(tombstone=runtime.remove(second.vault_binding_id))
+    )
+    remover.start()
+    remover.join(1.0)
+    assert remover.is_alive()  # draining the holder
+    reserved = runtime.registry.load().registrations[second.vault_binding_id]
+    assert reserved.extensions["lifecycleState"] == "draining_removal"
+    assert _shared_refused(runtime, second.vault_binding_id, Path(second.path))
+    release.set()
+    holder.join(10)
+    remover.join(30)
+    tombstone = result["tombstone"]
+    snapshot = runtime.registry.load()
+    assert second.vault_binding_id not in snapshot.registrations
+    assert snapshot.removal_tombstones[second.vault_binding_id] == tombstone
+    assert runtime.ledger.active_owner(second.vault_binding_id) is None
+    assert second.vault_binding_id in runtime.ledger.load().tombstones
+    assert background_ids(runtime) == (first.vault_binding_id,)
+
+
+@pytest.mark.parametrize(
+    "engine,phase",
+    [("removal", phase) for phase in (
+        "intent", "reserved", "prepared", "drained", "final_scanned", "committed",
+        "buffer_drained", "ownership_released", "resumed",
+    )]
+    + [("reactivation", phase) for phase in (
+        "intent", "ownership_reactivated", "registered_reactivating", "derived_invalidated",
+        "rescanned", "rebuild_receipted",
+    )],
+)
+def test_production_removal_and_reactivation_recover_after_every_durable_phase(
+    tmp_path, monkeypatch, engine, phase
+) -> None:
+    from app.instance.binding_removal import binding_epoch_lineage
+    from tests._mvr_default_vault_harness import reopen_runtime
+
+    from app.instance.runtime import open_default_vault_service
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    # The removed binding is the compatibility binding and the instance default (the
+    # first binding is the MVR-01C rollback target, which removal refuses up front).
+    open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
+    binding, root = second.vault_binding_id, Path(second.path)
+    assert background_ids(runtime) == (binding,)
+    point = f"binding-{engine}:{phase}"
+
+    def crash(name: str) -> None:
+        if name == point:
+            raise _ProcessCrash(name)
+
+    if engine == "reactivation":
+        runtime.remove(binding)
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", crash)
+    with pytest.raises(_ProcessCrash):
+        if engine == "removal":
+            runtime.remove(binding)
+        else:
+            runtime.reactivate_removed(root)
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", lambda name: None)
+
+    snapshot = runtime.registry.load()
+    registration = snapshot.registrations.get(binding)
+    lease = runtime.ledger.load().leases.get(binding)
+    # No early access and no dual ownership at any crash point.
+    if registration is not None and registration.extensions.get("lifecycleState"):
+        assert _shared_refused(runtime, binding, root)
+    if registration is None:
+        assert binding in snapshot.removal_tombstones
+    assert not (registration is not None and binding in snapshot.removal_tombstones)
+    if lease is not None:
+        assert lease.channel_id == runtime.layout.channel_id
+
+    restarted = reopen_runtime(runtime, tmp_path)
+    if engine == "removal":
+        tombstone = restarted.recover_removal()
+        final = restarted.registry.load()
+        assert tombstone is not None and tombstone == final.removal_tombstones[binding]
+        assert binding not in final.registrations
+        assert restarted.ledger.active_owner(binding) is None
+        assert final.default_vault_binding_id is None
+        assert background_ids(restarted) == ()  # enabled idle/no-vault, not a stale binding
+        events = [item["event"] for item in binding_epoch_lineage(final, binding)]
+        assert events == ["removed"]
+        assert _shared_refused(restarted, binding, root)
+    else:
+        reactivated = restarted.recover_reactivation()
+        final = restarted.registry.load()
+        assert reactivated is not None
+        assert reactivated.extensions["contentEpoch"] == 2
+        assert "lifecycleState" not in reactivated.extensions
+        assert binding not in final.removal_tombstones
+        assert restarted.ledger.active_owner(binding).channel_id == restarted.layout.channel_id
+        lineage = binding_epoch_lineage(final, binding)
+        assert [item["event"] for item in lineage] == ["removed", "reactivated"]
+        assert lineage[1]["predecessorEpoch"] == 1 and lineage[1]["contentEpoch"] == 2
+        assert not _shared_refused(restarted, binding, root)
+        # Reactivation never re-enrols the binding in background intent.
+        assert background_ids(restarted) == ()
+
+
+def test_tombstone_reactivation_rebuilds_all_derived_state_before_healthy(
+    tmp_path, monkeypatch
+) -> None:
+    import json
+    import re
+
+    from app.instance import binding_removal
+
+    # The invalidation inventory classifies every MVR-05 binding-keyed table.
+    migrated: set[str] = set()
+    versions = REPO_ROOT / "app" / "alembic" / "versions"
+    for path in versions.glob("*mvr05a*.py"):
+        text = path.read_text(encoding="utf-8")
+        migrated.update(
+            name
+            for name in re.findall(r"(?:ALTER TABLE|UPDATE)\s+(?:public\.)?([a-z_]+)", text)
+        )
+    classified = set(binding_removal.PG_BINDING_KEYED_DERIVED_TABLES) | set(
+        binding_removal.PG_BINDING_KEYED_RETAINED_TABLES
+    )
+    # Dynamic-SQL tokens (``ALTER TABLE public.%I``, loop aliases) are not tables.
+    migrated -= {"public", "so", "action"}
+    assert migrated, "no MVR-05 binding-keyed tables were discovered"
+    assert migrated <= classified, migrated - classified
+    assert not set(binding_removal.PG_BINDING_KEYED_DERIVED_TABLES) & set(
+        binding_removal.PG_BINDING_KEYED_RETAINED_TABLES
+    )
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    binding, root = second.vault_binding_id, Path(second.path)
+    runtime.remove(binding)
+    retired = runtime.registry.load().removal_tombstones[binding]
+    assert retired.content_epoch == 1
+
+    calls: list[str] = []
+    families = list(binding_removal.DERIVED_PROJECTION_FAMILIES)
+
+    def failing(binding_id: str, path: Path) -> dict:
+        calls.append(binding_id)
+        raise RuntimeError("derived projection invalidation failed")
+
+    monkeypatch.setattr(
+        binding_removal,
+        "DERIVED_PROJECTION_FAMILIES",
+        tuple(families[:1] + [("watcher_cursors", failing)] + families[2:]),
+    )
+    with pytest.raises(RuntimeError, match="invalidation failed"):
+        runtime.reactivate_removed(root)
+    sealed = runtime.registry.load().registrations[binding]
+    assert sealed.extensions["lifecycleState"] == "reactivating"
+    assert sealed.extensions["contentEpoch"] == 2
+    assert _shared_refused(runtime, binding, root)  # no healthy read/effect yet
+    admin(runtime).remove(first.vault_binding_id)
+    with pytest.raises(BackgroundLifecycleError, match="sealed by its lifecycle"):
+        admin(runtime).add(binding)  # no background enrollment before the rebuild
+
+    monkeypatch.setattr(binding_removal, "DERIVED_PROJECTION_FAMILIES", tuple(families))
+    healthy = runtime.recover_reactivation()
+    assert healthy is not None and "lifecycleState" not in healthy.extensions
+    receipt_path = runtime.layout.root / "rebuild-receipts" / f"{binding}-e2.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["retired_epoch"] == 1 and receipt["content_epoch"] == 2
+    assert receipt["invalidated_families"] == sorted(name for name, _ in families)
+    assert receipt["rescan"]["files"] >= 1
+    assert healthy.extensions["rebuildReceiptSha256"]
+    assert not _shared_refused(runtime, binding, root)
+    admin(runtime).add(binding)
+    assert supervisor(runtime).start().status == "running"
+
+
+def test_removed_binding_rehome_preserves_historical_receipt_audit(tmp_path, monkeypatch) -> None:
+    from app.instance.binding_removal import binding_epoch_lineage
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    binding, root = second.vault_binding_id, Path(second.path)
+    tombstone = runtime.remove(binding)
+    removal = binding_epoch_lineage(runtime.registry.load(), binding)
+    assert removal == [
+        {
+            "bindingId": binding,
+            "event": "removed",
+            "contentEpoch": 1,
+            "removalId": removal[0]["removalId"],
+            "registryRevision": removal[0]["registryRevision"],
+        }
+    ]
+    # Ordinary registration cannot silently mint a new binding around the tombstone.
+    with pytest.raises(Exception):
+        runtime.production_register(root, producer="api")
+    assert binding in runtime.registry.load().removal_tombstones
+
+    reactivated = runtime.reactivate_removed(root)
+    assert reactivated.vault_binding_id == binding
+    assert reactivated.local_instance_id == tombstone.local_instance_id
+    lineage = binding_epoch_lineage(runtime.registry.load(), binding)
+    # Historical receipts stamped under epoch 1 stay attributable to the same binding's
+    # retired epoch; rebuilt rows use epoch 2 and cannot alias them.
+    assert [(item["event"], item["contentEpoch"]) for item in lineage] == [
+        ("removed", 1),
+        ("reactivated", 2),
+    ]
+    assert lineage[1]["predecessorEpoch"] == 1
+    assert lineage[1]["reactivationId"] != lineage[0]["removalId"]
+    # A second removal/reactivation cycle extends, never rewrites, the lineage.
+    runtime.remove(binding)
+    runtime.reactivate_removed(root)
+    epochs = [item["contentEpoch"] for item in binding_epoch_lineage(runtime.registry.load(), binding)]
+    assert epochs == [1, 2, 2, 3]

@@ -718,6 +718,30 @@ class BindingEffectLeaseManager:
         path.unlink()
         self._fsync_directory(self.state_root)
 
+    def retire_binding_state(self, vault_binding_id: str) -> None:
+        """MVR-06B: drop a removed binding's local fairness state (idempotent).
+
+        Only valid once the registry no longer carries the binding's lease state and no
+        holder or waiter remains, i.e. after the removal commit drained every holder.
+        """
+
+        self._ensure_state_root()
+        with self._state_locked(vault_binding_id):
+            if self._registry_state(vault_binding_id) != self._empty_state(vault_binding_id):
+                raise BindingEffectLeaseError("binding lease state is still registry-owned")
+            path = self._state_path(vault_binding_id)
+            if os.path.lexists(path):
+                value = self._validate_state(
+                    vault_binding_id, json.loads(self._read_private_text(path))
+                )
+                if value["sharedHolders"] or value["exclusivePending"] or value["exclusiveHolder"]:
+                    raise BindingEffectLeaseError("a retired binding still has lease holders")
+                os.unlink(path)
+            journal = self._journal_path(vault_binding_id)
+            if os.path.lexists(journal):
+                os.unlink(journal)
+            self._fsync_directory(self.state_root)
+
     def _assert_lifecycle_admits_shared(self, vault_binding_id: str) -> None:
         registration = self.registry_store.load().registrations.get(vault_binding_id)
         state = None if registration is None else registration.extensions.get("lifecycleState")
