@@ -87,6 +87,9 @@ class _FakeDocker:
         self.container = None
         self.created: list[str] = []
         self.repository = repository
+        self.oom = False
+        self.limit_mismatch = False
+        self.finished = False
 
     def __call__(self, argv, *, timeout=60):
         self.calls.append(argv)
@@ -121,11 +124,16 @@ class _FakeDocker:
                     labels[key] = item
             mounts = [{'Type': 'bind', 'Source': self.created[i + 1].split(',')[1].removeprefix('src=')}
                       for i, value in enumerate(self.created) if value == '--mount']
+            memory = int(self.created[self.created.index('--memory') + 1]) if '--memory' in self.created else 0
+            swap = int(self.created[self.created.index('--memory-swap') + 1]) if '--memory-swap' in self.created else 0
             return json.dumps([{'Id': self.container, 'Name': '/' + self.created[2], 'Image': 'sha256:' + 'f' * 64,
                                 'Config': {'Labels': labels}, 'Mounts': mounts,
-                                'HostConfig': {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'CapDrop': ['ALL']}}]
+                                'State': {'OOMKilled': self.oom, 'ExitCode': 0, 'Running': not self.finished},
+                                'HostConfig': {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'CapDrop': ['ALL'],
+                                               'Memory': memory + int(self.limit_mismatch), 'MemorySwap': swap}}]
                               ).encode()
         if command[:2] == ['start', '--attach']:
+            self.finished = True
             return self.output.encode()
         if command[:1] == ['rm']:
             self.container = None
@@ -138,7 +146,7 @@ def heavy_image_digest():
     return IMAGE_REPOSITORY + '@' + DIGEST
 
 
-def _runner(tmp_path, monkeypatch, output):
+def _runner(tmp_path, monkeypatch, output, *, channel='test', memory_limit=None):
     journal = tmp_path / 'journal'
     journal.mkdir(mode=0o700)
     fake = _FakeDocker(tmp_path / 'repo', output)
@@ -148,8 +156,8 @@ def _runner(tmp_path, monkeypatch, output):
     for path in (docker, compose):
         path.write_text('')
     monkeypatch.setattr(runner_module, 'host_docker_cli', lambda: (docker, compose))
-    return HeavyAcceptanceRunner(tmp_path / 'repo', journal, sha=SHA, digest=DIGEST, channel='test',
-                                 operation_id=OPERATION), fake
+    return HeavyAcceptanceRunner(tmp_path / 'repo', journal, sha=SHA, digest=DIGEST, channel=channel,
+                                 operation_id=OPERATION, memory_limit=memory_limit), fake
 
 
 def test_runner_isolates_candidate_and_cleans_owned_resources(tmp_path, monkeypatch):

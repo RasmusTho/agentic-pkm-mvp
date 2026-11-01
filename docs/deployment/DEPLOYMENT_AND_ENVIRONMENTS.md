@@ -1047,6 +1047,34 @@ that exact candidate's test deployment. A red/refused result holds this candidat
 later admitted builds proceed to dev. A terminal dev deployment failure dispatches a persisted,
 one-time `refused` verdict with reason `dev_deploy_failed`.
 
+The DEV/TEST native heavy and PG acceptance runners support an optional per-channel memory policy
+at `/etc/yggdrasil/bws-deploy/<channel>.acceptance-memory.json`. A missing file preserves existing
+execution and emits `acceptance_memory_policy_unconfigured ... isolation=inactive`; no numeric
+limit is silently invented. The file must be a single root-owned, mode `0600` regular file and its
+JSON object must contain exactly `version: 1` and `heavy`, `pg_db`, `pg_tests` objects. Each profile
+object has integer byte values `memory` and `memory_swap`; the latter is the combined RAM-plus-swap
+limit, at least `memory`. Each RAM limit is at least 6 MiB; all three RAM limits together must not
+exceed the guest's physical RAM because heavy can overlap a later PG run. Each container's
+permitted swap is `memory_swap - memory`; their combined swap budgets must also
+fit the guest's measured `SwapTotal`. These totals do not reserve RAM or swap for services.
+Invalid, unreadable or
+unqualified configured policy refuses the affected acceptance run. Configured limits are applied to
+the exact disposable containers and checked through Docker before start and after execution; an OOM
+or unsuccessful container exit cannot produce a passing result. Missing policy does not change the
+normal service containers, Docker daemon defaults or PROD.
+
+Qualify values separately on each guest before creating the optional file. In a coordinated test
+window, observe representative complete heavy and PG profiles, including the two concurrent PG
+containers and charged tmpfs; retain the operation identity and cgroup-v2 `memory.peak` and
+`memory.swap.peak` while each owned container still exists, or explicitly mark a sampled substitute
+as an incomplete peak. Measure concurrent service/OS consumption and available RAM, add a justified
+margin for variation and overlap, then choose finite values that leave that margin. Recheck actual
+Docker `Memory`/`MemorySwap`, successful verdict and service health after activation. If a profile
+does not fit, adjust its qualified budget or add capacity; do not reinterpret a killed test as green.
+No full-profile peak or live adoption is established by this repository change. Standalone host shell
+tests, unrelated containers, daemon/kernel overhead and uncontrolled writers remain outside these
+limits, and a sample or individual cgroup limit is not an absolute reservation against global OOM.
+
 The controller dispatches `.github/workflows/post-merge-heavy-tests.yml` once with the bounded
 verdict, using the existing Actions read/write, Contents read, Metadata read client only. A durable
 intent precedes the heavy run and the dispatch: a crash during the run is conservatively refused,

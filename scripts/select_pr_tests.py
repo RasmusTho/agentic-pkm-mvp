@@ -429,6 +429,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "app/instance/settings_rebind.py",
         "app/instance/settings_rebind_runtime_capability.json",
         "app/ops/__init__.py",
+        "app/ops/acceptance_memory.py",
         "app/ops/bws_control_installation.py",
         "app/ops/bws_installation_admission.py",
         "app/ops/bws_installation_lifecycle.py",
@@ -440,6 +441,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "app/ops/host_secret_contract.py",
         "app/ops/host_secret_controller.py",
         "app/ops/native_source_bootstrap.py",
+        "app/ops/pg_acceptance_runner.py",
         "app/ops/postgres_deploy_host.py",
         "app/ops/postgres_deploy_linux.py",
         "app/tts/config.py",
@@ -2339,6 +2341,10 @@ def select_tests(changed_files: list[str], *, baseline: str | None = None) -> Se
         else CI_INTEGRITY_TARGETS if test_only
         else ALWAYS_TARGETS
     )
+    if any(path in {"app/ops/acceptance_memory.py", "app/ops/pg_acceptance_runner.py"} for path in paths):
+        # These ops-owned modules control real deploy acceptance containers;
+        # retain their deployment tests even in a source-only change.
+        targets.append("tests/deploy")
     if any(
         path in CI_CONTRACT_PATHS and path.startswith(("scripts/", "tests/scripts/"))
         for path in paths

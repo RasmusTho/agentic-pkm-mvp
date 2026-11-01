@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -19,6 +20,7 @@ import tarfile
 import time
 from typing import Any, Callable
 
+from app.ops.acceptance_memory import AcceptanceMemoryPolicy
 from app.ops.pg_acceptance import (
     IMAGE_REPOSITORY, POSTGRES_IMAGE, PROFILE_DEADLINE, SELECTORS, SELECTION_HASH,
     PgAcceptanceDeadlineExceeded, PgAcceptanceError, identity, require_pass,
@@ -53,8 +55,10 @@ def _command(argv: list[str], *, timeout: int = 60) -> bytes:
 
 class PgAcceptanceRunner:
     def __init__(self, repository: Path, journal_directory: Path, *, sha: str, digest: str,
-                 channel: str, operation_id: str, deadline_signal: Callable[[], None] | None = None) -> None:
+                 channel: str, operation_id: str, deadline_signal: Callable[[], None] | None = None,
+                 memory_policy: AcceptanceMemoryPolicy | None = None) -> None:
         self.identity = identity(sha, digest, channel, operation_id)
+        self.memory_policy = memory_policy
         self.repository = repository
         self.deadline_signal = deadline_signal
         self.name = 'ygg-pg-' + channel + '-' + operation_id + '-' + SELECTION_HASH[:12]
@@ -240,11 +244,17 @@ class PgAcceptanceRunner:
 
     def _create(self, suffix: str, arguments: list[str]) -> str:
         labels = [argument for key, value in self.labels.items() for argument in ('--label', key + '=' + value)]
+        limit = None if self.memory_policy is None else (
+            self.memory_policy.pg_db if suffix == 'db' else self.memory_policy.pg_tests
+        )
         identifier = self._docker('create', '--name', self.name + '-' + suffix,
                                   *labels, '--log-driver', 'json-file', '--log-opt', 'max-size=50m',
-                                  '--log-opt', 'max-file=3', *arguments).decode().strip()
+                                  '--log-opt', 'max-file=3',
+                                  *(limit.docker_args() if limit is not None else []), *arguments).decode().strip()
         row = self._owned(suffix)
-        if row is None or row['Id'] != identifier:
+        if row is None or row['Id'] != identifier or (limit is not None and not limit.applied(row.get('HostConfig'))):
+            if limit is not None:
+                logging.getLogger(__name__).error('acceptance_memory_limit_unqualified profile=pg container=%s', suffix)
             raise PgAcceptanceError()
         return identifier
 
@@ -334,6 +344,19 @@ class PgAcceptanceRunner:
                     except Exception:
                         pass
                 raise
+            test_row = self._inspect(container)
+            db_row = self._inspect(database)
+            test_state = test_row.get('State', {})
+            db_state = db_row.get('State', {})
+            if (not isinstance(test_state, dict) or not isinstance(db_state, dict)
+                or (self.memory_policy is not None and (
+                    not self.memory_policy.pg_tests.applied(test_row.get('HostConfig'))
+                    or not self.memory_policy.pg_db.applied(db_row.get('HostConfig'))))
+                or test_state.get('OOMKilled') is not False or type(test_state.get('ExitCode')) is not int
+                or test_state.get('ExitCode') != 0 or test_state.get('Running') is not False
+                or db_state.get('OOMKilled') is not False or db_state.get('Running') is not True):
+                logging.getLogger(__name__).error('acceptance_memory_or_process_failed profile=pg')
+                raise PgAcceptanceError()
             rows = [line for line in output.splitlines() if line.startswith('YGGDRASIL_PG_ACCEPTANCE=')]
             if len(rows) != 1:
                 raise PgAcceptanceError()
