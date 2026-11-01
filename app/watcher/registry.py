@@ -1855,6 +1855,9 @@ def _collect_changed_entries(
         rel_str = str(rel)
         scanned_paths.append(rel_str)
         previous_file_state = state.file_entry(rel_str) or {}
+        is_priority = not observation_only and state.throttle_priority == rel_str
+        if is_priority:
+            state.throttle_priority_generation = state.scan_generation
         last_mtime_value = previous_file_state.get("mtime")
         last_mtime = float(last_mtime_value) if last_mtime_value is not None else None
         previous_hash_value = previous_file_state.get("hash")
@@ -1864,6 +1867,8 @@ def _collect_changed_entries(
             and last_mtime == mtime
             and not is_runtime_gating_owner_path(rel)
         ):
+            if is_priority:
+                state.clear_throttle_priority()
             if observation_only:
                 state.mark_scan_generation_seen(rel_str)
             else:
@@ -1871,20 +1876,21 @@ def _collect_changed_entries(
             continue
         hashed = _hash_file(path)
         if hashed is None:
-            # A transient read failure is a real degraded tick, but the file
-            # was observed. Mark it in this generation so deletion
-            # reconciliation cannot misclassify it as removed.
+            # Preserve presence for an existing observation without creating
+            # an empty observation for a file that has never been accepted.
             _record_scan_error(state)
-            if observation_only:
+            if is_priority:
+                state.clear_throttle_priority()
+            if state.file_entry(rel_str) is not None:
                 state.mark_scan_generation_seen(rel_str)
-            else:
-                state.update_file_state(rel_str)
             _mark_scan_incomplete(summary, reason="hash")
             continue
         digest, read_bytes = hashed
         summary["hashed_files"] = int(summary["hashed_files"]) + 1
         summary["bytes_read"] = int(summary["bytes_read"]) + read_bytes
         if previous_hash is not None and previous_hash == digest:
+            if is_priority:
+                state.clear_throttle_priority()
             if observation_only:
                 state.mark_scan_generation_seen(rel_str)
             else:
@@ -2086,8 +2092,12 @@ def _emit_changed_entry(
 ) -> str | None:
     rel_path = str(entry.rel_path)
     previous_file_state = state.file_entry(rel_path)
-    last_seen_value = (previous_file_state or {}).get("last_seen")
-    last_seen = float(last_seen_value) if last_seen_value is not None else None
+    previous = previous_file_state or {}
+    activity = [float(previous[key]) for key in ("last_seen", "last_emitted") if previous.get(key) is not None]
+    # Older checkpoints may carry last_emitted without last_seen. Both are
+    # relevant to the existing debounce interval, and neither advances when a
+    # changed observation is temporarily deferred.
+    last_seen = max(activity) if activity else None
     required_db = (
         spec.emit_event in {PANEL_SCAN_REQUESTED, INGEST_VAULT_CHANGED}
         and _db_outbox_required()
@@ -2100,10 +2110,27 @@ def _emit_changed_entry(
     ):
         state.update_file_state(rel_path, mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
         return None
+    if state.throttle_priority is not None and state.throttle_priority != rel_path:
+        # Keep scanning settings and the rest of the vault while reserving
+        # the next available slot for the oldest rate-deferred observation.
+        if previous_file_state is not None:
+            state.mark_scan_generation_seen(rel_path)
+        if state.rate_window_count(now) >= spec.rate_limit_per_min:
+            state.rate_limited += 1
+            summary["rate_limited_in_tick"] = int(summary.get("rate_limited_in_tick", 0)) + 1
+        return None
     should_skip, reason = _should_skip_changed_entry(spec=spec, state=state, last_seen=last_seen, now=now)
     if should_skip:
-        state.update_file_state(rel_path, mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
+        # Preserve the last accepted cursor so a later scan sees this change
+        # again. Mark an existing sidecar row present for this scan generation
+        # without creating a row for a file never delivered at all.
+        if previous_file_state is not None:
+            state.mark_scan_generation_seen(rel_path)
         if reason == "rate_limit":
+            if state.throttle_priority is None:
+                state.throttle_priority = rel_path
+            if state.throttle_priority == rel_path:
+                state.throttle_priority_generation = state.scan_generation
             summary["rate_limited_in_tick"] = int(summary.get("rate_limited_in_tick", 0)) + 1
         return None
     if spec.emit_event == "panel.scan.requested" and not _panel_emit_allowed(
@@ -2114,6 +2141,8 @@ def _emit_changed_entry(
         state=state,
     ):
         state.update_file_state(rel_path, mtime=entry.mtime, content_hash=entry.digest, seen_at=now)
+        if state.throttle_priority == rel_path:
+            state.clear_throttle_priority()
         return None
     current_mtime = entry.mtime
     current_digest = entry.digest
@@ -2147,6 +2176,8 @@ def _emit_changed_entry(
         raise
     if not trace_id:
         state.update_file_state(rel_path, mtime=current_mtime, content_hash=current_digest, seen_at=now)
+        if state.throttle_priority == rel_path:
+            state.clear_throttle_priority()
         return None
     state.last_trace_id = trace_id
     state.intents_emitted += 1
@@ -2156,9 +2187,12 @@ def _emit_changed_entry(
         str(entry.rel_path),
         mtime=current_mtime,
         content_hash=current_digest,
+        seen_at=now,
         emitted_at=now,
         trace_id=trace_id,
     )
+    if state.throttle_priority == rel_path:
+        state.clear_throttle_priority()
     if (
         spec.emit_event == PANEL_SCAN_REQUESTED
         and process_panel_notes_inline
@@ -2407,6 +2441,14 @@ def _run_spec_tick(
         settings_source_reload_results=settings_source_reload_results,
         observation_only=observation_only,
     )
+    if (state.scan_generation_had_error and not state.scan_in_progress
+        and state.throttle_priority is not None
+        and state.throttle_priority_generation != state.scan_generation):
+        # A failed completed scan may have hidden the priority in an unreadable
+        # directory or stat. Release only the scheduling hint, retaining its
+        # observation and the degraded-scan evidence. An unrelated error must
+        # not starve a priority actually encountered in this generation.
+        state.clear_throttle_priority()
     if state.scan_generation_had_error:
         _mark_scan_incomplete(summary, reason="scan")
     elif state.scan_in_progress:
@@ -2577,6 +2619,7 @@ def _run_spec_tick(
             if previous_file_state_raw is not None
             else None
         )
+        previous_priority = (state.throttle_priority, state.throttle_priority_generation)
         try:
             trace_id = _emit_changed_entry(
                 spec=spec,
@@ -2637,6 +2680,7 @@ def _run_spec_tick(
                 )
             emitted_in_tick += 1
         except Exception:
+            state.throttle_priority, state.throttle_priority_generation = previous_priority
             state.errors += 1
             state.backoff_until = now + spec.backoff_seconds
             summary["backoff_active"] = True
@@ -2735,6 +2779,11 @@ def _run_spec_tick(
             state.errors == errors_before and not state.scan_generation_had_error
         )
         if scan_clean:
+            if (state.throttle_priority is not None
+                and state.throttle_priority_generation != state.scan_generation):
+                # A complete, identity-rechecked clean scan is the only
+                # authority to retire an absent or out-of-scope priority.
+                state.clear_throttle_priority()
             if state._observation_store is not None:
                 # Excluded historical companion rows are observations only.
                 # Prune them here, never via a source-delete/UUID purge: the note
@@ -2800,6 +2849,22 @@ def _run_registry_cycle(
                 cfg.enable = False
             else:
                 cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
+        for spec in cfg.specs:
+            authority = {
+                "root": str(cfg.vault_path), "scope": spec.scope_glob,
+                "topic": spec.emit_event, "debounce": spec.debounce_ms,
+                "rate": spec.rate_limit_per_min,
+                "binding": (
+                    {"mode": rebind_cycle.mode, "revision": rebind_cycle.record.desired_revision,
+                     "prior": rebind_cycle.record.prior_binding_id,
+                     "candidate": rebind_cycle.record.candidate_binding_id}
+                    if rebind_cycle is not None else None
+                ),
+            }
+            throttle_authority = hashlib.sha256(json.dumps(authority, sort_keys=True).encode()).hexdigest()
+            if states[spec.name].throttle_authority != throttle_authority:
+                states[spec.name].clear_throttle_priority()
+                states[spec.name].throttle_authority = throttle_authority
         rebind_observation_revision = (
             rebind_cycle.record.desired_revision
             if rebind_cycle is not None
