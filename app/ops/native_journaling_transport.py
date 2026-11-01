@@ -97,12 +97,14 @@ def selected_references() -> dict[str, str]:
                 continue
             endpoint = urlsplit(values[key])
             address = ipaddress.ip_address(endpoint.hostname or '')
+            port = endpoint.port
             valid_address = (address in ipaddress.ip_network('100.64.0.0/10')
                              if key == TAILNET_ENDPOINT_KEY else address.is_private)
             if (endpoint.scheme != 'https' or address.version != 4 or not valid_address
                 or address.is_loopback or address.is_unspecified or address.is_multicast
                 or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment
-                or endpoint.path not in {'', '/'} or endpoint.port in {5432, 8000, 8090}):
+                or endpoint.path not in {'', '/'} or port in {5432, 8000, 8090}
+                or (port is not None and not 1 <= port <= 65535)):
                 raise ValueError()
         for key in REFERENCE_KEYS[1:]:
             source = Path(values[key])

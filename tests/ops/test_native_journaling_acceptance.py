@@ -717,9 +717,10 @@ def test_tailnet_mtls_native_provider_references_and_relay_binding(tmp_path, mon
         scoped.setattr(transport, 'REFERENCE_FILE', config)
         scoped.setattr(Path, 'stat', root_owned)
         assert transport.selected_references() == selected
-        write_config({**selected, transport.TAILNET_ENDPOINT_KEY: 'https://203.0.113.1:9443'})
-        with pytest.raises(web.NativeWebRefusal, match='references_unavailable'):
-            transport.selected_references()
+        for endpoint in ('https://203.0.113.1:9443', 'https://100.100.20.30:0'):
+            write_config({**selected, transport.TAILNET_ENDPOINT_KEY: endpoint})
+            with pytest.raises(web.NativeWebRefusal, match='references_unavailable'):
+                transport.selected_references()
         write_config({transport.REFERENCE_KEYS[0]: 'https://10.0.0.8:8123', **certs})
         assert transport.selected_references()[transport.REFERENCE_KEYS[0]] == 'https://10.0.0.8:8123'
     monkeypatch.setattr(runners, 'selected_references', lambda: selected)
