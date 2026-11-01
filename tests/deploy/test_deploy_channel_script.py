@@ -2771,7 +2771,8 @@ def test_admin_parity_preflight_precedes_remote_deploy_mutation(tmp_path):
     admin, provider, _, remote = _bws_host(tmp_path)
     provider.seed('shared/openai.api-key', 'a' * 32, ('non-prod',))
     provider.seed('shared/openai.api-key', 'b' * 32, ('prod',))
-    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db', 'builderops-model-inquiry'))
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db', 'builderops-model-inquiry'),
+                      image_digest='sha256:' + 'b' * 64)
     with pytest.raises(PostgresDeployError):
         deploy_from_host(admin, remote, plan, qualified=lambda: None)
     assert remote.events == []
