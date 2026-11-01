@@ -136,4 +136,3 @@ def test_preflight_counts_only_rows_the_previous_worker_could_dispatch(monkeypat
             "AND payload #>> '{meta,binding_revision}' = '7'"
         )
         assert preflight.evaluate(conn, STAMP)["status"] == "ok"
-
