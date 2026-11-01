@@ -1622,6 +1622,52 @@ def test_scoped_rpc_assembly_shards_preserve_exact_coverage(tmp_path):
     assert all((tmp_path / "aggregate.log").read_text().count(node + " PASSED") == 1 for node in nodes)
 
 
+@pytest.mark.parametrize("jobs", [2, 4])
+def test_scoped_heavy_node_units_stay_in_distinct_processes(tmp_path, monkeypatch, jobs):
+    """The real scoped scheduler must not repack both halves into one pytest."""
+    import scripts.run_scoped_test_partitions as runner
+    from scripts.plan_full_suite_node_shards import (
+        NATIVE_ADMISSION_MODULE, SHARED_CHECKOUT_NODES, SOURCE_RPC_MODULE, TARGET_MODULE,
+    )
+
+    source = tuple(f"{SOURCE_RPC_MODULE}::test_case[{i}]" for i in range(574))
+    native = tuple(f"{NATIVE_ADMISSION_MODULE}::test_case[{i}]" for i in range(394))
+    deploy = (*SHARED_CHECKOUT_NODES, *(f"{TARGET_MODULE}::test_case[{i}]" for i in range(698)))
+    other = tuple(f"tests/scripts/test_other.py::test_case[{i}]" for i in range(1900))
+    collected = (*source, *native, *deploy, *other)
+    serial = ("tests/ops/test_native_journaling_acceptance.py",)
+    targets = (SOURCE_RPC_MODULE, NATIVE_ADMISSION_MODULE, TARGET_MODULE, "tests/scripts", *serial)
+    calls = []
+    monkeypatch.setattr(runner, "_collect_parallel_nodes", lambda _targets: collected)
+
+    def execute(index, selected, *, log_dir, timeout_seconds):
+        calls.append(tuple(selected))
+        log = log_dir / f"partition-{index}.log"
+        log.write_text("".join(f"{node} PASSED\n" for node in selected if node in collected))
+        return index, 0, log, False
+
+    monkeypatch.setattr(runner, "_run_partition", execute)
+    assert runner.run_partitions(
+        tuple((target,) for target in targets), log_dir=tmp_path / "logs",
+        aggregate_log=tmp_path / "aggregate.log", jobs=jobs, timeout_seconds=10,
+        serial_last=False, serial_boundary=serial,
+        execution_units=tuple((target,) for target in targets), expected_targets=targets,
+    ) == 0
+    assert calls[-1] == serial
+    parallel = calls[:-1]
+    assert len(parallel) == jobs
+    for nodes in (source, native):
+        owners = [unit for unit in parallel if any(node in unit for node in nodes)]
+        assert len(owners) == 2
+        assert sorted(node for unit in owners for node in unit if node in nodes) == sorted(nodes)
+    assert sorted(node for unit in parallel for node in unit if node in deploy) == sorted(deploy)
+    assert sum(set(SHARED_CHECKOUT_NODES) <= set(unit) for unit in parallel) == 1
+    if jobs == 4:
+        assert not any(any(node in unit for node in source) and any(node in unit for node in native)
+                       for unit in parallel)
+    assert sum("tests/scripts" in unit for unit in parallel) == 1
+
+
 @pytest.mark.parametrize("mode", ["pytest-failure", "missing", "duplicate", "unexpected"])
 def test_scoped_rpc_assembly_shards_fail_closed(tmp_path, mode):
     result, state, _nodes = _run_scoped_measured_fixture(tmp_path, mode, source_rpc=True)
