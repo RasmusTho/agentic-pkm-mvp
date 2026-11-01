@@ -612,6 +612,27 @@ def _empty_control_manifest_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     )
 
 
+def _fixed_budget_generated_sources(count: int, total_bytes: int) -> list[bytes]:
+    """Keep sixteen contents and two sizes independent of core-source length."""
+    base_size, extra_bytes = divmod(total_bytes, count)
+    sizes = [base_size + (index < extra_bytes) for index in range(count)]
+    if not extra_bytes:
+        # Preserve the exact total while retaining two sizes at this boundary.
+        sizes = [base_size + count - 1, *([base_size - 1] * (count - 1))]
+    smaller, larger = sorted(set(sizes))
+    small_count = sizes.count(smaller)
+    # A short remainder cannot supply eight contents of that size. Allocate
+    # the same sixteen contents across the two actual populations instead.
+    small_variants = min(small_count, max(8, 16 - (count - small_count)))
+    variants = {smaller: small_variants, larger: 16 - small_variants}
+    sources = []
+    for index, size in enumerate(sizes):
+        prefix = f"GENERATED_SOURCE = {index % variants[size]}\n".encode()
+        assert len(prefix) <= size
+        sources.append(prefix + b'#' * (size - len(prefix)))
+    return sources
+
+
 def _full_source_manifest_case(
     monkeypatch: pytest.MonkeyPatch, secure_tmp_path: Path, *, channel: str,
     generated_count: int = 205, generated_update_count: int = 0,
@@ -647,18 +668,15 @@ def _full_source_manifest_case(
     )
     candidate_sources = {relative: (repository / relative).read_bytes() for relative in core_paths}
     candidate_contract = (repository / "config/secrets/host_secret_contract.json").read_bytes()
-    if delta_payload_total_bytes is None:
-        generated_payload_sizes = [None] * generated_count
-    else:
+    fixed_budget_sources = None
+    if delta_payload_total_bytes is not None:
         fixed_payload_bytes = sum(len(candidate_sources[path]) for path in (
             "app/ops/postgres_deploy_linux.py", "app/ops/bws_installation_admission.py",
             "scripts/postgres_deploy_service.py",
         )) + len(candidate_contract)
         generated_total_bytes = delta_payload_total_bytes - fixed_payload_bytes
         assert generated_total_bytes >= generated_count
-        base_size, extra_bytes = divmod(generated_total_bytes, generated_count)
-        generated_payload_sizes = [base_size + (index < extra_bytes)
-                                   for index in range(generated_count)]
+        fixed_budget_sources = _fixed_budget_generated_sources(generated_count, generated_total_bytes)
     generated_paths = [
         f"{generated_directory}/generated_budget_{index:04d}.py"
         for index in range(generated_count)
@@ -667,10 +685,8 @@ def _full_source_manifest_case(
         variant = index % 8
         path = generated_paths[index]
         prefix = f"GENERATED_SOURCE = {variant}\n".encode()
-        target_size = generated_payload_sizes[index]
-        candidate_sources[path] = prefix + b"#" * (
-            variant * 7 if target_size is None else target_size - len(prefix)
-        )
+        candidate_sources[path] = (prefix + b"#" * (variant * 7) if fixed_budget_sources is None
+                                   else fixed_budget_sources[index])
 
     checkout = _owned_dir(secure_tmp_path / f"candidate-{channel}")
     git_env = {
@@ -1123,6 +1139,16 @@ def test_first_install_manifest_refuses_control_source_drift(monkeypatch, tmp_pa
 
     with pytest.raises(RuntimeError, match="bws_installation_transaction_refused"):
         case.invoke()
+
+
+@pytest.mark.parametrize('remainder', [0, 1, 3, 7, 8, 19, 217, 218, 224])
+def test_large_delta_fixture_preserves_fixed_budget_content_diversity(remainder):
+    total = 225 * 64 + remainder
+    sources = _fixed_budget_generated_sources(225, total)
+    assert len(sources) == 225
+    assert sum(map(len, sources)) == total
+    assert len({hashlib.sha256(raw).hexdigest() for raw in sources}) == 16
+    assert len({len(raw) for raw in sources}) == 2
 
 
 @pytest.mark.parametrize("channel", ["dev", "test"])

@@ -3118,6 +3118,20 @@ def test_deploy_heavy_triggers_cover_scripts_referenced_by_deploy_tests() -> Non
     assert uncovered == []
 
 
+@pytest.mark.parametrize('path', [
+    'app/ops/bws_installation_admission.py',
+    'app/ops/bws_installation_lifecycle.py',
+    'app/ops/bws_installation_transaction.py',
+])
+def test_preinstall_source_rpc_module_inputs_retain_deploy_coverage(path: str) -> None:
+    assert path in selector.HEAVY_PR_DEFERRED_TARGETS['tests/deploy']
+    # Retention is not source-only subsystem ownership. Exercise the real CI
+    # helper companion route, as in this PR, that already selects deploy proof.
+    selection = select_tests([path, 'scripts/select_pr_tests.py'])
+    assert 'tests/deploy' in selection.targets
+    assert 'tests/deploy' not in selection.deferred_targets
+
+
 def test_post_merge_heavy_workflow_runs_selector_heavy_targets() -> None:
     import yaml
 
