@@ -244,7 +244,7 @@ def test_added_source_between_preparation_and_freeze_is_refused(tmp_path, monkey
     assert before == snapshot()
 
 
-@pytest.mark.parametrize("case", ["layout", "briefing", "layout-selection"])
+@pytest.mark.parametrize("case", ["layout", "briefing", "layout-selection", "briefing-date"])
 def test_frozen_passive_facts_are_rechecked_before_effect_and_probe(tmp_path, monkeypatch, case):
     from app.briefing.compose import briefing_note_path
     from app.briefing.trigger import _local_now
@@ -261,6 +261,13 @@ def test_frozen_passive_facts_are_rechecked_before_effect_and_probe(tmp_path, mo
         alternate = layout.parent / "alternate-layout.md"
         alternate.write_bytes(layout.read_bytes())
         monkeypatch.setenv("VAULT_LAYOUT_NOTE_REL", alternate.relative_to(instance.root).as_posix())
+    elif case == "briefing-date":
+        from datetime import timedelta
+        from types import SimpleNamespace
+        from app.briefing import trigger as briefing_trigger
+        current = briefing_trigger._local_now(None)
+        monkeypatch.setattr(briefing_trigger, "datetime", SimpleNamespace(
+            now=lambda *, tz: (current + timedelta(days=1)).astimezone(tz)))
     else:
         target = layout if case == "layout" else briefing
         target.write_text(target.read_text() + "Changed frozen passive prestate.\n")
@@ -498,8 +505,22 @@ def test_authority_and_stale_cases_refuse_without_effects(tmp_path, monkeypatch,
 
 @pytest.mark.timeout(360)
 def test_recovery_preserves_original_receipts_without_replay(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
     from app.api.routes.active_context_selection import get_selection_store
+    from app.briefing import trigger as briefing_trigger
+
+    class Clock:
+        current = datetime(2026, 11, 1, 23, 59, 56, tzinfo=ZoneInfo(briefing_trigger.BRIEFING_TIMEZONE))
+
+        @classmethod
+        def now(cls, *, tz):
+            return cls.current.astimezone(tz)
+
+    monkeypatch.setattr(briefing_trigger, "datetime", Clock)
     instance = host(tmp_path, monkeypatch)
+    Clock.current += timedelta(minutes=1)
+    assert Clock.now(tz=ZoneInfo(briefing_trigger.BRIEFING_TIMEZONE)).date() == datetime(2026, 11, 2).date()
     with runtime_http(instance) as (url, calls, _):
         run = journey(instance, tmp_path / "recovery", url)
         run.profiles_and_operations()

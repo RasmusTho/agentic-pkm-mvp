@@ -56,6 +56,11 @@ def identity(channel="test"):
 
 
 def host(tmp_path, monkeypatch, *, channel="test", freeze=True, prepare=True):
+    from app.briefing import trigger as briefing_trigger
+    # Anchor the synthetic journey's implicit briefing date before initialization.
+    fixture_now = briefing_trigger._local_now(None)
+    monkeypatch.setattr(briefing_trigger, "datetime", SimpleNamespace(
+        now=lambda *, tz: fixture_now.astimezone(tz)))
     runtime = new_runtime(tmp_path, channel=channel)
     root = tmp_path / "synthetic-vault"
     root.mkdir()
