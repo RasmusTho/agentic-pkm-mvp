@@ -74,7 +74,7 @@ def test_untrusted_mount_skips_inherited_cleanup_and_refuses_default(tmp_path: P
     expired = _candidate(parent, "expired", pid=_dead_pid())
     conftest = suite / "conftest.py"
     with conftest.open("a") as target:
-        target.write("\ndef _temp_mount_identity(fd):\n    raise OSError('synthetic noowners')\n")
+        target.write("\ndef _temp_mount_identity(fd):\n    raise _TempMountNoOwners('synthetic noowners')\n")
     (suite / "test_probe.py").write_text("def test_probe(tmp_path):\n    assert tmp_path.is_dir()\n")
     env["PYTEST_DEBUG_TEMPROOT"] = str(parent)
     command = [sys.executable, "-m", "pytest", "-q"]
@@ -99,7 +99,7 @@ def test_untrusted_marked_ancestor_is_not_modified_by_nested_pytest(tmp_path: Pa
     env = _harness(suite)
     env["PYTEST_DEBUG_TEMPROOT"] = str(parent)
     with (suite / "conftest.py").open("a") as target:
-        target.write("\ndef _temp_mount_identity(fd):\n    raise OSError('synthetic noowners')\n")
+        target.write("\ndef _temp_mount_identity(fd):\n    raise _TempMountNoOwners('synthetic noowners')\n")
     (suite / "test_probe.py").write_text("def test_probe(tmp_path):\n    assert tmp_path.is_dir()\n")
     run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=suite, env=env,
                          capture_output=True, text=True, timeout=30)
@@ -107,6 +107,29 @@ def test_untrusted_marked_ancestor_is_not_modified_by_nested_pytest(tmp_path: Pa
     assert (marker.stat().st_mtime_ns, marker.read_bytes()) == before
     assert not list(parent.glob(".agentic-pkm-pytest-child-*"))
     assert any(path.name.startswith("pkm-py-") for path in parent.iterdir())
+
+
+def test_unknown_marked_ancestor_fails_without_modifying_marker(tmp_path: Path) -> None:
+    parent = _candidate(tmp_path, "unknown-ancestor", pid=_dead_pid())
+    marker = parent / ".agentic-pkm-pytest-owner.json"
+    before = marker.stat().st_mtime_ns, marker.read_bytes()
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    env = _harness(suite)
+    env["PYTEST_DEBUG_TEMPROOT"] = str(parent)
+    with (suite / "conftest.py").open("a") as target:
+        target.write("\n_real_mount = _temp_mount_identity\n"
+                     "def _temp_mount_identity(fd):\n"
+                     f"    if os.fstat(fd).st_ino == {parent.stat().st_ino}:\n"
+                     "        raise OSError('synthetic transient probe error')\n"
+                     "    return _real_mount(fd)\n")
+    (suite / "test_probe.py").write_text("def test_probe():\n    pass\n")
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=suite, env=env,
+                         capture_output=True, text=True, timeout=30)
+    assert run.returncode != 0 and "ancestor mount is unqualified" in run.stderr
+    assert (marker.stat().st_mtime_ns, marker.read_bytes()) == before
+    assert not list(parent.glob(".agentic-pkm-pytest-child-*"))
+    assert not any(path.name.startswith("pkm-py-") for path in parent.iterdir())
 
 
 def test_untrusted_parent_still_fences_qualified_marked_ancestor(tmp_path: Path) -> None:

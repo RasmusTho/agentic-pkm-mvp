@@ -313,8 +313,10 @@ does not interrupt a stalled filesystem call or bound deletion after the rename.
 unqualified default mount fails setup, while an inherited unqualified
 parent permits isolated runs without pruning. A same-UID or root process that deliberately bypasses this lock is outside
 the protection boundary; unqualified inherited parents are not pruned. Enclosing
-markers on unqualified mounts are left untouched; qualified enclosing namespaces
-still hold lifetime fences. On a qualified mount, an existing unsafe marker fails
+markers on confirmed `noowners` mounts are left untouched; qualified enclosing
+namespaces still hold lifetime fences. If an enclosing marker exists but the mount
+probe is inconclusive, setup fails rather than running without its lifetime fence.
+On a qualified mount, an existing unsafe marker fails
 setup rather than being treated as unmarked legacy. Setup waits up to 30 seconds for a valid busy parent lock, then fails loudly. Cleanup releases that
 lock before recursive deletion, so normal deletion does not delay new invocations.
 The full-suite selection remains unchanged. When the governing Issue requires it,

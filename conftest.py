@@ -38,6 +38,10 @@ class _TempParentBusy(OSError):
     """A valid cooperative parent lock could not be acquired in time."""
 
 
+class _TempMountNoOwners(OSError):
+    """The OS positively reported a mount with ownership disabled."""
+
+
 class _DarwinStatFS(ctypes.Structure):
     # Darwin's public 64-bit struct statfs from sys/mount.h.
     _fields_ = [
@@ -84,7 +88,9 @@ def _temp_mount_identity(fd: int) -> tuple[object, ...]:
             raise OSError(ctypes.get_errno(), "fstatfs failed")
         if isinstance(result, _DarwinStatFS):
             # MNT_IGNORE_OWNERSHIP is not exposed by Python statvfs.f_flag.
-            if (result.fstype not in {b"apfs", b"hfs"} or result.flags & 0x00200000
+            if result.flags & 0x00200000:
+                raise _TempMountNoOwners("pytest mount ownership is not qualified")
+            if (result.fstype not in {b"apfs", b"hfs"}
                     or result.flags_ext & 0x2):  # FSKit has unverified ownership semantics.
                 raise OSError("unqualified mount ownership")
             return ("darwin", tuple(result.fsid), result.fstype, result.mountpoint, result.source)
@@ -99,6 +105,8 @@ def _temp_mount_identity(fd: int) -> tuple[object, ...]:
         if len(lines) > 4096 or len(matches) != 1 or not matches[0].isdecimal():
             raise OSError("unavailable mount identity")
         return ("linux", result.type, tuple(result.fsid), int(matches[0]))
+    except _TempMountNoOwners:
+        raise
     except (AttributeError, OSError, ValueError, OverflowError) as exc:
         raise OSError("pytest mount ownership is not qualified") from exc
 
@@ -332,10 +340,18 @@ def _temp_parent_locks(parent: Path) -> list[tuple[int, int, str]]:
             try:
                 try:
                     mount = _temp_mount_identity(ancestor_fd)
-                except OSError:
-                    # Ownership on this mount is unknown: do not treat its
-                    # marker as authority or update its lifetime metadata.
+                except _TempMountNoOwners:
+                    # Positively known noowners mounts cannot be cleaned by
+                    # cooperating harnesses; leave ancestor metadata alone.
                     continue
+                except OSError:
+                    # A transient unknown may later become a qualified mount.
+                    # A marked ancestor then needs a fence we cannot prove.
+                    possible, _ = _open_temp_lifetime(directory)
+                    if possible is None:
+                        continue
+                    os.close(possible)
+                    raise OSError("pytest ancestor mount is unqualified") from None
             finally:
                 os.close(ancestor_fd)
             descriptor, identity = _open_temp_lifetime(directory)

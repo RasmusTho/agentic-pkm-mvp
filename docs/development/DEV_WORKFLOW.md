@@ -203,8 +203,9 @@ unqualified default mount fails setup; an inherited unqualified parent remains a
 for isolated tests without pruning. A same-UID
 or root process deliberately bypassing that advisory lock is outside this boundary;
 an inherited parent that cannot be qualified still supports isolated tests but is
-never pruned. Markers on unqualified enclosing mounts are left untouched; qualified
-enclosing namespaces retain lifetime fences. On a qualified mount, a marked enclosing
+never pruned. Markers on confirmed `noowners` enclosing mounts are left untouched;
+qualified enclosing namespaces retain lifetime fences. If an enclosing marker exists
+but its mount probe is inconclusive, setup fails rather than dropping its fence. On a qualified mount, a marked enclosing
 namespace whose owner marker cannot be safely opened and pinned fails setup rather
 than being treated as unmarked legacy.
 A valid busy lock is waited on for at most 30 seconds, then setup fails
