@@ -991,6 +991,10 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
 - DEV/TEST heavy and native PG acceptance support an optional verified container memory policy.
   With no policy, they run without these memory caps and report that isolation is inactive. Choose
   values only after coordinated measurement; see the [deployment policy contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1).
+- DEV/TEST base Compose services and the native PG/heavy acceptance containers specify bounded Docker
+  json-file logs. Existing containers acquire these limits only on controlled recreation; separate
+  containers and other storage consumers remain outside this setting. See the
+  [deployment procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure).
 - GitHub-visible DEV delivery liveness (#6222) runs in `dev-delivery-liveness.yml` on a schedule.
   Inspect the checker JSON `reason` and its signal workflow runs: the default missed-progress
   deadline is six hours, and the controller activity window is two hours. A fresh terminal DEV

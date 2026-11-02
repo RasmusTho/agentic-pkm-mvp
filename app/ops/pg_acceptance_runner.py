@@ -248,8 +248,9 @@ class PgAcceptanceRunner:
             self.memory_policy.pg_db if suffix == 'db' else self.memory_policy.pg_tests
         )
         identifier = self._docker('create', '--name', self.name + '-' + suffix,
-                                  *labels, *(limit.docker_args() if limit is not None else []),
-                                  *arguments).decode().strip()
+                                  *labels, '--log-driver', 'json-file', '--log-opt', 'max-size=50m',
+                                  '--log-opt', 'max-file=3',
+                                  *(limit.docker_args() if limit is not None else []), *arguments).decode().strip()
         row = self._owned(suffix)
         if row is None or row['Id'] != identifier or (limit is not None and not limit.applied(row.get('HostConfig'))):
             if limit is not None:
