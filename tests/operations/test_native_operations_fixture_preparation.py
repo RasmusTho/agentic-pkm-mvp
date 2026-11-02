@@ -36,6 +36,17 @@ from tests.operations._operations_acceptance_harness import NativeFixturePorts, 
 pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 
+def test_preparer_and_api_share_the_original_fixed_data_contract():
+    from app.api import native_operations_acceptance as api
+    from app.ops import operations_acceptance as facts
+    assert api.source_templates is facts.source_templates
+    assert api.raw_fixture_bytes is facts.raw_fixture_bytes
+    assert facts.digest(facts.source_templates(OPERATION)) == (
+        "e21490f9ae9cbc06998fedc4879a619c9051ceff83b82b5e523c0be83e895807")
+    assert facts.raw_fixture_bytes(OPERATION) == (
+        b"Synthetic operations raw acceptance 64790000-0000-4000-8000-000000000001.")
+
+
 def environment(tmp_path, monkeypatch, *, channel="dev"):
     runtime = new_runtime(tmp_path, channel=channel)
     root = tmp_path / "synthetic-vault"

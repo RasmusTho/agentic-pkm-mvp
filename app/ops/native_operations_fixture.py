@@ -23,7 +23,7 @@ from app.operations.contracts import (OperationContext, OperationConvergence, Op
     OperationOutcome, OperationReceipt, OperationRecovery, OperationStatus, ReceiptStatus, SourceEffectStatus)
 from app.operations.execution_kernel import JsonReceiptStore
 from app.ops.operations_acceptance import (CONTEXT_FILE, PROFILE, OperationsAcceptanceRefusal,
-    digest, file_hash, require_identity)
+    digest, file_hash, raw_fixture_bytes, require_identity, source_templates)
 
 # One fixed preparation per instance registry, independent of operation UUID or
 # later selection. It cannot manufacture another setup or journey allowance.
@@ -36,7 +36,6 @@ def _raw_preflight(identity: dict[str, Any], root: Path, principal: str,
                    instance: str, binding: str, *, stage: bool = False) -> dict[str, Any] | None:
     if identity["channel"] != "test":
         return None
-    from app.api.native_operations_acceptance import raw_fixture_bytes
     from app.heimdal import local_archive, raw_read_gate, raw_store
     from app.heimdal.consent_ledger import resolve_active_grant
     from app.heimdal.retention import resolve_retention_window_days
@@ -80,7 +79,6 @@ def _raw_preflight(identity: dict[str, Any], root: Path, principal: str,
 def _stage_raw(identity: dict[str, Any], qualified: dict[str, Any], journal: JsonReceiptStore,
                intent: str, binding_id: str, binding_revision: int, authorization_epoch: str,
                local_write_check: Callable[[], None]) -> dict[str, Any]:
-    from app.api.native_operations_acceptance import raw_fixture_bytes
     from app.heimdal import raw_store, local_archive
     from app.heimdal.consent_ledger import consent_raw_admission
     context = OperationContext("native:" + identity["operation_id"],
@@ -229,7 +227,6 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
                 or staged.outcome.context.extensions.get("binding_revision") != runtime.binding_revision
                 or staged.outcome.context.extensions.get("authorization_epoch") != runtime.authorization_epoch):
                 raise OperationsAcceptanceRefusal("original_raw_staging_receipt_required")
-        from app.api.native_operations_acceptance import source_templates
         from app.vault.paths import get_vault_capture_note_rel
         sources = source_templates(identity["operation_id"])
         sources["capture"]["path"] = get_vault_capture_note_rel(root)

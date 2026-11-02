@@ -7,7 +7,6 @@ selection and derives all versions from the same production owners as clients.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,7 +14,7 @@ import subprocess
 import sys
 from time import time
 from typing import Any
-from uuid import UUID, uuid5
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
@@ -28,8 +27,9 @@ from app.knowledge.write_ops import read_note_text_with_version
 from app.operations.contracts import OperationRequest
 from app.operations.execution_kernel import JsonReceiptStore
 from app.ops.operations_acceptance import (
-    CONTEXT_FILE, MAX_SECONDS, PROFILE, ROLES, OperationsAcceptanceRefusal,
-    digest, file_hash, load_context, public_binding, require_identity, require_native_fixture, require_runtime, write_private,
+    CONTEXT_FILE, MAX_SECONDS, PROFILE, OperationsAcceptanceRefusal,
+    digest, file_hash, load_context, public_binding, raw_fixture_bytes, require_identity,
+    require_native_fixture, require_runtime, source_templates, write_private,
 )
 
 router = APIRouter(prefix="/operations/acceptance", tags=["native-qualification"],
@@ -89,23 +89,6 @@ def authority_probe(request: Request, api_key: str | None = Depends(api_key_head
         else:
             raise HTTPException(409, "native_authority_probe_not_refused")
     return {"cases": result, "host_principal_id": runtime.actor, "effects": 0}
-
-
-def source_templates(operation_id: str) -> dict[str, dict[str, Any]]:
-    namespace = UUID(operation_id)
-    result = {}
-    for role in (*ROLES, "capture"):
-        identity = str(uuid5(namespace, "operations-acceptance:" + role))
-        path = "Notes/operations-acceptance-" + role + ".md"
-        text = (f"---\nuuid: {identity}\nartifact_class: human_knowledge\ntrust: human\n---\n"
-                f"Synthetic operations acceptance {role}.\n")
-        result[role] = {"artifact_id": identity, "path": path, "text": text,
-                        "seed_sha256": hashlib.sha256(text.encode()).hexdigest()}
-    return result
-
-
-def raw_fixture_bytes(operation_id: str) -> bytes:
-    return ("Synthetic operations raw acceptance " + operation_id + ".").encode()
 
 
 def prepare_native_context(identity: dict[str, Any], *, registry_path: Path) -> dict[str, Any]:
