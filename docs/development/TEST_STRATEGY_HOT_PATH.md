@@ -528,6 +528,13 @@ effort improved before adopting further changes.
   before packing other targets. Sibling units of either module never share a process; with four
   available processes all four long units start in different processes. This preserves the selected
   inventory and existing bounds; an actual current-head CI result remains the timing evidence.
+  [PR #6565 partition 1](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41424311217/job/125207364182)
+  timed out after 5400 seconds with source RPC, deploy-channel nodes and large dispatcher modules
+  together. The placement rule also keeps each preplanned deploy-channel unit in a distinct
+  process, while retaining the four-process cap, 120-second ordinary watchdog, admitted
+  case-specific watchdogs, 5400-second partition ceiling, 120-minute step and 135-minute waiter.
+  The mixed-workload regression proves placement and exact node accounting deterministically;
+  this PR's CI exercises its own selection, while consumer runtime remains unmeasured until rerun.
   A later [#6522 run 41310399802](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41310399802)
   reached the previous 3300-second partition limit at 99%, leaving the serial boundary unrun.
   The 5400-second per-partition limit within a 120-minute scoped step adds finite execution margin;
