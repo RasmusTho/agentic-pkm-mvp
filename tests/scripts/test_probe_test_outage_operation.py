@@ -5200,6 +5200,126 @@ def test_whole_caller_retained_stop_proof_refuses_resurrection_foreign_or_lost_l
             self.assertFalse(record["disarmed"])
 
 
+def test_whole_caller_every_stop_sample_and_profile_transition_refuses_stale_or_foreign_state(self):
+    cases = (
+        ("raw_pair_resurrection", "active"),
+        ("marker_returned_resurrection", "inactive"),
+        ("cleanup_foreign", "inactive"),
+        ("cleanup_foreign", "absent"),
+        ("cleanup_remaining_process", "inactive"),
+        ("cleanup_wrong_profile", "inactive"),
+    )
+    keys = ("InvocationID", "ExecMainPID", "ExecMainCode", "ExecMainStatus",
+            "ExecMainStartTimestampMonotonic", "InactiveEnterTimestampMonotonic", "ControlGroup")
+    cleared = dict(zip(keys, ("", "0", "0", "0", "0", "0", "")))
+    for index, (case, original_service) in enumerate(cases):
+        with self.subTest(case=case, original_service=original_service):
+            if index:
+                self.fresh()
+            state = {"resets": 0, "reloads": 0, "shows": 0, "injected": False}
+
+            def setup(kernel):
+                response = kernel.response
+
+                def manager(argv, payload):
+                    if argv == target.systemd("reset-failed"):
+                        state["resets"] += 1
+                    if argv == target.systemd("reload_for_temporary_test") and state["resets"] == 3:
+                        state["reloads"] += 1
+                        result = response(argv, payload)
+                        if state["reloads"] == 2 and case.startswith("cleanup_"):
+                            state["injected"] = True
+                            if case == "cleanup_foreign":
+                                stamp = str(int(kernel.clock.value * 1_000_000))
+                                kernel.unit.update(
+                                    InvocationID="f" * 32, ExecMainPID="7777", ExecMainCode="1",
+                                    ExecMainStatus="0", ExecMainStartTimestampMonotonic=stamp,
+                                    InactiveEnterTimestampMonotonic=stamp, ControlGroup="",
+                                )
+                            elif case == "cleanup_remaining_process":
+                                kernel.os.add(
+                                    "/sys/fs/cgroup" + kernel.unit["ControlGroup"] + "/cgroup.procs",
+                                    b"7777\n",
+                                )
+                            else:
+                                kernel.unit["KillMode"] = "process"
+                        return result
+                    if argv == target.systemd("show"):
+                        if case == "raw_pair_resurrection" and state["resets"] == 1:
+                            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+                            if record["owned_stops"][-1]["normalization_confirmed"]:
+                                state["shows"] += 1
+                        elif case == "marker_returned_resurrection" and state["reloads"] == 1:
+                            state["shows"] += 1
+                        clear_at, restore_at = (7, 8) if case == "raw_pair_resurrection" else (1, 3)
+                        if case in {"raw_pair_resurrection", "marker_returned_resurrection"}:
+                            if state["shows"] == clear_at:
+                                state["retained"] = {key: kernel.unit[key] for key in keys}
+                                kernel.unit.update(cleared)
+                            elif state["shows"] == restore_at:
+                                state["injected"] = True
+                                kernel.unit.update(state["retained"])
+                    return response(argv, payload)
+
+                kernel.response = manager
+
+            with self.assertRaises(Exception) as caught:
+                self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                    whole_worker=True, original_service=original_service, platform_setup=setup
+                )
+            self.assertIn(type(caught.exception).__name__, {"Unknown", "Refusal"})
+            self.assertTrue(state["injected"])
+            kernel = self.lifecycle_kernel
+            self.assertEqual(1 if case == "raw_pair_resurrection" else 3, state["resets"])
+            self.assertEqual(0 if case == "raw_pair_resurrection" else 2, len(self.h.deliveries))
+            self.assertFalse(kernel.os.fds)
+            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertFalse(record["disarmed"])
+
+
+def test_whole_caller_known_profile_restoration_accepts_one_way_gc_in_every_raw_sample(self):
+    for index, (original_service, reload_number) in enumerate((
+        ("inactive", 1), ("absent", 1), ("inactive", 2), ("absent", 2),
+    )):
+        with self.subTest(original_service=original_service, reload=reload_number):
+            if index:
+                self.fresh()
+            state = {"resets": 0, "reloads": 0, "cleared": False}
+
+            def setup(kernel):
+                response = kernel.response
+                kernel.before_profile = target.unit_profile(kernel.unit)
+
+                def manager(argv, payload):
+                    if argv == target.systemd("reset-failed"):
+                        state["resets"] += 1
+                    result = response(argv, payload)
+                    if argv == target.systemd("reload_for_temporary_test") and state["resets"] == 3:
+                        state["reloads"] += 1
+                        if state["reloads"] == reload_number:
+                            state["cleared"] = True
+                            kernel.unit.update(
+                                InvocationID="", ExecMainPID="0", ExecMainCode="0", ExecMainStatus="0",
+                                ExecMainStartTimestampMonotonic="0", InactiveEnterTimestampMonotonic="0",
+                                ControlGroup="",
+                            )
+                    return result
+
+                kernel.response = manager
+
+            kernel = self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                whole_worker=True, original_service=original_service, platform_setup=setup
+            )
+            self.assertTrue(state["cleared"])
+            self.assertEqual((3, 2), (state["resets"], state["reloads"]))
+            self.assertEqual(kernel.before_profile, target.unit_profile(kernel.unit))
+            self.assertEqual("inactive", kernel.unit["ActiveState"])
+            self.assertFalse(kernel.os.fds)
+            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertTrue(record["disarmed"])
+            self.assertTrue(all(row["normalization_confirmed"] for row in record["owned_stops"]))
+
+
 for _name, _value in list(globals().items()):
     if _name.startswith("test_") and callable(_value):
         setattr(NativeBindingTests, _name, _value)

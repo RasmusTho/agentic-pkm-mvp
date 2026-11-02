@@ -843,6 +843,14 @@ class OwnedStop:
     exit_identity: tuple[str, str] = ("1", "143")
     gc_cleared: bool = False
 
+    def for_profile(self, expected: dict[str, str]) -> "OwnedStop":
+        """After an owned removal, bind its previously qualified target profile."""
+        if not self.normalized:
+            raise Unknown("profile_restoration_before_owned_stop_normalized")
+        previous = dict(self.before)
+        previous.update({key: expected[key] for key in UNIT_KEYS if key not in VOLATILE})
+        return replace(self, before=tuple(sorted(previous.items())))
+
     def require(self, unit: dict[str, str]) -> None:
         previous = dict(self.before)
         if (
@@ -890,7 +898,11 @@ class OwnedStop:
             "ExecMainCode", "ExecMainStatus",
         ))
         if (
-            unit["ActiveState"] != "inactive"
+            any(not unit[key].isascii() or not unit[key].isdigit() for key in (
+                "MainPID", "ExecMainPID", "ExecMainCode", "ExecMainStatus",
+                "ExecMainStartTimestampMonotonic", "InactiveEnterTimestampMonotonic",
+            ))
+            or unit["ActiveState"] != "inactive"
             or unit["SubState"] != "dead"
             or unit["MainPID"] != "0"
             or unit["Job"] not in {"", "0"}
@@ -931,13 +943,17 @@ def test_credential_property() -> tuple[str, ...]:
     )
 
 
-def read_test_unit(command: Callable[..., bytes]) -> bytes:
+def read_test_unit(
+    command: Callable[..., bytes], *, owned_stop: OwnedStop | None = None
+) -> bytes:
     """Join the fixed unit profile to its typed credential ID/path metadata.
 
     systemctl can render a(ss) as [unprintable]. Only the exact typed D-Bus
     property establishes the binding; neither that marker nor a path suffix
     does. Both typed reads must qualify around a stable unit/config profile.
     Transient job/process state may advance; return the later actual sample.
+    A retained stop consumes EVERY sample, so discarding an early cleared
+    snapshot cannot hide a later resurrection or foreign stopped invocation.
     Every read uses the caller's existing finite process/byte/close budget.
     """
     raw = command(systemd("show"))
@@ -945,6 +961,8 @@ def read_test_unit(command: Callable[..., bytes]) -> bytes:
     if first["LoadState"] == "not-found":
         # An absent unit needs no credential getter. parse_unit still has to
         # positively qualify absence before temporary staging is permitted.
+        if owned_stop is not None:
+            parse_unit(raw, allow_absent=True, owned_stop=owned_stop)
         return raw
     snapshots = []
     expected = ":".join(TEST_CREDENTIAL)
@@ -971,6 +989,11 @@ def read_test_unit(command: Callable[..., bytes]) -> bytes:
         ):
             raise Refusal("typed_test_credential_binding_unqualified")
         fields["LoadCredentialEncrypted"] = expected
+        if owned_stop is not None:
+            parse_unit(
+                "".join(key + "=" + fields[key] + "\n" for key in UNIT_KEYS).encode(),
+                owned_stop=owned_stop,
+            )
         snapshots.append(fields)
     if unit_profile(snapshots[0], cleanup=True) != unit_profile(snapshots[1], cleanup=True):
         raise Unknown("typed_credential_unit_profile_changed_during_read")
@@ -1025,7 +1048,7 @@ def parse_unit(
     fields = systemctl_fields(raw, UNIT_KEYS)
     if fields["Id"] != UNIT or fields["Names"].split() != [UNIT]:
         raise Refusal("unit_metadata_missing_aliased_or_wrong_channel")
-    if allow_absent and owned_stop is None and fields["LoadState"] == "not-found":
+    if allow_absent and fields["LoadState"] == "not-found":
         if (
             fields["ActiveState"] != "inactive"
             or fields["SubState"] != "dead"
@@ -1045,6 +1068,10 @@ def parse_unit(
             )
         ):
             raise Refusal("absent_test_unit_not_positively_quiescent")
+        if owned_stop is not None:
+            if cleanup_states or allow_restarts or not owned_stop.normalized:
+                raise Refusal("absent_unit_without_normalized_owned_stop")
+            owned_stop.require_normalized(fields)
         return fields
     if (
         fields["LoadState"] != "loaded"
@@ -1799,7 +1826,9 @@ class TestProbeAdapter:
             active or owned_stop.handle_sha256 != self.caller.original_handle
         ):
             raise Unknown("owned_stop_not_same_original_handle")
-        unit = parse_unit(read_test_unit(self.caller.run), owned_stop=owned_stop)
+        unit = parse_unit(
+            read_test_unit(self.caller.run, owned_stop=owned_stop), owned_stop=owned_stop
+        )
         if (unit["ActiveState"] == "active") is not active:
             raise Unknown("test_service_state_unconfirmed")
         runtime = self.caller.read_runtime(self.binding, health=health, owned_stop=owned_stop)
@@ -2719,6 +2748,9 @@ class TemporaryTestInstallation:
             raise Refusal("cleanup_requires_completed_test_sequence_and_restoration")
         if not already_stopped:
             self.adapter.stop_owned()
+        proof = self.adapter.stopped_proof
+        if proof is None or proof.handle_sha256 != self.caller.original_handle:
+            raise Unknown("temporary_cleanup_without_retained_owned_stop")
         self.adapter._observe(active=False)
         self._originals()
         config = self.files.read("config")
@@ -2769,13 +2801,22 @@ class TemporaryTestInstallation:
             finally:
                 self.caller.close("owned_rmdir_parent", lambda: self.ops.close(parent))
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
-        restored = parse_unit(read_test_unit(self.caller.run), allow_absent=True)
+        proof = proof.for_profile(self.original)
+        restored = parse_unit(
+            read_test_unit(self.caller.run, owned_stop=proof),
+            allow_absent=True, owned_stop=proof,
+        )
         if (
             unit_profile(restored) != unit_profile(self.original)
             or restored["ActiveState"] != "inactive"
             or restored["MainPID"] != "0"
         ):
             raise Unknown("original_test_unit_enablement_or_absence_not_restored")
+        if isinstance(self.caller.runtime, LinuxRuntimeReader) and self.caller.runtime.io.cgroup(
+            dict(proof.before)["ControlGroup"]
+        ):
+            raise Unknown("temporary_cleanup_original_cgroup_not_empty")
+        self.adapter.stopped_proof = proof
         self._originals()
         self.state = "restored"
         return {
@@ -3960,7 +4001,8 @@ class LinuxRuntimeReader:
         if owned_stop is not None and owned_stop.handle_sha256 != original_handle:
             raise Unknown("owned_stop_runtime_handle_changed")
         first = parse_unit(
-            read_test_unit(self.caller.run), allow_absent=True, owned_stop=owned_stop
+            read_test_unit(self.caller.run, owned_stop=owned_stop),
+            allow_absent=True, owned_stop=owned_stop,
         )
         preinstallation = (
             first["ActiveState"] != "active"
@@ -3975,7 +4017,8 @@ class LinuxRuntimeReader:
         while True:
             self.caller.check()
             unit = parse_unit(
-                read_test_unit(self.caller.run), allow_absent=True, owned_stop=owned_stop
+                read_test_unit(self.caller.run, owned_stop=owned_stop),
+                allow_absent=True, owned_stop=owned_stop,
             )
             active = unit["ActiveState"] == "active"
             identity = tuple(
@@ -4070,7 +4113,8 @@ class LinuxRuntimeReader:
             ready_status, _ = self.http.get(binding.api_base + "/readyz", binding)
             health_status, health = self.http.get(binding.api_base + "/api/health", binding)
         again = parse_unit(
-            read_test_unit(self.caller.run), allow_absent=True, owned_stop=owned_stop
+            read_test_unit(self.caller.run, owned_stop=owned_stop),
+            allow_absent=True, owned_stop=owned_stop,
         )
         normalized_gc = (
             owned_stop is not None
@@ -5100,7 +5144,9 @@ class NativeFaultGuard:
             if descriptor is not None:
                 self.caller.close("owned_stop_marker", lambda: self.ops.close(descriptor))
             self.caller.close("owned_stop_marker_parent", lambda: self.ops.close(parent))
-        current = parse_unit(read_test_unit(self.caller.run), owned_stop=proof)
+        current = parse_unit(
+            read_test_unit(self.caller.run, owned_stop=proof), owned_stop=proof
+        )
         if unit_profile(current) != unit_profile(unit) or any(
             current[key] != unit[key] for key in VOLATILE
         ):
@@ -5177,15 +5223,15 @@ class NativeFaultGuard:
                 self.caller.close("guard_parent_removal", lambda: self.ops.close(parent))
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
 
-        restored = parse_unit(read_test_unit(self.caller.run))
+        proof = self.adapter.stopped_proof.for_profile(self.before_unit)
+        restored = parse_unit(
+            read_test_unit(self.caller.run, owned_stop=proof), owned_stop=proof
+        )
         if unit_profile(restored) != unit_profile(self.before_unit):
             raise Unknown("original_unit_profile_not_restored_after_owned_marker")
-        # Only this already-verified own marker removal changes the profile
-        # bound by the retained stop. Its original incarnation/GC state survives.
-        proof = self.adapter.stopped_proof
-        previous = dict(proof.before)
-        previous.update({key: restored[key] for key in UNIT_KEYS if key not in VOLATILE})
-        self.adapter.stopped_proof = replace(proof, before=tuple(sorted(previous.items())))
+        # The known original profile was bound before either observed sample;
+        # its original incarnation and any observed GC clearing survive.
+        self.adapter.stopped_proof = proof
         self.adapter.original_unit = dict(self.before_unit)
         self.adapter._observe(active=False)
         self.adapter._preserved()
