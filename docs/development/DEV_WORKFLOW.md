@@ -194,7 +194,9 @@ evidence intact. Automatic cleanup is limited to UID-owned 0700 parents and uses
 common parent lock shared by cooperating harnesses around namespace changes. A same-UID
 or root process deliberately bypassing that advisory lock is outside this boundary;
 an inherited parent that cannot be qualified still supports isolated tests but is
-never pruned. A valid busy lock is waited on for at most 30 seconds, then setup fails
+never pruned. A marked enclosing namespace whose existing owner marker cannot be
+safely opened and pinned fails setup rather than being treated as unmarked legacy.
+A valid busy lock is waited on for at most 30 seconds, then setup fails
 loudly; cleanup holds it only for final identity checks and the rename, not recursive
 deletion. A malformed default-parent lock also fails setup before collection.
 

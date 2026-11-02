@@ -7,6 +7,7 @@ from pathlib import Path
 import select
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -288,6 +289,96 @@ def test_nested_pytest_retains_enclosing_namespace_lock(tmp_path: Path) -> None:
     assert not parent.exists()
 
 
+def test_nested_lifetime_lock_survives_concurrent_marker_timestamp_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = _root_harness()
+    parent = _candidate(tmp_path, "outer", pid=_dead_pid())
+    marker = parent / subject._TEMP_OWNER
+    marker_identity = (marker.stat().st_dev, marker.stat().st_ino)
+    entered = threading.Event()
+    updated = threading.Event()
+    original_fstat = os.fstat
+
+    def observed_fstat(descriptor):
+        info = original_fstat(descriptor)
+        if (info.st_dev, info.st_ino) == marker_identity and not entered.is_set():
+            entered.set()
+            assert updated.wait(5)
+        return info
+
+    def update_marker():
+        if entered.wait(5):
+            os.utime(marker, None)
+            updated.set()
+
+    thread = threading.Thread(target=update_marker)
+    thread.start()
+    held = []
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(subject.os, "fstat", observed_fstat)
+            held = subject._temp_parent_locks(parent)
+        parent_info = parent.stat()
+        assert updated.is_set() and any(
+            (os.fstat(root_fd).st_dev, os.fstat(root_fd).st_ino) == (parent_info.st_dev, parent_info.st_ino)
+            for _, root_fd, _ in held
+        )
+        assert any(path.name.startswith(subject._TEMP_CHILD_PREFIX) for path in parent.iterdir())
+        subject._prune_expired_temp_roots(tmp_path, now_ns=time.time_ns() + 8 * 24 * 60 * 60 * 1_000_000_000)
+        assert parent.exists()  # The actual shared marker lock fences pruning.
+    finally:
+        for descriptor, root_fd, child_name in held:
+            os.unlink(child_name, dir_fd=root_fd)
+            os.close(root_fd)
+            os.close(descriptor)
+        thread.join(5)
+        assert not thread.is_alive()
+
+
+def test_existing_unqualified_ancestor_marker_is_not_legacy(tmp_path: Path) -> None:
+    subject = _root_harness()
+    parent = _candidate(tmp_path, "outer", pid=_dead_pid())
+    marker = parent / subject._TEMP_OWNER
+    marker.unlink()
+    outside = tmp_path / "outside"
+    outside.write_text("preserve")
+    marker.symlink_to(outside)
+    with pytest.raises(OSError):
+        subject._temp_parent_locks(parent)
+    assert marker.is_symlink() and outside.read_text() == "preserve"
+
+
+def test_nested_lifetime_refuses_marker_replacement_after_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = _root_harness()
+    parent = _candidate(tmp_path, "outer", pid=_dead_pid())
+    marker = parent / subject._TEMP_OWNER
+    original = parent / "original-marker"
+    marker_info = marker.stat()
+    flock = subject.fcntl.flock
+    swapped = False
+
+    def swap_after_lock(descriptor, operation):
+        nonlocal swapped
+        result = flock(descriptor, operation)
+        info = os.fstat(descriptor)
+        if (not swapped and (info.st_dev, info.st_ino) == (marker_info.st_dev, marker_info.st_ino)
+                and operation == subject.fcntl.LOCK_SH | subject.fcntl.LOCK_NB):
+            swapped = True
+            marker.rename(original)
+            marker.write_text("replacement")
+            marker.chmod(0o600)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(subject.fcntl, "flock", swap_after_lock)
+        with pytest.raises(OSError, match="namespace changed"):
+            subject._temp_parent_locks(parent)
+    assert swapped and original.is_file() and marker.read_text() == "replacement"
+
+
 def test_abrupt_or_recent_completion_preserves_old_namespace(tmp_path: Path) -> None:
     subject = _root_harness()
     abrupt = _candidate(tmp_path, "abrupt", pid=_dead_pid())
@@ -402,12 +493,17 @@ def test_unsafe_default_parent_fails_loud(tmp_path: Path) -> None:
         subject._private_temp_parent(tmp_path)
 
 
-def test_broken_default_parent_lock_fails_loud_before_collection(tmp_path: Path) -> None:
+@pytest.mark.parametrize("kind", ["symlink", "fifo"])
+def test_broken_default_parent_lock_fails_loud_before_collection(tmp_path: Path, kind: str) -> None:
     subject = _root_harness()
     system_temp = tmp_path / "system-temp"
     system_temp.mkdir(mode=0o700)
     parent = subject._private_temp_parent(system_temp)
-    (parent / subject._TEMP_PARENT_LOCK).symlink_to(tmp_path / "foreign-lock")
+    bad_lock = parent / subject._TEMP_PARENT_LOCK
+    if kind == "symlink":
+        bad_lock.symlink_to(tmp_path / "foreign-lock")
+    else:
+        os.mkfifo(bad_lock)
     suite = tmp_path / "suite"
     suite.mkdir()
     env = _harness(suite)
@@ -419,7 +515,38 @@ def test_broken_default_parent_lock_fails_loud_before_collection(tmp_path: Path)
     assert result.returncode != 0
     assert "pytest temporary-root isolation failed" in result.stdout + result.stderr
     assert not (suite / "collected").exists()
-    assert (parent / subject._TEMP_PARENT_LOCK).is_symlink()
+    assert bad_lock.is_symlink() if kind == "symlink" else bad_lock.exists()
+
+
+def test_fifo_markers_refuse_without_blocking_cleanup_or_nested_start(tmp_path: Path) -> None:
+    subject = _root_harness()
+    bad_owner = _candidate(tmp_path, "bad-owner", pid=_dead_pid())
+    owner_marker = bad_owner / subject._TEMP_OWNER
+    owner_marker.unlink()
+    os.mkfifo(owner_marker)
+    bad_finish = _candidate(tmp_path, "bad-finish", pid=_dead_pid())
+    finish_marker = bad_finish / subject._TEMP_FINISHED
+    finish_marker.unlink()
+    os.mkfifo(finish_marker)
+    old_ns = time.time_ns() - 8 * 24 * 60 * 60 * 1_000_000_000
+    os.utime(bad_owner, ns=(old_ns, old_ns))
+    os.utime(bad_finish, ns=(old_ns, old_ns))
+    harness = Path(__file__).resolve().parents[2] / "conftest.py"
+    code = (
+        "import importlib.util,sys\n"
+        "from pathlib import Path\n"
+        "spec=importlib.util.spec_from_file_location('subject',sys.argv[1])\n"
+        "subject=importlib.util.module_from_spec(spec); spec.loader.exec_module(subject)\n"
+        "subject._prune_expired_temp_roots(Path(sys.argv[2]))\n"
+        "try: subject._temp_parent_locks(Path(sys.argv[3]))\n"
+        "except OSError: print('refused',flush=True)\n"
+        "else: raise SystemExit('FIFO ancestor was accepted')\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code, str(harness), str(tmp_path), str(bad_owner)],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "refused"
+    assert (bad_owner / "artifact.txt").exists() and (bad_finish / "artifact.txt").exists()
 
 
 def test_busy_parent_lock_has_bounded_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

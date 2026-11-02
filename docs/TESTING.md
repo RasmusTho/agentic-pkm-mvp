@@ -304,8 +304,9 @@ test run. The default parent is a stable UID-owned private directory under the s
 temporary directory; an inherited debug root still receives a direct child. Pruning
 requires a UID-owned 0700 parent and a common advisory lock across cooperating
 harnesses. A same-UID or root process that deliberately bypasses this lock is outside
-the protection boundary; unqualified inherited parents are not pruned. Setup waits up
-to 30 seconds for a valid busy parent lock, then fails loudly. Cleanup releases that
+the protection boundary; unqualified inherited parents are not pruned. An existing
+unsafe marker on a marked enclosing namespace fails setup rather than being treated
+as unmarked legacy. Setup waits up to 30 seconds for a valid busy parent lock, then fails loudly. Cleanup releases that
 lock before recursive deletion, so normal deletion does not delay new invocations.
 The full-suite selection remains unchanged. When the governing Issue requires it,
 run it under the lease owned by the development validation baseline:

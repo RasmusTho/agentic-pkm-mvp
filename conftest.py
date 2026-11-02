@@ -67,11 +67,12 @@ def _lock_temp_parent(parent: Path, *, wait: bool) -> tuple[int, tuple[int, int]
                 or (root.st_dev, root.st_ino) != (named.st_dev, named.st_ino)):
             raise OSError("unqualified pytest parent")
         try:
-            descriptor = os.open(_TEMP_PARENT_LOCK, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+            descriptor = os.open(_TEMP_PARENT_LOCK, os.O_RDWR | os.O_NONBLOCK | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
                                  | os.O_CLOEXEC, 0o600, dir_fd=parent_fd)
             os.fchmod(descriptor, 0o600)
         except FileExistsError:
-            descriptor = os.open(_TEMP_PARENT_LOCK, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+            descriptor = os.open(_TEMP_PARENT_LOCK, os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                 dir_fd=parent_fd)
         lock = os.fstat(descriptor)
         lock_named = os.stat(_TEMP_PARENT_LOCK, dir_fd=parent_fd, follow_symlinks=False)
         if (not stat.S_ISREG(lock.st_mode) or lock.st_uid != os.geteuid() or lock.st_nlink != 1
@@ -112,7 +113,7 @@ def _unique_temp_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 def _open_temp_owner(directory: Path) -> tuple[int, dict[str, int]]:
     """Open a namespace marker without following links; malformed means unknown."""
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
     directory_fd = os.open(directory, flags | os.O_DIRECTORY)
     marker_fd = None
     try:
@@ -150,6 +151,40 @@ def _open_temp_owner(directory: Path) -> tuple[int, dict[str, int]]:
             os.close(marker_fd)
 
 
+def _open_temp_lifetime(directory: Path) -> tuple[int | None, tuple[int, int]]:
+    """Pin a parent's marker inode without sampling its mutable timestamp."""
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+    root_fd = os.open(directory, flags | os.O_DIRECTORY)
+    marker_fd = None
+    try:
+        root = os.fstat(root_fd)
+        named_root = os.stat(directory, follow_symlinks=False)
+        if (root.st_uid != os.geteuid() or stat.S_IMODE(root.st_mode) != 0o700
+                or (root.st_dev, root.st_ino) != (named_root.st_dev, named_root.st_ino)):
+            raise OSError("unqualified pytest ancestor")
+        try:
+            marker_fd = os.open(_TEMP_OWNER, flags, dir_fd=root_fd)
+        except FileNotFoundError:
+            # A genuinely unmarked legacy root is never eligible for cleanup.
+            named_root = os.stat(directory, follow_symlinks=False)
+            if (root.st_dev, root.st_ino) != (named_root.st_dev, named_root.st_ino):
+                raise OSError("pytest ancestor changed") from None
+            return None, (root.st_dev, root.st_ino)
+        marker = os.fstat(marker_fd)
+        named_marker = os.stat(_TEMP_OWNER, dir_fd=root_fd, follow_symlinks=False)
+        if (not stat.S_ISREG(marker.st_mode) or marker.st_uid != os.geteuid()
+                or stat.S_IMODE(marker.st_mode) != 0o600 or marker.st_nlink != 1
+                or (marker.st_dev, marker.st_ino) != (named_marker.st_dev, named_marker.st_ino)):
+            raise OSError("unqualified pytest ancestor marker")
+        result = marker_fd
+        marker_fd = None
+        return result, (root.st_dev, root.st_ino)
+    finally:
+        if marker_fd is not None:
+            os.close(marker_fd)
+        os.close(root_fd)
+
+
 def _temp_parent_locks(parent: Path) -> list[tuple[int, int, str]]:
     """Keep every marked enclosing pytest namespace alive for this run."""
     held: list[tuple[int, int, str]] = []
@@ -157,12 +192,8 @@ def _temp_parent_locks(parent: Path) -> list[tuple[int, int, str]]:
         for directory in (parent, *parent.parents):
             if not directory.name.startswith(_TEMP_PREFIX):
                 continue
-            try:
-                descriptor, owner = _open_temp_owner(directory)
-            except (OSError, ValueError, json.JSONDecodeError):
-                # An old or malformed marker is never eligible for cleanup.
-                # Recheck the directory still exists before creating beneath it.
-                directory.stat()
+            descriptor, identity = _open_temp_lifetime(directory)
+            if descriptor is None:
                 continue
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -172,12 +203,12 @@ def _temp_parent_locks(parent: Path) -> list[tuple[int, int, str]]:
                 marker_named = (directory / _TEMP_OWNER).stat(follow_symlinks=False)
                 if ((marker_info.st_dev, marker_info.st_ino) != (marker_named.st_dev, marker_named.st_ino)
                         or not stat.S_ISDIR(named.st_mode)
-                        or (named.st_dev, named.st_ino) != (owner["device"], owner["inode"])):
+                        or (named.st_dev, named.st_ino) != identity):
                     raise OSError("pytest parent namespace changed")
                 root_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
                 try:
                     opened = os.fstat(root_fd)
-                    if (opened.st_dev, opened.st_ino) != (owner["device"], owner["inode"]):
+                    if (opened.st_dev, opened.st_ino) != identity:
                         raise OSError("pytest parent namespace changed")
                     child_name = _TEMP_CHILD_PREFIX + uuid.uuid4().hex
                     child_fd = os.open(child_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
@@ -214,7 +245,8 @@ def _finished_temp_root(directory: Path, owner: dict[str, int], cutoff: int) -> 
         with os.scandir(root_fd) as entries:
             if any(entry.name.startswith(_TEMP_CHILD_PREFIX) for entry in entries):
                 return False
-        descriptor = os.open(_TEMP_FINISHED, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=root_fd)
+        descriptor = os.open(_TEMP_FINISHED, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             dir_fd=root_fd)
         try:
             info = os.fstat(descriptor)
             named = os.stat(_TEMP_FINISHED, dir_fd=root_fd, follow_symlinks=False)
