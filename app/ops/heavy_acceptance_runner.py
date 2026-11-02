@@ -18,6 +18,7 @@ import stat
 import subprocess
 from typing import Any
 
+from app.ops.acceptance_memory import MemoryLimit
 from app.ops.heavy_acceptance import (
     PROFILE_DEADLINE, RESULT_PREFIX, HeavyAcceptanceError, classify, identity,
 )
@@ -60,8 +61,9 @@ def host_docker_cli() -> tuple[Path, Path]:
 
 class HeavyAcceptanceRunner:
     def __init__(self, repository: Path, journal_directory: Path, *, sha: str, digest: str,
-                 channel: str, operation_id: str) -> None:
+                 channel: str, operation_id: str, memory_limit: MemoryLimit | None = None) -> None:
         self.identity = identity(sha, digest, channel, operation_id)
+        self.memory_limit = memory_limit
         self.repository = repository
         self.name = 'ygg-heavy-' + channel + '-' + operation_id
         self.parent = journal_directory / 'heavy-acceptance'
@@ -172,6 +174,7 @@ class HeavyAcceptanceRunner:
                        'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1', 'LANG': 'C.UTF-8'}
         container = self._docker(
             'create', '--name', self.name + '-tests', *labels,
+            *(self.memory_limit.docker_args() if self.memory_limit is not None else []),
             '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges', '--pids-limit', '4096', '--no-healthcheck', '--user', '0:0', '--workdir', '/work',
             '--tmpfs', '/tmp:rw,nosuid,nodev,size=2g',
@@ -189,10 +192,18 @@ class HeavyAcceptanceRunner:
             or config.get('NetworkMode') != 'none' or config.get('Privileged')
             or config.get('ReadonlyRootfs') is not True or config.get('CapDrop') != ['ALL']
             or config.get('Binds') or config.get('PortBindings')
+            or (self.memory_limit is not None and not self.memory_limit.applied(config))
             or any(m.get('Type') not in {'bind', 'tmpfs'} for m in row.get('Mounts', []))
             or any(str(m.get('Source', '')).endswith('docker.sock') for m in row.get('Mounts', []))):
             raise HeavyAcceptanceError('heavy_container_unqualified')
         output = self._docker('start', '--attach', container, timeout=PROFILE_DEADLINE).decode(errors='replace')
+        finished = self._owned()
+        state = (finished or {}).get('State', {})
+        if (finished is None or finished['Id'] != container or not isinstance(state, dict)
+            or (self.memory_limit is not None and not self.memory_limit.applied(finished.get('HostConfig')))
+            or state.get('OOMKilled') is not False or type(state.get('ExitCode')) is not int
+            or state.get('ExitCode') != 0 or state.get('Running') is not False):
+            raise HeavyAcceptanceError('heavy_memory_or_process_failed')
         rows = [line for line in output.splitlines() if line.startswith(RESULT_PREFIX)]
         if len(rows) != 1 or rows[0] == RESULT_PREFIX + 'refused':
             raise HeavyAcceptanceError('heavy_evidence_refused')
