@@ -302,11 +302,22 @@ an uncertain child, an active lock or process, and a symlink cause preservation.
 Pre-existing unmarked namespaces remain untouched, and cleanup errors do not block the
 test run. The default parent is a stable UID-owned private directory under the system
 temporary directory; an inherited debug root still receives a direct child. Pruning
-requires a UID-owned 0700 parent and a common advisory lock across cooperating
-harnesses. A same-UID or root process that deliberately bypasses this lock is outside
-the protection boundary; unqualified inherited parents are not pruned. An existing
-unsafe marker on a marked enclosing namespace fails setup rather than being treated
-as unmarked legacy. Setup waits up to 30 seconds for a valid busy parent lock, then fails loudly. Cleanup releases that
+requires a UID-owned 0700 parent on a qualified ownership-enforcing mount and a common
+advisory lock across cooperating harnesses. macOS `noowners` and unknown filesystem
+semantics are unqualified; mount identity is checked again before moving or deleting a
+candidate. Candidates containing another mount, special files, or entries that cannot
+be inspected are preserved. The parent listing and each candidate scan have a limit of
+100,000 entries and share a five-second pre-rename budget; a root not fully checked
+remains for separately qualified maintenance. This
+does not interrupt a stalled filesystem call or bound deletion after the rename. An
+unqualified default mount fails setup, while an inherited unqualified
+parent permits isolated runs without pruning. A same-UID or root process that deliberately bypasses this lock is outside
+the protection boundary; unqualified inherited parents are not pruned. Enclosing
+markers on confirmed `noowners` mounts are left untouched; qualified enclosing
+namespaces still hold lifetime fences. If an enclosing marker exists but the mount
+probe is inconclusive, setup fails rather than running without its lifetime fence.
+On a qualified mount, an existing unsafe marker fails
+setup rather than being treated as unmarked legacy. Setup waits up to 30 seconds for a valid busy parent lock, then fails loudly. Cleanup releases that
 lock before recursive deletion, so normal deletion does not delay new invocations.
 The full-suite selection remains unchanged. When the governing Issue requires it,
 run it under the lease owned by the development validation baseline:
