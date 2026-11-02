@@ -2062,7 +2062,8 @@ class NativeKernel:
 
     def log(self, level, msg, args):
         self.serial += 1
-        self.clock.advance(0.00001)
+        # journald uses cached sd_event_now time for all stdout lines scanned
+        # in one event-loop iteration. Entry cursors, not timestamps, are unique.
         self.rows.append(
             {
                 "MESSAGE": "2026-10-30 12:00:00,000 [prod-probe] " + level + " " + (msg % args),
@@ -2596,24 +2597,55 @@ def test_realistic_http_reader_is_qualified_but_unknown_descendant_refuses(self)
 
 
 def test_type_simple_missing_child_waits_bounded_without_accepting_descendant(self):
-    kernel, assembly = _native(self)
-    group = kernel.unit["ControlGroup"]
-    real_response = kernel.response
-    samples = [0]
+    for outcome in ("ready", "missing", "foreign"):
+        with self.subTest(outcome=outcome):
+            self.fresh()
+            kernel, assembly = _native(self)
+            group = kernel.unit["ControlGroup"]
+            members = "/sys/fs/cgroup" + group + "/cgroup.procs"
+            kernel.os.files[members] = b"4141\n"
+            started, waits = kernel.clock.value, []
 
-    def pending_then_ready(argv, payload):
-        if argv == target.systemd("show"):
-            samples[0] += 1
-            kernel.os.files["/sys/fs/cgroup" + group + "/cgroup.procs"] = (
-                b"4141\n" if samples[0] < 4 else b"4141\n4241\n"
-            )
-        return real_response(argv, payload)
+            def materialize_after_wait(seconds):
+                # Typed unit qualification performs multiple show calls per
+                # sample. Only a real StartupPending wait releases the child.
+                waits.append(seconds)
+                kernel.sleep(seconds)
+                if outcome != "missing":
+                    kernel.os.files[members] = b"4141\n4241\n"
+                if outcome == "foreign":
+                    kernel._proc(
+                        "4341", "4241", ("python3", "unqualified.py"), {}, 4341, group
+                    )
+                    kernel.os.files[members] += b"4341\n"
 
-    kernel.response = pending_then_ready
-    runtime = assembly.caller.read_runtime(kernel.scope.binding)
-    self.assertIsNotNone(runtime.child)
-    self.assertGreaterEqual(samples[0], 4)
-    self.assertGreater(kernel.clock.value, 1000)
+            kernel.dependencies.time.sleep = materialize_after_wait
+            if outcome == "ready":
+                runtime = assembly.caller.read_runtime(kernel.scope.binding)
+                self.assertEqual("4241", runtime.child.pid)
+                self.assertFalse(assembly.caller.unknown_reasons)
+            else:
+                expected = (
+                    "bounded_normal_startup_or_metadata_not_ready"
+                    if outcome == "missing"
+                    else "unqualified_descendant_of_normal_test_probe"
+                )
+                with self.assertRaisesRegex((target.Refusal, target.Unknown), expected):
+                    assembly.caller.read_runtime(kernel.scope.binding)
+                count = len(kernel.processes)
+                with self.assertRaisesRegex(target.Unknown, "original_handle_sticky_unknown"):
+                    assembly.caller.read_runtime(kernel.scope.binding)
+                self.assertEqual(count, len(kernel.processes))
+            self.assertTrue(waits)
+            self.assertTrue(all(0 < seconds <= 0.2 for seconds in waits))
+            self.assertAlmostEqual(30.0 if outcome == "missing" else 0.2, sum(waits))
+            self.assertAlmostEqual(started + sum(waits), kernel.clock.value)
+            self.assertFalse(self.h.deliveries)
+            self.assertTrue(all(selector.closed for selector in kernel.selectors))
+            self.assertTrue(all(
+                pipe.closed for process in kernel.processes
+                for pipe in (process.stdin, process.stdout, process.stderr)
+            ))
 
 
 def test_controller_append_is_preserved_and_pending_or_truncated_history_refuses(self):
@@ -3677,6 +3709,168 @@ raise SystemExit(_subprocess_runner(
             )
             self.assertTrue(kernel.rows)
             self.assertTrue(all(row["_TRANSPORT"] == "stdout" for row in kernel.rows))
+
+
+def test_whole_caller_accepts_distinct_cursor_equal_time_batch_and_split_reads(self):
+    for split in (False, True):
+        with self.subTest(split=split):
+            self.fresh()
+            reads = []
+
+            def setup(kernel):
+                response = kernel.response
+
+                def journal(argv, payload):
+                    raw = response(argv, payload)
+                    if argv[0] == "/usr/bin/journalctl" and any(
+                        arg.startswith("--after-cursor=") for arg in argv
+                    ):
+                        rows = [json.loads(line) for line in raw.splitlines()]
+                        # A bounded forward journal read may end between the
+                        # normal sender confirmation and its outcome record.
+                        if split:
+                            rows = rows[:1]
+                        reads.append((argv, rows))
+                        return b"\n".join(json.dumps(row).encode() for row in rows)
+                    return raw
+
+                kernel.response = journal
+
+            kernel = self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                whole_worker=True, original_service="absent", platform_setup=setup
+            )
+            records = [(index, argv, row) for index, (argv, rows) in enumerate(reads) for row in rows]
+            equal_pairs = [(left, right) for left, right in zip(records, records[1:]) if (
+                left[2]["__MONOTONIC_TIMESTAMP"] == right[2]["__MONOTONIC_TIMESTAMP"]
+                and left[2]["_SYSTEMD_INVOCATION_ID"] == right[2]["_SYSTEMD_INVOCATION_ID"]
+            )]
+            self.assertEqual(3, len(equal_pairs), "down pair and probe-ok/confirmed/recovery trio")
+            for left, right in equal_pairs:
+                self.assertNotEqual(left[2]["__CURSOR"], right[2]["__CURSOR"])
+                self.assertEqual(split, left[0] != right[0])
+                if split:
+                    self.assertIn("--after-cursor=" + left[2]["__CURSOR"], right[1])
+            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertTrue(record["disarmed"])
+            self.assertFalse((self.root / "native-incident.json").exists())
+
+
+def test_phase_start_keeps_qualified_incident_before_any_new_start(self):
+    for recovery in (False, True):
+        with self.subTest(recovery=recovery):
+            h = self.fresh()
+            if recovery:
+                h.fault_start()
+                h.fault_evidence()
+                h.adapter.stop_owned()
+                h.adapter.swap_base_url(restore=True)
+                (h.root / "incident.json").unlink()
+            else:
+                h.adapter.admit()
+                h.adapter.reserve_fault()
+                h.adapter.stop_owned()
+                h.adapter.swap_base_url()
+                h.probe._record_outage_state(
+                    ["foreign pre-start incident"], environment="test",
+                    correlation_id="11111111-1111-4111-8111-111111111111",
+                )
+                (h.root / "incident.json").chmod(0o600)
+            effects = list(h.command.effects)
+            with self.assertRaisesRegex(target.Unknown, "phase_start_incident_not_qualified"):
+                h.adapter.start_owned()
+            self.assertEqual(effects, h.command.effects)
+            self.assertTrue(h.caller.unknown_reasons)
+
+
+def test_whole_caller_equal_time_keeps_cursor_order_origin_and_incident_guards(self):
+    cases = (
+        "duplicate_cursor", "decreasing", "prestart", "numeric_timestamp",
+        "foreign_pid", "foreign_stream", "split_duplicate", "split_incident_replaced",
+        "split_incident_resurrected",
+    )
+    for case in cases:
+        with self.subTest(case=case):
+            self.fresh()
+            injected = []
+
+            def setup(kernel):
+                response = kernel.response
+                consumed = []
+                saved_incident = []
+
+                def journal(argv, payload):
+                    raw = response(argv, payload)
+                    if argv[0] != "/usr/bin/journalctl" or not any(
+                        arg.startswith("--after-cursor=") for arg in argv
+                    ):
+                        return raw
+                    rows = [json.loads(line) for line in raw.splitlines()]
+                    if not rows:
+                        return raw
+                    incident_path = self.root / "native-incident.json"
+                    if incident_path.exists() and not saved_incident:
+                        saved_incident.append(incident_path.read_bytes())
+                    if case.startswith("split_"):
+                        rows = rows[:1]
+                    if not injected:
+                        if case == "duplicate_cursor":
+                            rows[1]["__CURSOR"] = rows[0]["__CURSOR"]
+                        elif case == "decreasing":
+                            rows[0]["__MONOTONIC_TIMESTAMP"] = str(
+                                int(rows[1]["__MONOTONIC_TIMESTAMP"]) + 1
+                            )
+                        elif case == "prestart":
+                            rows[0]["__MONOTONIC_TIMESTAMP"] = str(
+                                int(kernel.unit["ExecMainStartTimestampMonotonic"]) - 1
+                            )
+                        elif case == "numeric_timestamp":
+                            rows[0]["__MONOTONIC_TIMESTAMP"] = int(rows[0]["__MONOTONIC_TIMESTAMP"])
+                        elif case == "foreign_pid":
+                            rows[1]["_PID"] = "99999"
+                        elif case == "foreign_stream":
+                            rows[1]["_STREAM_ID"] = "f" * 32
+                        elif case == "split_duplicate" and consumed:
+                            rows[0]["__CURSOR"] = consumed[-1]["__CURSOR"]
+                        elif case == "split_incident_replaced" and consumed:
+                            value = json.loads(incident_path.read_bytes())
+                            value["correlation_id"] = "11111111-1111-4111-8111-111111111111"
+                            incident_path.write_text(json.dumps(value))
+                        elif case == "split_incident_resurrected" and (
+                            consumed and "probe ok:" in consumed[-1]["MESSAGE"]
+                        ):
+                            incident_path.write_bytes(saved_incident[0])
+                            incident_path.chmod(0o600)
+                        else:
+                            consumed.extend(rows)
+                            return b"\n".join(json.dumps(row).encode() for row in rows)
+                        injected.append(case)
+                    consumed.extend(rows)
+                    return b"\n".join(json.dumps(row).encode() for row in rows)
+
+                kernel.response = journal
+
+            # The serialized program owns its exception class. The whole-call
+            # helper exposes that original exception without converting it.
+            with self.assertRaises(Exception) as raised:
+                self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                    whole_worker=True, original_service="absent", platform_setup=setup
+                )
+            self.assertEqual("Unknown", type(raised.exception).__name__)
+            self.assertEqual([case], injected)
+            expected = (
+                "normal_incident_changed_between_stream_reads" if "incident_" in case
+                else "creator_child_stream_mapping_changed" if case.startswith("foreign_")
+                else "normal_stream_shape_cursor_or_order"
+            )
+            self.assertEqual(expected, str(raised.exception))
+            kernel = self.lifecycle_kernel
+            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertFalse(record["disarmed"])
+            self.assertEqual(2 if case == "split_incident_resurrected" else 1, len(self.h.deliveries))
+            self.assertFalse(kernel.os.fds)
+            self.assertTrue(all(selector.closed for selector in kernel.selectors))
+            self.assertTrue(all(pipe.closed for process in kernel.processes
+                                for pipe in (process.stdin, process.stdout, process.stderr)))
 
 
 def test_native_journal_rejects_nonproducer_pids_before_effects(self):

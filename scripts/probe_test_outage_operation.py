@@ -1666,6 +1666,7 @@ class Transitions:
         raw: bytes,
         peer: Peer,
         binding: Binding,
+        phase_start: FileState | None,
         before: FileState | None,
         after: FileState | None,
         cadence: int,
@@ -1677,6 +1678,20 @@ class Transitions:
         if type(cadence) is not int or cadence < 1:
             raise Unknown("normal_loop_cadence_not_qualified")
         old, new = incident(before), incident(after)
+        # Journal reads can split confirmation/outcome lines after the normal
+        # producer has already created or cleared its incident. Preserve that
+        # one-way observation across reads; replacement or resurrection is not
+        # another supported writer or evidence of a completed transition.
+        if before != after and (
+            (phase_start is None and (before is not None or after is None))
+            or (phase_start is not None and after is not None)
+        ):
+            raise Unknown("normal_incident_changed_between_stream_reads")
+        if self.down and any(
+            state is not None and state.data != self.incident_bytes
+            for state in (before, after)
+        ):
+            raise Unknown("normal_incident_correlation_changed_between_stream_reads")
         observed_state = before
         if len(raw) > 131_072 or len(raw.splitlines()) > 512:
             raise Unknown("bounded_normal_stream_read_exceeded")
@@ -1697,7 +1712,9 @@ class Transitions:
                     or not isinstance(stamp, str)
                     or not stamp.isascii()
                     or not stamp.isdigit()
-                    or int(stamp) <= self.last_stamp
+                    # journald may timestamp distinct entries equally. The
+                    # opaque cursor identifies each forward record uniquely.
+                    or int(stamp) < self.last_stamp
                     or int(stamp) < peer.start_usec
                     or not isinstance(message, str)
                 ):
@@ -1742,7 +1759,8 @@ class Transitions:
                         self.down
                         or self.recovery
                         or not self.confirmation_pending
-                        or old is not None
+                        or phase_start is not None
+                        or (old is not None and before != after)
                         or new is None
                         or after is None
                     ):
@@ -1771,8 +1789,9 @@ class Transitions:
                         or self.completed_repeats < 2
                         or self.recovery
                         or not self.confirmation_pending
-                        or before is None
-                        or before.data != self.incident_bytes
+                        or phase_start is None
+                        or phase_start.data != self.incident_bytes
+                        or (before is not None and before.data != self.incident_bytes)
                         or new is not None
                     ):
                         raise Unknown("same_correlation_confirmed_recovery_unproven")
@@ -2082,6 +2101,14 @@ class TestProbeAdapter:
             raise Unknown("pre_start_journal_boundary_unbound")
         saved_incident = self.files.read("incident")
         phase = self.state
+        if (
+            phase == "fault_quiescent" and saved_incident is not None
+        ) or (
+            phase == "restored_quiescent" and (
+                saved_incident is None or saved_incident.data != self.transitions.incident_bytes
+            )
+        ):
+            raise Unknown("phase_start_incident_not_qualified")
         self.start_intents.add(phase)  # Retained even if result/transport is lost.
         intent_usec = int(self.caller.clock() * 1_000_000)
         self.caller.begin("start_test_" + phase)
@@ -2102,6 +2129,7 @@ class TestProbeAdapter:
         # The boundary precedes start. Taking the latest cursor AFTER the effect
         # would silently skip a fast normal child's down/recovery confirmation.
         self.transitions.cursor = start_cursor
+        self.phase_start_incident = saved_incident
         self.phase_incident = saved_incident
         self.state = "fault_running" if phase == "fault_quiescent" else "recovery_running"
 
@@ -2138,7 +2166,8 @@ class TestProbeAdapter:
         after = self.files.read("incident")
         try:
             self.transitions.consume(
-                raw, self.peer, self.binding, self.phase_incident, after, self.cadence
+                raw, self.peer, self.binding, self.phase_start_incident,
+                self.phase_incident, after, self.cadence
             )
         except Unknown as error:
             if str(error) == "normal_iteration_or_delivery_failed":
