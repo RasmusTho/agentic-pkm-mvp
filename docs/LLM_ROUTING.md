@@ -88,8 +88,11 @@ The deploy wrapper fails closed on duplicate, malformed, or additional keys; it 
 endpoint only as an HTTPS Tailnet IPv4 literal and requires the identity references when that path
 is selected. For that explicit DEV/TEST selection the governed deploy wrapper adds the two Tailnet
 references only to the Product callers through its private Compose override; without the selection,
-the previous default Compose model is unchanged. Direct standalone Compose invocations do not use
-this wrapper projection. Compose does not read the raw file as a service `env_file`, so unrelated settings or
+the previous default Compose model is unchanged unless the generic runtime snapshot mentions a
+reserved Tailnet name. In that case empty placeholders prevent those generic values reaching other
+DEV/TEST services. Production keeps its existing bindings and ignores the new selector. Direct
+standalone Compose invocations do not use this wrapper projection. Compose does not read the raw
+model-access file as a service `env_file`, so unrelated settings or
 credentials cannot leak into Product containers. The file selects no model and activates no route.
 The deploy entrypoint validates this separation before acquiring the channel lock or preparing
 migrations/state. Immediately before a Product-channel Compose invocation, it snapshots the governed

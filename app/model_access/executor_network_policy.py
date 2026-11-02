@@ -359,6 +359,10 @@ def _selected_executor_profile(
     if executor_profile != EXECUTOR_NETWORK_PROFILE:
         return executor_profile
     env = os.environ if environment is None else environment
+    # The new selector is a DEV/TEST capability. Previously unknown runtime
+    # keys must not change production's existing VLAN path or block it.
+    if env.get("PKM_ENVIRONMENT", "").strip().lower() == "prod":
+        return executor_profile
     selected = env.get(_PATH_SELECTION_ENV, "").strip()
     if selected in {"", "vlan"}:
         return executor_profile

@@ -115,6 +115,24 @@ def _run_snapshot(
     )
 
 
+def test_runtime_snapshot_detects_reserved_keys_across_read_boundaries(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime.env"
+    snapshot = tmp_path / "snapshot.env"
+    snapshot.touch()
+    # The detector reads 1 MiB at a time; split the key across that boundary.
+    content = b"#" * (1024 * 1024 - 10) + b"MODEL_ACCESS_EXECUTOR_PATH=tailnet_mtls\n"
+    runtime.write_bytes(content)
+
+    result = _run_snapshot(runtime, tmp_path / "missing-model.env", snapshot)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "reserved\n"
+    assert snapshot.read_bytes() == content
+    # A later path change cannot change the bytes or detection used by Compose.
+    runtime.write_bytes(b"SAFE=value\n")
+    assert snapshot.read_bytes() == content
+
+
 def test_model_access_preflight_exports_only_valid_path_references(
     tmp_path: Path,
 ) -> None:

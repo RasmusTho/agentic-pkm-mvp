@@ -639,6 +639,18 @@ def test_tailnet_mtls_profile_is_opt_in_and_preserves_vlan_default(tmp_path: Pat
         resolve_executor_paths("profile.codex_remote_host", environment=env)
 
 
+@pytest.mark.parametrize("selection", ["tailnet_mtls", "previously-unknown"])
+def test_production_keeps_vlan_for_previously_unknown_selector(
+    tmp_path: Path, selection: str
+) -> None:
+    from app.model_access.executor_network_policy import resolve_executor_paths
+
+    env = _host_environment(tmp_path)
+    baseline = resolve_executor_paths("profile.codex_remote_host", environment=env)
+    env.update(PKM_ENVIRONMENT="prod", MODEL_ACCESS_EXECUTOR_PATH=selection)
+    assert resolve_executor_paths("profile.codex_remote_host", environment=env) == baseline
+
+
 def test_tailnet_mtls_product_route_preserves_identity_and_no_replay(tmp_path: Path) -> None:
     env = _host_environment(tmp_path)
     env.update(MODEL_ACCESS_EXECUTOR_PATH="tailnet_mtls", MODEL_ACCESS_CODEX_TAILNET_ENDPOINT="https://100.100.20.30:9443")
