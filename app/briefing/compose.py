@@ -163,11 +163,14 @@ def compose_briefing(
     vault_context: VaultContext,
     for_date: date,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    create_once: bool = False,
 ) -> WriteReceipt:
     """Compose and atomically replace the dated briefing artifact.
 
     Source failures are isolated to their section. Addressing, guard, and write
     failures are global and leave the previous dated note intact.
+    Explicit pristine-fixture preparation may require create-only publication;
+    it must not adopt an intervening file as a regeneration precondition.
     """
 
     vault_root = _vault_root(vault_context)
@@ -216,7 +219,7 @@ def compose_briefing(
 
     target = briefing_note_path(vault_context=vault_context, for_date=for_date)
     expected_version: str | None = None
-    if target.exists():
+    if not create_once and target.exists():
         # The version token is for the exact bytes observed from the canonical
         # target. A regeneration must never replace an owner edit made after
         # this read.

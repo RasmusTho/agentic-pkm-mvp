@@ -78,7 +78,10 @@ uses `--stage-raw` to insert its encrypted seed through the ordinary RAW owner u
 matching consent. Its original receipt records actual ingestion and the eligibility/retention
 handoff; fresh RAW is not archive-ready until the owner's real greater-than-seven-day age gate
 passes. The command without that flag then prepares the finite source/briefing/profile/restore
-composition. No initialization, principal/consent/key provisioning, timestamp change or implicit
+composition. The original native operation, actual immutable candidate and existing principal/binding
+authority must remain qualified through that wait; successor candidates never inherit the staging
+receipt. This requirement does not authorize stopping the post-merge controller. The runtime owner
+and #5340 retain any unresolved qualification window. No initialization, principal/consent/key provisioning, timestamp change or implicit
 setup occurs in the qualifier. Partial/UNKNOWN setup retains original receipts and refuses replay;
 source merge alone leaves installation and live acceptance with the parent/runtime owner.
 

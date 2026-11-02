@@ -1,8 +1,8 @@
-"""Fixed live DEV/TEST fact producer; no deploy, repair, or source initializer.
+"""Native DEV/TEST facts and explicit fixed operator fixture preparation.
 
-Only the native committed operation id and channel are inputs. Git, Docker,
-the existing native journal and installed external distribution produce facts.
-The external effect ports are replaceable for deterministic orchestration tests.
+Admission only qualifies existing state. Separate preparation requires explicit
+setup inputs and intent. Git, Docker, the original native journal and installed
+distribution produce candidate facts; physical effect ports support source tests.
 """
 from __future__ import annotations
 

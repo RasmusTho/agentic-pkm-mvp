@@ -16,7 +16,7 @@ import sys
 from typing import Any
 from uuid import UUID
 
-from app.instance.runtime import open_local_operator_principal_store
+from app.instance.runtime import open_local_operator_principal_store, local_operator_principal_path
 from app.instance.vault_registry import VaultRegistryStore
 from app.operations.contracts import (OperationContext, OperationConvergence, OperationItemOutcome,
     OperationOutcome, OperationReceipt, OperationRecovery, OperationStatus, ReceiptStatus, SourceEffectStatus)
@@ -77,12 +77,13 @@ def _raw_preflight(identity: dict[str, Any], root: Path, principal: str,
 
 
 def _stage_raw(identity: dict[str, Any], qualified: dict[str, Any], journal: JsonReceiptStore,
-               intent: str, binding_id: str) -> dict[str, Any]:
+               intent: str, binding_id: str, binding_revision: int, authorization_epoch: str) -> dict[str, Any]:
     from app.api.native_operations_acceptance import raw_fixture_bytes
     from app.heimdal import raw_store, local_archive
     from app.heimdal.consent_ledger import consent_raw_admission
     context = OperationContext("native:" + identity["operation_id"],
-        extensions={"identity_sha256": digest(identity), "binding_id": binding_id})
+        extensions={"identity_sha256": digest(identity), "binding_id": binding_id,
+            "binding_revision": binding_revision, "authorization_epoch": authorization_epoch})
     pending = OperationOutcome(RAW_STAGE_REQUEST, OperationStatus.RECOVERY_REQUIRED,
         PREPARATION_ACTION, context, convergence=OperationConvergence(SourceEffectStatus.UNKNOWN),
         receipt=OperationReceipt(RAW_STAGE_REQUEST, ReceiptStatus.PENDING),
@@ -173,10 +174,12 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
     if runtime is None or runtime.channel_id != identity["channel"]:
         raise OperationsAcceptanceRefusal("existing_native_binding_authority_required")
     journal = JsonReceiptStore(registry_path.parent / "operation-receipts.json")
-    intent = digest({key: value for key, value in request.items() if key != "stage_raw"})
+    intent = digest({"request": {key: value for key, value in request.items() if key != "stage_raw"},
+        "principal_record_sha256": file_hash(local_operator_principal_path(registry_path))})
     with principal_store.read_effect_window(expected_revision=principal.revision), runtime.effect_leases.shared_effect(
         registration.vault_binding_id, channel_id=runtime.channel_id, root=runtime.root), frozen_binding_effect(runtime), journal.effect_window(PREPARATION_REQUEST):
         validate_frozen_binding_runtime(runtime)
+        snapshot = registry.load()
         previous = journal.lookup(RAW_STAGE_REQUEST if request["stage_raw"] else PREPARATION_REQUEST)
         if previous is not None:
             if previous.intent_digest != intent:
@@ -202,11 +205,14 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
             registration.vault_binding_id, stage=request["stage_raw"])
         if request["stage_raw"]:
             assert raw is not None
-            return _stage_raw(identity, raw, journal, intent, registration.vault_binding_id)
+            return _stage_raw(identity, raw, journal, intent, registration.vault_binding_id,
+                runtime.binding_revision, runtime.authorization_epoch)
         if identity["channel"] == "test":
             staged = journal.lookup(RAW_STAGE_REQUEST)
             if (staged is None or staged.intent_digest != intent or staged.outcome.receipt is None
-                or staged.outcome.receipt.status is not ReceiptStatus.COMMITTED):
+                or staged.outcome.receipt.status is not ReceiptStatus.COMMITTED
+                or staged.outcome.context.extensions.get("binding_revision") != runtime.binding_revision
+                or staged.outcome.context.extensions.get("authorization_epoch") != runtime.authorization_epoch):
                 raise OperationsAcceptanceRefusal("original_raw_staging_receipt_required")
         from app.api.native_operations_acceptance import source_templates
         from app.vault.paths import get_vault_capture_note_rel
@@ -257,7 +263,15 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
             if BRIEFING_ENABLED:
                 pending_effect = "briefing"
                 journal.finalize(PREPARATION_REQUEST, intent, outcome())
-                receipt = compose_briefing(vault_context=context, for_date=_local_now(None).date())
+                from app.knowledge.errors import KnowledgeWriteConflict
+                try:
+                    receipt = compose_briefing(vault_context=context, for_date=_local_now(None).date(), create_once=True)
+                except KnowledgeWriteConflict as exc:
+                    if exc.receipt is not None:
+                        effects.append(OperationItemOutcome("briefing", OperationStatus.CONFLICTED,
+                            payload={"mutation_receipt": asdict(exc.receipt)}))
+                        journal.finalize(PREPARATION_REQUEST, intent, outcome())
+                    raise
                 effects.append(OperationItemOutcome("briefing", OperationStatus.SUCCEEDED, payload={"mutation_receipt": asdict(receipt)}))
                 journal.finalize(PREPARATION_REQUEST, intent, outcome())
             if any(file_hash(root / source["path"]) != source["seed_sha256"] for source in sources.values()):

@@ -429,9 +429,18 @@ seed therefore requires real elapsed time before the second command can succeed.
 ingestion timestamp or retention policy is changed by preparation. Native owners remain
 responsible if background archival, retention or revoked consent makes that substrate ineligible.
 
+The same original native operation and actual immutable source/image/resources must remain
+qualified across that maturation window. Staging also retains the existing principal-record
+identity and binding authority; changed operation, running candidate, principal or binding
+authority refuses before the later preparation effects. Original receipts are never rebased onto
+a successor candidate. This operational prerequisite does not authorize pausing the post-merge
+controller, pinning a channel or changing normal deployment policy. If the original cannot remain
+qualified, #5340 and its runtime owner retain that unresolved acceptance prerequisite. Preparation
+does not inventory older RAW evidence or claim that none exists.
+
 The second command creates the exact canonical source seeds at their fixed paths (including the
-configured capture target), composes today's briefing when enabled, remembers the registry restore
-target through the ordinary picker owner and records the fixed profile declaration. Existing
+configured capture target), creates today's canonical briefing once when enabled, records the fixed
+profile declaration and remembers the registry restore target through the ordinary picker owner. Existing
 notes, foreign declarations, links and partially prepared state refuse rather than being healed
 or overwritten. Setup intent, source/GOV receipts and known partial or UNKNOWN effects stay in the
 existing instance `operation-receipts.json`, under fixed preparation and RAW-stage request IDs.

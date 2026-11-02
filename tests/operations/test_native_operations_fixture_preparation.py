@@ -81,6 +81,8 @@ def environment(tmp_path, monkeypatch, *, channel="dev"):
         native=native, calls=calls, manager=manager)
     if channel == "test":
         archive_authority(result, tmp_path, monkeypatch)
+    else:
+        monkeypatch.delenv("PKM_CONFIG_ROOT", raising=False)
     return result
 
 
@@ -397,3 +399,61 @@ runpy.run_module('app.ops.native_operations_acceptance_runner',run_name='__main_
     assert "--confirm-synthetic-setup" in result.stdout and "--stage-raw" in result.stdout
     alias = CliRunner().invoke(cli, ["ops", "prepare-operations-fixture", "--help"])
     assert alias.exit_code == 0 and "--confirm-synthetic-setup" in alias.output
+
+
+def test_create_only_briefing_preserves_a_competing_normal_writer(tmp_path, monkeypatch):
+    from app.briefing import compose, trigger
+    from app.knowledge.write_ops import write_note_relative
+    host = environment(tmp_path, monkeypatch)
+    monkeypatch.setattr(trigger, "BRIEFING_ENABLED", True)
+    original = compose.compose_briefing
+    target = compose.briefing_note_path(vault_context=host.manager.context, for_date=trigger._local_now(None).date())
+    foreign = "A concurrent normal writer owns today's target.\n"
+    calls = []
+    def competing_writer(**kwargs):
+        calls.append(True)
+        write_note_relative(target.relative_to(host.root).as_posix(), foreign, vault_root=host.root, create_once=True)
+        return original(**kwargs)
+    monkeypatch.setattr(compose, "compose_briefing", competing_writer)
+    assert invoke(host).exit_code != 0
+    assert target.read_text() == foreign
+    store = JsonReceiptStore(host.runtime.registry.path.parent / "operation-receipts.json")
+    pending = store.lookup(preparation.PREPARATION_REQUEST).outcome.to_dict()
+    assert pending["status"] == "recovery_required"
+    assert pending["items"][-1]["status"] == "conflicted"
+    assert pending["items"][-1]["payload"]["mutation_receipt"]["outcome"] == "already_exists"
+    assert PROFILE not in host.runtime.registry.lookup(host.binding_id).extensions
+    assert invoke(host).exit_code != 0
+    assert target.read_text() == foreign and len(calls) == 1
+    assert pending == store.lookup(preparation.PREPARATION_REQUEST).outcome.to_dict()
+
+
+@pytest.mark.parametrize("drift", ["native_operation", "running_candidate", "principal_authority", "binding_authority"])
+def test_raw_maturation_never_rebinds_original_candidate_or_authority(tmp_path, monkeypatch, drift):
+    from app.instance.runtime import local_operator_storage_capability
+    from app.heimdal import raw_store
+    host = environment(tmp_path, monkeypatch, channel="test")
+    assert invoke(host, stage=True).exit_code == 0
+    store = JsonReceiptStore(host.runtime.registry.path.parent / "operation-receipts.json")
+    original = store.lookup(preparation.RAW_STAGE_REQUEST).outcome.to_dict()
+    host.clock.now += timedelta(days=8)
+    if drift == "native_operation":
+        host.native.commit("65600000-0000-4000-8000-000000000099")
+    elif drift == "running_candidate":
+        # The native request stays original; actual Docker's running SHA drifts.
+        host.native.sha = "9" * 40
+    elif drift == "principal_authority":
+        # Normal owner advances the same role's auth record; no new principal
+        # or credential is created, and the old staging authority is not rebased.
+        open_local_operator_principal_store(host.runtime.registry.path).rotate_credential(
+            credential=None, _capability=local_operator_storage_capability())
+    else:
+        # Ordinary remember advances the fallback binding revision. The existing
+        # authority owner determines that change; setup cannot reset it.
+        from app.vault.manager import VaultManager
+        VaultManager().select_vault(host.root, remember=True)
+    assert invoke(host).exit_code != 0
+    assert store.lookup(preparation.RAW_STAGE_REQUEST).outcome.to_dict() == original
+    assert store.lookup(preparation.PREPARATION_REQUEST) is None
+    assert len(raw_store.all_raw_records()) == 1
+    assert not (host.root / "Notes").exists()
