@@ -1056,6 +1056,11 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
   persistent Product routing, inference qualification or release acceptance. DEV/TEST source support
   also permits a separately configured Tailnet mTLS path through the governed deploy wrapper; host
   ingress, channel activation and verification remain separate operational steps.
+- `scripts/check_model_access_certificates.py` checks explicitly supplied DEV/TEST public server,
+  client and CA files against a server IP and a validity margin. For example, pass `--channel dev`,
+  `--server`, `--client`, `--ca` and `--server-ip`; `--min-days` defaults to 30. It does not inspect
+  private keys, discover the files used by running services, renew certificates, or establish live
+  mTLS health. Actual rotation and adoption remain separate operational work.
 - For the explicit `openai_api` evaluation transport, the executor may start through
   `scripts/start_model_access_executor.sh` as the dev-only `model-access-executor` Keychain consumer
   of `openai.api-key` (#6386). Switching the launchd job to that launcher and the owner's one-time
