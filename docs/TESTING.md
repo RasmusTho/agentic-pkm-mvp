@@ -294,6 +294,19 @@ for each invocation before collection, so concurrent processes do not share pyte
 numbered-directory root. Provisioning failure aborts the run before test execution.
 `tests/governance/test_pytest_temp_root_isolation.py` exercises the root hook in
 overlapping subprocesses and injects creation and validation failures before collection.
+New namespaces carry an owner marker and a lifetime lock; nested invocations also hold
+the enclosing marked namespace locks and extend their retention on completion. Each
+invocation may reclaim marked, inactive direct-child namespaces at least seven days
+after a recorded completion. A missing, invalid or unverifiable owner or completion,
+an uncertain child, an active lock or process, and a symlink cause preservation.
+Pre-existing unmarked namespaces remain untouched, and cleanup errors do not block the
+test run. The default parent is a stable UID-owned private directory under the system
+temporary directory; an inherited debug root still receives a direct child. Pruning
+requires a UID-owned 0700 parent and a common advisory lock across cooperating
+harnesses. A same-UID or root process that deliberately bypasses this lock is outside
+the protection boundary; unqualified inherited parents are not pruned. Setup waits up
+to 30 seconds for a valid busy parent lock, then fails loudly. Cleanup releases that
+lock before recursive deletion, so normal deletion does not delay new invocations.
 The full-suite selection remains unchanged. When the governing Issue requires it,
 run it under the lease owned by the development validation baseline:
 
