@@ -8,6 +8,7 @@ Partial/UNKNOWN effects stay in the existing operation journal and cannot replay
 from __future__ import annotations
 
 from dataclasses import asdict
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -77,7 +78,8 @@ def _raw_preflight(identity: dict[str, Any], root: Path, principal: str,
 
 
 def _stage_raw(identity: dict[str, Any], qualified: dict[str, Any], journal: JsonReceiptStore,
-               intent: str, binding_id: str, binding_revision: int, authorization_epoch: str) -> dict[str, Any]:
+               intent: str, binding_id: str, binding_revision: int, authorization_epoch: str,
+               local_write_check: Callable[[], None]) -> dict[str, Any]:
     from app.api.native_operations_acceptance import raw_fixture_bytes
     from app.heimdal import raw_store, local_archive
     from app.heimdal.consent_ledger import consent_raw_admission
@@ -97,6 +99,7 @@ def _stage_raw(identity: dict[str, Any], qualified: dict[str, Any], journal: Jso
         content = raw_fixture_bytes(identity["operation_id"])
         key = raw_store.resolve_raw_store_key()
         ciphertext, nonce = raw_store.encrypt_raw_bytes(content, key=key)
+        local_write_check()
         record, created = raw_store.insert_raw_record(
             content_identity=raw_store.compute_raw_content_identity(content), capture_chain=[PROFILE, "heimdal"],
             sensor={"sensor_id": PROFILE, "operation_id": identity["operation_id"]},
@@ -146,7 +149,7 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
     from app.governance.governed_write import GovernedWriteAdapter
     from app.instance.runtime import declare_operations_acceptance_fixture
     from app.vault.manager import VaultManager
-    from app.write_guard import DEFAULT_WRITE_GUARD
+    from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
     if set(request) != {"identity", "binding_id", "principal_id", "instance_identity", "confirm_synthetic_setup", "stage_raw"}:
         raise OperationsAcceptanceRefusal("explicit_fixed_setup_inputs_required")
@@ -200,13 +203,25 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
         if (context.status != "selected" or context.active_vault_id != registration.vault_id
             or context.local_instance_id != registration.local_instance_id):
             raise OperationsAcceptanceRefusal("canonical_initialized_binding_required")
-        DEFAULT_WRITE_GUARD.assert_writes_allowed(PREPARATION_ACTION)
+        def require_local_writes() -> None:
+            if not manager.permissions_for_context(context).allow_writes_to_vault:
+                raise OperationsAcceptanceRefusal("local_vault_writes_disallowed")
+        require_local_writes()
+        def write_snapshot() -> dict[str, Any]:
+            snapshot = DEFAULT_WRITE_GUARD.snapshot_fn()
+            # Consume the current local-clone ceiling after health work too.
+            # Canonical HKA/briefing ports reassert this same guard at their
+            # existing mutation seams; fixture metadata never overrides it.
+            require_local_writes()
+            return snapshot
+        guard = WriteGuard(write_snapshot, bootstrap_actions=())
+        guard.assert_writes_allowed(PREPARATION_ACTION)
         raw = _raw_preflight(identity, root, principal.local_operator_role_id, snapshot.app_install_id,
             registration.vault_binding_id, stage=request["stage_raw"])
         if request["stage_raw"]:
             assert raw is not None
             return _stage_raw(identity, raw, journal, intent, registration.vault_binding_id,
-                runtime.binding_revision, runtime.authorization_epoch)
+                runtime.binding_revision, runtime.authorization_epoch, require_local_writes)
         if identity["channel"] == "test":
             staged = journal.lookup(RAW_STAGE_REQUEST)
             if (staged is None or staged.intent_digest != intent or staged.outcome.receipt is None
@@ -242,12 +257,12 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
             for source in sources.values():
                 pending_effect = source["path"]
                 journal.finalize(PREPARATION_REQUEST, intent, outcome())
-                grant = gov.issue_decision_token(write_guard=DEFAULT_WRITE_GUARD, action=PREPARATION_ACTION,
+                grant = gov.issue_decision_token(write_guard=guard, action=PREPARATION_ACTION,
                     write_class="synthetic_fixture_source", actor=principal.local_operator_role_id, resource=source["path"])
                 gov.validate_decision_token(decision_token=grant.decision_token, action=PREPARATION_ACTION,
                     write_class="synthetic_fixture_source", actor=principal.local_operator_role_id, resource=source["path"])
                 mutation = write_note_relative(source["path"], source["text"], vault_root=root,
-                    writer_identity=principal.local_operator_role_id, create_once=True)
+                    writer_identity=principal.local_operator_role_id, write_guard=guard, create_once=True)
                 written = mutation.outcome == "written"
                 authority = gov.record_authority_receipt(decision_token=grant.decision_token,
                     mutation_receipt=mutation, state_owner="HKA", outcome="applied" if written else "failed",
@@ -265,7 +280,8 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
                 journal.finalize(PREPARATION_REQUEST, intent, outcome())
                 from app.knowledge.errors import KnowledgeWriteConflict
                 try:
-                    receipt = compose_briefing(vault_context=context, for_date=_local_now(None).date(), create_once=True)
+                    receipt = compose_briefing(vault_context=context, for_date=_local_now(None).date(),
+                        write_guard=guard, create_once=True)
                 except KnowledgeWriteConflict as exc:
                     if exc.receipt is not None:
                         effects.append(OperationItemOutcome("briefing", OperationStatus.CONFLICTED,

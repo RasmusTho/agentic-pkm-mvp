@@ -233,6 +233,7 @@ def compose_briefing(
         content=content,
         write_guard=write_guard,
         expected_version=expected_version,
+        create_once=create_once,
     )
 
 
@@ -377,6 +378,7 @@ def _atomic_write(
     content: str,
     write_guard: WriteGuard,
     expected_version: str | None,
+    create_once: bool = False,
 ) -> WriteReceipt:
     """Stage through the FS adapter, then atomically install its complete file.
 
@@ -437,7 +439,11 @@ def _atomic_write(
                     content,
                     vault_root=vault_root,
                     action=BRIEFING_WRITE_ACTION,
-                    write_guard=adapter_guard,
+                    # A strict pristine creator carries a live local policy
+                    # ceiling in addition to health. Do not substitute the
+                    # earlier cached snapshot after the profile/path waits.
+                    # Ordinary compose/regenerate keeps its existing cache.
+                    write_guard=write_guard if create_once else adapter_guard,
                     create_once=True,
                 )
                 if receipt.outcome != "written":

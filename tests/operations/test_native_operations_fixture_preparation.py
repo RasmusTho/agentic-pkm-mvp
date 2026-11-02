@@ -199,7 +199,8 @@ def test_prepared_fixture_qualifies_real_native_operations_admission(tmp_path, m
 
 
 @pytest.mark.parametrize("fault", ["principal", "instance", "binding", "intent", "candidate", "operation",
-    "foreign_source", "symlink", "profile", "consent", "archive", "reader", "key", "retention", "too_young"])
+    "foreign_source", "symlink", "profile", "consent", "archive", "reader", "key", "retention", "too_young",
+    "read_only_role", "writes_disabled"])
 def test_preparation_refuses_unqualified_inputs_without_dependent_effects(tmp_path, monkeypatch, fault):
     from app.heimdal import consent_ledger, raw_store
     from app.heimdal.settings_notes import write_settings_note, SettingsNote, SETTINGS
@@ -242,6 +243,13 @@ def test_preparation_refuses_unqualified_inputs_without_dependent_effects(tmp_pa
             write_settings_note(host.root, SettingsNote(spec=SETTINGS, values={"retention_window_days": 7}))
         elif fault == "too_young":
             assert invoke(host, stage=True).exit_code == 0
+        elif fault in {"read_only_role", "writes_disabled"}:
+            path = host.root / "settings/local.md"
+            settings = host.manager.markdown_store
+            doc = settings.read(path)
+            values = {**doc.frontmatter, "machineRole": "readOnlySatellite" if fault == "read_only_role" else "testNode",
+                      "allowWritesToVault": fault == "read_only_role"}
+            settings.write_frontmatter(path, values, body=doc.body)
         before = {p.relative_to(host.root).as_posix(): p.read_bytes() for p in host.root.rglob("*") if p.is_file()}
         result = invoke(host, stage=fault != "too_young")
         after = {p.relative_to(host.root).as_posix(): p.read_bytes() for p in host.root.rglob("*") if p.is_file()}
@@ -477,4 +485,63 @@ def test_preparation_never_heals_identity_removed_during_validation(tmp_path, mo
     assert invoke(host).exit_code != 0
     assert (host.root / "settings/vault.md").read_bytes() == changed[0]
     assert not (host.root / "Notes").exists()
+    assert PROFILE not in host.runtime.registry.lookup(host.binding_id).extensions
+
+
+def test_preparation_rechecks_local_permission_at_canonical_source_seam(tmp_path, monkeypatch):
+    from app.governance.governed_write import GovernedWriteAdapter
+    host = environment(tmp_path, monkeypatch)
+    original = GovernedWriteAdapter.validate_decision_token
+    def permission_revoked(self, **kwargs):
+        result = original(self, **kwargs)
+        path = host.root / "settings/local.md"
+        settings = host.manager.markdown_store
+        doc = settings.read(path)
+        settings.write_frontmatter(path, {**doc.frontmatter, "allowWritesToVault": False}, body=doc.body)
+        return result
+    monkeypatch.setattr(GovernedWriteAdapter, "validate_decision_token", permission_revoked)
+    assert invoke(host).exit_code != 0
+    assert not list((host.root / "Notes").glob("*.md"))
+    store = JsonReceiptStore(host.runtime.registry.path.parent / "operation-receipts.json")
+    pending = store.lookup(preparation.PREPARATION_REQUEST).outcome.to_dict()
+    assert pending["status"] == "recovery_required" and pending["items"] == []
+    assert PROFILE not in host.runtime.registry.lookup(host.binding_id).extensions
+
+
+def test_raw_staging_rechecks_local_permission_before_normal_insert(tmp_path, monkeypatch):
+    from app.heimdal import raw_store
+    host = environment(tmp_path, monkeypatch, channel="test")
+    original = raw_store.encrypt_raw_bytes
+    def permission_revoked(*args, **kwargs):
+        encrypted = original(*args, **kwargs)
+        path = host.root / "settings/local.md"
+        settings = host.manager.markdown_store
+        doc = settings.read(path)
+        settings.write_frontmatter(path, {**doc.frontmatter, "allowWritesToVault": False}, body=doc.body)
+        return encrypted
+    monkeypatch.setattr(raw_store, "encrypt_raw_bytes", permission_revoked)
+    assert invoke(host, stage=True).exit_code != 0
+    assert raw_store.all_raw_records() == []
+    store = JsonReceiptStore(host.runtime.registry.path.parent / "operation-receipts.json")
+    assert store.lookup(preparation.RAW_STAGE_REQUEST).outcome.status == "recovery_required"
+
+
+def test_briefing_create_only_rechecks_local_permission_after_cached_snapshot(tmp_path, monkeypatch):
+    from app.briefing import compose, trigger
+    host = environment(tmp_path, monkeypatch)
+    monkeypatch.setattr(trigger, "BRIEFING_ENABLED", True)
+    original = compose.write_note_relative
+    target = compose.briefing_note_path(vault_context=host.manager.context, for_date=trigger._local_now(None).date())
+    def permission_revoked(*args, **kwargs):
+        path = host.root / "settings/local.md"
+        settings = host.manager.markdown_store
+        doc = settings.read(path)
+        settings.write_frontmatter(path, {**doc.frontmatter, "allowWritesToVault": False}, body=doc.body)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(compose, "write_note_relative", permission_revoked)
+    assert invoke(host).exit_code != 0
+    assert not target.exists()
+    store = JsonReceiptStore(host.runtime.registry.path.parent / "operation-receipts.json")
+    pending = store.lookup(preparation.PREPARATION_REQUEST).outcome.to_dict()
+    assert pending["status"] == "recovery_required" and pending["extensions"]["pending_effect"] == "briefing"
     assert PROFILE not in host.runtime.registry.lookup(host.binding_id).extensions

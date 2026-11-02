@@ -404,8 +404,10 @@ also exposes `ops prepare-operations-fixture` as an alias of the same compositio
 It requires a **previously initialized, registered, isolated synthetic binding** and the already
 configured local-operator principal and instance. Normal vault initialization and registration keep
 their own explicit operator authority; preparation does not initialize an unknown folder or create
-a principal, binding, consent grant, key or archive volume. The IDs are expected-value assertions,
-not permission. Run it only under the existing native operator's authorized setup intent:
+a principal, binding, consent grant, key or archive volume. The existing local clone must permit
+vault writes: `readOnlySatellite` remains a hard denial, and `allowWritesToVault: false` is honored
+through the normal permission owner and canonical write guards. The IDs are expected-value
+assertions, not permission. Run it only under the existing native operator's authorized setup intent:
 
 ```sh
 # TEST: stage the one exact encrypted synthetic RAW seed through the normal owner.
