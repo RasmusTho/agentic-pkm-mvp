@@ -159,8 +159,7 @@ def _open_temp_lifetime(directory: Path) -> tuple[int | None, tuple[int, int]]:
     try:
         root = os.fstat(root_fd)
         named_root = os.stat(directory, follow_symlinks=False)
-        if (root.st_uid != os.geteuid() or stat.S_IMODE(root.st_mode) != 0o700
-                or (root.st_dev, root.st_ino) != (named_root.st_dev, named_root.st_ino)):
+        if (root.st_dev, root.st_ino) != (named_root.st_dev, named_root.st_ino):
             raise OSError("unqualified pytest ancestor")
         try:
             marker_fd = os.open(_TEMP_OWNER, flags, dir_fd=root_fd)
@@ -170,6 +169,8 @@ def _open_temp_lifetime(directory: Path) -> tuple[int | None, tuple[int, int]]:
             if (root.st_dev, root.st_ino) != (named_root.st_dev, named_root.st_ino):
                 raise OSError("pytest ancestor changed") from None
             return None, (root.st_dev, root.st_ino)
+        if root.st_uid != os.geteuid() or stat.S_IMODE(root.st_mode) != 0o700:
+            raise OSError("unqualified pytest ancestor")
         marker = os.fstat(marker_fd)
         named_marker = os.stat(_TEMP_OWNER, dir_fd=root_fd, follow_symlinks=False)
         if (not stat.S_ISREG(marker.st_mode) or marker.st_uid != os.geteuid()

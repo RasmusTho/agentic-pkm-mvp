@@ -448,7 +448,7 @@ def test_default_parent_is_private_and_unqualified_parent_is_not_pruned(tmp_path
     private = Path(report.read_text()).parent
     assert private.parent == system_temp and (private.stat().st_mode & 0o777) == 0o700
     assert subject._private_temp_parent(system_temp) == private
-    inherited = tmp_path / "inherited"
+    inherited = tmp_path / "agentic-pkm-pytest-inherited"
     inherited.mkdir(mode=0o755)
     inherited.chmod(0o755)
     old = _candidate(inherited, "old", pid=_dead_pid())
