@@ -1,4 +1,4 @@
-"""Focused fixed TEST adapter proof. OS files are private; all effects fake."""
+"""Focused TEST proof: fake native effects, plus a confined local stderr producer."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 from types import ModuleType, SimpleNamespace
@@ -84,6 +85,7 @@ SOURCE_FILES = (
     "ops/host-setup/mac-mini/prod_probe.py",
 )
 _FIXTURE_SOURCE = None
+_REAL_POPEN = subprocess.Popen
 
 
 def fixture_source():
@@ -510,7 +512,7 @@ class SourceLog:
                 "_SYSTEMD_CGROUP": owner.unit["ControlGroup"],
                 "_TRANSPORT": "stdout",
                 "_STREAM_ID": runtime.stream,
-                "_PID": runtime.creator.pid,
+                "_PID": runtime.child.pid,
                 "__MONOTONIC_TIMESTAMP": str(int(owner.clock.value * 1_000_000)),
                 "__CURSOR": "fixture-cursor-" + str(owner.serial),
             }
@@ -1067,18 +1069,54 @@ class FixedTestAdapterTests(unittest.TestCase):
         with self.assertRaises(target.Unknown):
             h.adapter.swap_base_url(restore=True)
 
-    def test_failed_confirmation_iteration_error_wrong_creator_or_replayed_cursor_unknown(self):
+    def test_foreign_journal_pid_cannot_confirm_a_normal_transition(self):
         h = self.h
         h.fault_start()
         h.source_cycle()
-        # The source emitted real confirmed/down. Metadata claiming child PID
-        # instead of the inherited stream creator must fail even with correct text.
+        # The source emitted real confirmed/down. An outsider is neither the
+        # qualified launcher nor its fixed child, even with correct message text.
         original = h.rows[0]["_PID"]
-        h.rows[0]["_PID"] = str(int(original) + 100)
+        h.rows[0]["_PID"] = str(int(original) + 1000)
         with self.assertRaises(target.Unknown):
             h.adapter.normal_transitions()
         self.assertEqual(0, h.adapter.transitions.down)
         self.assertEqual(1, len(h.deliveries))
+
+    def test_child_attribution_preserves_stream_and_process_continuity_guards(self):
+        rows = (
+            ("_PID", "99999"),
+            ("_PID", "707"),
+            ("_PID", None),
+            ("_PID", 4241),
+            ("_TRANSPORT", "syslog"),
+            ("_STREAM_ID", "e" * 32),
+            ("_SYSTEMD_CGROUP", "/foreign"),
+            ("_BOOT_ID", "e" * 32),
+            ("_SYSTEMD_INVOCATION_ID", "e" * 32),
+        )
+        for key, value in rows:
+            with self.subTest(field=key, value=value):
+                h = self.fresh()
+                h.fault_start()
+                h.source_cycle()
+                h.rows[0][key] = value
+                with self.assertRaises(target.Unknown):
+                    h.adapter.normal_transitions()
+                self.assertEqual(0, h.adapter.transitions.down)
+                self.assertEqual(1, len(h.deliveries))
+        for name, change in (
+            ("pid_reuse", lambda p: replace(p, start_identity="e" * 64)),
+            ("foreign_parent", lambda p: replace(p, parent="99999")),
+            ("foreign_fd", lambda p: replace(p, stderr_inode=552, stderr_target="socket:[552]")),
+        ):
+            with self.subTest(process=name):
+                h = self.fresh()
+                h.fault_start()
+                h.source_cycle()
+                h.runtime.modify = lambda r: replace(r, child=change(r.child))
+                with self.assertRaises(target.Unknown):
+                    h.adapter.normal_transitions()
+                self.assertEqual(0, h.adapter.transitions.down)
 
     def test_real_source_delivery_failure_cannot_become_down_or_trigger_retry(self):
         h = self.h
@@ -1985,7 +2023,10 @@ class NativeKernel:
                 "_SYSTEMD_UNIT": target.UNIT,
                 "_SYSTEMD_INVOCATION_ID": self.unit["InvocationID"],
                 "_SYSTEMD_CGROUP": self.unit["ControlGroup"],
-                "_PID": self.unit["MainPID"],
+                "_PID": str(
+                    int(self.unit["MainPID"])
+                    + (100 if getattr(self, "journal_origin", "child") == "child" else 0)
+                ),
                 "_TRANSPORT": "stdout",
                 "_STREAM_ID": str(self.incarnation + 3) * 32,
                 "__CURSOR": "native-cursor-" + str(self.serial),
@@ -3007,12 +3048,51 @@ def test_guard_refuses_foreign_incarnation_and_retains_original_fault_handle(sel
 
 def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
     self,
+    *,
+    whole_worker=False,
+    journal_origin="child",
 ):
     import contextlib, io
     from datetime import datetime, timezone
 
     kernel, assembly = _native(self)
     program = Path(target.__file__).read_bytes()
+    if whole_worker:
+        assembly.files.close()
+        archive, manifest, hashes = fixture_source()
+        raw = program.decode()
+        for old, new in (
+            (LIVE_PINS["ARCHIVE_SHA256"], target.sha(archive)),
+            (LIVE_PINS["MANIFEST_SHA256"], target.sha(manifest)),
+            *[(LIVE_PINS["SOURCE_HASHES"][name], value) for name, value in hashes.items()],
+        ):
+            raw = raw.replace(old, new)
+        raw = raw.replace(
+            "ARCHIVE_BYTES = " + format(LIVE_PINS["ARCHIVE_BYTES"], "_"),
+            "ARCHIVE_BYTES = " + str(len(archive)),
+        )
+        program = raw.encode()
+        old_base = kernel.scope.binding.api_base
+        kernel.scope = replace(
+            kernel.scope,
+            binding=replace(kernel.scope.binding, api_base="http://127.0.0.1:47777"),
+            program_sha256=target.sha(program),
+        )
+        kernel.os.files[kernel.scope.binding.config] = kernel.os.files[
+            kernel.scope.binding.config
+        ].replace(old_base.encode(), kernel.scope.binding.api_base.encode())
+        kernel.os.add(
+            kernel.unit["FragmentPath"], (PUBLIC / target.TEMPLATE).read_bytes(), mode=0o644
+        )
+        for path in list(kernel.os.meta):
+            if path == kernel.scope.root or path.startswith(kernel.scope.root + "/"):
+                kernel.os.meta.pop(path)
+                kernel.os.files.pop(path, None)
+        kernel.journal_origin = journal_origin
+        for row in kernel.rows:
+            row["_PID"] = str(
+                int(kernel.unit["MainPID"]) + (100 if journal_origin == "child" else 0)
+            )
     contract = b"fixed reviewed issue6493"
     packet = {
         "schema": "fixed_test_probe.carrier.v1",
@@ -3049,7 +3129,11 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
     }
     kernel.os.add(caller_path, program, mode=0o644)
     kernel.os.getcwd = lambda: entry["cwd"]
-    kernel.os.path.realpath = lambda path: path
+    kernel.os.path.realpath = lambda path: (
+        kernel.scope.binding.sdk_realpath
+        if whole_worker and path == kernel.scope.binding.sdk
+        else path
+    )
     authority = {
         "ok": True,
         "task": {
@@ -3079,6 +3163,37 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
             "expires_at": kernel.clock.epoch + 7200,
         }
     }
+    stages = []
+
+    class SDKExited(BaseException):
+        pass
+
+    def execve(executable, argv, environment):
+        module = sys.modules["fixed_test_program"]
+        scope, _, _ = module._decode_scope(
+            kernel.os.files[kernel.scope.root + "/native-input.json"]
+        )
+        self.assertEqual(scope.binding.sdk, executable)
+        self.assertEqual(
+            [
+                executable,
+                "-I",
+                scope.root + "/program.py",
+                "--qualified-test-worker",
+                packet["operation"],
+            ],
+            argv,
+        )
+        self.assertEqual({"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}, environment)
+        kernel.scope = scope
+        stages.append("qualified-sdk-exec")
+        self.assertEqual(0, module.main(["--qualified-test-worker", packet["operation"]]))
+        stages.append("qualified-worker-complete")
+        raise SDKExited()
+
+    if whole_worker:
+        kernel.os.execve = execve
+        docker = DockerDiscoveryProducer()
 
     def response(argv, payload):
         if argv[:3] == ("/usr/bin/git", "-C", target.LOCAL_TEST_WORKTREE):
@@ -3124,16 +3239,64 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
                 exec(source, namespace)
                 self.assertIs(sys.modules[namespace["__name__"]].__dict__, namespace)
                 self.assertEqual(namespace["Binding"].__module__, namespace["__name__"])
-                namespace["native_entry"] = remote_port
+                if whole_worker:
+                    namespace["LinuxDependencies"].standard_library = lambda: kernel.dependencies
+                    stages.append("serialized-remote-entry")
+                else:
+                    namespace["native_entry"] = remote_port
 
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                exec(
-                    compile(payload, "actual-assembled-remote-envelope", "exec"),
-                    {"exec": execute_remote_source},
-                )
+                try:
+                    exec(
+                        compile(payload, "actual-assembled-remote-envelope", "exec"),
+                        {"exec": execute_remote_source},
+                    )
+                except BaseException as error:
+                    kernel.port_failure = error
+                    raise
             executed.append(json.loads(output.getvalue()))
             return output.getvalue().encode()
+        if whole_worker and argv[0] == "/usr/bin/docker":
+            return docker(argv)
+        if (
+            whole_worker
+            and argv[0] == "/usr/bin/systemd-run"
+            and "--supervised-first-preflight" in argv
+        ):
+            root = kernel.scope.root
+            self.assertEqual(
+                {
+                    root + "/" + name
+                    for name in (
+                        "program.py",
+                        "source.tar",
+                        "manifest.json",
+                        "carrier-envelope.json",
+                    )
+                },
+                {path for path in kernel.os.files if path.startswith(root + "/")},
+            )
+            module = sys.modules["fixed_test_program"]
+            actual_path = Path
+
+            def namespace_path(value):
+                if str(value) == root + "/program.py":
+                    return SimpleNamespace(resolve=lambda: SimpleNamespace(parent=root))
+                return actual_path(value)
+
+            stages.append("cold-first-preflight")
+            with (
+                patch.object(module, "__file__", root + "/program.py"),
+                patch.object(module, "Path", side_effect=namespace_path),
+                self.assertRaises(SDKExited),
+            ):
+                module.main(["--supervised-first-preflight", packet["operation"]])
+            kernel.supervisor.update(ActiveState="inactive", SubState="dead", MainPID="0", Job="")
+            kernel.os.files[
+                "/sys/fs/cgroup" + kernel.supervisor["ControlGroup"] + "/cgroup.procs"
+            ] = b""
+            return b""
         return original(argv, payload)
 
     kernel.response = response
@@ -3169,10 +3332,42 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
                     inputs + "/custody.py",
                 ]
             )
-        self.assertEqual(78, result)
+        self.assertEqual(0 if whole_worker else 78, result)
         return output.getvalue().encode()
 
-    result = invoke()
+    try:
+        result = invoke()
+    except target.Unknown:
+        if whole_worker and hasattr(kernel, "port_failure"):
+            raise kernel.port_failure
+        raise
+    if whole_worker:
+        self.assertEqual(
+            [
+                "serialized-remote-entry",
+                "cold-first-preflight",
+                "qualified-sdk-exec",
+                "qualified-worker-complete",
+            ],
+            stages,
+        )
+        # This exercises receipt construction with fake platform ports. It is
+        # test output only, never an actual native acceptance artifact.
+        self.assertEqual("PASS", json.loads(result)["status"])
+        self.assertTrue(json.loads(result)["config_restored"])
+        self.assertTrue(json.loads(result)["same_correlation"])
+        self.assertEqual(2, len(self.h.deliveries))
+        self.assertFalse(kernel.os.fds)
+        self.assertTrue(all(selector.closed for selector in kernel.selectors))
+        self.assertTrue(
+            all(
+                pipe.closed
+                for process in kernel.processes
+                for pipe in (process.stdin, process.stdout, process.stderr)
+            )
+        )
+        sys.modules.pop("fixed_test_program", None)
+        return kernel
     self.assertEqual(
         {
             "schema": "fixed_test_probe.outcome.v1",
@@ -3300,6 +3495,118 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
     kernel.clock.epoch, kernel.clock.value = epoch, monotonic
     self.assertFalse(any(path == caller_path for path, _ in kernel.os.fds.values()))
     sys.modules.pop("fixed_test_program", None)
+
+
+def test_normal_popen_stderr_producer_and_whole_caller_origins(self):
+    """Real bootstrap Popen/normal logging, then complete native calls at fake ports."""
+    import signal
+
+    child = """
+import json, os, runpy, socket, sys, time
+from pathlib import Path
+root, scratch = Path(sys.argv[1]), Path(sys.argv[2])
+sys.path.insert(0, str(root / 'ops/host-setup/mac-mini'))
+os.environ['PROBE_STATE_FILE'] = str(scratch / 'absent-incident.json')
+probe = runpy.run_path(str(root / 'ops/host-setup/mac-mini/prod_probe.py'))
+def forbidden(*args, **kwargs):
+    raise AssertionError('no native network in producer fixture')
+socket.socket = socket.getaddrinfo = forbidden
+heartbeat = scratch / 'producer-heartbeat.json'
+heartbeat.write_text(json.dumps({'ts': time.time()}))
+fd = os.fstat(2)
+print(json.dumps({'role': 'child', 'pid': os.getpid(), 'parent': os.getppid(),
+                  'fd': [fd.st_dev, fd.st_ino]}), flush=True)
+assert probe['run_probe'](base_url='http://synthetic.invalid', heartbeat_path=str(heartbeat),
+    heartbeat_stale_seconds=60, channel=probe['NullChannel'](), environment='test',
+    http_get=lambda *args, **kwargs: (200, {'required_ok': True})) is True
+"""
+    parent = """
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+from app.ops.host_secret_bootstrap import _subprocess_runner
+fd = os.fstat(2)
+print(json.dumps({'role': 'creator', 'pid': os.getpid(),
+                  'fd': [fd.st_dev, fd.st_ino]}), flush=True)
+raise SystemExit(_subprocess_runner(
+    [sys.executable, '-I', '-c', sys.argv[3], sys.argv[1], sys.argv[2]],
+    {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}))
+"""
+    process = _REAL_POPEN(
+        [sys.executable, "-I", "-c", parent, str(PUBLIC), str(self.root), child],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+        start_new_session=True,
+    )
+    try:
+        output, error = process.communicate(timeout=15)
+    except BaseException:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
+        raise
+    finally:
+        process.stdout.close()
+        process.stderr.close()
+    self.assertEqual(0, process.returncode, error.decode())
+    creator, writer = (json.loads(line) for line in output.splitlines())
+    self.assertEqual(creator["pid"], writer["parent"])
+    self.assertNotEqual(creator["pid"], writer["pid"])
+    self.assertEqual(creator["fd"], writer["fd"])
+    lines = error.decode().splitlines()
+    self.assertEqual(1, len(lines))
+    match = target.LOG_FORMAT.fullmatch(lines[0])
+    self.assertIsNotNone(match)
+    self.assertEqual("INFO", match[1])
+    self.assertTrue(match[2].startswith("probe ok:"))
+    # SO_PASSCRED attributes that real writer; legacy stream metadata may name
+    # its creator. Map these observed roles to the fake kernel's exact processes.
+    for origin in (writer["role"], creator["role"]):
+        with self.subTest(origin=origin):
+            self.fresh()
+            kernel = self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                whole_worker=True, journal_origin=origin
+            )
+            self.assertTrue(kernel.rows)
+            self.assertTrue(all(row["_TRANSPORT"] == "stdout" for row in kernel.rows))
+
+
+def test_native_journal_rejects_nonproducer_pids_before_effects(self):
+    for pid in ("99999", "707", "4341", 4241, None, "04241"):
+        with self.subTest(pid=pid):
+            self.fresh()
+            kernel, assembly = _native(self)
+            if pid == "4341":
+                binding, group = kernel.scope.binding, kernel.unit["ControlGroup"]
+                kernel._proc(
+                    pid,
+                    "4241",
+                    (
+                        binding.sdk,
+                        "-I",
+                        "-c",
+                        target.HTTP_CHILD_CODE,
+                        binding.package + "/ops/host-setup/mac-mini",
+                    ),
+                    {},
+                    4341,
+                    group,
+                )
+                kernel.os.files["/sys/fs/cgroup" + group + "/cgroup.procs"] += b"4341\n"
+            kernel.rows[-1]["_PID"] = pid
+            with self.assertRaisesRegex(
+                target.Unknown, "actual_creator_child_journal_stream_unqualified"
+            ):
+                target.TestProbeAdapter(
+                    kernel.scope.binding, assembly.caller, assembly.files
+                ).admit()
+            self.assertEqual([], self.h.deliveries)
+            self.assertFalse(
+                any(
+                    p.argv in {target.systemd("start"), target.systemd("stop")}
+                    for p in kernel.processes
+                )
+            )
 
 
 def test_core_observations_cannot_satisfy_live_receipt_without_native_custody(self):

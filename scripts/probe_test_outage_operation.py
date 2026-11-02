@@ -1479,6 +1479,13 @@ class Peer:
         )
 
 
+def normal_stream_pid(pid: object, creator: Process | None, child: Process | None) -> bool:
+    # journald may retain the stream-opening parent's credentials or update them
+    # from SCM_CREDENTIALS when its fixed child writes inherited stderr. Neither
+    # attribution replaces Runtime.qualify's source/ancestry/shared-FD proof.
+    return creator is not None and child is not None and pid in (creator.pid, child.pid)
+
+
 def incident(snapshot: FileState | None) -> dict[str, Any] | None:
     if snapshot is None:
         return None
@@ -1574,12 +1581,11 @@ class Transitions:
                     ):
                         raise Unknown("normal_stream_error_restart_or_loss")
                     continue
-                creator = peer.runtime.creator
-                assert creator is not None
-                # journald _PID is the stream CREATOR, not proof of child emit.
-                # Runtime.qualify separately binds fixed child/source/shared FD.
-                if (row["_PID"], row["_TRANSPORT"], row["_SYSTEMD_CGROUP"], row["_STREAM_ID"]) != (
-                    creator.pid,
+                if not normal_stream_pid(row["_PID"], peer.runtime.creator, peer.runtime.child) or (
+                    row["_TRANSPORT"],
+                    row["_SYSTEMD_CGROUP"],
+                    row["_STREAM_ID"],
+                ) != (
                     "stdout",
                     peer.runtime.cgroup,
                     peer.runtime.stream,
@@ -3706,7 +3712,11 @@ class LinuxRuntimeReader:
         return worker, str(host.device) + ":" + str(host.inode)
 
     def _journal(
-        self, binding: Binding, unit: dict[str, str], creator: Process | None
+        self,
+        binding: Binding,
+        unit: dict[str, str],
+        creator: Process | None,
+        child: Process | None,
     ) -> tuple[str, str]:
         boundary = self.caller.run(
             (
@@ -3748,20 +3758,23 @@ class LinuxRuntimeReader:
             if match is None:
                 continue
             if (
-                row.get("_BOOT_ID"),
-                row.get("_SYSTEMD_UNIT"),
-                row.get("_SYSTEMD_INVOCATION_ID"),
-                row.get("_SYSTEMD_CGROUP"),
-                row.get("_PID"),
-                row.get("_TRANSPORT"),
-            ) != (
-                binding.boot_id,
-                UNIT,
-                unit["InvocationID"],
-                creator.cgroup,
-                creator.pid,
-                "stdout",
-            ) or not identifier(row.get("_STREAM_ID", "")):
+                (
+                    row.get("_BOOT_ID"),
+                    row.get("_SYSTEMD_UNIT"),
+                    row.get("_SYSTEMD_INVOCATION_ID"),
+                    row.get("_SYSTEMD_CGROUP"),
+                    row.get("_TRANSPORT"),
+                )
+                != (
+                    binding.boot_id,
+                    UNIT,
+                    unit["InvocationID"],
+                    creator.cgroup,
+                    "stdout",
+                )
+                or not normal_stream_pid(row.get("_PID"), creator, child)
+                or not identifier(row.get("_STREAM_ID", ""))
+            ):
                 raise Unknown("actual_creator_child_journal_stream_unqualified")
             if match[1] == "ERROR":
                 raise Unknown("normal_source_error_during_runtime_qualification")
@@ -3869,7 +3882,7 @@ class LinuxRuntimeReader:
                 worker, backing = self._worker(binding, boot)
                 if backing != binding.heartbeat_backing:
                     raise Refusal("actual_heartbeat_backing_changed")
-                stream, cursor = self._journal(binding, unit, creator)
+                stream, cursor = self._journal(binding, unit, creator, child)
                 break
             except StartupPending:
                 if self.clock() >= deadline:
