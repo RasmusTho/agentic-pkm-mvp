@@ -196,7 +196,7 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
         if (settings.read(root / "settings/vault.md").frontmatter.get("vaultId") != registration.vault_id
             or settings.read(root / "settings/local.md").frontmatter.get("localInstanceId") != registration.local_instance_id):
             raise OperationsAcceptanceRefusal("canonical_fixture_instance_identity_mismatch")
-        context = manager.validate_vault(root)
+        context = manager.validate_vault(root, heal_identity=False)
         if (context.status != "selected" or context.active_vault_id != registration.vault_id
             or context.local_instance_id != registration.local_instance_id):
             raise OperationsAcceptanceRefusal("canonical_initialized_binding_required")
@@ -287,8 +287,11 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
             effects.append(OperationItemOutcome("fixture_declaration", OperationStatus.SUCCEEDED, resulting_version=revision))
             pending_effect = "last_active_restore"
             journal.finalize(PREPARATION_REQUEST, intent, outcome())
-            selected = manager.select_vault(root, remember=True)
-            if selected.status != "selected" or registry.load().last_active_vault_ref != registration.ref:
+            # Reuse the picker's remembered-context producer with the already
+            # validated identity. Re-selecting here could heal an identity
+            # removed by an intervening writer, which this setup never owns.
+            manager._remember_context(context, root)
+            if registry.load().last_active_vault_ref != registration.ref:
                 raise OperationsAcceptanceRefusal("canonical_fixture_restore_target_unavailable")
             effects.append(OperationItemOutcome("last_active_restore", OperationStatus.SUCCEEDED))
             result = outcome(complete=True)

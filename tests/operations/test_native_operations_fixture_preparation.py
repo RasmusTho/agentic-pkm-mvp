@@ -457,3 +457,24 @@ def test_raw_maturation_never_rebinds_original_candidate_or_authority(tmp_path, 
     assert store.lookup(preparation.PREPARATION_REQUEST) is None
     assert len(raw_store.all_raw_records()) == 1
     assert not (host.root / "Notes").exists()
+
+
+def test_preparation_never_heals_identity_removed_during_validation(tmp_path, monkeypatch):
+    from app.vault.manager import VaultManager
+    host = environment(tmp_path, monkeypatch)
+    original = VaultManager.validate_vault
+    changed = []
+    def identity_removed(self, root, **kwargs):
+        assert kwargs == {"heal_identity": False}
+        path = root / "settings/vault.md"
+        doc = self.markdown_store.read(path)
+        frontmatter = dict(doc.frontmatter)
+        frontmatter.pop("vaultId")
+        self.markdown_store.write_frontmatter(path, frontmatter, body=doc.body)
+        changed.append(path.read_bytes())
+        return original(self, root, **kwargs)
+    monkeypatch.setattr(VaultManager, "validate_vault", identity_removed)
+    assert invoke(host).exit_code != 0
+    assert (host.root / "settings/vault.md").read_bytes() == changed[0]
+    assert not (host.root / "Notes").exists()
+    assert PROFILE not in host.runtime.registry.lookup(host.binding_id).extensions
