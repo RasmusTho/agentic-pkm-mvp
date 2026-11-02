@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import ctypes
 import tempfile
 import errno
 import fcntl
@@ -29,10 +30,133 @@ _TEMP_FINISHED = ".agentic-pkm-pytest-finished.json"
 _TEMP_CHILD_PREFIX = ".agentic-pkm-pytest-child-"
 _TEMP_PARENT_LOCK = ".agentic-pkm-pytest-parent.lock"
 _TEMP_RETENTION_NS = 7 * 24 * 60 * 60 * 1_000_000_000
+_TEMP_SCAN_SECONDS = 5.0
+_TEMP_SCAN_MAX_ENTRIES = 100_000
 
 
 class _TempParentBusy(OSError):
     """A valid cooperative parent lock could not be acquired in time."""
+
+
+class _DarwinStatFS(ctypes.Structure):
+    # Darwin's public 64-bit struct statfs from sys/mount.h.
+    _fields_ = [
+        ("bsize", ctypes.c_uint32), ("iosize", ctypes.c_int32),
+        ("blocks", ctypes.c_uint64), ("bfree", ctypes.c_uint64), ("bavail", ctypes.c_uint64),
+        ("files", ctypes.c_uint64), ("ffree", ctypes.c_uint64), ("fsid", ctypes.c_int32 * 2),
+        ("owner", ctypes.c_uint32), ("type", ctypes.c_uint32), ("flags", ctypes.c_uint32),
+        ("subtype", ctypes.c_uint32), ("fstype", ctypes.c_char * 16),
+        ("mountpoint", ctypes.c_char * 1024), ("source", ctypes.c_char * 1024),
+        ("flags_ext", ctypes.c_uint32), ("reserved", ctypes.c_uint32 * 7),
+    ]
+
+
+class _LinuxStatFS(ctypes.Structure):
+    # Linux 64-bit struct statfs; unknown ABIs are refused below.
+    _fields_ = [
+        ("type", ctypes.c_long), ("bsize", ctypes.c_long), ("blocks", ctypes.c_ulong),
+        ("bfree", ctypes.c_ulong), ("bavail", ctypes.c_ulong), ("files", ctypes.c_ulong),
+        ("ffree", ctypes.c_ulong), ("fsid", ctypes.c_int32 * 2), ("namelen", ctypes.c_long),
+        ("frsize", ctypes.c_long), ("flags", ctypes.c_long), ("spare", ctypes.c_long * 4),
+    ]
+
+
+def _temp_mount_identity(fd: int) -> tuple[object, ...]:
+    """Identify an ownership-enforcing mount from the held directory descriptor.
+
+    Unknown filesystems and missing mount evidence are not cleanup authority.
+    This checks the OS mount, not adversarial root remounts outside our lock model.
+    """
+    try:
+        if ctypes.sizeof(ctypes.c_void_p) != 8:
+            raise OSError("unsupported mount ABI")
+        if sys.platform == "darwin":
+            result = _DarwinStatFS()
+        elif sys.platform.startswith("linux"):
+            result = _LinuxStatFS()
+        else:
+            raise OSError("unsupported mount platform")
+        libc = ctypes.CDLL(None, use_errno=True)
+        fstatfs = libc.fstatfs
+        fstatfs.argtypes = (ctypes.c_int, ctypes.c_void_p)
+        fstatfs.restype = ctypes.c_int
+        if fstatfs(fd, ctypes.byref(result)) != 0:
+            raise OSError(ctypes.get_errno(), "fstatfs failed")
+        if isinstance(result, _DarwinStatFS):
+            # MNT_IGNORE_OWNERSHIP is not exposed by Python statvfs.f_flag.
+            if (result.fstype not in {b"apfs", b"hfs"} or result.flags & 0x00200000
+                    or result.flags_ext & 0x2):  # FSKit has unverified ownership semantics.
+                raise OSError("unqualified mount ownership")
+            return ("darwin", tuple(result.fsid), result.fstype, result.mountpoint, result.source)
+        # These local Linux filesystems enforce Unix ownership. Network, FUSE,
+        # and unrecognized types are intentionally not inferred to do so.
+        if result.type not in {0xEF53, 0x58465342, 0x9123683E, 0x01021994, 0x794C7630}:
+            raise OSError("unqualified mount ownership")
+        with open(f"/proc/self/fdinfo/{fd}", encoding="ascii") as source:
+            lines = source.read(4097)
+        matches = [line.partition(":")[2].strip() for line in lines.splitlines()
+                   if line.startswith("mnt_id:")]
+        if len(lines) > 4096 or len(matches) != 1 or not matches[0].isdecimal():
+            raise OSError("unavailable mount identity")
+        return ("linux", result.type, tuple(result.fsid), int(matches[0]))
+    except (AttributeError, OSError, ValueError, OverflowError) as exc:
+        raise OSError("pytest mount ownership is not qualified") from exc
+
+
+def _same_temp_mount(parent: Path, fd: int, expected: tuple[object, ...]) -> bool:
+    """Compare the held parent with its current name and original mount."""
+    other = None
+    try:
+        other = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        held, named = os.fstat(fd), os.fstat(other)
+        return ((held.st_dev, held.st_ino) == (named.st_dev, named.st_ino)
+                and _temp_mount_identity(fd) == expected == _temp_mount_identity(other))
+    except OSError:
+        return False
+    finally:
+        if other is not None:
+            os.close(other)
+
+
+def _temp_tree_on_mount(root_fd: int, expected: tuple[object, ...], deadline: float) -> bool:
+    """Refuse a candidate containing another or unprovable mount.
+
+    Never follow links or open special files. A closed, exclusively locked
+    cooperative namespace cannot acquire new entries during this walk.
+    """
+    remaining = _TEMP_SCAN_MAX_ENTRIES
+    def visit(directory_fd: int) -> bool:
+        nonlocal remaining
+        if time.monotonic() >= deadline or _temp_mount_identity(directory_fd) != expected:
+            return False
+        with os.scandir(directory_fd) as entries:
+            for entry in entries:
+                remaining -= 1
+                if remaining < 0 or time.monotonic() >= deadline:
+                    return False
+                before = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(before.st_mode):
+                    continue
+                is_dir = stat.S_ISDIR(before.st_mode)
+                if not is_dir and not stat.S_ISREG(before.st_mode):
+                    return False
+                flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+                if is_dir:
+                    flags |= os.O_DIRECTORY
+                child = os.open(entry.name, flags, dir_fd=directory_fd)
+                try:
+                    opened = os.fstat(child)
+                    if ((opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                            or _temp_mount_identity(child) != expected
+                            or (is_dir and not visit(child))):
+                        return False
+                finally:
+                    os.close(child)
+        return True
+    try:
+        return visit(root_fd)
+    except (OSError, RecursionError):
+        return False
 
 
 def _private_temp_parent(system_temp: Path) -> Path:
@@ -44,17 +168,24 @@ def _private_temp_parent(system_temp: Path) -> Path:
         pass
     info = parent.stat(follow_symlinks=False)
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
-            or stat.S_IMODE(info.st_mode) != 0o700):
+            or stat.S_IMODE(info.st_mode) != 0o700 or not _qualified_temp_parent(parent)):
         raise OSError("pytest default parent is not private")
     return parent
 
 
 def _qualified_temp_parent(parent: Path) -> bool:
+    fd = None
     try:
-        info = parent.stat(follow_symlinks=False)
-        return stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700
+        fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        info = os.fstat(fd)
+        mount = _temp_mount_identity(fd)
+        return (stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+                and stat.S_IMODE(info.st_mode) == 0o700 and _same_temp_mount(parent, fd, mount))
     except OSError:
         return False
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def _lock_temp_parent(parent: Path, *, wait: bool) -> tuple[int, tuple[int, int]]:
@@ -64,8 +195,10 @@ def _lock_temp_parent(parent: Path, *, wait: bool) -> tuple[int, tuple[int, int]
     try:
         root = os.fstat(parent_fd)
         named = os.stat(parent, follow_symlinks=False)
+        mount = _temp_mount_identity(parent_fd)
         if (root.st_uid != os.geteuid() or stat.S_IMODE(root.st_mode) != 0o700
-                or (root.st_dev, root.st_ino) != (named.st_dev, named.st_ino)):
+                or (root.st_dev, root.st_ino) != (named.st_dev, named.st_ino)
+                or not _same_temp_mount(parent, parent_fd, mount)):
             raise OSError("unqualified pytest parent")
         try:
             descriptor = os.open(_TEMP_PARENT_LOCK, os.O_RDWR | os.O_NONBLOCK | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
@@ -92,7 +225,8 @@ def _lock_temp_parent(parent: Path, *, wait: bool) -> tuple[int, tuple[int, int]
         named = os.stat(parent, follow_symlinks=False)
         lock_named = os.stat(_TEMP_PARENT_LOCK, dir_fd=parent_fd, follow_symlinks=False)
         if ((root.st_dev, root.st_ino) != (named.st_dev, named.st_ino)
-                or (lock.st_dev, lock.st_ino) != (lock_named.st_dev, lock_named.st_ino)):
+                or (lock.st_dev, lock.st_ino) != (lock_named.st_dev, lock_named.st_ino)
+                or not _same_temp_mount(parent, parent_fd, mount)):
             raise OSError("pytest parent identity changed")
         result = descriptor
         descriptor = None
@@ -194,6 +328,16 @@ def _temp_parent_locks(parent: Path) -> list[tuple[int, int, str]]:
         for directory in (parent, *parent.parents):
             if not directory.name.startswith((_TEMP_PREFIX, _TEMP_LEGACY_PREFIX)):
                 continue
+            ancestor_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                try:
+                    mount = _temp_mount_identity(ancestor_fd)
+                except OSError:
+                    # Ownership on this mount is unknown: do not treat its
+                    # marker as authority or update its lifetime metadata.
+                    continue
+            finally:
+                os.close(ancestor_fd)
             descriptor, identity = _open_temp_lifetime(directory)
             if descriptor is None:
                 continue
@@ -210,7 +354,8 @@ def _temp_parent_locks(parent: Path) -> list[tuple[int, int, str]]:
                 root_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
                 try:
                     opened = os.fstat(root_fd)
-                    if (opened.st_dev, opened.st_ino) != identity:
+                    if ((opened.st_dev, opened.st_ino) != identity
+                            or not _same_temp_mount(directory, root_fd, mount)):
                         raise OSError("pytest parent namespace changed")
                     child_name = _TEMP_CHILD_PREFIX + uuid.uuid4().hex
                     child_fd = os.open(child_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
@@ -278,6 +423,7 @@ def _prune_expired_temp_roots(parent: Path, *, now_ns: int | None = None) -> Non
     """Reclaim only old, marked, unlocked, dead-owner direct children."""
     if not shutil.rmtree.avoids_symlink_attacks or not _qualified_temp_parent(parent):
         return
+    deadline = time.monotonic() + _TEMP_SCAN_SECONDS
     now = time.time_ns() if now_ns is None else now_ns
     cutoff = now - _TEMP_RETENTION_NS
     try:
@@ -286,13 +432,27 @@ def _prune_expired_temp_roots(parent: Path, *, now_ns: int | None = None) -> Non
         return
     try:
         try:
+            mount = _temp_mount_identity(parent_fd)
+        except OSError:
+            return
+        if not _same_temp_mount(parent, parent_fd, mount):
+            return
+        try:
             with os.scandir(parent_fd) as entries:
-                names = [entry.name for entry in entries if entry.name.startswith(_TEMP_PREFIX)]
+                names = []
+                for index, entry in enumerate(entries):
+                    if index >= _TEMP_SCAN_MAX_ENTRIES or time.monotonic() >= deadline:
+                        return
+                    if entry.name.startswith(_TEMP_PREFIX):
+                        names.append(entry.name)
         except OSError:
             return
         for name in names:
+            if time.monotonic() >= deadline:
+                return
             descriptor = None
             quarantine = None
+            quarantine_identity = None
             parent_lock = None
             try:
                 path = parent / name
@@ -319,13 +479,27 @@ def _prune_expired_temp_roots(parent: Path, *, now_ns: int | None = None) -> Non
                         continue
                 else:
                     continue
+                if not _same_temp_mount(parent, parent_fd, mount):
+                    return
+                candidate_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                       dir_fd=parent_fd)
+                try:
+                    candidate = os.fstat(candidate_fd)
+                    if ((candidate.st_dev, candidate.st_ino) != (owner["device"], owner["inode"])
+                            or not _temp_tree_on_mount(candidate_fd, mount, deadline)):
+                        continue
+                finally:
+                    os.close(candidate_fd)
                 # Rename into a private directory first. A late nested pytest
                 # cannot enter the original pathname after the exclusive lock.
                 quarantine = Path(tempfile.mkdtemp(prefix=".pytest-prune-", dir=parent))
                 quarantine_fd = os.open(quarantine, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
                 try:
+                    quarantine_info = os.fstat(quarantine_fd)
+                    quarantine_identity = (quarantine_info.st_dev, quarantine_info.st_ino)
                     parent_lock, identity = _lock_temp_parent(parent, wait=False)
                     parent_info = os.fstat(parent_fd)
+                    named_quarantine = os.stat(quarantine.name, dir_fd=parent_fd, follow_symlinks=False)
                     final_root = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
                     final_fd, final_owner = _open_temp_owner(path)
                     try:
@@ -333,9 +507,14 @@ def _prune_expired_temp_roots(parent: Path, *, now_ns: int | None = None) -> Non
                     finally:
                         os.close(final_fd)
                     if ((parent_info.st_dev, parent_info.st_ino) != identity
+                            or (named_quarantine.st_dev, named_quarantine.st_ino) != quarantine_identity
+                            or root.st_dev != parent_info.st_dev
                             or (final_root.st_dev, final_root.st_ino) != (owner["device"], owner["inode"])
                             or (final_marker.st_dev, final_marker.st_ino) != (marker.st_dev, marker.st_ino)
-                            or final_owner != owner):
+                            or final_owner != owner
+                            or _temp_mount_identity(quarantine_fd) != mount
+                            or not _same_temp_mount(parent, parent_fd, mount)
+                            or time.monotonic() >= deadline):
                         continue
                     os.rename(name, "owned", src_dir_fd=parent_fd, dst_dir_fd=quarantine_fd)
                     moved = os.stat("owned", dir_fd=quarantine_fd, follow_symlinks=False)
@@ -345,7 +524,9 @@ def _prune_expired_temp_roots(parent: Path, *, now_ns: int | None = None) -> Non
                     # namespace move, not for potentially expensive deletion.
                     os.close(parent_lock)
                     parent_lock = None
-                    shutil.rmtree("owned", dir_fd=quarantine_fd)
+                    if (_temp_mount_identity(quarantine_fd) == mount
+                            and _same_temp_mount(parent, parent_fd, mount)):
+                        shutil.rmtree("owned", dir_fd=quarantine_fd)
                 finally:
                     os.close(quarantine_fd)
             except (OSError, ValueError, json.JSONDecodeError):
@@ -357,9 +538,12 @@ def _prune_expired_temp_roots(parent: Path, *, now_ns: int | None = None) -> Non
                     os.close(descriptor)
                 if parent_lock is not None:
                     os.close(parent_lock)
-                if quarantine is not None:
+                if quarantine is not None and quarantine_identity is not None:
                     try:
-                        quarantine.rmdir()
+                        named = os.stat(quarantine.name, dir_fd=parent_fd, follow_symlinks=False)
+                        if ((named.st_dev, named.st_ino) == quarantine_identity
+                                and _same_temp_mount(parent, parent_fd, mount)):
+                            os.rmdir(quarantine.name, dir_fd=parent_fd)
                     except OSError:
                         pass
     finally:

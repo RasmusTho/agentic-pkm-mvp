@@ -190,12 +190,23 @@ when the owner is absent and the exclusive cleanup lock is available. Missing or
 malformed markers, interrupted runs without a complete end record, uncertain child runs,
 live or unknown owners, symlinks, and failed checks are preserved. Existing unmarked
 namespaces are not migrated or removed; cleanup is best effort and leaves uncertain
-evidence intact. Automatic cleanup is limited to UID-owned 0700 parents and uses a
-common parent lock shared by cooperating harnesses around namespace changes. A same-UID
+evidence intact. Automatic cleanup is limited to UID-owned 0700 parents on qualified
+ownership-enforcing mounts and uses a common parent lock shared by cooperating harnesses
+around namespace changes. macOS `noowners` and unknown filesystem semantics are not
+qualified; mount identity is rechecked before moving or deleting a candidate. A
+candidate with another mount, special files, or uninspectable entries is preserved. The
+parent listing and each candidate scan have a limit of 100,000 entries and share a
+five-second pre-rename budget; an unfinished root requires separately qualified
+maintenance. This does not interrupt a stalled filesystem call or
+bound deletion after rename. An
+unqualified default mount fails setup; an inherited unqualified parent remains available
+for isolated tests without pruning. A same-UID
 or root process deliberately bypassing that advisory lock is outside this boundary;
 an inherited parent that cannot be qualified still supports isolated tests but is
-never pruned. A marked enclosing namespace whose existing owner marker cannot be
-safely opened and pinned fails setup rather than being treated as unmarked legacy.
+never pruned. Markers on unqualified enclosing mounts are left untouched; qualified
+enclosing namespaces retain lifetime fences. On a qualified mount, a marked enclosing
+namespace whose owner marker cannot be safely opened and pinned fails setup rather
+than being treated as unmarked legacy.
 A valid busy lock is waited on for at most 30 seconds, then setup fails
 loudly; cleanup holds it only for final identity checks and the rename, not recursive
 deletion. A malformed default-parent lock also fails setup before collection.
