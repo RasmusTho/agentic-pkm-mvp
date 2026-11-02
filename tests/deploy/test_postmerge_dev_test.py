@@ -1108,6 +1108,28 @@ def test_heavy_verdict_dispatch_payload_is_bounded(monkeypatch):
     assert driver.native_heavy(candidate)['result'] == 'refused'
 
 
+@pytest.mark.parametrize('stderr,forward', [
+    ('acceptance_memory_policy_unconfigured channel=dev isolation=inactive\n' * 2, True),
+    ('private prefix acceptance_memory_policy_unconfigured channel=dev isolation=inactive\n', False),
+    ('acceptance_memory_policy_unconfigured channel=dev isolation=inactive PRIVATE\n', False),
+    ('PRIVATE_CANARY\n', False),
+])
+def test_native_heavy_forwards_only_exact_fixed_memory_advisory(monkeypatch, capsys, stderr, forward):
+    monkeypatch.undo()  # Restore the real entrypoint before replacing its SSH transport.
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    receipt = {'profile_version': 'postmerge-heavy.v1', 'result': 'passed', 'source_sha': SHA,
+               'image_digest': DIGEST, 'channel': 'dev', 'operation_id': candidate.operation_id('dev'),
+               'targets': ['tests/deploy'], 'report_hash': '0' * 64,
+               **{key: value for key, value in HEAVY_PASSED.items() if key != 'result'}}
+    monkeypatch.setattr(driver.subprocess, 'run', lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0, stdout=json.dumps(receipt), stderr=stderr,
+    ))
+    if forward:
+        assert stderr.splitlines() == [driver._HEAVY_MEMORY_UNCONFIGURED] * 2
+    assert driver.native_heavy(candidate) == HEAVY_PASSED
+    assert capsys.readouterr().err == (driver._HEAVY_MEMORY_UNCONFIGURED + '\n' if forward else '')
+
+
 def test_heavy_verdict_dispatch_refuses_after_three_failed_attempts(monkeypatch):
     candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
     monkeypatch.undo()

@@ -20,11 +20,17 @@ only configured or required path; Tailscale is not part of current acceptance or
 - A logical executor profile is independent of network transport, endpoint address, and model
   provider. Product model policy names the logical executor and exact route; deployment config names
   an ordered list of network path profiles.
-- The checked-in Ygg environment configures only `ygg_vlan_primary`. The shared path-adapter
+- The default Ygg environment selects only `ygg_vlan_primary`. The shared path-adapter
   interface can accept additional paths when a future deployment explicitly configures them; no
   Tailscale endpoint, Serve profile, grant, or fallback is required here. Concrete addresses, host
   identities, and secrets remain in host-local config and do not enter Product settings, source
   code, or receipts.
+- DEV/TEST may explicitly select the separate `ygg_tailnet_mtls` profile with
+  `MODEL_ACCESS_EXECUTOR_PATH=tailnet_mtls` and a host-local
+  `MODEL_ACCESS_CODEX_TAILNET_ENDPOINT`. This mTLS adapter accepts only a literal Tailnet IPv4
+  address in `100.64.0.0/10`, reuses the protected client identity references, and does not use
+  Tailscale Serve. The checked-in profile is available source support, not proof of live activation;
+  the default VLAN profile never requires the optional endpoint.
 - The path adapter checks connectivity and performs route-bound preflight without inference. It may
   advance to the next configured path only before completion and only for the same logical executor,
   exact model, reasoning effort, and capability intent. Failover is limited to these typed,

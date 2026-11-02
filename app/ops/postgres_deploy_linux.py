@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import hashlib
 import itertools
 import json
+import logging
 import os
 from pathlib import Path
 import pwd
@@ -3071,14 +3072,20 @@ class LinuxEffects:
                 path.unlink()
 
     def _pg_runner(self, operation_id: str, plan: DeployPlan) -> Any:
+        from app.ops.acceptance_memory import AcceptanceMemoryError, load_policy
         from app.ops.pg_acceptance_runner import PgAcceptanceRunner
         if (not plan.automatic or self.config.channel != plan.channel
             or plan.image_digest is None or self.operation_id not in {None, operation_id}):
             raise PostgresDeployError()
+        try:
+            memory_policy = load_policy(plan.channel)
+        except AcceptanceMemoryError:
+            logging.getLogger(__name__).error('acceptance_memory_policy_invalid channel=%s profile=pg', plan.channel)
+            raise PostgresDeployError() from None
         return PgAcceptanceRunner(self.config.root, self.config.journal.directory,
                                   sha=plan.revision, digest=plan.image_digest,
                                   channel=plan.channel, operation_id=operation_id,
-                                  deadline_signal=_emit_pg_deadline)
+                                  deadline_signal=_emit_pg_deadline, memory_policy=memory_policy)
 
     def verify(self, operation_id: str, plan: DeployPlan) -> dict[str, Any]:
         receipt = self.config.journal.read()
@@ -5706,6 +5713,7 @@ def qualify_heavy(config: LinuxConfig, operation_id: str) -> dict[str, Any]:
     channel resource: the disposable container and work tree are owned by this
     operation under the journal directory. It never gates channel advancement.
     """
+    from app.ops.acceptance_memory import AcceptanceMemoryError, load_policy
     from app.ops.heavy_acceptance import HeavyAcceptanceError
     from app.ops.heavy_acceptance_runner import HeavyAcceptanceRunner
     from app.ops.pg_acceptance import require_pass
@@ -5717,10 +5725,15 @@ def qualify_heavy(config: LinuxConfig, operation_id: str) -> dict[str, Any]:
         raise HeavyAcceptanceError('expected_committed_native_operation_required')
     proof = receipt.pg_acceptance
     require_pass(proof, proof['source_sha'], proof['image_digest'], config.channel, operation_id)
+    try:
+        memory_policy = load_policy(config.channel)
+    except AcceptanceMemoryError:
+        raise HeavyAcceptanceError('acceptance_memory_policy_invalid') from None
     ensure_candidate_object(config, proof['source_sha'])
     return HeavyAcceptanceRunner(config.root, config.journal.directory, sha=proof['source_sha'],
                                  digest=proof['image_digest'], channel=config.channel,
-                                 operation_id=operation_id).verify()
+                                 operation_id=operation_id,
+                                 memory_limit=memory_policy.heavy if memory_policy is not None else None).verify()
 
 
 def main(argv: list[str] | None = None) -> int:

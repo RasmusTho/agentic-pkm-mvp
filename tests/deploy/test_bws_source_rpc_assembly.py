@@ -27,6 +27,9 @@ _ROOT_RPC_BATCHES = {'empty': 5, 'anchored': 4, 'alias': 1, 'proposed': 1, 'unce
 def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path,
               batch: int | None = None, input_count: int = 1, input_index: int = 0) -> None:
     """Run in a disposable interpreter; no native configuration is consulted."""
+    exercise_memory_import = fault == 'memory-import'
+    if exercise_memory_import:
+        fault = 'none'
     scenario = fault.split(':')[1] if fault.startswith('path-diagnostic:') else ''
     topology_scenario = scenario.removesuffix('-runtime-close').removesuffix('-close')
     application_fixture_root = base / 'checkout'
@@ -147,6 +150,10 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
         from app.ops import bws_installation_lifecycle as lifecycle
         from app.ops import bws_installation_transaction as transaction
         from app.ops import postgres_deploy_linux as linux
+        if exercise_memory_import:
+            # Model a long-lived source-only supervisor after actual profile imports.
+            import app.ops.heavy_acceptance_runner  # noqa: F401
+            import app.ops.pg_acceptance_runner  # noqa: F401
         from tests.ops.test_bws_installation_transaction import _ordinary_terminal_installation_fixture
 
         patch = pytest.MonkeyPatch()
@@ -648,6 +655,18 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 candidate_sha=revision, image_digest=request["image_digest"],
                 caller_source_modules=selected.get("caller_source_modules"),
             )
+            if exercise_memory_import:
+                import hashlib
+                rows = {row['module']: row for row in profile['modules']}
+                assert len(rows) <= transaction._MAX_MODULES
+                assert {'app.ops.acceptance_memory', 'app.ops.heavy_acceptance_runner',
+                        'app.ops.pg_acceptance_runner'} <= set(rows)
+                memory_row = rows['app.ops.acceptance_memory']
+                assert memory_row['path'] == 'app/ops/acceptance_memory.py'
+                assert memory_row['sha256'] == hashlib.sha256(
+                    (checkout / memory_row['path']).read_bytes()
+                ).hexdigest()
+                state['memory_import_verified'] = True
             profile["roots"]["application"] = transaction._root_identity(installed)
             canonical = {key: value for key, value in profile.items() if key != "profile_sha256"}
             profile["profile_sha256"] = transaction._sha(json.dumps(
@@ -1064,7 +1083,9 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     sys.stdout = sys.__stdout__
     print(json.dumps({"status": result["status"], "restored": True,
                       "prebackup_gate": result.get("prebackup_gate"),
-                      "source_only": sys.pycache_prefix == "/dev/null"}))
+                      "source_only": sys.pycache_prefix == "/dev/null",
+                      **({'memory_import_verified': state.get('memory_import_verified')}
+                         if exercise_memory_import else {})}))
 
 
 @pytest.mark.parametrize("channel", ["dev", "test"])
@@ -1083,6 +1104,18 @@ def test_assembled_source_rpc_uses_real_descriptor_envelope(secure_tmp_path, cha
     assert completed.returncode == 0, completed.stderr
     result = json.loads(completed.stdout)
     assert result["restored"] is True and result["source_only"] is True
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+def test_assembled_source_profile_includes_acceptance_memory_after_profile_imports(secure_tmp_path, channel):
+    with tempfile.TemporaryDirectory(prefix='pkm-source-journal-') as directory:
+        completed = subprocess.run(
+            [sys.executable, '-m', 'tests.deploy.test_bws_source_rpc_assembly', str(secure_tmp_path),
+             str(Path(__file__).resolve().parents[2]), channel, 'memory-import', str(Path(directory).resolve())],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=90,
+        )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)['memory_import_verified'] is True
 
 
 @pytest.mark.parametrize("channel", ["dev", "test"])

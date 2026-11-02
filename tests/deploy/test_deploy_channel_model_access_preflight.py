@@ -115,6 +115,24 @@ def _run_snapshot(
     )
 
 
+def test_runtime_snapshot_detects_reserved_keys_across_read_boundaries(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime.env"
+    snapshot = tmp_path / "snapshot.env"
+    snapshot.touch()
+    # The detector reads 1 MiB at a time; split the key across that boundary.
+    content = b"#" * (1024 * 1024 - 10) + b"MODEL_ACCESS_EXECUTOR_PATH=tailnet_mtls\n"
+    runtime.write_bytes(content)
+
+    result = _run_snapshot(runtime, tmp_path / "missing-model.env", snapshot)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "reserved\n"
+    assert snapshot.read_bytes() == content
+    # A later path change cannot change the bytes or detection used by Compose.
+    runtime.write_bytes(b"SAFE=value\n")
+    assert snapshot.read_bytes() == content
+
+
 def test_model_access_preflight_exports_only_valid_path_references(
     tmp_path: Path,
 ) -> None:
@@ -155,6 +173,26 @@ def test_missing_optional_model_access_file_clears_inherited_values(
     assert result.returncode == 0, result.stderr
     assert _reported_bindings(result) == {key: "" for key in MODEL_ACCESS_ENV_KEYS}
     assert "optional_missing" in result.stderr
+
+
+def test_missing_model_access_does_not_forward_stale_tailnet_selector(tmp_path: Path) -> None:
+    shell = '''
+set -euo pipefail
+source "$1"
+deploy_channel_model_access_runtime_env_preflight "$2"
+_deploy_channel_signboard_override_document full dev
+'''
+    env = os.environ.copy()
+    env.update({"MODEL_ACCESS_EXECUTOR_PATH": "tailnet_mtls",
+                "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT": "https://100.100.20.30:9443"})
+    result = subprocess.run(
+        ["bash", "-c", shell, "model-access-preflight", str(DEPLOY_COMPOSE_LIB),
+         str(tmp_path / "missing.env")],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "MODEL_ACCESS_EXECUTOR_PATH" not in result.stdout
+    assert "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT" not in result.stdout
 
 
 @pytest.mark.parametrize("recovery", ["automatic", "explicit"])
