@@ -987,6 +987,9 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
   are removed after every completed run. Legacy TEST receipts remain readable. Manual qualification
   does not grant controller promotion authority. Live activation stays #6170/#3347. See
   [Post-merge heavy tests](development/TEST_STRATEGY_HOT_PATH.md#post-merge-heavy-tests).
+- DEV/TEST heavy and native PG acceptance support an optional verified container memory policy.
+  With no policy, they run without these memory caps and report that isolation is inactive. Choose
+  values only after coordinated measurement; see the [deployment policy contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1).
 - GitHub-visible DEV delivery liveness (#6222) runs in `dev-delivery-liveness.yml` on a schedule.
   Inspect the checker JSON `reason` and its signal workflow runs: the default missed-progress
   deadline is six hours, and the controller activity window is two hours. A fresh terminal DEV

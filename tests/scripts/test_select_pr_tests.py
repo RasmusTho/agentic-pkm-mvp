@@ -2807,6 +2807,8 @@ def test_selector_reports_deferred_targets_to_github_output(tmp_path: Path) -> N
     "scripts/lib/deploy_channel_compose.sh",
     "config/deploy/prod.env",
     "app/config/database.py",
+    "app/ops/acceptance_memory.py",
+    "app/ops/pg_acceptance_runner.py",
     "app/release_channels/prepare_promotion.py",
     "ops/scalar-rollback/nginx.conf",
     "tests/deploy/conftest.py",
