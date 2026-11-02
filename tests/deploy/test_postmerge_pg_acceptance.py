@@ -116,8 +116,13 @@ class DockerBoundary:
             self.containers[name] = {
                 'Id': identifier, 'Name': '/' + name, 'Image': IMAGE_ID,
                 'Config': {'Labels': labels}, 'Mounts': mounts,
+                'State': {'OOMKilled': False, 'ExitCode': 0, 'Running': False},
                 'HostConfig': {'NetworkMode': arguments[arguments.index('--network') + 1],
-                               'ReadonlyRootfs': '--read-only' in arguments, 'CapDrop': ['ALL']},
+                               'ReadonlyRootfs': '--read-only' in arguments, 'CapDrop': ['ALL'],
+                               'Memory': (int(arguments[arguments.index('--memory') + 1])
+                                          if '--memory' in arguments else 0) + int(self.fault == 'memory_mismatch'),
+                               'MemorySwap': int(arguments[arguments.index('--memory-swap') + 1])
+                                             if '--memory-swap' in arguments else 0},
             }
             return identifier.encode()
         if arguments[0] == 'rm':
@@ -133,6 +138,10 @@ class DockerBoundary:
                 return b'457 passing cases; no complete envelope'
             if self.fault == 'interrupted':
                 raise KeyboardInterrupt()
+            test_row = next(row for row in self.containers.values() if row['Id'] == arguments[-1])
+            test_row['State'] = {'OOMKilled': self.fault == 'oom_test', 'ExitCode': 0, 'Running': False}
+            if self.fault == 'oom_db':
+                next(row for name, row in self.containers.items() if name.endswith('-db'))['State']['OOMKilled'] = True
             manifest = json.loads((self.runner.directory / 'source/pg-acceptance-manifest.json').read_text())
             result = {**_result(self.runner.identity['source_sha'], self.runner.identity['channel'],
                                self.runner.identity['operation_id']), 'resource_tree': manifest['resource_tree']}
@@ -143,14 +152,18 @@ class DockerBoundary:
             if self.fault == 'profile':
                 result['profile_version'] = 'smoke.v0'
             return ('YGGDRASIL_PG_ACCEPTANCE=' + json.dumps(result)).encode()
+        if arguments[0] == 'start':
+            next(row for row in self.containers.values() if row['Id'] == arguments[-1])['State']['Running'] = True
+            return b''
         return b''
 
 
-def _runner(tmp_path, monkeypatch, *, channel='dev', operation_id=None):
+def _runner(tmp_path, monkeypatch, *, channel='dev', operation_id=None, memory_policy=None):
     root, sha = _repository(tmp_path)
     operation_id = operation_id or str(uuid4())
     runner = runner_module.PgAcceptanceRunner(root, tmp_path / 'journal', sha=sha,
-                                            digest=DIGEST, channel=channel, operation_id=operation_id)
+                                            digest=DIGEST, channel=channel, operation_id=operation_id,
+                                            memory_policy=memory_policy)
     boundary = DockerBoundary(runner)
     monkeypatch.setattr(runner, '_docker', boundary.command)
     return runner, boundary, sha, operation_id

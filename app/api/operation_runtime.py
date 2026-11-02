@@ -397,6 +397,12 @@ def build_production_operation_runtime(
                 raise InvalidDecisionTokenError("operation selection changed at native effect") from exc
             if not valid:
                 raise InvalidDecisionTokenError("operation native effect authority unavailable")
+            if acceptance_effect_started:
+                from app.ops.operations_acceptance import OperationsAcceptanceRefusal, require_effect as require_acceptance_effect
+                try:
+                    require_acceptance_effect(runtime, admitted_intent)
+                except OperationsAcceptanceRefusal:
+                    raise InvalidDecisionTokenError("native operations acceptance admission refused") from None
 
         def capture_owner(arguments: Mapping[str, Any], incoming: Request) -> Any:
             return capture._capture_to_inbox(
@@ -420,11 +426,17 @@ def build_production_operation_runtime(
             if operation_id == UPDATE_OPERATION_ID else None
         )
         if operation_id in {"artifact.move", "artifact.rename"}:
+            def placement_authority(*_: Any) -> bool:
+                # Placement rechecks these ports at its actual publication
+                # seams, including after queue waits and syscall boundaries.
+                require_effect()
+                return True
+
             placement_owner = KnowledgePlacementOwner(
                 vault_root=root, context_ref=context.context_id, vault_generation=str(context.generation),
                 actor=actor, active_context=context, target_binding_id=target_binding_id,
-                registry_store=registry, context_is_current=lambda: validate_token(),
-                authority_is_current=lambda _: validate_token(), filesystem="local-posix-v1",
+                registry_store=registry, context_is_current=placement_authority,
+                authority_is_current=placement_authority, filesystem="local-posix-v1",
             )
             placement_config = PlacementOperationServerConfig(
                 placement_owner, operation_context, artifact_id or "", resource,
@@ -435,13 +447,20 @@ def build_production_operation_runtime(
             canonical = build_archival_operation_handlers(replace(
                 archive_configs[target_binding_id], effect_check=require_effect))
 
+        acceptance_effect_started = False
+
         def invoke_owner(item: OperationRequest) -> Any:
+            nonlocal acceptance_effect_started
             # Revalidate after kernel/process-lock waits and hold the complete
             # MVR-05C window through native source and authority receipts.
-            with context_bound_write_window(context, target_binding_id=target_binding_id,
-                token=token, registry_store=registry,
-                effect_check=require_effect, **binding):
-                return canonical[operation_id](item)
+            acceptance_effect_started = True
+            try:
+                with context_bound_write_window(context, target_binding_id=target_binding_id,
+                    token=token, registry_store=registry,
+                    effect_check=require_effect, **binding):
+                    return canonical[operation_id](item)
+            finally:
+                acceptance_effect_started = False
 
         if native_reconciler is not None:
             def invoke_reconciliation(item: OperationRequest) -> OwnerExecutionResult:
@@ -452,7 +471,17 @@ def build_production_operation_runtime(
                     return native_reconciler(item)
             reconcile_owner = invoke_reconciliation
         handlers = {name: invoke_owner for name in EFFECTS if name not in unavailable}
-        valid_token = validate_token
+        def execution_token(item: OperationRequest, *_: Any) -> bool:
+            from app.ops.operations_acceptance import require_effect as require_acceptance_effect
+            valid = validate_token()
+            if valid:
+                # Reject an out-of-budget test intent before the kernel's
+                # UNKNOWN reservation. Native effect checks consume its slot
+                # only when the actual owner is about to start.
+                require_acceptance_effect(runtime, item, consume=False)
+            return valid
+
+        valid_token = execution_token
         def check_version(item: OperationRequest) -> bool:
             if item.operation_id != operation_id:
                 return False

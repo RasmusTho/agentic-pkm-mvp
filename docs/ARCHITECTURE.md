@@ -379,6 +379,8 @@ See also:
 
 ### Runtime watcher choice
 - Registry watcher is the runtime default; start-system flows and Docker compose use `python -m app.cli watcher run` with `configs/watchers.yaml`.
+- The registry watcher retains debounce- and rate-deferred changes for ordinary retry under current
+  policy; the cursor and recovery boundaries are specified in [Watcher required-delivery cursor semantics](DB_SCHEMA.md#watcher-required-delivery-cursor-semantics).
 - Settings tiering enforcement: watcher dev/lab tuning env vars are ignored in normal runtime (`PKM_SETTINGS_PROFILE=operator`) and require explicit `PKM_SETTINGS_PROFILE=lab`. See `docs/ENVIRONMENTS.md`; this current settings-profile split is a partial control mechanism, not the full environment contract.
 - Legacy snapshot watchers (`vault-watcher-run`, `vault-watcher-daemon`, runtime-loop) are dev-only, require `PKM_SETTINGS_PROFILE=lab`, and are not used in runtime start-system flows or as production surfaces.
 - Store object table is canonicalized to `store_objects`; legacy `objects` rows are best-effort backfilled when `store_objects` is empty so runtime reads/writes stay on one table.
