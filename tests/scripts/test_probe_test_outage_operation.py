@@ -5102,6 +5102,104 @@ def test_whole_caller_normalized_gc_is_finite_and_reload_cannot_clear_failed_sta
     self.assertFalse(any(p.argv == target.systemd("reset-failed") for p in kernel.processes))
 
 
+def test_whole_caller_retains_stop_proof_for_delayed_gc_at_quiescent_boundaries(self):
+    # Reviewer's exact first7 schedule, then one coupled start/profile/cleanup
+    # boundary per later stop. This is a finite producer schedule, not retries.
+    schedules = (("active", 1, 7), ("active", 2, 15), ("inactive", 3, 17), ("absent", 3, 25))
+    for index, (original_service, stop_number, show_number) in enumerate(schedules):
+        with self.subTest(original_service=original_service, stop=stop_number, show=show_number):
+            if index:
+                self.fresh()
+            state = {"resets": 0, "shows": 0, "gc_fired": False}
+
+            def setup(kernel):
+                response = kernel.response
+
+                def manager(argv, payload):
+                    if argv == target.systemd("reset-failed"):
+                        state["resets"] += 1
+                    if (argv == target.systemd("show") and state["resets"] == stop_number
+                            and kernel.unit["ActiveState"] == "inactive"):
+                        record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+                        if record["owned_stops"][-1]["normalization_confirmed"]:
+                            state["shows"] += 1
+                            if state["shows"] == show_number:
+                                state["gc_fired"] = True
+                                kernel.unit.update(
+                                    InvocationID="", ExecMainPID="0", ExecMainCode="0", ExecMainStatus="0",
+                                    ExecMainStartTimestampMonotonic="0", InactiveEnterTimestampMonotonic="0",
+                                    ControlGroup="",
+                                )
+                    return response(argv, payload)
+
+                kernel.response = manager
+
+            kernel = self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                whole_worker=True, original_service=original_service, platform_setup=setup
+            )
+            self.assertTrue(state["gc_fired"])
+            self.assertEqual(3, state["resets"])
+            self.assertEqual("active" if original_service == "active" else "inactive", kernel.unit["ActiveState"])
+            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertTrue(record["disarmed"])
+            self.assertTrue(all(row["normalization_confirmed"] for row in record["owned_stops"]))
+
+
+def test_whole_caller_retained_stop_proof_refuses_resurrection_foreign_or_lost_later_read(self):
+    for index, case in enumerate(("resurrect_old", "foreign_invocation", "lost_later_read")):
+        with self.subTest(case=case):
+            if index:
+                self.fresh()
+            state = {"resets": 0, "shows": 0, "gc_fired": False, "bad_fired": False}
+
+            def setup(kernel):
+                response = kernel.response
+
+                def manager(argv, payload):
+                    if argv == target.systemd("reset-failed"):
+                        state["resets"] += 1
+                    if (argv == target.systemd("show") and state["resets"] == 1
+                            and kernel.unit["ActiveState"] == "inactive"):
+                        record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+                        if record["owned_stops"][-1]["normalization_confirmed"]:
+                            state["shows"] += 1
+                            if state["shows"] == 7:
+                                state["gc_fired"] = True
+                                keys = ("InvocationID", "ExecMainPID", "ExecMainCode", "ExecMainStatus",
+                                        "ExecMainStartTimestampMonotonic", "InactiveEnterTimestampMonotonic",
+                                        "ControlGroup")
+                                state["retained"] = {key: kernel.unit[key] for key in keys}
+                                kernel.unit.update(dict(zip(keys, ("", "0", "0", "0", "0", "0", ""))))
+                            if state["shows"] == 9:
+                                state["bad_fired"] = True
+                                if case == "lost_later_read":
+                                    kernel.forced_returncodes = {argv: 1}
+                                else:
+                                    kernel.unit.update(state["retained"])
+                                    if case == "foreign_invocation":
+                                        kernel.unit["InvocationID"] = "f" * 32
+                    return response(argv, payload)
+
+                kernel.response = manager
+
+            with self.assertRaises(Exception) as caught:
+                self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                    whole_worker=True, platform_setup=setup
+                )
+            self.assertIn(type(caught.exception).__name__, {"Unknown", "Refusal"})
+            self.assertTrue(state["gc_fired"] and state["bad_fired"])
+            self.assertEqual(1, state["resets"])
+            kernel = self.lifecycle_kernel
+            effects = [p.argv[1] for p in kernel.processes if p.argv in {
+                target.systemd("stop"), target.systemd("reset-failed"), target.systemd("start")
+            }]
+            self.assertEqual(["stop", "reset-failed"], effects)
+            self.assertFalse(self.h.deliveries)
+            self.assertFalse(kernel.os.fds)
+            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertFalse(record["disarmed"])
+
+
 for _name, _value in list(globals().items()):
     if _name.startswith("test_") and callable(_value):
         setattr(NativeBindingTests, _name, _value)

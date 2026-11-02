@@ -832,7 +832,7 @@ def unit_profile(unit: dict[str, str], *, cleanup: bool = False) -> dict[str, An
     }
 
 
-@dataclass(frozen=True)
+@dataclass
 class OwnedStop:
     """One acknowledged stop of the previously qualified normal incarnation."""
 
@@ -840,6 +840,8 @@ class OwnedStop:
     intent_usec: int
     handle_sha256: str
     normalized: bool = False
+    exit_identity: tuple[str, str] = ("1", "143")
+    gc_cleared: bool = False
 
     def require(self, unit: dict[str, str]) -> None:
         previous = dict(self.before)
@@ -896,9 +898,10 @@ class OwnedStop:
             or unit["Result"] != "success"
             or unit_profile(unit) != unit_profile(previous)
             or unit["ControlGroup"] not in {"", previous["ControlGroup"]}
+            or (self.gc_cleared and identity[0] != "")
             or identity not in {
                 (previous["InvocationID"], previous["MainPID"],
-                 previous["ExecMainStartTimestampMonotonic"], "1", "143"),
+                 previous["ExecMainStartTimestampMonotonic"], *self.exit_identity),
                 ("", "0", "0", "0", "0"),
             }
             or (
@@ -911,6 +914,9 @@ class OwnedStop:
             )
         ):
             raise Unknown("owned_stop_normalization_not_positively_inactive")
+        # This proof survives all quiescent consumers, so clearing is one-way
+        # across reads as well as inside one reader snapshot.
+        self.gc_cleared = not bool(identity[0])
 
 
 def test_credential_property() -> tuple[str, ...]:
@@ -1781,11 +1787,14 @@ class TestProbeAdapter:
         self.transitions = Transitions()
         self.stop_guard: NativeFaultGuard | None = None
         self.owned_stops: list[dict[str, Any]] = []
+        self.stopped_proof: OwnedStop | None = None
 
     def _observe(
         self, *, active: bool, health: bool = False, owned_stop: OwnedStop | None = None
     ) -> tuple[dict[str, str], Runtime]:
         assert self.current_config is not None
+        if not active and owned_stop is None:
+            owned_stop = self.stopped_proof
         if owned_stop is not None and (
             active or owned_stop.handle_sha256 != self.caller.original_handle
         ):
@@ -1912,16 +1921,19 @@ class TestProbeAdapter:
                 raise Unknown("owned_stop_physical_guard_unbound")
             self.stop_guard.retain_owned_stop(proof, unit, evidence)
         self.owned_stops.append(evidence)
+        normalized = replace(
+            proof, normalized=True, exit_identity=(unit["ExecMainCode"], unit["ExecMainStatus"])
+        )
         if unit["ActiveState"] == "failed":
             # This is the only ResetFailed call site. Its intent and finite
             # last-exit metadata are retained before the one bounded effect.
             self.caller.run(systemd("reset-failed"), effect=True)
-            unit, runtime = self._observe(active=False, owned_stop=replace(proof, normalized=True))
-            proof.require_normalized(unit)
+            unit, runtime = self._observe(active=False, owned_stop=normalized)
             self._preserved()
             evidence["normalization_confirmed"] = True
             if self.stop_guard is not None:
                 self.stop_guard.finish_owned_stop(evidence)
+        self.stopped_proof = normalized
         self.unit, self.runtime = unit, runtime
         self.state = "quiescent_fault" if self.state == "fault_running" else "quiescent_healthy"
 
@@ -2045,6 +2057,7 @@ class TestProbeAdapter:
         intent_usec = int(self.caller.clock() * 1_000_000)
         self.caller.begin("start_test_" + phase)
         self.caller.run(systemd("start"), effect=True)
+        self.stopped_proof = None
         unit, runtime = self._observe(active=True)
         if int(unit["ExecMainStartTimestampMonotonic"]) < intent_usec:
             raise Unknown("new_start_not_bound_to_original_intent")
@@ -4597,6 +4610,7 @@ def run_fixed_test_worker(
         result["temporary_installation"] = installation.restore_and_cleanup(already_stopped=True)
     else:
         caller.run(systemd("start"), effect=True)
+        adapter.stopped_proof = None
         adapter.unit, adapter.runtime = adapter._observe(active=True, health=True)
     guard.disarm()
     # Core observations, including tests with substituted ports, cannot mint
@@ -5127,6 +5141,10 @@ class NativeFaultGuard:
 
     @fs_guard
     def remove_marker(self) -> None:
+        if self.adapter.stopped_proof is None:
+            raise Unknown("owned_marker_removal_without_retained_stop_proof")
+        self.adapter._observe(active=False)
+        self.adapter._preserved()
         parent = self.io.directory(self.parent_path)
         try:
             meta = self.ops.stat(self.marker, dir_fd=parent, follow_symlinks=False)
@@ -5162,6 +5180,15 @@ class NativeFaultGuard:
         restored = parse_unit(read_test_unit(self.caller.run))
         if unit_profile(restored) != unit_profile(self.before_unit):
             raise Unknown("original_unit_profile_not_restored_after_owned_marker")
+        # Only this already-verified own marker removal changes the profile
+        # bound by the retained stop. Its original incarnation/GC state survives.
+        proof = self.adapter.stopped_proof
+        previous = dict(proof.before)
+        previous.update({key: restored[key] for key in UNIT_KEYS if key not in VOLATILE})
+        self.adapter.stopped_proof = replace(proof, before=tuple(sorted(previous.items())))
+        self.adapter.original_unit = dict(self.before_unit)
+        self.adapter._observe(active=False)
+        self.adapter._preserved()
 
     def disarm(self) -> None:
         self.record["disarmed"] = True
