@@ -1,0 +1,321 @@
+"""Real operator CLI → native owners → baked preparation → real API admission.
+
+Only physical Docker/volume ports and the test clock are substituted. The older
+operations harness's manual source assembly/RAW timestamp edits are never used.
+These isolated source tests are not live native acceptance evidence.
+"""
+from __future__ import annotations
+
+from contextlib import redirect_stdout
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+import io
+import json
+import secrets
+import sys
+from types import SimpleNamespace
+
+from click.testing import CliRunner
+from fastapi.testclient import TestClient
+import pytest
+
+from app.api.app import app
+from app.cli import cli
+from app.instance.local_operator_principal import AuthPosture
+from app.instance.runtime import open_default_vault_service, open_local_operator_principal_store
+from app.operations.execution_kernel import JsonReceiptStore
+from app.ops import native_operations_fixture as preparation
+from app.ops.native_operations_acceptance_runner import NativeChannel
+from app.ops.operations_acceptance import CONTEXT_FILE, PROFILE, OperationsAcceptanceRefusal, file_hash
+from tests._mvr_default_vault_harness import new_runtime, activate
+from tests._mvr03_principal_harness import run_principal_cutover
+from tests.api._vault_test_helpers import bind_initialized_vault
+from tests.operations._operations_acceptance_harness import NativeFixturePorts, OPERATION, ROOT
+
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
+
+def environment(tmp_path, monkeypatch, *, channel="dev"):
+    runtime = new_runtime(tmp_path, channel=channel)
+    root = tmp_path / "synthetic-vault"
+    root.mkdir()
+    manager = bind_initialized_vault(monkeypatch, root, store_dir=tmp_path, channel=channel)
+    registration = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    activate(runtime, registration, tmp_path)
+    run_principal_cutover(runtime, channel_id=channel, posture=AuthPosture(
+        configured_credentials=0, credential=None, loopback_listener_proven=True, companion_proxy_configured=False))
+    runtime.complete_initialization(registration.vault_binding_id, vault_id=manager.context.active_vault_id,
+                                    local_instance_id=registration.local_instance_id)
+    open_default_vault_service(runtime.registry.path).set(registration.vault_binding_id)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "false")
+    facts = SimpleNamespace(identity={"channel": channel}, runtime=runtime)
+    native = NativeFixturePorts(facts, tmp_path, monkeypatch)
+    original_port = native.runner.command
+    source_hash = preparation.file_hash
+    # Physical /app mount translation only; hashes still read actual bytes.
+    monkeypatch.setattr(preparation, "file_hash", lambda path, **kwargs:
+        source_hash(ROOT / path.relative_to("/app"), **kwargs) if path.is_relative_to("/app") else source_hash(path, **kwargs))
+    monkeypatch.setenv("VCS_REF", native.sha)
+    calls = []
+    def docker(argv, *, payload=None, cwd=None):
+        if "app.ops.native_operations_fixture" not in argv:
+            return original_port(argv, payload=payload, cwd=cwd)
+        assert argv == ["docker", "exec", "-i", native.api_id, "python", "-m", "app.ops.native_operations_fixture"]
+        calls.append(payload)
+        output = io.StringIO()
+        with monkeypatch.context() as patch:
+            patch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+            with redirect_stdout(output):
+                code = preparation.main()
+        if code:
+            raise OperationsAcceptanceRefusal("native_preparation_port_refused")
+        return output.getvalue()
+    monkeypatch.setattr(native.runner, "command", docker)
+    principal = open_local_operator_principal_store(runtime.registry.path).require()
+    result = SimpleNamespace(runtime=runtime, root=root, binding_id=registration.vault_binding_id,
+        principal_id=principal.local_operator_role_id, instance_identity=runtime.registry.load().app_install_id,
+        native=native, calls=calls, manager=manager)
+    if channel == "test":
+        archive_authority(result, tmp_path, monkeypatch)
+    return result
+
+
+def archive_authority(host, tmp_path, monkeypatch):
+    from app.heimdal import consent_ledger, local_archive, raw_store, raw_liveness, raw_read_gate
+    from app.heimdal.settings_notes import write_settings_note, SettingsNote, SETTINGS
+    from app.ops import heimdal_cold_volume as volume
+    raw_store.reset_memory_raw_store()
+    raw_liveness.reset_memory_deletion_receipts()
+    raw_read_gate.reset_memory_raw_read_receipts()
+    consent_ledger.reset_memory_consent_ledger()
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", secrets.token_bytes(32).hex())
+    monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", local_archive.OPERATION_RESTORE_SERVICE)
+    config = tmp_path / "archive-config"
+    config.mkdir()
+    monkeypatch.setenv("PKM_CONFIG_ROOT", str(config))
+    cold = tmp_path / "cold-volume"
+    cold.mkdir()
+    metadata = SimpleNamespace(mountpoint=cold, archive_id="synthetic-operations", channel="test")
+    def ready(*args, **kwargs):
+        return volume._issue_archive_volume_ready(metadata.archive_id, cold, _issuer=volume._ARCHIVE_VOLUME_READY_ISSUER)
+    for module in (volume, local_archive):
+        monkeypatch.setattr(module, "load_channel_archive_metadata", lambda **kwargs: metadata)
+        monkeypatch.setattr(module, "require_archive_volume_ready", ready)
+    write_settings_note(host.root, SettingsNote(spec=SETTINGS, values={"retention_window_days": 30}))
+    host.grant = consent_ledger.grant_consent(grant_ref=PROFILE + ":" + OPERATION, basis="self_record",
+        scope=PROFILE + ":" + OPERATION, granted_by=host.principal_id,
+        payload={"instance_identity": host.instance_identity, "vault_binding_id": host.binding_id})
+    host.clock = SimpleNamespace(now=datetime.now(timezone.utc))
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return host.clock.now.astimezone(tz) if tz else host.clock.now.replace(tzinfo=None)
+    # A normal insert observes this clock. Later eligibility observes its real
+    # original timestamp against a later test time; no record/backend is edited.
+    monkeypatch.setattr(raw_store, "datetime", Clock)
+    monkeypatch.setattr(preparation, "datetime", Clock)
+
+
+def invoke(host, *, stage=False, **overrides):
+    values = {"binding-id": host.binding_id, "principal-id": host.principal_id,
+              "instance-id": host.instance_identity, **overrides}
+    argv = ["ops", "prepare-operations-fixture", host.native.channel, OPERATION]
+    for name, value in values.items():
+        argv += ["--" + name, value]
+    argv += ["--confirm-synthetic-setup"]
+    if stage:
+        argv += ["--stage-raw"]
+    return CliRunner().invoke(cli, argv, catch_exceptions=False)
+
+
+def prepared(tmp_path, monkeypatch, channel):
+    host = environment(tmp_path, monkeypatch, channel=channel)
+    if channel == "test":
+        staged = invoke(host, stage=True)
+        assert staged.exit_code == 0, staged.output
+        assert json.loads(staged.output)["status"] == "convergence_pending"
+        host.clock.now += timedelta(days=8)
+    result = invoke(host)
+    assert result.exit_code == 0, result.output
+    host.preparation = json.loads(result.output)
+    return host
+
+
+@pytest.mark.parametrize("channel", ["test", "dev"])
+def test_operator_preparation_uses_original_operation_and_existing_authority(tmp_path, monkeypatch, channel):
+    from app.api.native_operations_acceptance import source_templates
+    from app.vault.paths import get_vault_capture_note_rel
+    host = prepared(tmp_path, monkeypatch, channel)
+    assert host.preparation["status"] == "succeeded"
+    assert host.calls[-1]["identity"]["operation_id"] == OPERATION
+    assert host.calls[-1]["identity"]["native_receipt_sha256"]
+    snapshot = host.runtime.registry.load()
+    registration = snapshot.registrations[host.binding_id]
+    assert registration.extensions[PROFILE] == {"operation_id": OPERATION}
+    assert snapshot.last_active_vault_ref == registration.ref
+    assert snapshot.app_install_id == host.instance_identity
+    assert open_local_operator_principal_store(host.runtime.registry.path).require().local_operator_role_id == host.principal_id
+    sources = source_templates(OPERATION)
+    sources["capture"]["path"] = get_vault_capture_note_rel(host.root)
+    for source in sources.values():
+        assert file_hash(host.root / source["path"]) == source["seed_sha256"]
+    receipts = [item["payload"] for item in host.preparation["items"] if "authority_receipt" in item["payload"]]
+    assert len(receipts) == len(sources)
+    assert all(row["authority_receipt"]["actor"] == host.principal_id for row in receipts)
+    assert not (host.runtime.registry.path.parent / CONTEXT_FILE).exists()
+
+
+@pytest.mark.parametrize("channel", ["test", "dev"])
+def test_prepared_fixture_qualifies_real_native_operations_admission(tmp_path, monkeypatch, channel):
+    from app.api.routes import active_context_selection
+    from app.ops.operations_acceptance import load_context
+    host = prepared(tmp_path, monkeypatch, channel)
+    native = NativeChannel(channel, OPERATION)
+    result = native.admit()
+    assert result["binding_id"] == host.binding_id
+    assert result["principal_id"] == host.principal_id
+    active_context_selection.reset_selection_store_for_tests()
+    with TestClient(app) as client:
+        selected = client.post("/api/companion/active-context/selection", json={"vault_binding_ids": [host.binding_id]})
+        assert selected.status_code == 201, selected.text
+        frozen = client.post("/api/operations/acceptance/admission", json={},
+            headers={"X-Active-Context-Session": selected.json()["context_selection_id"]})
+        assert frozen.status_code == 200, frozen.text
+    context = load_context(host.runtime.registry.path, required=True)
+    assert len(context["slots"]) == (15 if channel == "test" else 1)
+    assert bool(context["fixture"]["raw_source"]) == (channel == "test")
+
+
+@pytest.mark.parametrize("fault", ["principal", "instance", "binding", "intent", "candidate", "operation",
+    "foreign_source", "symlink", "profile", "consent", "archive", "reader", "key", "retention", "too_young"])
+def test_preparation_refuses_unqualified_inputs_without_dependent_effects(tmp_path, monkeypatch, fault):
+    from app.heimdal import consent_ledger, raw_store
+    from app.heimdal.settings_notes import write_settings_note, SettingsNote, SETTINGS
+    from app.instance.runtime import local_operator_storage_capability
+    from app.ops import heimdal_cold_volume as volume
+    host = environment(tmp_path, monkeypatch, channel="test")
+    if fault == "principal":
+        result = invoke(host, stage=True, **{"principal-id": "unissued"})
+    elif fault == "instance":
+        result = invoke(host, stage=True, **{"instance-id": "unissued"})
+    elif fault == "binding":
+        result = invoke(host, stage=True, **{"binding-id": "unissued"})
+    elif fault == "intent":
+        result = CliRunner().invoke(cli, ["ops", "prepare-operations-fixture", "test", OPERATION,
+            "--binding-id", host.binding_id, "--principal-id", host.principal_id, "--instance-id", host.instance_identity])
+    else:
+        if fault == "candidate":
+            host.native.api_command = ["python", "foreign.py"]
+        elif fault == "operation":
+            host.native.journal.write(OPERATION, "failed")
+        elif fault == "foreign_source":
+            (host.root / "personal.md").write_text("Preserve this unrelated user note.")
+        elif fault == "symlink":
+            (host.root / "foreign").symlink_to(tmp_path)
+        elif fault == "profile":
+            row = host.runtime.registry.lookup(host.binding_id)
+            host.runtime.registry.update_registration(replace(row, extensions={**row.extensions, PROFILE: {"operation_id": "foreign"}}),
+                _capability=local_operator_storage_capability())
+        elif fault == "consent":
+            consent_ledger.revoke_consent(grant_ref=host.grant.grant_ref, revoked_by=host.principal_id)
+        elif fault == "archive":
+            def unavailable(*args, **kwargs):
+                raise RuntimeError("unavailable physical volume")
+            monkeypatch.setattr(volume, "require_archive_volume_ready", unavailable)
+        elif fault == "reader":
+            monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", "foreign-reader")
+        elif fault == "key":
+            monkeypatch.delenv("HEIMDAL_RAW_STORE_KEY")
+        elif fault == "retention":
+            write_settings_note(host.root, SettingsNote(spec=SETTINGS, values={"retention_window_days": 7}))
+        elif fault == "too_young":
+            assert invoke(host, stage=True).exit_code == 0
+        before = {p.relative_to(host.root).as_posix(): p.read_bytes() for p in host.root.rglob("*") if p.is_file()}
+        result = invoke(host, stage=fault != "too_young")
+        after = {p.relative_to(host.root).as_posix(): p.read_bytes() for p in host.root.rglob("*") if p.is_file()}
+        assert before == after
+    assert result.exit_code != 0
+    assert not (host.root / "Notes").exists()
+    if fault != "too_young":
+        assert raw_store.all_raw_records() == []
+
+
+def test_partial_preparation_preserves_original_receipts_and_no_replay(tmp_path, monkeypatch):
+    import app.knowledge.write_ops as writes
+    host = environment(tmp_path, monkeypatch)
+    original = writes.write_note_relative
+    calls = []
+    def lost_ack(*args, **kwargs):
+        receipt = original(*args, **kwargs)
+        calls.append(receipt)
+        if len(calls) == 2:
+            raise OSError("physical publication acknowledgement lost")
+        return receipt
+    monkeypatch.setattr(writes, "write_note_relative", lost_ack)
+    assert invoke(host).exit_code != 0
+    store = JsonReceiptStore(host.runtime.registry.path.parent / "operation-receipts.json")
+    original_receipt = store.lookup(preparation.PREPARATION_REQUEST).outcome.to_dict()
+    assert original_receipt["status"] == "recovery_required"
+    assert len(original_receipt["items"]) == 1
+    files = {str(p): p.read_bytes() for p in host.root.rglob("*.md")}
+    assert invoke(host).exit_code != 0
+    assert len(calls) == 2
+    assert original_receipt == store.lookup(preparation.PREPARATION_REQUEST).outcome.to_dict()
+    assert files == {str(p): p.read_bytes() for p in host.root.rglob("*.md")}
+
+
+def test_preparation_does_not_replenish_acceptance_authority(tmp_path, monkeypatch):
+    from app.operations.contracts import OperationContext, OperationOutcome, OperationStatus
+    host = prepared(tmp_path, monkeypatch, "dev")
+    store = JsonReceiptStore(host.runtime.registry.path.parent / "operation-receipts.json")
+    consumed = "ygg.acceptance:" + OPERATION + ":dev-smoke"
+    store.reserve(consumed, "unchanged", OperationOutcome(consumed, OperationStatus.RECOVERY_REQUIRED,
+        "artifact.update", OperationContext("original-selection")))
+    record = store.lookup(consumed).outcome.to_dict()
+    assert invoke(host).exit_code == 0  # Original receipt observation only.
+    original_files = {str(p): p.read_bytes() for p in host.root.rglob("*.md")}
+    changed = dict(host.calls[-1])
+    changed["identity"] = {**changed["identity"], "operation_id": "65600000-0000-4000-8000-000000000002"}
+    with pytest.raises(OperationsAcceptanceRefusal, match="original_preparation_binding_changed"):
+        preparation.prepare_fixture(changed, registry_path=host.runtime.registry.path)
+    assert store.lookup(consumed).outcome.to_dict() == record
+    assert original_files == {str(p): p.read_bytes() for p in host.root.rglob("*.md")}
+
+
+def test_runner_and_api_qualification_never_provision_missing_fixture(tmp_path, monkeypatch):
+    from app.api.routes import active_context_selection
+    host = environment(tmp_path, monkeypatch)
+    before = {str(p): p.read_bytes() for p in host.root.rglob("*.md")}
+    with pytest.raises(OperationsAcceptanceRefusal, match="canonical_isolated_fixture_missing"):
+        NativeChannel("dev", OPERATION).admit()
+    active_context_selection.reset_selection_store_for_tests()
+    with TestClient(app) as client:
+        selected = client.post("/api/companion/active-context/selection", json={"vault_binding_ids": [host.binding_id]})
+        assert selected.status_code == 201
+        response = client.post("/api/operations/acceptance/admission", json={},
+            headers={"X-Active-Context-Session": selected.json()["context_selection_id"]})
+        assert response.status_code == 409
+    assert not host.calls
+    assert before == {str(p): p.read_bytes() for p in host.root.rglob("*.md")}
+
+
+def test_raw_staging_retains_real_time_receipt_and_waits_for_owner_eligibility(tmp_path, monkeypatch):
+    from app.api.native_operations_acceptance import raw_fixture_bytes
+    from app.heimdal import raw_store, local_archive
+    host = environment(tmp_path, monkeypatch, channel="test")
+    staged = invoke(host, stage=True)
+    assert staged.exit_code == 0, staged.output
+    original = json.loads(staged.output)
+    record = raw_store.get_raw_record_by_content_identity(raw_store.compute_raw_content_identity(raw_fixture_bytes(OPERATION)))
+    assert record.ingested_at == host.clock.now
+    assert local_archive.archive_eligible(record, now=host.clock.now, retention_window_days=30) is False
+    assert json.loads(invoke(host, stage=True).output) == original
+    assert len(raw_store.all_raw_records()) == 1
+    assert invoke(host).exit_code != 0
+    host.clock.now += timedelta(days=8)
+    assert local_archive.archive_eligible(record, now=host.clock.now, retention_window_days=30)
+    assert invoke(host).exit_code == 0
+    assert raw_store.get_raw_record_by_content_identity(record.content_identity).ingested_at == record.ingested_at
