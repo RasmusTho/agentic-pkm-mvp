@@ -171,9 +171,14 @@ The fixed Linux `heimdal-external-alerts` consumer source supports explicit DEV,
 DEV and TEST resolve only `non-prod` / `shared/discord.webhook`; PROD uses the existing `prod`
 binding. Endpoint, heartbeat, state, and alert-channel configuration remain explicit. The existing
 installer remains TEST/PROD-only, and its shared `/opt/yggdrasil/host-probe` package is not a DEV
-installation plan. Native DEV configuration, installation, healthy baseline, effect window, drill,
-and restoration remain separately qualified with the Product keeper. No live DEV proof is claimed,
-and #4076's controlled live TEST AC4 remains pending.
+installation plan. The [2026-11-02 accepted DEV drill](https://github.com/RasmusTho/agentic-pkm-mvp/pull/6509#issuecomment-6572302498)
+qualified a healthy baseline before temporary probe installation and ran through the normal fixed
+consumer: one confirmed down, two later completed duplicate-suppression cycles, and one recovery
+with the same correlation. It restored the original absent service and state, configuration and
+runtime paths, removed the temporary probe artifacts, and positively closed the original processes,
+resources and transport without rewinding normal history. This is bounded DEV acceptance, not a
+permanent DEV installation or a continuing health guarantee. Each later operation still requires its
+own qualified baseline and compatible keeper window; #4076's controlled live TEST AC4 remains pending.
 The source template leads with `DEV hälsoproblem`, `TEST hälsoproblem`, or `PROD hälsoproblem`, not a
 claim of total outage. It names failed required checks from the finite health-producer mapping
 and mandatory runtime database, worker and model components. Optional failures are excluded;

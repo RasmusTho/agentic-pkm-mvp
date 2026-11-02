@@ -991,6 +991,10 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
 - DEV/TEST heavy and native PG acceptance support an optional verified container memory policy.
   With no policy, they run without these memory caps and report that isolation is inactive. Choose
   values only after coordinated measurement; see the [deployment policy contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1).
+- DEV/TEST base Compose services and the native PG/heavy acceptance containers specify bounded Docker
+  json-file logs. Existing containers acquire these limits only on controlled recreation; separate
+  containers and other storage consumers remain outside this setting. See the
+  [deployment procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure).
 - GitHub-visible DEV delivery liveness (#6222) runs in `dev-delivery-liveness.yml` on a schedule.
   Inspect the checker JSON `reason` and its signal workflow runs: the default missed-progress
   deadline is six hours, and the controller activity window is two hours. A fresh terminal DEV
@@ -1385,10 +1389,19 @@ The fixed Linux launcher and shared probe source accept explicit `dev`, `test`, 
 DEV and TEST bind this consumer to `non-prod` and `shared/discord.webhook`, while PROD uses `prod`.
 Endpoint, heartbeat, state, and alert-channel inputs remain explicit. The existing
 `scripts/install_host_probe.py` installer remains TEST/PROD-only; its shared
-`/opt/yggdrasil/host-probe` package is not a DEV installation plan. Native DEV configuration,
-installation, baseline, and drill qualification remain pending with the Product keeper. DEV
-source support does not upgrade the dated production installation below or satisfy #4076's
-pending live TEST AC4.
+`/opt/yggdrasil/host-probe` package is not a DEV installation plan.
+The [2026-11-02 accepted DEV receipt](https://github.com/RasmusTho/agentic-pkm-mvp/pull/6509#issuecomment-6572302498)
+records operation `062b7585684f4a4b9f89921957a3f300` on `ygg-dev`, using probe source
+`afb7990f61a97a5616e7c4a795578ddca1ca1b4e` and the normal fixed `heimdal-external-alerts`
+consumer. Independent readyz, required health and worker-heartbeat/backing checks qualified the
+baseline before temporary installation. The controlled probe-target fault produced one confirmed
+down, two later completed duplicate-suppression cycles, and one recovery with the same correlation.
+The original service and state were absent and were restored absent; configuration, runtime paths
+and temporary artifacts were restored, the independent guard was disarmed, and all original
+processes, resources and transport were positively closed. Normal incident/controller/ACK history
+was not rewound. This proves the bounded DEV drill, not a permanent installation, future health,
+an application upgrade, or #4076's still-pending controlled live TEST AC4. The dated production
+installation below retains its separate source and observation scope.
 The service has no Docker startup dependency and reads the worker heartbeat from the host volume.
 The prior Mac LaunchAgent and plist remain legacy templates. The installer
 `scripts/install_host_probe.py` prints a plan by default; host writes require `--apply` from a clean
