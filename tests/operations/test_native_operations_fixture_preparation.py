@@ -285,13 +285,29 @@ def test_partial_preparation_preserves_original_receipts_and_no_replay(tmp_path,
 
 
 def test_preparation_does_not_replenish_acceptance_authority(tmp_path, monkeypatch):
-    from app.operations.contracts import OperationContext, OperationOutcome, OperationStatus
+    from app.api.routes import active_context_selection
     host = prepared(tmp_path, monkeypatch, "dev")
+    NativeChannel("dev", OPERATION).admit()
+    active_context_selection.reset_selection_store_for_tests()
+    client = TestClient(app)
+    selected = client.post("/api/companion/active-context/selection", json={"vault_binding_ids": [host.binding_id]})
+    assert selected.status_code == 201
+    headers = {"X-Active-Context-Session": selected.json()["context_selection_id"]}
+    frozen = client.post("/api/operations/acceptance/admission", json={}, headers=headers)
+    assert frozen.status_code == 200, frozen.text
+    binding = frozen.json()
+    selection = binding["selection"]
+    command = {**binding["slots"][0]["intent"], "request_id": "acceptance:" + OPERATION + ":dev-smoke",
+        "active_context_ref": selection["context_id"], "vault_generation": str(selection["generation"]),
+        "target_binding_id": host.binding_id}
+    applied = client.post("/api/operations", json=command, headers=headers)
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["status"] in {"succeeded", "convergence_pending"}
     store = JsonReceiptStore(host.runtime.registry.path.parent / "operation-receipts.json")
     consumed = "ygg.acceptance:" + OPERATION + ":dev-smoke"
-    store.reserve(consumed, "unchanged", OperationOutcome(consumed, OperationStatus.RECOVERY_REQUIRED,
-        "artifact.update", OperationContext("original-selection")))
     record = store.lookup(consumed).outcome.to_dict()
+    context_file = host.runtime.registry.path.parent / CONTEXT_FILE
+    original_context = context_file.read_bytes()
     assert invoke(host).exit_code == 0  # Original receipt observation only.
     original_files = {str(p): p.read_bytes() for p in host.root.rglob("*.md")}
     changed = dict(host.calls[-1])
@@ -300,6 +316,14 @@ def test_preparation_does_not_replenish_acceptance_authority(tmp_path, monkeypat
         preparation.prepare_fixture(changed, registry_path=host.runtime.registry.path)
     assert store.lookup(consumed).outcome.to_dict() == record
     assert original_files == {str(p): p.read_bytes() for p in host.root.rglob("*.md")}
+    fresh = client.post("/api/companion/active-context/selection", json={"vault_binding_ids": [host.binding_id]})
+    assert fresh.status_code == 201
+    refused = client.post("/api/operations/acceptance/admission", json={},
+        headers={"X-Active-Context-Session": fresh.json()["context_selection_id"]})
+    assert refused.status_code != 200
+    assert store.lookup(consumed).outcome.to_dict() == record
+    assert context_file.read_bytes() == original_context
+    client.close()
 
 
 def test_runner_and_api_qualification_never_provision_missing_fixture(tmp_path, monkeypatch):
