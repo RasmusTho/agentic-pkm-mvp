@@ -414,7 +414,7 @@ def _expand_and_balance_parallel(
 
     def heavy_module(candidate: tuple[str, ...]) -> str | None:
         first = next(target for target in candidate if not target.startswith("-"))
-        return next((module for module in (SOURCE_RPC_MODULE, NATIVE_ADMISSION_MODULE)
+        return next((module for module in MEASURED_NODE_MODULES
                      if first.startswith(module + "::")), None)
 
     # Keep the measured long modules' independently planned units in separate
