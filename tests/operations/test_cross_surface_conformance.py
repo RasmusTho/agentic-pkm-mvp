@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+import os
+from urllib.parse import quote
 
 import pytest
 
@@ -112,3 +114,62 @@ def test_all_operation_families_share_owner_native_semantics(tmp_path, monkeypat
         assert mcp.payload('mimer.v2.batch.inspect', reference)['items'] == batch['items']
         assert companion.get('/api/operations/batches/' + reference['batch_id'],
             params={'expected_digest': reference['expected_digest']}).json()['items'] == batch['items']
+
+
+@pytest.mark.browser_runtime
+@pytest.mark.skipif(os.environ.get("COMPANION_UI_BROWSER_TESTS") != "1",
+                   reason="Composed human/agent proof executes in the blocking browser lane")
+def test_human_and_agent_flows_share_authority_and_recovery_semantics(tmp_path, monkeypatch):
+    """A served human write is one original agent-readable native receipt.
+
+    A genuine temporary WSP process-store replacement invalidates both old
+    carriers. A fresh native read selection recovers the same durable receipts
+    through browser and official SDK, and cannot refresh the frozen write grant.
+    """
+    from playwright.sync_api import sync_playwright
+    from app.api.routes import active_context_selection
+    from app.ops.operations_acceptance import file_hash
+    from tests.companion_ui.test_live_operations_acceptance import served_journey
+    from tests.operations.live_operations_acceptance import OfficialClient
+    with served_journey(tmp_path, monkeypatch) as (host, run, calls):
+        originals = dict(run.outcomes)
+        assert len(originals) == 3
+        before = {str(path): file_hash(path) for path in host.root.rglob("*.md")}
+        writes = sum(method == 'POST' and path == '/api/operations' for method, path in calls)
+        python = run.binding["identity"]["sidecar"]["runtime"]["executable"]
+        old = run.bearer
+        active_context_selection.reset_selection_store_for_tests()
+        assert host.client.get('/api/operations/capabilities', headers=host.headers).status_code == 401
+        with OfficialClient(run.api_url, old, python) as sdk:
+            assert sdk.call('mimer.v2.operation.discovery').isError
+        issued = host.client.post('/api/companion/active-context/selection',
+                                  json={'vault_binding_ids': [host.binding_id]})
+        assert issued.status_code == 201
+        fresh = issued.json()
+        assert fresh['context']['principal_id'] == run.binding['principal_id']
+        assert fresh['context']['instance_identity'] == run.binding['instance_identity']
+        headers = {'X-Active-Context-Session': fresh['context_selection_id']}
+        with OfficialClient(run.api_url, fresh['context_selection_id'], python) as sdk:
+            for request_id, original in originals.items():
+                assert sdk.payload('mimer.v2.operation.receipt', {'request_id': request_id}) == original
+                assert host.client.get('/api/operations/receipts/' + quote(request_id, safe=''), headers=headers).json() == original
+        request_id = next(iter(originals))
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            context = browser.new_context()
+            context.add_cookies([{'name': 'companion_context_session', 'value': fresh['context_selection_id'],
+                'url': run.ui_url, 'httpOnly': True, 'sameSite': 'Strict'}])
+            page = context.new_page()
+            page.goto(run.ui_url + '/?operation_request=' + quote(request_id, safe=''), wait_until='domcontentloaded')
+            page.get_by_test_id('operations-open').click()
+            page.get_by_text('Source effect: committed', exact=False).wait_for()
+            context.close()
+            browser.close()
+        command = run.command('lost-ack')
+        command.update(active_context_ref=fresh['context']['context_id'], vault_generation=str(fresh['context']['generation']))
+        refused = host.client.post('/api/operations', json=command, headers=headers)
+        assert refused.status_code == 200 and refused.json()['status'] == 'rejected'
+        assert host.client.post('/api/operations', json=command,
+            headers={'Principal':'forged','X-API-Key':'forged'}).status_code == 401
+        assert writes == sum(method == 'POST' and path == '/api/operations' for method, path in calls)
+        assert before == {str(path): file_hash(path) for path in host.root.rglob('*.md')}

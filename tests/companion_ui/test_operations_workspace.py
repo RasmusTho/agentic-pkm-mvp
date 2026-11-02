@@ -594,6 +594,130 @@ def test_slow_passive_read_is_not_superseded_by_the_polling_interval(tmp_path,mo
         assert errors==[] and external==[]
 
 
+@pytest.mark.parametrize('readback', ['missing', 'transport', 'unknown', 'new_scope', 'lost_response'])
+def test_original_native_refusal_respects_current_receipt_and_scope(tmp_path,monkeypatch,readback):
+    from dataclasses import replace
+    from hashlib import sha256
+    from app.operations.contracts import OperationOutcome, OperationStatus
+    from app.operations.execution_kernel import JsonReceiptStore
+
+    host=production_operation_host(tmp_path,monkeypatch)
+    journal=JsonReceiptStore(host.runtime.registry.path.parent/'operation-receipts.json')
+    with browser(host) as (page,client,external,errors):
+        open_workspace(page)
+        choose(page)
+        page.locator('#operations-preview').click()
+        page.locator('#operations-confirm:enabled').wait_for()
+        # Another real native write makes the frozen browser version stale.
+        newer=host.command(request_id='newer-owner')
+        applied=host.client.post('/api/operations',json=newer,headers=host.headers)
+        assert applied.status_code==200
+        applied_body=applied.json()
+        source_effect=applied_body['convergence']['source_effect']
+        receipt_status=applied_body['receipt']['status']
+        assert source_effect=='committed' and receipt_status=='committed'
+        committed_status=applied_body['status']
+        source=sha256(host.note.read_bytes()).hexdigest()
+        held=[]
+        old_reads=[]
+        read_count=[0]
+        pending=[]
+
+        def original_fetch(route):
+            try:
+                return route.fetch()
+            except Exception as transport_error:
+                # Playwright fetch errors may include cookie-bearing call
+                # logs; retain only the typed transport failure here.
+                raise RuntimeError('original_native_transport_unavailable:'+type(transport_error).__name__) from None
+
+        def delay_original_response(route):
+            original=original_fetch(route)
+            result=original.json()
+            status=result['status']
+            no_receipt=result['receipt'] is None
+            no_convergence=result['convergence'] is None
+            assert status=='conflicted' and no_receipt and no_convergence
+            if readback=='unknown':
+                command=route.request.post_data_json
+                # Preserve the actual native actor and selected-binding
+                # provenance required by the authenticated receipt reader.
+                # Only the negative unresolved journal prestate is prepared;
+                # no source effect, receipt or grant is manufactured.
+                outcome=replace(OperationOutcome.from_dict(result),status=OperationStatus.RECOVERY_REQUIRED,
+                    warnings=('pending fixture requires original reconciliation',))
+                assert journal.reserve(command['request_id'],sha256(json.dumps(command,sort_keys=True).encode()).hexdigest(),outcome)[0]=='reserved'
+                pending.append(journal.lookup(command['request_id']).outcome.to_dict())
+            held.append((route,original,result))
+
+        def receipt_read(route):
+            read_count[0]+=1
+            if readback=='transport':
+                route.fulfill(status=503,json={'detail':'temporarily_unavailable'})
+            elif readback=='new_scope' and read_count[0]>1:
+                old_reads.append((route,original_fetch(route)))
+            else:
+                route.continue_()
+
+        page.route('**/api/operations',delay_original_response)
+        page.route('**/api/operations/receipts/companion-*',receipt_read)
+        page.locator('#operations-confirm').click()
+        if readback=='unknown':
+            page.get_by_text('Runtime status: recovery_required',exact=True).wait_for()
+        else:
+            page.get_by_text('Current readback unavailable;',exact=False).wait_for()
+        assert len(held)==1 and read_count[0]>=1
+        route,original,result=held[0]
+        with page.expect_request('**/api/operations/receipts/'+result['request_id']):
+            if readback=='lost_response':
+                route.abort()
+            else:
+                route.fulfill(response=original)
+        page.locator('#operations-new:enabled').wait_for()
+        if readback=='missing':
+            page.get_by_text('Runtime status: conflicted',exact=True).wait_for()
+            lookup=host.client.get('/api/operations/receipts/'+result['request_id'],headers=host.headers)
+            assert lookup.status_code==404
+            with page.expect_response('**/api/operations/receipts/'+result['request_id']) as later:
+                page.locator('#operations-inspect').click()
+            assert later.value.status==404
+            later.value.finished()
+            page.wait_for_timeout(100)
+            assert page.get_by_text('Runtime status: conflicted',exact=True).is_visible()
+            assert 'Current readback unavailable;' not in page.locator('#operations-state').text_content()
+            assert 'Durable readback restored' not in page.locator('#operations-state').text_content()
+        elif readback=='unknown':
+            page.get_by_text('Runtime status: recovery_required',exact=True).wait_for()
+            original_pending_unchanged=journal.lookup(result['request_id']).outcome.to_dict()==pending[0]
+            assert original_pending_unchanged
+        elif readback=='new_scope':
+            page.get_by_text('Reopen an operation after interruption',exact=True).click()
+            page.locator('#operations-reference').fill('newer-owner')
+            page.locator('#operations-digest').fill('')
+            page.locator('#operations-reopen').click()
+            page.get_by_text('Runtime status: '+committed_status,exact=True).wait_for()
+            assert old_reads
+            for stale,reply in old_reads:
+                assert reply.status==404
+                stale.fulfill(response=reply)
+            page.wait_for_timeout(50)
+            assert page.get_by_text('Runtime status: '+committed_status,exact=True).is_visible()
+            assert parse_qs(urlparse(page.url).query)['operation_request']==['newer-owner']
+        else:
+            page.get_by_text('Current readback unavailable;',exact=False).wait_for()
+        if readback=='transport':
+            assert page.get_by_text('Runtime status: conflicted',exact=True).is_visible()
+            assert 'Current readback unavailable;' in page.locator('#operations-state').text_content()
+        elif readback!='missing':
+            assert page.get_by_text('Runtime status: conflicted',exact=True).count()==0
+        assert sha256(host.note.read_bytes()).hexdigest()==source
+        writes=sum(c[0]=='POST' and c[1]=='/api/operations' and c[2]['operation_id']=='artifact.update' for c in client.calls)
+        assert writes==1
+        assert page.locator('#operations-resume').is_hidden() and page.locator('#operations-cancel').is_hidden()
+        page_errors,external_requests=len(errors),len(external)
+        assert page_errors==0 and external_requests==0
+
+
 def test_initial_unavailable_retained_read_exposes_safe_reset_and_focus(tmp_path,monkeypatch):
     host=production_operation_host(tmp_path,monkeypatch)
     with browser(host) as (page,client,external,errors):

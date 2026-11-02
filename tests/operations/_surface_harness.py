@@ -57,7 +57,7 @@ def runtime_http(host):
             pass
 
         def _forward(self, method):
-            body = self.rfile.read(int(self.headers.get("content-length", "0"))) if method == "POST" else None
+            body = self.rfile.read(int(self.headers.get("content-length", "0"))) if method in {"POST", "PUT", "DELETE"} else None
             headers = {key: value for key, value in self.headers.items() if key.lower() in {
                 "content-type", "x-active-context-session", "x-active-context-override", "x-trace-id"}}
             # Observe the actual socket boundary before the test bridge's
@@ -79,6 +79,12 @@ def runtime_http(host):
 
         def do_POST(self):
             self._forward("POST")
+
+        def do_PUT(self):
+            self._forward("PUT")
+
+        def do_DELETE(self):
+            self._forward("DELETE")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)

@@ -238,6 +238,10 @@ class RegistrySecurityError(RegistryError):
     """Registry path permissions, ownership, or type violate the private-state contract."""
 
 
+class RegistryQualificationError(RegistryError):
+    """A fixed observation-only qualification cannot heal its predecessor."""
+
+
 class RegistryDefaultConflict(RegistryError):
     """A mutation would leave the explicit instance default dangling or inferred."""
 
@@ -439,6 +443,38 @@ class VaultRegistryStore:
                 if os.path.lexists(self.transaction_path):
                     raise RegistryError("registry transaction requires normal recovery")
                 return self._read_current_locked(recover=False)
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+    def read_qualification_state(self) -> tuple[RegistrySnapshot, str]:
+        """Read complete canonical authority facts, without initialization or repair.
+
+        MVR-05A6 explicitly keeps bindingEffectLeases mechanical: ordinary
+        principal/ownership-fenced reads advance it without rotating registry
+        authority. Exclude exactly that validated native slot from the frozen
+        fingerprint. Preserve every other field/extension and reject any
+        noncanonical document bytes. Real effect leases still govern I/O;
+        this fingerprint grants no permission and never repairs lease state.
+        """
+        _assert_private(self.path.parent, directory=True)
+        _assert_private(self.path, directory=False)
+        _assert_private(self.lock_path, directory=False)
+        descriptor = os.open(self.lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            _assert_private_stat(os.fstat(descriptor), self.lock_path, directory=False)
+            fcntl.flock(descriptor, fcntl.LOCK_SH)
+            try:
+                if os.path.lexists(self.transaction_path):
+                    raise RegistryError("registry transaction requires normal recovery")
+                snapshot = self._read_current_locked(recover=False)
+                if self.path.read_bytes() != self._snapshot_payload(snapshot):
+                    raise RegistryError("qualification requires canonical registry bytes")
+                extensions = copy.deepcopy(snapshot.extensions)
+                extensions.pop("bindingEffectLeases", None)
+                authority = replace(snapshot, extensions=extensions)
+                return snapshot, hashlib.sha256(self._snapshot_payload(authority)).hexdigest()
             finally:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
@@ -2035,6 +2071,19 @@ class VaultRegistryStore:
         with os.fdopen(descriptor, "a+b", closefd=True) as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
+                # The fixed qualification is observation-only. Do not let a
+                # normal registry recovery or lease writer heal/normalize its
+                # predecessor before the acceptance guard can inspect it.
+                # Ordinary Product instances retain their existing behavior.
+                if os.path.lexists(self.path.parent / "native-operations-acceptance.json"):
+                    try:
+                        if os.path.lexists(self.transaction_path):
+                            raise RegistryError("registry transaction requires separate recovery")
+                        qualified = self._read_current_locked(recover=False)
+                        if self.path.read_bytes() != self._snapshot_payload(qualified):
+                            raise RegistryError("registry predecessor is noncanonical")
+                    except (RegistryError, OSError, ValueError):
+                        raise RegistryQualificationError("native registry qualification unavailable") from None
                 if recover_transactions:
                     self._recover_transaction_locked()
                     self._ensure_rollback_export_locked()
@@ -2117,12 +2166,7 @@ class VaultRegistryStore:
             REGISTRY_AUTHORITY_ACTIVE,
         }:
             raise RegistryError("unsupported registry schema or authority state")
-        frontmatter = self._frontmatter_from_snapshot(snapshot)
-        self._snapshot_from_frontmatter(frontmatter)
-        payload = _render_markdown_settings(
-            frontmatter,
-            "# Instance Vault Registry\nMechanical instance-local state; registration does not grant vault authority.\n",
-        ).encode("utf-8")
+        payload = self._snapshot_payload(snapshot)
         checksum = (hashlib.sha256(payload).hexdigest() + "\n").encode("ascii")
         rollback_export = self._rollback_export_payload(snapshot)
         previous = {
@@ -2169,6 +2213,14 @@ class VaultRegistryStore:
             # The committed journal is itself a durable completion receipt. A later locked
             # reader will idempotently finish verification/cleanup without losing the commit.
             pass
+
+    def _snapshot_payload(self, snapshot: RegistrySnapshot) -> bytes:
+        frontmatter = self._frontmatter_from_snapshot(snapshot)
+        self._snapshot_from_frontmatter(frontmatter)
+        return _render_markdown_settings(
+            frontmatter,
+            "# Instance Vault Registry\nMechanical instance-local state; registration does not grant vault authority.\n",
+        ).encode("utf-8")
 
     def _transaction_manifest(
         self,

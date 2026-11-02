@@ -27,10 +27,13 @@ def test_real_sdk_absence_fails_original_client_startup_and_terminates(tmp_path)
 
     # Preserve the actual core dependencies, without installing or mocking an SDK.
     views = []
-    for index, directory in enumerate(dict.fromkeys(site.getsitepackages())):
+    site_roots = {Path(directory).resolve() for directory in (*site.getsitepackages(), site.getusersitepackages())}
+    directories = dict.fromkeys(Path(directory).resolve() for directory in sys.path
+                                if Path(directory).is_dir() and Path(directory).resolve() in site_roots)
+    for index, directory in enumerate(directories):
         view = tmp_path / f"site-{index}"
         view.mkdir()
-        for entry in Path(directory).iterdir():
+        for entry in directory.iterdir():
             if entry.name == "mcp" or entry.name.startswith(("mcp-", "mcp.")):
                 continue
             (view / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
@@ -46,6 +49,10 @@ def test_real_sdk_absence_fails_original_client_startup_and_terminates(tmp_path)
         sys.path.extend([str(repo), str(repo / "companion-ui" / "companion-app"), *json.loads(sys.argv[2])])
         assert importlib.util.find_spec("mcp") is None
         import tests.operations._surface_harness as harness
+        import app.api.native_operations_acceptance
+        import tests.operations.live_operations_acceptance as acceptance
+        import tests.operations.operations_acceptance_recovery
+        import tests.companion_ui.live_operations_acceptance
         assert Path(harness.__file__).resolve() == repo / "tests" / "operations" / "_surface_harness.py"
         assert importlib.util.find_spec("mcp") is None and "mcp" not in sys.modules
         client = harness.ExternalMcpClient("http://127.0.0.1:1", {})
@@ -59,6 +66,16 @@ def test_real_sdk_absence_fails_original_client_startup_and_terminates(tmp_path)
         client.thread.join(5)
         assert not client.thread.is_alive()
         assert client.ready.done() and client.queue.empty()
+        fixed = acceptance.OfficialClient("http://127.0.0.1:1", "unissued", sys.executable)
+        try:
+            fixed.__enter__()
+        except ModuleNotFoundError as exc:
+            assert exc.name == "mcp"
+        else:
+            fixed.__exit__()
+            raise AssertionError("Missing SDK unexpectedly allowed acceptance startup")
+        fixed.thread.join(5)
+        assert not fixed.thread.is_alive() and fixed.ready.done() and fixed.queue.empty()
         print("original-sdk-absence-refusal-and-thread-termination")
     """)
     result = subprocess.run([sys.executable, "-I", "-S", "-B", "-c", script, str(repo), json.dumps(views)],
