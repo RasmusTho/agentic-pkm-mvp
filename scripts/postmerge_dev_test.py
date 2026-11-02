@@ -37,6 +37,7 @@ REPOSITORY = 'RasmusTho/agentic-pkm-mvp'
 IMAGE_REPOSITORY = 'ghcr.io/rasmustho/pkm-app'
 BUILD_WORKFLOW = '.github/workflows/app-image-build.yml'
 BUILD_JOB = 'Build SHA-tagged app image'
+_HEAVY_MEMORY_UNCONFIGURED = 'acceptance_memory_policy_unconfigured channel=dev isolation=inactive'
 
 
 @dataclass(frozen=True)
@@ -673,6 +674,13 @@ def native_heavy(candidate: Candidate) -> dict[str, Any]:
     try:
         result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False,
                                 timeout=2 * 3600)
+        # Forward only this fixed advisory; remote stderr may otherwise contain
+        # private host diagnostics and must remain captured and discarded.
+        diagnostic_prefix = result.stderr[:65536]
+        if len(result.stderr) > len(diagnostic_prefix):
+            diagnostic_prefix = diagnostic_prefix.rpartition('\n')[0]
+        if _HEAVY_MEMORY_UNCONFIGURED in diagnostic_prefix.splitlines():
+            print(_HEAVY_MEMORY_UNCONFIGURED, file=sys.stderr, flush=True)
         lines = result.stdout.strip().splitlines()
         if not lines or len(lines[-1]) > 16384:
             raise ValueError()
