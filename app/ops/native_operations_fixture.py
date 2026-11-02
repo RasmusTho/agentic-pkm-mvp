@@ -242,11 +242,16 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
                     write_class="synthetic_fixture_source", actor=principal.local_operator_role_id, resource=source["path"])
                 mutation = write_note_relative(source["path"], source["text"], vault_root=root,
                     writer_identity=principal.local_operator_role_id, create_once=True)
+                written = mutation.outcome == "written"
                 authority = gov.record_authority_receipt(decision_token=grant.decision_token,
-                    mutation_receipt=mutation, state_owner="HKA", effect_id=identity["operation_id"] + ":" + source["artifact_id"])
-                effects.append(OperationItemOutcome(source["artifact_id"], OperationStatus.SUCCEEDED,
+                    mutation_receipt=mutation, state_owner="HKA", outcome="applied" if written else "failed",
+                    effect_id=identity["operation_id"] + ":" + source["artifact_id"])
+                effects.append(OperationItemOutcome(source["artifact_id"],
+                    OperationStatus.SUCCEEDED if written else OperationStatus.CONFLICTED,
                     payload={"mutation_receipt": asdict(mutation), "authority_receipt": asdict(authority)}))
                 journal.finalize(PREPARATION_REQUEST, intent, outcome())
+                if not written:
+                    raise OperationsAcceptanceRefusal("source_create_once_conflict")
             from app.briefing.trigger import BRIEFING_ENABLED, _local_now
             from app.briefing.compose import compose_briefing
             if BRIEFING_ENABLED:
@@ -255,18 +260,23 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
                 receipt = compose_briefing(vault_context=context, for_date=_local_now(None).date())
                 effects.append(OperationItemOutcome("briefing", OperationStatus.SUCCEEDED, payload={"mutation_receipt": asdict(receipt)}))
                 journal.finalize(PREPARATION_REQUEST, intent, outcome())
+            if any(file_hash(root / source["path"]) != source["seed_sha256"] for source in sources.values()):
+                raise OperationsAcceptanceRefusal("source_preparation_readback_conflict")
+            # Declare while the source window's frozen binding revision is
+            # still current. Both following metadata transitions belong to
+            # their normal owners; no source/GOV consumer reuses the old
+            # scalar snapshot after these registry revisions advance.
+            pending_effect = "fixture_declaration"
+            journal.finalize(PREPARATION_REQUEST, intent, outcome())
+            revision = declare_operations_acceptance_fixture(registry_path=registry_path,
+                binding_id=registration.vault_binding_id, operation_id=identity["operation_id"])
+            effects.append(OperationItemOutcome("fixture_declaration", OperationStatus.SUCCEEDED, resulting_version=revision))
             pending_effect = "last_active_restore"
             journal.finalize(PREPARATION_REQUEST, intent, outcome())
             selected = manager.select_vault(root, remember=True)
             if selected.status != "selected" or registry.load().last_active_vault_ref != registration.ref:
                 raise OperationsAcceptanceRefusal("canonical_fixture_restore_target_unavailable")
             effects.append(OperationItemOutcome("last_active_restore", OperationStatus.SUCCEEDED))
-            journal.finalize(PREPARATION_REQUEST, intent, outcome())
-            pending_effect = "fixture_declaration"
-            journal.finalize(PREPARATION_REQUEST, intent, outcome())
-            revision = declare_operations_acceptance_fixture(registry_path=registry_path,
-                binding_id=registration.vault_binding_id, operation_id=identity["operation_id"])
-            effects.append(OperationItemOutcome("fixture_declaration", OperationStatus.SUCCEEDED, resulting_version=revision))
             result = outcome(complete=True)
             journal.finalize(PREPARATION_REQUEST, intent, result)
             return result.to_dict()
@@ -291,6 +301,9 @@ def main() -> int:
         result = prepare_fixture(request, registry_path=Path(os.environ["INSTANCE_VAULT_REGISTRY_PATH"]))
         print(json.dumps(result, sort_keys=True))
         return 0 if result["status"] in {"succeeded", "convergence_pending"} else 1
+    except OperationsAcceptanceRefusal as exc:
+        print(json.dumps({"status": "blocked", "reason": exc.reason}))
+        return 1
     except Exception:
         print(json.dumps({"status": "blocked", "reason": "native_fixture_preparation_refused_inspect_original_receipts"}))
         return 1

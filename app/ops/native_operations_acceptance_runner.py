@@ -388,3 +388,36 @@ class NativeChannel:
         return {"status": "observed", "separate_native_authority": True,
                 "original_native_receipt": receipt, "restart_binding": self.restart_binding,
                 "source_sha": plan["revision"], "image_digest": plan["image_digest"], "source_replays": 0}
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Fixed native operator command using the installed native runtime only.
+
+    Keep this argparse shell independent of the full Product Click CLI: the
+    native BWS/SDK runtime intentionally does not install that dependency set.
+    """
+    import argparse
+    parser = argparse.ArgumentParser(description="Explicit native operations fixture preparation")
+    actions = parser.add_subparsers(dest="action", required=True)
+    setup = actions.add_parser("prepare-fixture", help="Prepare one existing isolated synthetic binding")
+    setup.add_argument("channel", choices=("test", "dev"))
+    setup.add_argument("operation_id")
+    setup.add_argument("--binding-id", required=True)
+    setup.add_argument("--principal-id", required=True)
+    setup.add_argument("--instance-id", required=True)
+    setup.add_argument("--confirm-synthetic-setup", action="store_true", required=True)
+    setup.add_argument("--stage-raw", action="store_true", help="TEST only: stage normal encrypted RAW; real age still applies")
+    args = parser.parse_args(argv)
+    try:
+        result = NativeChannel(args.channel, args.operation_id).prepare_fixture(binding_id=args.binding_id,
+            principal_id=args.principal_id, instance_identity=args.instance_id,
+            confirm_synthetic_setup=args.confirm_synthetic_setup, stage_raw=args.stage_raw)
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["status"] in {"succeeded", "convergence_pending"} else 1
+    except (OperationsAcceptanceRefusal, ValueError):
+        print(json.dumps({"status": "blocked", "reason": "native_fixture_preparation_refused_inspect_original_receipts"}))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

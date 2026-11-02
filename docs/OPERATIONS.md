@@ -69,8 +69,8 @@ restart leaves the required scenario blocked. Temporary fixture proof and delive
 establish deployed acceptance; the qualified same-candidate TEST/short DEV outcome and post-acceptance
 owner-doc/State promotion remain on #5340/#5329.
 
-Explicit source preparation uses the registered `python -m app.cli ops
-prepare-operations-fixture test|dev ORIGINAL_NATIVE_OPERATION_UUID --binding-id ...
+Explicit source preparation uses the registered `python -m app.ops.native_operations_acceptance_runner
+prepare-fixture test|dev ORIGINAL_NATIVE_OPERATION_UUID --binding-id ...
 --principal-id ... --instance-id ... --confirm-synthetic-setup` command on the qualified native
 host. The [testing procedure](TESTING.md#automated-technical-acceptance) gives its exact commands,
 existing initialized synthetic-binding/operator authority and archive prerequisites. TEST first

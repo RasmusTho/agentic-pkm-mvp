@@ -399,6 +399,8 @@ rechecks and explicitly launches that exact executable. Missing, ambiguous, syml
 payloads refuse; qualification never downloads, installs or starts a browser.
 
 The supported explicit preparation entrypoint is the registered native/operator command below.
+Its argparse entrypoint uses the existing native runtime dependencies; the full Product CLI
+also exposes `ops prepare-operations-fixture` as an alias of the same composition.
 It requires a **previously initialized, registered, isolated synthetic binding** and the already
 configured local-operator principal and instance. Normal vault initialization and registration keep
 their own explicit operator authority; preparation does not initialize an unknown folder or create
@@ -407,11 +409,11 @@ not permission. Run it only under the existing native operator's authorized setu
 
 ```sh
 # TEST: stage the one exact encrypted synthetic RAW seed through the normal owner.
-/opt/yggdrasil/bws-deploy-runtime/bin/python -m app.cli ops prepare-operations-fixture test NATIVE_OPERATION_UUID --binding-id EXISTING_SYNTHETIC_BINDING --principal-id EXISTING_OPERATOR_ROLE --instance-id EXISTING_INSTANCE --confirm-synthetic-setup --stage-raw
+/opt/yggdrasil/bws-deploy-runtime/bin/python -m app.ops.native_operations_acceptance_runner prepare-fixture test NATIVE_OPERATION_UUID --binding-id EXISTING_SYNTHETIC_BINDING --principal-id EXISTING_OPERATOR_ROLE --instance-id EXISTING_INSTANCE --confirm-synthetic-setup --stage-raw
 # After the RAW owner's real eligibility gate passes, prepare the remaining fixture.
-/opt/yggdrasil/bws-deploy-runtime/bin/python -m app.cli ops prepare-operations-fixture test NATIVE_OPERATION_UUID --binding-id EXISTING_SYNTHETIC_BINDING --principal-id EXISTING_OPERATOR_ROLE --instance-id EXISTING_INSTANCE --confirm-synthetic-setup
+/opt/yggdrasil/bws-deploy-runtime/bin/python -m app.ops.native_operations_acceptance_runner prepare-fixture test NATIVE_OPERATION_UUID --binding-id EXISTING_SYNTHETIC_BINDING --principal-id EXISTING_OPERATOR_ROLE --instance-id EXISTING_INSTANCE --confirm-synthetic-setup
 # DEV has no RAW staging requirement.
-/opt/yggdrasil/bws-deploy-runtime/bin/python -m app.cli ops prepare-operations-fixture dev DEV_NATIVE_OPERATION_UUID --binding-id EXISTING_DEV_SYNTHETIC_BINDING --principal-id EXISTING_DEV_OPERATOR_ROLE --instance-id EXISTING_DEV_INSTANCE --confirm-synthetic-setup
+/opt/yggdrasil/bws-deploy-runtime/bin/python -m app.ops.native_operations_acceptance_runner prepare-fixture dev DEV_NATIVE_OPERATION_UUID --binding-id EXISTING_DEV_SYNTHETIC_BINDING --principal-id EXISTING_DEV_OPERATOR_ROLE --instance-id EXISTING_DEV_INSTANCE --confirm-synthetic-setup
 ```
 
 Native resolves the original committed full operation/request/PG acceptance and actual immutable
