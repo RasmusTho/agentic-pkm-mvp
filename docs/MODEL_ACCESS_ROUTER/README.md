@@ -224,6 +224,8 @@ This parent-level acceptance remains separate from merging individual MARR slice
 
 The parent feature issue is [#5618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618), a blocked validation hub, not an implementation issue. Each task above maps to one dependency-ordered child Issue; child Issue numbers are written into task frontmatter as soon as filed. No child is pickup-ready until its dependencies and the specification PR are merged, its Verify targets resolve, and strict readiness validation passes.
 
+The separate certificate-continuity outcome is tracked by [#6575](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6575). It does not change #5618's original acceptance scope. Its first planned slice is [verified certificate candidate preparation](PREPARE_CERTIFICATE_RENEWAL_CANDIDATE.md) / #6576; distribution, scheduler and actual acceptance remain separate work.
+
 ## Out of Scope
 
 - Sharing or collapsing Product and Builder policy, registry, credential, fallback, health, or receipt authority.
