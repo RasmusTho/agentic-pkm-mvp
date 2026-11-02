@@ -2597,24 +2597,55 @@ def test_realistic_http_reader_is_qualified_but_unknown_descendant_refuses(self)
 
 
 def test_type_simple_missing_child_waits_bounded_without_accepting_descendant(self):
-    kernel, assembly = _native(self)
-    group = kernel.unit["ControlGroup"]
-    real_response = kernel.response
-    samples = [0]
+    for outcome in ("ready", "missing", "foreign"):
+        with self.subTest(outcome=outcome):
+            self.fresh()
+            kernel, assembly = _native(self)
+            group = kernel.unit["ControlGroup"]
+            members = "/sys/fs/cgroup" + group + "/cgroup.procs"
+            kernel.os.files[members] = b"4141\n"
+            started, waits = kernel.clock.value, []
 
-    def pending_then_ready(argv, payload):
-        if argv == target.systemd("show"):
-            samples[0] += 1
-            kernel.os.files["/sys/fs/cgroup" + group + "/cgroup.procs"] = (
-                b"4141\n" if samples[0] < 4 else b"4141\n4241\n"
-            )
-        return real_response(argv, payload)
+            def materialize_after_wait(seconds):
+                # Typed unit qualification performs multiple show calls per
+                # sample. Only a real StartupPending wait releases the child.
+                waits.append(seconds)
+                kernel.sleep(seconds)
+                if outcome != "missing":
+                    kernel.os.files[members] = b"4141\n4241\n"
+                if outcome == "foreign":
+                    kernel._proc(
+                        "4341", "4241", ("python3", "unqualified.py"), {}, 4341, group
+                    )
+                    kernel.os.files[members] += b"4341\n"
 
-    kernel.response = pending_then_ready
-    runtime = assembly.caller.read_runtime(kernel.scope.binding)
-    self.assertIsNotNone(runtime.child)
-    self.assertGreaterEqual(samples[0], 4)
-    self.assertGreater(kernel.clock.value, 1000)
+            kernel.dependencies.time.sleep = materialize_after_wait
+            if outcome == "ready":
+                runtime = assembly.caller.read_runtime(kernel.scope.binding)
+                self.assertEqual("4241", runtime.child.pid)
+                self.assertFalse(assembly.caller.unknown_reasons)
+            else:
+                expected = (
+                    "bounded_normal_startup_or_metadata_not_ready"
+                    if outcome == "missing"
+                    else "unqualified_descendant_of_normal_test_probe"
+                )
+                with self.assertRaisesRegex((target.Refusal, target.Unknown), expected):
+                    assembly.caller.read_runtime(kernel.scope.binding)
+                count = len(kernel.processes)
+                with self.assertRaisesRegex(target.Unknown, "original_handle_sticky_unknown"):
+                    assembly.caller.read_runtime(kernel.scope.binding)
+                self.assertEqual(count, len(kernel.processes))
+            self.assertTrue(waits)
+            self.assertTrue(all(0 < seconds <= 0.2 for seconds in waits))
+            self.assertAlmostEqual(30.0 if outcome == "missing" else 0.2, sum(waits))
+            self.assertAlmostEqual(started + sum(waits), kernel.clock.value)
+            self.assertFalse(self.h.deliveries)
+            self.assertTrue(all(selector.closed for selector in kernel.selectors))
+            self.assertTrue(all(
+                pipe.closed for process in kernel.processes
+                for pipe in (process.stdin, process.stdout, process.stderr)
+            ))
 
 
 def test_controller_append_is_preserved_and_pending_or_truncated_history_refuses(self):
