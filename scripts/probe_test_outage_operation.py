@@ -65,6 +65,10 @@ UNIT_KEYS = (
     "SubState",
     "UnitFileState",
     "MainPID",
+    "Result",
+    "ExecMainPID",
+    "ExecMainCode",
+    "ExecMainStatus",
     "InvocationID",
     "ControlGroup",
     "ExecMainStartTimestampMonotonic",
@@ -109,6 +113,10 @@ VOLATILE = {
     "ActiveState",
     "SubState",
     "MainPID",
+    "Result",
+    "ExecMainPID",
+    "ExecMainCode",
+    "ExecMainStatus",
     "InvocationID",
     "ControlGroup",
     "ExecMainStartTimestampMonotonic",
@@ -345,7 +353,9 @@ class Caller:
         self.check()
         self.phase, self.phase_start = phase, self.clock()
 
-    def read_runtime(self, binding: "Binding", *, health: bool = False) -> "Runtime":
+    def read_runtime(
+        self, binding: "Binding", *, health: bool = False, owned_stop: "OwnedStop | None" = None
+    ) -> "Runtime":
         self.reads += 1
         remaining = self.check()
         try:
@@ -355,6 +365,7 @@ class Caller:
                     original_handle=self.original_handle,
                     timeout=remaining,
                     require_health=health,
+                    owned_stop=owned_stop,
                 )
             else:
                 value = self.runtime.read(
@@ -738,7 +749,7 @@ def systemd(action: str) -> tuple[str, ...]:
             "--all",
             "--no-pager",
         )
-    if action in {"stop", "start"}:
+    if action in {"stop", "start", "reset-failed"}:
         return "/usr/bin/systemctl", action, UNIT, "--no-pager"
     if action == "reload_for_temporary_test":
         return "/usr/bin/systemctl", "daemon-reload"
@@ -821,6 +832,105 @@ def unit_profile(unit: dict[str, str], *, cleanup: bool = False) -> dict[str, An
     }
 
 
+@dataclass
+class OwnedStop:
+    """One acknowledged stop of the previously qualified normal incarnation."""
+
+    before: tuple[tuple[str, str], ...]
+    intent_usec: int
+    handle_sha256: str
+    normalized: bool = False
+    exit_identity: tuple[str, str] = ("1", "143")
+    gc_cleared: bool = False
+
+    def for_profile(self, expected: dict[str, str]) -> "OwnedStop":
+        """After an owned removal, bind its previously qualified target profile."""
+        if not self.normalized:
+            raise Unknown("profile_restoration_before_owned_stop_normalized")
+        previous = dict(self.before)
+        previous.update({key: expected[key] for key in UNIT_KEYS if key not in VOLATILE})
+        return replace(self, before=tuple(sorted(previous.items())))
+
+    def require(self, unit: dict[str, str]) -> None:
+        previous = dict(self.before)
+        if (
+            previous["ActiveState"] != "active"
+            or previous["SubState"] != "running"
+            or previous["Result"] != "success"
+            or not identifier(previous["InvocationID"])
+            or not previous["MainPID"].isascii()
+            or not previous["MainPID"].isdigit()
+            or int(previous["MainPID"]) < 1
+            or previous["ExecMainPID"] != previous["MainPID"]
+            or type(self.intent_usec) is not int
+            or self.intent_usec < int(previous["ExecMainStartTimestampMonotonic"])
+            or unit_profile(unit) != unit_profile(previous)
+            or unit["MainPID"] != "0"
+            or unit["Job"] not in {"", "0"}
+            or unit["NRestarts"] != previous["NRestarts"]
+            or unit["NRestarts"] != "0"
+            or unit["InvocationID"] != previous["InvocationID"]
+            or unit["ExecMainPID"] != previous["MainPID"]
+            or unit["ExecMainStartTimestampMonotonic"]
+            != previous["ExecMainStartTimestampMonotonic"]
+            or unit["ControlGroup"] not in {"", previous["ControlGroup"]}
+            or int(unit["InactiveEnterTimestampMonotonic"]) < self.intent_usec
+        ):
+            raise Unknown("owned_stop_identity_profile_or_intent_unqualified")
+        outcome = (
+            unit["ActiveState"], unit["SubState"], unit["Result"],
+            unit["ExecMainCode"], unit["ExecMainStatus"],
+        )
+        if outcome not in {
+            ("failed", "failed", "exit-code", "1", "143"),
+            ("inactive", "dead", "success", "1", "0"),
+            ("inactive", "dead", "success", "1", "143"),
+            ("inactive", "dead", "success", "2", "15"),
+        }:
+            raise Unknown("owned_stop_terminal_exit_unqualified")
+
+    def require_normalized(self, unit: dict[str, str]) -> None:
+        previous = dict(self.before)
+        # ResetFailed preserves last ExecMain metadata. Subsequent normal GC
+        # may clear it; neither form admits a different live incarnation.
+        identity = tuple(unit[key] for key in (
+            "InvocationID", "ExecMainPID", "ExecMainStartTimestampMonotonic",
+            "ExecMainCode", "ExecMainStatus",
+        ))
+        if (
+            any(not unit[key].isascii() or not unit[key].isdigit() for key in (
+                "MainPID", "ExecMainPID", "ExecMainCode", "ExecMainStatus",
+                "ExecMainStartTimestampMonotonic", "InactiveEnterTimestampMonotonic",
+            ))
+            or unit["ActiveState"] != "inactive"
+            or unit["SubState"] != "dead"
+            or unit["MainPID"] != "0"
+            or unit["Job"] not in {"", "0"}
+            or unit["NRestarts"] != "0"
+            or unit["Result"] != "success"
+            or unit_profile(unit) != unit_profile(previous)
+            or unit["ControlGroup"] not in {"", previous["ControlGroup"]}
+            or (self.gc_cleared and identity[0] != "")
+            or identity not in {
+                (previous["InvocationID"], previous["MainPID"],
+                 previous["ExecMainStartTimestampMonotonic"], *self.exit_identity),
+                ("", "0", "0", "0", "0"),
+            }
+            or (
+                identity[0] == ""
+                and (unit["ControlGroup"] or unit["InactiveEnterTimestampMonotonic"] != "0")
+            )
+            or (
+                identity[0] != ""
+                and int(unit["InactiveEnterTimestampMonotonic"]) < self.intent_usec
+            )
+        ):
+            raise Unknown("owned_stop_normalization_not_positively_inactive")
+        # This proof survives all quiescent consumers, so clearing is one-way
+        # across reads as well as inside one reader snapshot.
+        self.gc_cleared = not bool(identity[0])
+
+
 def test_credential_property() -> tuple[str, ...]:
     return (
         "/usr/bin/busctl",
@@ -833,13 +943,17 @@ def test_credential_property() -> tuple[str, ...]:
     )
 
 
-def read_test_unit(command: Callable[..., bytes]) -> bytes:
+def read_test_unit(
+    command: Callable[..., bytes], *, owned_stop: OwnedStop | None = None
+) -> bytes:
     """Join the fixed unit profile to its typed credential ID/path metadata.
 
     systemctl can render a(ss) as [unprintable]. Only the exact typed D-Bus
     property establishes the binding; neither that marker nor a path suffix
     does. Both typed reads must qualify around a stable unit/config profile.
     Transient job/process state may advance; return the later actual sample.
+    A retained stop consumes EVERY sample, so discarding an early cleared
+    snapshot cannot hide a later resurrection or foreign stopped invocation.
     Every read uses the caller's existing finite process/byte/close budget.
     """
     raw = command(systemd("show"))
@@ -847,6 +961,8 @@ def read_test_unit(command: Callable[..., bytes]) -> bytes:
     if first["LoadState"] == "not-found":
         # An absent unit needs no credential getter. parse_unit still has to
         # positively qualify absence before temporary staging is permitted.
+        if owned_stop is not None:
+            parse_unit(raw, allow_absent=True, owned_stop=owned_stop)
         return raw
     snapshots = []
     expected = ":".join(TEST_CREDENTIAL)
@@ -873,6 +989,11 @@ def read_test_unit(command: Callable[..., bytes]) -> bytes:
         ):
             raise Refusal("typed_test_credential_binding_unqualified")
         fields["LoadCredentialEncrypted"] = expected
+        if owned_stop is not None:
+            parse_unit(
+                "".join(key + "=" + fields[key] + "\n" for key in UNIT_KEYS).encode(),
+                owned_stop=owned_stop,
+            )
         snapshots.append(fields)
     if unit_profile(snapshots[0], cleanup=True) != unit_profile(snapshots[1], cleanup=True):
         raise Unknown("typed_credential_unit_profile_changed_during_read")
@@ -922,6 +1043,7 @@ def parse_unit(
     allow_absent: bool = False,
     allow_restarts: bool = False,
     cleanup_states: bool = False,
+    owned_stop: OwnedStop | None = None,
 ) -> dict[str, str]:
     fields = systemctl_fields(raw, UNIT_KEYS)
     if fields["Id"] != UNIT or fields["Names"].split() != [UNIT]:
@@ -946,6 +1068,10 @@ def parse_unit(
             )
         ):
             raise Refusal("absent_test_unit_not_positively_quiescent")
+        if owned_stop is not None:
+            if cleanup_states or allow_restarts or not owned_stop.normalized:
+                raise Refusal("absent_unit_without_normalized_owned_stop")
+            owned_stop.require_normalized(fields)
         return fields
     if (
         fields["LoadState"] != "loaded"
@@ -960,9 +1086,20 @@ def parse_unit(
         )
     ):
         raise Refusal("unit_masked_job_restart_or_load_unqualified")
-    for key in ("MainPID", "ExecMainStartTimestampMonotonic", "InactiveEnterTimestampMonotonic"):
+    for key in (
+        "MainPID", "ExecMainPID", "ExecMainCode", "ExecMainStatus",
+        "ExecMainStartTimestampMonotonic", "InactiveEnterTimestampMonotonic",
+    ):
         if not fields[key].isascii() or not fields[key].isdigit():
             raise Refusal("unit_numeric_identity_unqualified")
+    if owned_stop is not None:
+        if cleanup_states or allow_restarts:
+            raise Refusal("owned_stop_outside_strict_normal_lifecycle")
+        if owned_stop.normalized:
+            owned_stop.require_normalized(fields)
+        else:
+            owned_stop.require(fields)
+        return fields
     if cleanup_states:
         # This is decoding only. The guardian must separately prove its
         # physical marker, exact profile/config and any live incarnation.
@@ -1675,13 +1812,26 @@ class TestProbeAdapter:
         self.state = "unadmitted"
         self.start_intents: set[str] = set()
         self.transitions = Transitions()
+        self.stop_guard: NativeFaultGuard | None = None
+        self.owned_stops: list[dict[str, Any]] = []
+        self.stopped_proof: OwnedStop | None = None
 
-    def _observe(self, *, active: bool, health: bool = False) -> tuple[dict[str, str], Runtime]:
+    def _observe(
+        self, *, active: bool, health: bool = False, owned_stop: OwnedStop | None = None
+    ) -> tuple[dict[str, str], Runtime]:
         assert self.current_config is not None
-        unit = parse_unit(read_test_unit(self.caller.run))
+        if not active and owned_stop is None:
+            owned_stop = self.stopped_proof
+        if owned_stop is not None and (
+            active or owned_stop.handle_sha256 != self.caller.original_handle
+        ):
+            raise Unknown("owned_stop_not_same_original_handle")
+        unit = parse_unit(
+            read_test_unit(self.caller.run, owned_stop=owned_stop), owned_stop=owned_stop
+        )
         if (unit["ActiveState"] == "active") is not active:
             raise Unknown("test_service_state_unconfirmed")
-        runtime = self.caller.read_runtime(self.binding, health=health)
+        runtime = self.caller.read_runtime(self.binding, health=health, owned_stop=owned_stop)
         runtime.qualify(
             self.binding,
             self.caller,
@@ -1770,12 +1920,49 @@ class TestProbeAdapter:
             raise Refusal("stop_outside_finite_sequence")
         self._preserved()
         self._same_active()
+        assert self.unit is not None
+        before = tuple(sorted(self.unit.items()))
         self.caller.begin("quiesce_test")
         intent_usec = int(self.caller.clock() * 1_000_000)
         self.caller.run(systemd("stop"), effect=True)
-        unit, runtime = self._observe(active=False)
-        if int(unit["InactiveEnterTimestampMonotonic"]) < intent_usec:
-            raise Unknown("stop_not_bound_to_owned_intent")
+        # Constructed only after the original synchronous stop has a qualified
+        # exit/reap/close acknowledgement. A lost stop can never reach reset.
+        proof = OwnedStop(before, intent_usec, self.caller.original_handle)
+        unit, runtime = self._observe(active=False, owned_stop=proof)
+        self._preserved()
+        fingerprint = sha(json.dumps(before, separators=(",", ":")).encode())
+        if len(self.owned_stops) >= 3 or any(
+            value["incarnation_sha256"] == fingerprint for value in self.owned_stops
+        ):
+            raise Unknown("owned_stop_normalization_replay_or_bound")
+        evidence = {
+            "incarnation_sha256": fingerprint,
+            "intent_usec": intent_usec,
+            "terminal_state": unit["ActiveState"],
+            "result": unit["Result"],
+            "exit_code": unit["ExecMainCode"],
+            "exit_status": unit["ExecMainStatus"],
+            "normalization_intent": unit["ActiveState"] == "failed",
+            "normalization_confirmed": False,
+        }
+        if isinstance(self.caller.runtime, LinuxRuntimeReader):
+            if not isinstance(self.stop_guard, NativeFaultGuard):
+                raise Unknown("owned_stop_physical_guard_unbound")
+            self.stop_guard.retain_owned_stop(proof, unit, evidence)
+        self.owned_stops.append(evidence)
+        normalized = replace(
+            proof, normalized=True, exit_identity=(unit["ExecMainCode"], unit["ExecMainStatus"])
+        )
+        if unit["ActiveState"] == "failed":
+            # This is the only ResetFailed call site. Its intent and finite
+            # last-exit metadata are retained before the one bounded effect.
+            self.caller.run(systemd("reset-failed"), effect=True)
+            unit, runtime = self._observe(active=False, owned_stop=normalized)
+            self._preserved()
+            evidence["normalization_confirmed"] = True
+            if self.stop_guard is not None:
+                self.stop_guard.finish_owned_stop(evidence)
+        self.stopped_proof = normalized
         self.unit, self.runtime = unit, runtime
         self.state = "quiescent_fault" if self.state == "fault_running" else "quiescent_healthy"
 
@@ -1899,6 +2086,7 @@ class TestProbeAdapter:
         intent_usec = int(self.caller.clock() * 1_000_000)
         self.caller.begin("start_test_" + phase)
         self.caller.run(systemd("start"), effect=True)
+        self.stopped_proof = None
         unit, runtime = self._observe(active=True)
         if int(unit["ExecMainStartTimestampMonotonic"]) < intent_usec:
             raise Unknown("new_start_not_bound_to_original_intent")
@@ -2560,6 +2748,9 @@ class TemporaryTestInstallation:
             raise Refusal("cleanup_requires_completed_test_sequence_and_restoration")
         if not already_stopped:
             self.adapter.stop_owned()
+        proof = self.adapter.stopped_proof
+        if proof is None or proof.handle_sha256 != self.caller.original_handle:
+            raise Unknown("temporary_cleanup_without_retained_owned_stop")
         self.adapter._observe(active=False)
         self._originals()
         config = self.files.read("config")
@@ -2610,13 +2801,22 @@ class TemporaryTestInstallation:
             finally:
                 self.caller.close("owned_rmdir_parent", lambda: self.ops.close(parent))
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
-        restored = parse_unit(read_test_unit(self.caller.run), allow_absent=True)
+        proof = proof.for_profile(self.original)
+        restored = parse_unit(
+            read_test_unit(self.caller.run, owned_stop=proof),
+            allow_absent=True, owned_stop=proof,
+        )
         if (
             unit_profile(restored) != unit_profile(self.original)
             or restored["ActiveState"] != "inactive"
             or restored["MainPID"] != "0"
         ):
             raise Unknown("original_test_unit_enablement_or_absence_not_restored")
+        if isinstance(self.caller.runtime, LinuxRuntimeReader) and self.caller.runtime.io.cgroup(
+            dict(proof.before)["ControlGroup"]
+        ):
+            raise Unknown("temporary_cleanup_original_cgroup_not_empty")
+        self.adapter.stopped_proof = proof
         self._originals()
         self.state = "restored"
         return {
@@ -2835,6 +3035,7 @@ class NativeCommand:
             systemd("show"),
             systemd("start"),
             systemd("stop"),
+            systemd("reset-failed"),
             systemd("reload_for_temporary_test"),
         }:
             if effect != (argv != systemd("show")):
@@ -3792,11 +3993,17 @@ class LinuxRuntimeReader:
         original_handle: str,
         timeout: float,
         require_health: bool = False,
+        owned_stop: OwnedStop | None = None,
     ) -> Runtime:
         if self.caller is None or original_handle != self.scope.handle.fingerprint:
             raise Refusal("native_runtime_not_assembled_to_original_handle")
         boot, owner = self._selection(binding)
-        first = parse_unit(read_test_unit(self.caller.run), allow_absent=True)
+        if owned_stop is not None and owned_stop.handle_sha256 != original_handle:
+            raise Unknown("owned_stop_runtime_handle_changed")
+        first = parse_unit(
+            read_test_unit(self.caller.run, owned_stop=owned_stop),
+            allow_absent=True, owned_stop=owned_stop,
+        )
         preinstallation = (
             first["ActiveState"] != "active"
             and not require_health
@@ -3809,7 +4016,10 @@ class LinuxRuntimeReader:
         initial = None
         while True:
             self.caller.check()
-            unit = parse_unit(read_test_unit(self.caller.run), allow_absent=True)
+            unit = parse_unit(
+                read_test_unit(self.caller.run, owned_stop=owned_stop),
+                allow_absent=True, owned_stop=owned_stop,
+            )
             active = unit["ActiveState"] == "active"
             identity = tuple(
                 unit[key] for key in ("InvocationID", "MainPID", "ExecMainStartTimestampMonotonic")
@@ -3902,9 +4112,18 @@ class LinuxRuntimeReader:
         if require_health:
             ready_status, _ = self.http.get(binding.api_base + "/readyz", binding)
             health_status, health = self.http.get(binding.api_base + "/api/health", binding)
-        again = parse_unit(read_test_unit(self.caller.run), allow_absent=True)
-        if unit_profile(again) != unit_profile(unit) or any(
-            again[key] != unit[key] for key in VOLATILE
+        again = parse_unit(
+            read_test_unit(self.caller.run, owned_stop=owned_stop),
+            allow_absent=True, owned_stop=owned_stop,
+        )
+        normalized_gc = (
+            owned_stop is not None
+            and owned_stop.normalized
+            and unit["InvocationID"] == dict(owned_stop.before)["InvocationID"]
+            and again["InvocationID"] == ""
+        )
+        if unit_profile(again) != unit_profile(unit) or (
+            any(again[key] != unit[key] for key in VOLATILE) and not normalized_gc
         ):
             raise Unknown("test_unit_changed_during_full_runtime_read")
         return Runtime(
@@ -4435,6 +4654,7 @@ def run_fixed_test_worker(
         result["temporary_installation"] = installation.restore_and_cleanup(already_stopped=True)
     else:
         caller.run(systemd("start"), effect=True)
+        adapter.stopped_proof = None
         adapter.unit, adapter.runtime = adapter._observe(active=True, health=True)
     guard.disarm()
     # Core observations, including tests with substituted ports, cannot mint
@@ -4883,6 +5103,73 @@ class NativeFaultGuard:
             or ready.get("guardian_start") != identity[0]
         ):
             raise Unknown("independent_watchdog_ready_identity_unqualified")
+        self.adapter.stop_guard = self
+
+    @fs_guard
+    def retain_owned_stop(
+        self, proof: OwnedStop, unit: dict[str, str], evidence: dict[str, Any]
+    ) -> None:
+        if (
+            self.adapter.stop_guard is not self
+            or proof.handle_sha256 != self.scope.handle.fingerprint
+            or self.record.get("disarmed") is True
+        ):
+            raise Unknown("owned_stop_guard_not_current")
+        proof.require(unit)
+        parent = self.io.directory(self.parent_path)
+        descriptor = None
+        try:
+            descriptor = self.ops.open(
+                self.marker,
+                self.ops.O_RDONLY | self.ops.O_NOFOLLOW | self.ops.O_NONBLOCK | self.ops.O_CLOEXEC,
+                dir_fd=parent,
+            )
+            keys = (
+                "st_dev", "st_ino", "st_uid", "st_gid", "st_mode", "st_nlink",
+                "st_size", "st_mtime_ns", "st_ctime_ns",
+            )
+            body = (
+                "[Service]\nEnvironment=YGG_TEST_OPERATION=" + self.scope.handle.operation + "\n"
+            ).encode()
+            before = self.ops.fstat(descriptor)
+            observed = self.ops.read(descriptor, 257)
+            after = self.ops.fstat(descriptor)
+            slot = self.ops.stat(self.marker, dir_fd=parent, follow_symlinks=False)
+            if observed != body or any(
+                tuple(getattr(info, key) for key in keys) != self.marker_identity
+                for info in (before, after, slot)
+            ):
+                raise Unknown("owned_stop_physical_marker_changed")
+        finally:
+            if descriptor is not None:
+                self.caller.close("owned_stop_marker", lambda: self.ops.close(descriptor))
+            self.caller.close("owned_stop_marker_parent", lambda: self.ops.close(parent))
+        current = parse_unit(
+            read_test_unit(self.caller.run, owned_stop=proof), owned_stop=proof
+        )
+        if unit_profile(current) != unit_profile(unit) or any(
+            current[key] != unit[key] for key in VOLATILE
+        ):
+            raise Unknown("owned_stop_changed_before_normalization_intent")
+        records = self.record.setdefault("owned_stops", [])
+        if len(records) >= 3 or any(
+            value["incarnation_sha256"] == evidence["incarnation_sha256"] for value in records
+        ):
+            raise Unknown("owned_stop_guard_replay_or_bound")
+        records.append(dict(evidence))
+        self.write_record()
+
+    def finish_owned_stop(self, evidence: dict[str, Any]) -> None:
+        records = self.record.get("owned_stops", [])
+        if (
+            not records
+            or records[-1]["incarnation_sha256"] != evidence["incarnation_sha256"]
+            or records[-1]["normalization_intent"] is not True
+            or records[-1]["normalization_confirmed"] is not False
+        ):
+            raise Unknown("owned_stop_normalization_receipt_unbound")
+        records[-1] = dict(evidence)
+        self.write_record()
 
     def fault_intent(self, url: str) -> None:
         import base64
@@ -4900,6 +5187,10 @@ class NativeFaultGuard:
 
     @fs_guard
     def remove_marker(self) -> None:
+        if self.adapter.stopped_proof is None:
+            raise Unknown("owned_marker_removal_without_retained_stop_proof")
+        self.adapter._observe(active=False)
+        self.adapter._preserved()
         parent = self.io.directory(self.parent_path)
         try:
             meta = self.ops.stat(self.marker, dir_fd=parent, follow_symlinks=False)
@@ -4932,9 +5223,18 @@ class NativeFaultGuard:
                 self.caller.close("guard_parent_removal", lambda: self.ops.close(parent))
         self.caller.run(systemd("reload_for_temporary_test"), effect=True)
 
-        restored = parse_unit(read_test_unit(self.caller.run))
+        proof = self.adapter.stopped_proof.for_profile(self.before_unit)
+        restored = parse_unit(
+            read_test_unit(self.caller.run, owned_stop=proof), owned_stop=proof
+        )
         if unit_profile(restored) != unit_profile(self.before_unit):
             raise Unknown("original_unit_profile_not_restored_after_owned_marker")
+        # The known original profile was bound before either observed sample;
+        # its original incarnation and any observed GC clearing survive.
+        self.adapter.stopped_proof = proof
+        self.adapter.original_unit = dict(self.before_unit)
+        self.adapter._observe(active=False)
+        self.adapter._preserved()
 
     def disarm(self) -> None:
         self.record["disarmed"] = True
