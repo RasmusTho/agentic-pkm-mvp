@@ -170,3 +170,12 @@ def test_cli_rejects_unsafe_or_changed_public_inputs(public_chain, tmp_path, mon
     with pytest.raises(subject.Refused):
         subject.check_certificates(channel='dev', server=str(original), client=str(public_chain['client']),
                                    ca=str(public_chain['ca']), server_ip='100.64.0.10', min_days=30)
+
+
+def test_verifier_uses_only_explicit_trust_anchor(public_chain, monkeypatch):
+    # Ambient trust cannot make a different explicitly supplied CA acceptable.
+    monkeypatch.setenv('SSL_CERT_FILE', str(public_chain['ca']))
+    result = cli(public_chain, ca='client')
+    assert result.returncode != 0
+    assert json.loads(result.stdout) == {'status': 'unqualified'}
+    assert not result.stderr

@@ -95,8 +95,7 @@ def _verify_chain(ca: bytes, leaf: bytes, purpose: str) -> None:
         os.close(write_fd)
         write_fd = -1
         result = subprocess.run(
-            [_OPENSSL, 'verify', '-CAfile', f'/dev/fd/{read_fd}', '-CApath', '/dev/null',
-             '-purpose', purpose], input=leaf, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            [_OPENSSL, 'verify', '-trusted', f'/dev/fd/{read_fd}', '-purpose', purpose], input=leaf, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             pass_fds=(read_fd,), check=False, timeout=5,
             env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'},
         )
