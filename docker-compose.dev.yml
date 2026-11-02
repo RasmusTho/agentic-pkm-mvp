@@ -1,11 +1,35 @@
 services:
+  source-identity-db-witness:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  ollama:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
   instance-state-init:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     environment:
       # The base service inherits LLM_PROVIDER for app import-time safety; keep
       # non-caller bootstrap work pinned to mock in the dev channel.
       LLM_PROVIDER: mock
 
   migrate:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     environment:
       PKM_ENVIRONMENT: dev
       LLM_PROVIDER: mock
@@ -19,6 +43,11 @@ services:
       PROD_MIGRATION_FORWARD_ONLY_ACK: !reset null
 
   db:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     environment:
       POSTGRES_DB: app_dev
     ports: !override
@@ -30,6 +59,11 @@ services:
       - pgdata-dev:/var/lib/postgresql/data
 
   api:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     ports: !override
       - "18001:8000"
     environment:
@@ -79,6 +113,11 @@ services:
           create_host_path: true
 
   worker:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     environment:
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       LLM_PROVIDER_ENFORCE: "0"
@@ -100,6 +139,11 @@ services:
           create_host_path: true
 
   watcher:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     environment:
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       LLM_PROVIDER_ENFORCE: "0"
@@ -121,6 +165,11 @@ services:
           create_host_path: true
 
   heimdal-capture-watch:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     # The host-secret env_file layer (HOST_SECRET_RUNTIME_ENV_FILE) now lives
     # in the base compose file (#4362) so every channel, not just dev, gets
     # it deterministically -- no per-channel override needed here anymore.
@@ -138,6 +187,11 @@ services:
       HEIMDAL_RAW_STORE_KEY: !reset null
 
   companion-ui:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     ports: !override
       - "${COMPANION_UI_BIND_HOST:-127.0.0.1}:8111:8111"
     environment:

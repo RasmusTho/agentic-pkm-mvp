@@ -174,6 +174,7 @@ class HeavyAcceptanceRunner:
                        'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1', 'LANG': 'C.UTF-8'}
         container = self._docker(
             'create', '--name', self.name + '-tests', *labels,
+            '--log-driver', 'json-file', '--log-opt', 'max-size=50m', '--log-opt', 'max-file=3',
             *(self.memory_limit.docker_args() if self.memory_limit is not None else []),
             '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges', '--pids-limit', '4096', '--no-healthcheck', '--user', '0:0', '--workdir', '/work',
