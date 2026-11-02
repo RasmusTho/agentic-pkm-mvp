@@ -27,6 +27,7 @@ MODEL_ACCESS_ENV_KEYS = (
     "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT",
     "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY",
 )
+TAILNET_ENV_KEYS = ("MODEL_ACCESS_EXECUTOR_PATH", "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT")
 pytestmark = pytest.mark.skipif(
     shutil.which("docker") is None,
     reason="docker executable not found on PATH",
@@ -50,6 +51,7 @@ def _merged_compose(
         "VAULT_ROOT",
         "VAULT_ROOT_TEST",
         *MODEL_ACCESS_ENV_KEYS,
+        *TAILNET_ENV_KEYS,
     ):
         env.pop(key, None)
     env["WATCHER_ENABLE"] = "1" if explicit_vault is None else "0"
@@ -73,6 +75,17 @@ def _merged_compose(
         "-f",
         str(TEST_COMPOSE),
     ]
+    if model_access_bindings is not None and model_access_bindings.get("MODEL_ACCESS_EXECUTOR_PATH") == "tailnet_mtls":
+        # Render the same conditional override that the real deploy wrapper
+        # supplies after validating and exporting model-access references.
+        override = runtime_env.parent / "test-model-access-override.yml"
+        generated = subprocess.run(
+            ["bash", "-c", 'source "$1"; _deploy_channel_signboard_override_document full test',
+             "model-access-override", str(REPO_ROOT / "scripts/lib/deploy_channel_compose.sh")],
+            env=env, check=True, capture_output=True, text=True,
+        )
+        override.write_text(generated.stdout, encoding="utf-8")
+        command.extend(["-f", str(override)])
     if explicit_vault is not None:
         env["VAULT_HOST_ROOT"] = str(explicit_vault)
         command.extend(
@@ -315,3 +328,19 @@ def test_test_runtime_services_have_mock_provider_and_vault_binding(tmp_path: Pa
 
     assert _environment(services["migrate"])["LLM_PROVIDER"] == "mock"
     assert _environment(services["heimdal-capture-watch"])["LLM_PROVIDER"] == "mock"
+
+
+def test_tailnet_model_access_is_scoped_to_product_callers(tmp_path: Path) -> None:
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text("", encoding="utf-8")
+    keys = {"MODEL_ACCESS_EXECUTOR_PATH": "tailnet_mtls", "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT": "https://100.100.20.30:9443"}
+    services = _services(_merged_compose(runtime_env, model_access_bindings=keys))
+    for name, service in services.items():
+        env = _environment(service)
+        if name in {"api", "worker", "watcher"}:
+            assert all(env.get(key) == value for key, value in keys.items())
+        else:
+            assert not set(keys).intersection(env), name
+    default_services = _services(_merged_compose(runtime_env))
+    for service in default_services.values():
+        assert not set(keys).intersection(_environment(service))
