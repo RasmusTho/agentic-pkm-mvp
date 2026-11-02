@@ -116,6 +116,15 @@ def test_normal_request_enforces_finite_transport_limits(monkeypatch, action, fa
         if fault == 'blocked-input':
             original_write = linux.os.write
             descriptor = child.stdin.fileno()
+            # Pipe capacity differs by OS (Linux can buffer the entire valid
+            # request). Fill this nonreading fixture's pipe before the client
+            # starts, so stdin is actually blocked on every supported host.
+            linux.os.set_blocking(descriptor, False)
+            while True:
+                try:
+                    original_write(descriptor, b'x' * 4096)
+                except BlockingIOError:
+                    break
 
             def write(fd, data):
                 count = original_write(fd, data)
@@ -132,7 +141,7 @@ def test_normal_request_enforces_finite_transport_limits(monkeypatch, action, fa
         assert time.monotonic() - started < 1.5
         assert len(calls) == (0 if fault == 'oversized-input' else 1)
         if fault == 'blocked-input':
-            assert 0 < sum(written) < 60000
+            assert not written
         if action == 'reconcile-unknown':
             assert failure.value.missing_predicate == 'native_rpc_returns_fence_evidence'
         for child in children:
