@@ -176,6 +176,9 @@ def test_cleanup_fails_closed_for_unverifiable_or_active_roots(tmp_path: Path) -
     marker.write_text(marker.read_text().replace('"version": 1', '"version": 1, "version": 1'))
     with pytest.raises(ValueError, match="duplicate"):
         subject._open_temp_owner(duplicate)
+    overflow = _candidate(tmp_path, "overflow", pid=2**128)
+    with pytest.raises(ValueError, match="unqualified"):
+        subject._open_temp_owner(overflow)
     locked = _candidate(tmp_path, "locked", pid=_dead_pid())
     marker = locked / subject._TEMP_OWNER
     child = subprocess.Popen(
@@ -188,7 +191,7 @@ def test_cleanup_fails_closed_for_unverifiable_or_active_roots(tmp_path: Path) -
         assert select.select([child.stdout], [], [], 10)[0]
         assert child.stdout.readline() == "ready\n"
         subject._prune_expired_temp_roots(tmp_path)
-        assert missing.exists() and invalid.exists() and duplicate.exists() and locked.exists()
+        assert missing.exists() and invalid.exists() and duplicate.exists() and overflow.exists() and locked.exists()
     finally:
         if child.stdin is not None:
             child.stdin.close()

@@ -138,7 +138,7 @@ def _open_temp_owner(directory: Path) -> tuple[int, dict[str, int]]:
         if (type(value) is not dict or set(value) != {"version", "pid", "created_ns", "device", "inode"}
                 or type(value["version"]) is not int or value["version"] != 1
                 or any(type(value[key]) is not int for key in ("pid", "created_ns", "device", "inode"))
-                or value["pid"] <= 0 or value["created_ns"] <= 0
+                or not 0 < value["pid"] < 2**31 or value["created_ns"] <= 0
                 or (value["device"], value["inode"]) != (root_stat.st_dev, root_stat.st_ino)):
             raise ValueError("unqualified owner")
         result = marker_fd
