@@ -7,8 +7,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from app.ops import heavy_acceptance, heavy_acceptance_runner, pg_acceptance, pg_acceptance_runner
+from app.ops.acceptance_memory import AcceptanceMemoryPolicy, MemoryLimit
 from app.ops.heavy_acceptance_runner import HeavyAcceptanceRunner
 from tests.deploy import test_postmerge_heavy_acceptance as heavy_fixtures
 from tests.deploy import test_postmerge_pg_acceptance as pg_fixtures
@@ -18,6 +20,15 @@ EXPECTED_LOGGING = {
     "driver": "json-file",
     "options": {"max-file": "3", "max-size": "50m"},
 }
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_channel_compose_logging_has_no_anchor_or_alias(channel: str) -> None:
+    # The retained-source projection deliberately refuses YAML indirection;
+    # real channel overlays must remain admissible to that comparison.
+    events = yaml.parse((ROOT / f"docker-compose.{channel}.yml").read_text())
+    assert all(not isinstance(event, yaml.events.AliasEvent) and not getattr(event, "anchor", None)
+               for event in events)
 
 
 def _compose(*files: str, channel: str = "dev") -> dict:
@@ -51,15 +62,23 @@ def _assert_rotation(arguments: list[str] | tuple[str, ...]) -> None:
 
 
 @pytest.mark.parametrize("channel", ["dev", "test"])
-def test_native_acceptance_container_create_rotation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, channel: str) -> None:
+@pytest.mark.parametrize("use_memory", [False, True])
+def test_native_acceptance_container_create_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, channel: str, use_memory: bool,
+) -> None:
+    limit = MemoryLimit(256 * 1024**2, 256 * 1024**2)
+    policy = AcceptanceMemoryPolicy(heavy=limit, pg_db=limit, pg_tests=limit) if use_memory else None
     pg_dir = tmp_path / "pg"
     pg_dir.mkdir()
-    runner, boundary, _, _ = pg_fixtures._runner(pg_dir, monkeypatch, channel=channel)
+    runner, boundary, _, _ = pg_fixtures._runner(pg_dir, monkeypatch, channel=channel, memory_policy=policy)
     assert runner.verify()["result"] == "passed"
     pg_creates = [args for args, _ in boundary.commands if args[0] == "create"]
     assert len(pg_creates) == 2
     for args in pg_creates:
         _assert_rotation(args)
+        if use_memory:
+            assert args[args.index("--memory") + 1] == str(limit.memory)
+            assert args[args.index("--memory-swap") + 1] == str(limit.memory_swap)
 
     heavy_dir = tmp_path / "heavy"
     heavy_dir.mkdir()
@@ -68,9 +87,13 @@ def test_native_acceptance_container_create_rotation(tmp_path: Path, monkeypatch
     heavy_runner = HeavyAcceptanceRunner(
         fixture_runner.repository, heavy_dir / "journal", sha=heavy_fixtures.SHA,
         digest=heavy_fixtures.DIGEST, channel=channel, operation_id=heavy_fixtures.OPERATION,
+        memory_limit=limit if use_memory else None,
     )
     assert heavy_runner.verify()["result"] == "passed"
     _assert_rotation(fake.created)
+    if use_memory:
+        assert fake.created[fake.created.index("--memory") + 1] == str(limit.memory)
+        assert fake.created[fake.created.index("--memory-swap") + 1] == str(limit.memory_swap)
 
 
 def test_native_acceptance_rejects_prod_before_docker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
