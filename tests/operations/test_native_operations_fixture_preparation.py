@@ -220,7 +220,10 @@ def test_preparation_refuses_unqualified_inputs_without_dependent_effects(tmp_pa
         if fault == "candidate":
             host.native.api_command = ["python", "foreign.py"]
         elif fault == "operation":
-            host.native.journal.write(OPERATION, "failed")
+            failed = "65600000-0000-4000-8000-000000000098"
+            host.native.journal.bind_request(failed, host.native.plan, False, create=True)
+            for stage in ("prepared", "preflighted", "materialized", "authenticating", "activating", "failed"):
+                host.native.journal.write(failed, stage)
         elif fault == "foreign_source":
             (host.root / "personal.md").write_text("Preserve this unrelated user note.")
         elif fault == "symlink":
