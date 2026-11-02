@@ -1,4 +1,4 @@
-"""Focused fixed TEST adapter proof. OS files are private; all effects fake."""
+"""Focused TEST proof: fake native effects, plus a confined local stderr producer."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 from types import ModuleType, SimpleNamespace
@@ -84,6 +85,7 @@ SOURCE_FILES = (
     "ops/host-setup/mac-mini/prod_probe.py",
 )
 _FIXTURE_SOURCE = None
+_REAL_POPEN = subprocess.Popen
 
 
 def fixture_source():
@@ -255,6 +257,10 @@ def unit_metadata(binding, clock):
         SubState="running",
         UnitFileState="enabled",
         MainPID="4141",
+        Result="success",
+        ExecMainPID="4141",
+        ExecMainCode="0",
+        ExecMainStatus="0",
         InvocationID="1" * 32,
         ControlGroup="/system.slice/system-yggdrasil\\x2dhost\\x2dprobe.slice/" + target.UNIT,
         ExecMainStartTimestampMonotonic="900000000",
@@ -334,6 +340,9 @@ class Command:
             )
         elif argv == target.systemd("reload_for_temporary_test"):
             envelope = self.owner.installation
+            runtime = {
+                key: self.owner.unit[key] for key in target.VOLATILE | {"Job"}
+            }
             if (self.owner.root / envelope.artifact).exists():
                 self.owner.binding = envelope.selected
                 updated = unit_metadata(envelope.selected, self.owner.clock)
@@ -359,6 +368,8 @@ class Command:
             else:
                 self.owner.binding = envelope.binding
                 self.owner.unit = dict(envelope.original)
+            # DaemonReload replaces configuration, not retained manager state.
+            self.owner.unit.update(runtime)
             data = b""
         elif argv == target.systemd("show"):
             data = manager_show(argv, self.owner.unit)
@@ -366,11 +377,19 @@ class Command:
             data = manager_credential_property(argv, self.owner.unit)
         elif argv == target.systemd("stop"):
             self.owner.unit.update(
-                ActiveState="inactive",
-                SubState="dead",
+                ActiveState="failed",
+                SubState="failed",
+                Result="exit-code",
+                ExecMainPID=self.owner.unit["MainPID"],
+                ExecMainCode="1",
+                ExecMainStatus="143",
                 MainPID="0",
+                Job="",
                 InactiveEnterTimestampMonotonic=str(int(self.owner.clock.value * 1_000_000)),
             )
+            data = b""
+        elif argv == target.systemd("reset-failed"):
+            self.owner.unit.update(ActiveState="inactive", SubState="dead", Result="success")
             data = b""
         elif argv == target.systemd("start"):
             self.owner.incarnation += 1
@@ -379,6 +398,10 @@ class Command:
                 ActiveState="active",
                 SubState="running",
                 MainPID=str(4140 + self.owner.incarnation),
+                Result="success",
+                ExecMainPID=str(4140 + self.owner.incarnation),
+                ExecMainCode="0",
+                ExecMainStatus="0",
                 InvocationID=identity,
                 ExecMainStartTimestampMonotonic=str(int(self.owner.clock.value * 1_000_000)),
                 ControlGroup="/system.slice/system-yggdrasil\\x2dhost\\x2dprobe.slice/"
@@ -510,7 +533,7 @@ class SourceLog:
                 "_SYSTEMD_CGROUP": owner.unit["ControlGroup"],
                 "_TRANSPORT": "stdout",
                 "_STREAM_ID": runtime.stream,
-                "_PID": runtime.creator.pid,
+                "_PID": runtime.child.pid,
                 "__MONOTONIC_TIMESTAMP": str(int(owner.clock.value * 1_000_000)),
                 "__CURSOR": "fixture-cursor-" + str(owner.serial),
             }
@@ -849,7 +872,8 @@ class FixedTestAdapterTests(unittest.TestCase):
         correlation = h.adapter.transitions.correlation
         self.assertTrue(all("correlation_id: " + correlation in item for item in h.deliveries))
         self.assertEqual(
-            ["stop", "start", "stop", "start"], [argv[1] for argv in h.command.effects]
+            ["stop", "reset-failed", "start", "stop", "reset-failed", "start"],
+            [argv[1] for argv in h.command.effects]
         )
         self.assertEqual(-1, held.fileno())
         self.assertFalse(result["native_entry_enabled"])
@@ -945,7 +969,7 @@ class FixedTestAdapterTests(unittest.TestCase):
         path.write_bytes(h.healthy + b"UNEXPECTED=value\n")
         with self.assertRaises(target.Unknown):
             h.adapter.swap_base_url()
-        self.assertEqual(["stop"], [argv[1] for argv in h.command.effects])
+        self.assertEqual(["stop", "reset-failed"], [argv[1] for argv in h.command.effects])
 
     def test_real_atomic_replace_loss_is_sticky_and_not_retried_or_cleaned_blindly(self):
         h = self.h
@@ -1067,18 +1091,54 @@ class FixedTestAdapterTests(unittest.TestCase):
         with self.assertRaises(target.Unknown):
             h.adapter.swap_base_url(restore=True)
 
-    def test_failed_confirmation_iteration_error_wrong_creator_or_replayed_cursor_unknown(self):
+    def test_foreign_journal_pid_cannot_confirm_a_normal_transition(self):
         h = self.h
         h.fault_start()
         h.source_cycle()
-        # The source emitted real confirmed/down. Metadata claiming child PID
-        # instead of the inherited stream creator must fail even with correct text.
+        # The source emitted real confirmed/down. An outsider is neither the
+        # qualified launcher nor its fixed child, even with correct message text.
         original = h.rows[0]["_PID"]
-        h.rows[0]["_PID"] = str(int(original) + 100)
+        h.rows[0]["_PID"] = str(int(original) + 1000)
         with self.assertRaises(target.Unknown):
             h.adapter.normal_transitions()
         self.assertEqual(0, h.adapter.transitions.down)
         self.assertEqual(1, len(h.deliveries))
+
+    def test_child_attribution_preserves_stream_and_process_continuity_guards(self):
+        rows = (
+            ("_PID", "99999"),
+            ("_PID", "707"),
+            ("_PID", None),
+            ("_PID", 4241),
+            ("_TRANSPORT", "syslog"),
+            ("_STREAM_ID", "e" * 32),
+            ("_SYSTEMD_CGROUP", "/foreign"),
+            ("_BOOT_ID", "e" * 32),
+            ("_SYSTEMD_INVOCATION_ID", "e" * 32),
+        )
+        for key, value in rows:
+            with self.subTest(field=key, value=value):
+                h = self.fresh()
+                h.fault_start()
+                h.source_cycle()
+                h.rows[0][key] = value
+                with self.assertRaises(target.Unknown):
+                    h.adapter.normal_transitions()
+                self.assertEqual(0, h.adapter.transitions.down)
+                self.assertEqual(1, len(h.deliveries))
+        for name, change in (
+            ("pid_reuse", lambda p: replace(p, start_identity="e" * 64)),
+            ("foreign_parent", lambda p: replace(p, parent="99999")),
+            ("foreign_fd", lambda p: replace(p, stderr_inode=552, stderr_target="socket:[552]")),
+        ):
+            with self.subTest(process=name):
+                h = self.fresh()
+                h.fault_start()
+                h.source_cycle()
+                h.runtime.modify = lambda r: replace(r, child=change(r.child))
+                with self.assertRaises(target.Unknown):
+                    h.adapter.normal_transitions()
+                self.assertEqual(0, h.adapter.transitions.down)
 
     def test_real_source_delivery_failure_cannot_become_down_or_trigger_retry(self):
         h = self.h
@@ -1095,7 +1155,10 @@ class FixedTestAdapterTests(unittest.TestCase):
             h.adapter.normal_transitions()
         self.assertEqual(effects, h.command.effects)
         self.assertEqual(0, h.adapter.transitions.down)
-        self.assertEqual(["stop", "start", "stop"], [argv[1] for argv in h.command.effects])
+        self.assertEqual(
+            ["stop", "reset-failed", "start", "stop", "reset-failed"],
+            [argv[1] for argv in h.command.effects],
+        )
 
     def test_wrong_confirmation_correlation_duplicate_cursor_or_error_is_unknown(self):
         variants = ("unconfirmed", "correlation", "cursor", "iteration")
@@ -1132,7 +1195,9 @@ class FixedTestAdapterTests(unittest.TestCase):
         with self.assertRaises(target.Unknown):
             h.adapter.normal_transitions()
         self.assertEqual(b"new ACK event must survive", (h.root / "ack-history").read_bytes())
-        self.assertEqual(["stop", "start"], [argv[1] for argv in h.command.effects])
+        self.assertEqual(
+            ["stop", "reset-failed", "start"], [argv[1] for argv in h.command.effects]
+        )
 
     def test_public_custody_is_exact_and_setup_failure_reaps_closes_all_fake_pipes(self):
         source = (PUBLIC / "scripts/probe_upgrade_operation.py").read_text()
@@ -1205,7 +1270,10 @@ class FixedTestAdapterTests(unittest.TestCase):
         self.assertNotIn(b"StandardOutput=append", artifact)
         result = self.run_installed_sequence(envelope)
         self.assertFalse((h.root / "test.env").exists())
-        self.assertEqual(original_unit, h.unit)
+        self.assertEqual(target.unit_profile(original_unit), target.unit_profile(h.unit))
+        self.assertEqual(("inactive", "dead", "0", "success"), tuple(
+            h.unit[key] for key in ("ActiveState", "SubState", "MainPID", "Result")
+        ))
         self.assertEqual([], os.listdir(h.root / "var-lib"))
         self.assertEqual([], os.listdir(h.root / "volatile-systemd"))
         self.assertEqual("absent", result["original_service"])
@@ -1224,7 +1292,10 @@ class FixedTestAdapterTests(unittest.TestCase):
             (h.root / envelope.artifact).read_bytes().startswith(b"[Service]\nWorkingDirectory=")
         )
         result = self.run_installed_sequence(envelope)
-        self.assertEqual(original_unit, h.unit)
+        self.assertEqual(target.unit_profile(original_unit), target.unit_profile(h.unit))
+        self.assertEqual(("inactive", "dead", "0", "success"), tuple(
+            h.unit[key] for key in ("ActiveState", "SubState", "MainPID", "Result")
+        ))
         self.assertEqual(original_config, h.files.read("config"))
         self.assertEqual("enabled", h.unit["UnitFileState"])
         self.assertEqual(template, envelope.qualification.original_template_bytes)
@@ -1435,6 +1506,14 @@ class MemoryLinuxOS:
         a, b = self.full(source, src_dir_fd), self.full(destination, dst_dir_fd)
         self.files[b], self.meta[b] = self.files.pop(a), self.meta.pop(a)
 
+    def link(self, source, destination, *, src_dir_fd, dst_dir_fd, follow_symlinks):
+        assert follow_symlinks is False
+        a, b = self.full(source, src_dir_fd), self.full(destination, dst_dir_fd)
+        if b in self.meta:
+            raise FileExistsError(b)
+        self.files[b], self.meta[b] = self.files[a], self.meta[a]
+        self.meta[b].st_nlink += 1
+
     def killpg(self, pid, sig):
         self.kernel.killed.append((pid, sig))
 
@@ -1464,7 +1543,7 @@ class MemoryLinuxOS:
     def unlink(self, path, *, dir_fd=None):
         path = self.full(path, dir_fd)
         self.files.pop(path)
-        self.meta.pop(path)
+        self.meta.pop(path).st_nlink -= 1
 
     def rmdir(self, path, *, dir_fd=None):
         path = self.full(path, dir_fd)
@@ -1878,8 +1957,14 @@ class NativeKernel:
         )
         self.source_cycle()
 
+    def normal_binding(self):
+        return replace(
+            self.scope.binding, package=self.unit["WorkingDirectory"],
+            config=self.unit["EnvironmentFiles"].split(" ", 1)[0],
+        )
+
     def _proc(self, pid, parent, argv, environment, ticks, cgroup, *, stderr=551):
-        binding = self.scope.binding
+        binding = self.normal_binding()
         fields = ["S", str(parent)] + ["0"] * 17 + [str(ticks)] + ["0"] * 5
         base = "/proc/" + pid
         for leaf, data in {
@@ -1903,7 +1988,7 @@ class NativeKernel:
         )
 
     def _processes(self):
-        binding, group = self.scope.binding, self.unit["ControlGroup"]
+        binding, group = self.normal_binding(), self.unit["ControlGroup"]
         creator, child = (
             self.unit["MainPID"],
             str(int(self.unit["MainPID"]) + 100) if self.unit["MainPID"] != "0" else "0",
@@ -1985,7 +2070,10 @@ class NativeKernel:
                 "_SYSTEMD_UNIT": target.UNIT,
                 "_SYSTEMD_INVOCATION_ID": self.unit["InvocationID"],
                 "_SYSTEMD_CGROUP": self.unit["ControlGroup"],
-                "_PID": self.unit["MainPID"],
+                "_PID": str(
+                    int(self.unit["MainPID"])
+                    + (100 if getattr(self, "journal_origin", "child") == "child" else 0)
+                ),
                 "_TRANSPORT": "stdout",
                 "_STREAM_ID": str(self.incarnation + 3) * 32,
                 "__CURSOR": "native-cursor-" + str(self.serial),
@@ -1994,7 +2082,7 @@ class NativeKernel:
         )
 
     def source_cycle(self):
-        binding = self.scope.binding
+        binding = self.normal_binding()
         values = target.parse_config(self.os.files[binding.config])
 
         def http_get(url, **kwargs):
@@ -2038,17 +2126,41 @@ class NativeKernel:
 
     def response(self, argv, input_bytes):
         if argv == target.systemd("reload_for_temporary_test"):
-            guard_paths = [path for path in self.os.files if "/99-ygg-test-owner-" in path]
-            if not hasattr(self, "original_guard_properties"):
-                self.original_guard_properties = (
-                    self.unit["Environment"],
-                    self.unit["DropInPaths"],
+            # A manager reload recomputes the physical unit/drop-in profile;
+            # it does not erase failed or retained last-execution state.
+            if not hasattr(self, "original_unit_profile"):
+                self.original_unit_profile = dict(self.unit)
+            runtime = {key: self.unit[key] for key in target.VOLATILE | {"Job"}}
+            original = self.original_unit_profile
+            artifact = next((path for path in self.os.files if (
+                path == "/run/systemd/system/" + target.UNIT
+                or path.startswith("/run/systemd/system/" + target.UNIT + ".d/99-test-probe-")
+            )), None)
+            self.unit = dict(original)
+            if artifact:
+                directives = {}
+                for row in self.os.files[artifact].decode().splitlines():
+                    if "=" in row and not row.startswith("#"):
+                        key, value = row.split("=", 1)
+                        directives[key] = value
+                selected = replace(
+                    self.scope.binding, package=directives["WorkingDirectory"],
+                    config=directives["EnvironmentFile"],
                 )
-            environment, dropins = self.original_guard_properties
-            self.unit["Environment"] = environment + (
-                " YGG_TEST_OPERATION=" + self.scope.handle.operation if guard_paths else ""
-            )
-            self.unit["DropInPaths"] = " ".join([*dropins.split(), *guard_paths])
+                self.unit = unit_metadata(selected, self.clock)
+                self.unit.update(
+                    FragmentPath=artifact if artifact.endswith(".service") else original["FragmentPath"],
+                    DropInPaths="" if artifact.endswith(".service") else artifact,
+                    UnitFileState="static" if artifact.endswith(".service") else original["UnitFileState"],
+                    LoadCredentialEncrypted=":".join(target.TEST_CREDENTIAL),
+                    ReadWritePaths=self.scope.controller_directory,
+                )
+            guards = [path for path in self.os.files if "/99-ygg-test-owner-" in path]
+            if guards:
+                self.unit["Environment"] += " YGG_TEST_OPERATION=" + self.scope.handle.operation
+                self.unit["DropInPaths"] = " ".join([*self.unit["DropInPaths"].split(), *guards])
+            self.unit.update(runtime)
+            self.reload_states = getattr(self, "reload_states", []) + [self.unit["ActiveState"]]
             return b""
         if argv == target.watchdog_command(self.scope):
             self.guardian_active = True
@@ -2126,14 +2238,27 @@ class NativeKernel:
         if argv == target.test_credential_property():
             return manager_credential_property(argv, self.unit)
         if argv == target.systemd("stop"):
+            # The pinned BWS wrapper catches SIGTERM and returns143. An
+            # explicit systemd stop suppresses restart, but keeps failed state.
+            live = self.unit["MainPID"] != "0"
+            if live:
+                self.unit.update(
+                    ActiveState="failed", SubState="failed", Result="exit-code",
+                    ExecMainPID=self.unit["MainPID"], ExecMainCode="1", ExecMainStatus="143",
+                )
+            elif self.unit["ActiveState"] not in {"inactive", "failed"}:
+                self.unit.update(ActiveState="inactive", SubState="dead")
             self.unit.update(
-                ActiveState="inactive",
-                SubState="dead",
                 MainPID="0",
                 Job="",
                 InactiveEnterTimestampMonotonic=str(int(self.clock.value * 1_000_000)),
             )
             self._processes()
+            return b""
+        if argv == target.systemd("reset-failed"):
+            self.unit.update(
+                ActiveState="inactive", SubState="dead", Result="success", NRestarts="0"
+            )
             return b""
         if argv == target.systemd("start"):
             self.incarnation += 1
@@ -2141,9 +2266,14 @@ class NativeKernel:
                 ActiveState="active",
                 SubState="running",
                 MainPID=str(4140 + self.incarnation),
+                Result="success",
+                ExecMainPID=str(4140 + self.incarnation),
+                ExecMainCode="0",
+                ExecMainStatus="0",
                 InvocationID=str(self.incarnation) * 32,
                 ExecMainStartTimestampMonotonic=str(int(self.clock.value * 1_000_000)),
             )
+            self.unit["ControlGroup"] = unit_metadata(self.scope.binding, self.clock)["ControlGroup"]
             self._processes()
             self.source_cycle()
             self.next_cycle = self.clock.value + 61
@@ -2959,7 +3089,7 @@ def test_guard_quiesces_only_owned_fault_and_restores_config_without_state_rewin
     try:
         result = target.cleanup_owned_test_fault(fresh, guard.record)
         self.assertEqual("unknown", result["status"])
-        self.assertEqual("inactive", kernel.unit["ActiveState"])
+        self.assertEqual("failed", kernel.unit["ActiveState"])
         self.assertEqual(original, target.parse_config(fresh.files.read("config").data))
         self.assertEqual(incident, (self.root / "native-incident.json").read_bytes())
         self.assertFalse(result["history_rewound"])
@@ -3007,12 +3137,66 @@ def test_guard_refuses_foreign_incarnation_and_retains_original_fault_handle(sel
 
 def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
     self,
+    *,
+    whole_worker=False,
+    journal_origin="child",
+    original_service="active",
+    platform_setup=None,
 ):
     import contextlib, io
     from datetime import datetime, timezone
 
     kernel, assembly = _native(self)
     program = Path(target.__file__).read_bytes()
+    if whole_worker:
+        assembly.files.close()
+        archive, manifest, hashes = fixture_source()
+        raw = program.decode()
+        for old, new in (
+            (LIVE_PINS["ARCHIVE_SHA256"], target.sha(archive)),
+            (LIVE_PINS["MANIFEST_SHA256"], target.sha(manifest)),
+            *[(LIVE_PINS["SOURCE_HASHES"][name], value) for name, value in hashes.items()],
+        ):
+            raw = raw.replace(old, new)
+        raw = raw.replace(
+            "ARCHIVE_BYTES = " + format(LIVE_PINS["ARCHIVE_BYTES"], "_"),
+            "ARCHIVE_BYTES = " + str(len(archive)),
+        )
+        program = raw.encode()
+        old_base = kernel.scope.binding.api_base
+        kernel.scope = replace(
+            kernel.scope,
+            binding=replace(kernel.scope.binding, api_base="http://127.0.0.1:47777"),
+            program_sha256=target.sha(program),
+        )
+        kernel.os.files[kernel.scope.binding.config] = kernel.os.files[
+            kernel.scope.binding.config
+        ].replace(old_base.encode(), kernel.scope.binding.api_base.encode())
+        kernel.os.add(
+            kernel.unit["FragmentPath"], (PUBLIC / target.TEMPLATE).read_bytes(), mode=0o644
+        )
+        for path in list(kernel.os.meta):
+            if path == kernel.scope.root or path.startswith(kernel.scope.root + "/"):
+                kernel.os.meta.pop(path)
+                kernel.os.files.pop(path, None)
+        if original_service != "active":
+            kernel.unit.update(
+                ActiveState="inactive", SubState="dead", MainPID="0", Result="success",
+                ExecMainPID="0", ExecMainCode="0", ExecMainStatus="0", InvocationID="",
+                ExecMainStartTimestampMonotonic="0", InactiveEnterTimestampMonotonic="0",
+            )
+            kernel._processes()
+            kernel.unit["ControlGroup"] = ""
+            if original_service == "absent":
+                kernel.unit.update(
+                    LoadState="not-found", UnitFileState="not-found", FragmentPath="",
+                    DropInPaths="", LoadCredentialEncrypted="[unprintable]",
+                )
+        kernel.journal_origin = journal_origin
+        for row in kernel.rows:
+            row["_PID"] = str(
+                int(kernel.unit["MainPID"]) + (100 if journal_origin == "child" else 0)
+            )
     contract = b"fixed reviewed issue6493"
     packet = {
         "schema": "fixed_test_probe.carrier.v1",
@@ -3039,6 +3223,10 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
     }
     for path in (packet["gh_executable"], packet["caller_interpreter"]):
         kernel.os.add(path, b"qualified existing local tool", mode=0o755)
+    self.lifecycle_kernel = kernel
+    self.addCleanup(lambda: sys.modules.pop("fixed_test_program", None))
+    if platform_setup is not None:
+        platform_setup(kernel)
     original = kernel.response
     executed = []
     caller_path = target.LOCAL_TEST_WORKTREE + "/scripts/probe_test_outage_operation.py"
@@ -3049,7 +3237,11 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
     }
     kernel.os.add(caller_path, program, mode=0o644)
     kernel.os.getcwd = lambda: entry["cwd"]
-    kernel.os.path.realpath = lambda path: path
+    kernel.os.path.realpath = lambda path: (
+        kernel.scope.binding.sdk_realpath
+        if whole_worker and path == kernel.scope.binding.sdk
+        else path
+    )
     authority = {
         "ok": True,
         "task": {
@@ -3079,6 +3271,37 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
             "expires_at": kernel.clock.epoch + 7200,
         }
     }
+    stages = []
+
+    class SDKExited(BaseException):
+        pass
+
+    def execve(executable, argv, environment):
+        module = sys.modules["fixed_test_program"]
+        scope, _, _ = module._decode_scope(
+            kernel.os.files[kernel.scope.root + "/native-input.json"]
+        )
+        self.assertEqual(scope.binding.sdk, executable)
+        self.assertEqual(
+            [
+                executable,
+                "-I",
+                scope.root + "/program.py",
+                "--qualified-test-worker",
+                packet["operation"],
+            ],
+            argv,
+        )
+        self.assertEqual({"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}, environment)
+        kernel.scope = scope
+        stages.append("qualified-sdk-exec")
+        self.assertEqual(0, module.main(["--qualified-test-worker", packet["operation"]]))
+        stages.append("qualified-worker-complete")
+        raise SDKExited()
+
+    if whole_worker:
+        kernel.os.execve = execve
+        docker = DockerDiscoveryProducer()
 
     def response(argv, payload):
         if argv[:3] == ("/usr/bin/git", "-C", target.LOCAL_TEST_WORKTREE):
@@ -3124,16 +3347,64 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
                 exec(source, namespace)
                 self.assertIs(sys.modules[namespace["__name__"]].__dict__, namespace)
                 self.assertEqual(namespace["Binding"].__module__, namespace["__name__"])
-                namespace["native_entry"] = remote_port
+                if whole_worker:
+                    namespace["LinuxDependencies"].standard_library = lambda: kernel.dependencies
+                    stages.append("serialized-remote-entry")
+                else:
+                    namespace["native_entry"] = remote_port
 
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                exec(
-                    compile(payload, "actual-assembled-remote-envelope", "exec"),
-                    {"exec": execute_remote_source},
-                )
+                try:
+                    exec(
+                        compile(payload, "actual-assembled-remote-envelope", "exec"),
+                        {"exec": execute_remote_source},
+                    )
+                except BaseException as error:
+                    kernel.port_failure = error
+                    raise
             executed.append(json.loads(output.getvalue()))
             return output.getvalue().encode()
+        if whole_worker and argv[0] == "/usr/bin/docker":
+            return docker(argv)
+        if (
+            whole_worker
+            and argv[0] == "/usr/bin/systemd-run"
+            and "--supervised-first-preflight" in argv
+        ):
+            root = kernel.scope.root
+            self.assertEqual(
+                {
+                    root + "/" + name
+                    for name in (
+                        "program.py",
+                        "source.tar",
+                        "manifest.json",
+                        "carrier-envelope.json",
+                    )
+                },
+                {path for path in kernel.os.files if path.startswith(root + "/")},
+            )
+            module = sys.modules["fixed_test_program"]
+            actual_path = Path
+
+            def namespace_path(value):
+                if str(value) == root + "/program.py":
+                    return SimpleNamespace(resolve=lambda: SimpleNamespace(parent=root))
+                return actual_path(value)
+
+            stages.append("cold-first-preflight")
+            with (
+                patch.object(module, "__file__", root + "/program.py"),
+                patch.object(module, "Path", side_effect=namespace_path),
+                self.assertRaises(SDKExited),
+            ):
+                module.main(["--supervised-first-preflight", packet["operation"]])
+            kernel.supervisor.update(ActiveState="inactive", SubState="dead", MainPID="0", Job="")
+            kernel.os.files[
+                "/sys/fs/cgroup" + kernel.supervisor["ControlGroup"] + "/cgroup.procs"
+            ] = b""
+            return b""
         return original(argv, payload)
 
     kernel.response = response
@@ -3169,10 +3440,42 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
                     inputs + "/custody.py",
                 ]
             )
-        self.assertEqual(78, result)
+        self.assertEqual(0 if whole_worker else 78, result)
         return output.getvalue().encode()
 
-    result = invoke()
+    try:
+        result = invoke()
+    except target.Unknown:
+        if whole_worker and hasattr(kernel, "port_failure"):
+            raise kernel.port_failure
+        raise
+    if whole_worker:
+        self.assertEqual(
+            [
+                "serialized-remote-entry",
+                "cold-first-preflight",
+                "qualified-sdk-exec",
+                "qualified-worker-complete",
+            ],
+            stages,
+        )
+        # This exercises receipt construction with fake platform ports. It is
+        # test output only, never an actual native acceptance artifact.
+        self.assertEqual("PASS", json.loads(result)["status"])
+        self.assertTrue(json.loads(result)["config_restored"])
+        self.assertTrue(json.loads(result)["same_correlation"])
+        self.assertEqual(2, len(self.h.deliveries))
+        self.assertFalse(kernel.os.fds)
+        self.assertTrue(all(selector.closed for selector in kernel.selectors))
+        self.assertTrue(
+            all(
+                pipe.closed
+                for process in kernel.processes
+                for pipe in (process.stdin, process.stdout, process.stderr)
+            )
+        )
+        sys.modules.pop("fixed_test_program", None)
+        return kernel
     self.assertEqual(
         {
             "schema": "fixed_test_probe.outcome.v1",
@@ -3302,6 +3605,118 @@ def test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolut
     sys.modules.pop("fixed_test_program", None)
 
 
+def test_normal_popen_stderr_producer_and_whole_caller_origins(self):
+    """Real bootstrap Popen/normal logging, then complete native calls at fake ports."""
+    import signal
+
+    child = """
+import json, os, runpy, socket, sys, time
+from pathlib import Path
+root, scratch = Path(sys.argv[1]), Path(sys.argv[2])
+sys.path.insert(0, str(root / 'ops/host-setup/mac-mini'))
+os.environ['PROBE_STATE_FILE'] = str(scratch / 'absent-incident.json')
+probe = runpy.run_path(str(root / 'ops/host-setup/mac-mini/prod_probe.py'))
+def forbidden(*args, **kwargs):
+    raise AssertionError('no native network in producer fixture')
+socket.socket = socket.getaddrinfo = forbidden
+heartbeat = scratch / 'producer-heartbeat.json'
+heartbeat.write_text(json.dumps({'ts': time.time()}))
+fd = os.fstat(2)
+print(json.dumps({'role': 'child', 'pid': os.getpid(), 'parent': os.getppid(),
+                  'fd': [fd.st_dev, fd.st_ino]}), flush=True)
+assert probe['run_probe'](base_url='http://synthetic.invalid', heartbeat_path=str(heartbeat),
+    heartbeat_stale_seconds=60, channel=probe['NullChannel'](), environment='test',
+    http_get=lambda *args, **kwargs: (200, {'required_ok': True})) is True
+"""
+    parent = """
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+from app.ops.host_secret_bootstrap import _subprocess_runner
+fd = os.fstat(2)
+print(json.dumps({'role': 'creator', 'pid': os.getpid(),
+                  'fd': [fd.st_dev, fd.st_ino]}), flush=True)
+raise SystemExit(_subprocess_runner(
+    [sys.executable, '-I', '-c', sys.argv[3], sys.argv[1], sys.argv[2]],
+    {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}))
+"""
+    process = _REAL_POPEN(
+        [sys.executable, "-I", "-c", parent, str(PUBLIC), str(self.root), child],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+        start_new_session=True,
+    )
+    try:
+        output, error = process.communicate(timeout=15)
+    except BaseException:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
+        raise
+    finally:
+        process.stdout.close()
+        process.stderr.close()
+    self.assertEqual(0, process.returncode, error.decode())
+    creator, writer = (json.loads(line) for line in output.splitlines())
+    self.assertEqual(creator["pid"], writer["parent"])
+    self.assertNotEqual(creator["pid"], writer["pid"])
+    self.assertEqual(creator["fd"], writer["fd"])
+    lines = error.decode().splitlines()
+    self.assertEqual(1, len(lines))
+    match = target.LOG_FORMAT.fullmatch(lines[0])
+    self.assertIsNotNone(match)
+    self.assertEqual("INFO", match[1])
+    self.assertTrue(match[2].startswith("probe ok:"))
+    # SO_PASSCRED attributes that real writer; legacy stream metadata may name
+    # its creator. Map these observed roles to the fake kernel's exact processes.
+    for origin in (writer["role"], creator["role"]):
+        with self.subTest(origin=origin):
+            self.fresh()
+            kernel = self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                whole_worker=True, journal_origin=origin
+            )
+            self.assertTrue(kernel.rows)
+            self.assertTrue(all(row["_TRANSPORT"] == "stdout" for row in kernel.rows))
+
+
+def test_native_journal_rejects_nonproducer_pids_before_effects(self):
+    for pid in ("99999", "707", "4341", 4241, None, "04241"):
+        with self.subTest(pid=pid):
+            self.fresh()
+            kernel, assembly = _native(self)
+            if pid == "4341":
+                binding, group = kernel.scope.binding, kernel.unit["ControlGroup"]
+                kernel._proc(
+                    pid,
+                    "4241",
+                    (
+                        binding.sdk,
+                        "-I",
+                        "-c",
+                        target.HTTP_CHILD_CODE,
+                        binding.package + "/ops/host-setup/mac-mini",
+                    ),
+                    {},
+                    4341,
+                    group,
+                )
+                kernel.os.files["/sys/fs/cgroup" + group + "/cgroup.procs"] += b"4341\n"
+            kernel.rows[-1]["_PID"] = pid
+            with self.assertRaisesRegex(
+                target.Unknown, "actual_creator_child_journal_stream_unqualified"
+            ):
+                target.TestProbeAdapter(
+                    kernel.scope.binding, assembly.caller, assembly.files
+                ).admit()
+            self.assertEqual([], self.h.deliveries)
+            self.assertFalse(
+                any(
+                    p.argv in {target.systemd("start"), target.systemd("stop")}
+                    for p in kernel.processes
+                )
+            )
+
+
 def test_core_observations_cannot_satisfy_live_receipt_without_native_custody(self):
     kernel, assembly = _native(self)
     archive, _, _ = fixture_source()
@@ -3352,7 +3767,7 @@ def test_guard_contains_the_owned_systemd_lifecycle_and_cancels_queued_restarts(
             before = sum(process.argv == target.systemd("stop") for process in kernel.processes)
             result = target.cleanup_owned_test_fault(assembly, guard.record)
             self.assertEqual(
-                ("unknown", "failed" if state == "failed" else "inactive", "0", ""),
+                ("unknown", "failed" if live or state == "failed" else "inactive", "0", ""),
                 (
                     result["status"],
                     kernel.unit["ActiveState"],
@@ -4112,7 +4527,7 @@ def test_actual_cleanup_tolerates_exiting_proc_boundaries_without_weakening_admi
             self.assertEqual("unknown", result["status"])
             self.assertTrue(result["healthy_config_restored"])
             self.assertEqual(
-                ("inactive", "0", ""),
+                ("failed", "0", ""),
                 (kernel.unit["ActiveState"], kernel.unit["MainPID"], kernel.unit["Job"]),
             )
             self.assertEqual(incident, (self.root / "native-incident.json").read_bytes())
@@ -4191,7 +4606,7 @@ def test_actual_watchdog_cancels_owned_preexec_and_same_pid_exec_transitions(sel
             self.assertEqual("unknown", result["status"])
             self.assertTrue(result["healthy_config_restored"])
             self.assertFalse(result["history_rewound"])
-            self.assertEqual("inactive", kernel.unit["ActiveState"])
+            self.assertEqual("failed", kernel.unit["ActiveState"])
             self.assertEqual(saved_incident, (self.root / "native-incident.json").read_bytes())
             self.assertNotIn(
                 "http://127.0.0.1:", kernel.os.files[kernel.scope.binding.config].decode()
@@ -4485,6 +4900,424 @@ def test_stop_is_bounded_before_effects_and_ambiguous_containment_never_restores
             self.assertFalse(
                 any(p.argv == target.systemd("start") for p in kernel.processes[before:])
             )
+
+
+def test_whole_caller_normalizes_three_owned_143_stops_and_restores_original_service(self):
+    for index, original_service in enumerate(("active", "inactive", "absent")):
+        with self.subTest(original_service=original_service):
+            if index:
+                self.fresh()
+            reset_records = []
+
+            def setup(kernel):
+                response = kernel.response
+                before_profile = target.unit_profile(kernel.unit)
+                kernel.before_profile = before_profile
+                kernel.original_config = kernel.os.files[kernel.scope.binding.config]
+
+                def manager(argv, payload):
+                    if argv == target.systemd("reset-failed"):
+                        record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+                        evidence = record["owned_stops"][-1]
+                        self.assertEqual(("failed", "exit-code", "1", "143"), tuple(
+                            evidence[key] for key in ("terminal_state", "result", "exit_code", "exit_status")
+                        ))
+                        self.assertTrue(evidence["normalization_intent"])
+                        self.assertFalse(evidence["normalization_confirmed"])
+                        self.assertEqual(len(reset_records) + 1, len(record["owned_stops"]))
+                        # The last-exit evidence is durably present before reset.
+                        reset_records.append(record)
+                    return response(argv, payload)
+
+                kernel.response = manager
+
+            kernel = self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                whole_worker=True, original_service=original_service, platform_setup=setup
+            )
+            effects = [process.argv[1] for process in kernel.processes if process.argv in {
+                target.systemd("stop"), target.systemd("reset-failed"), target.systemd("start")
+            }]
+            expected = ["stop", "reset-failed", "start"] * 2 + ["stop", "reset-failed"]
+            expected = expected + ["start"] if original_service == "active" else ["start"] + expected
+            self.assertEqual(expected, effects)
+            self.assertEqual(3, len(reset_records))
+            final_record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertTrue(final_record["disarmed"])
+            self.assertTrue(all(row["normalization_confirmed"] for row in final_record["owned_stops"]))
+            self.assertEqual(3, len({row["incarnation_sha256"] for row in final_record["owned_stops"]}))
+            self.assertEqual(kernel.before_profile, target.unit_profile(kernel.unit))
+            self.assertEqual("active" if original_service == "active" else "inactive", kernel.unit["ActiveState"])
+            self.assertEqual("success", kernel.unit["Result"])
+            self.assertEqual(kernel.original_config, kernel.os.files[kernel.scope.binding.config])
+            self.assertFalse(any("99-ygg-test-owner-" in path or "/source/" in path
+                                 for path in kernel.os.files if path.startswith(kernel.scope.root)
+                                 or path.startswith("/run/systemd/system/")))
+            self.assertFalse((self.root / "native-incident.json").exists())
+
+
+def test_whole_caller_owned_stop_refuses_ambiguity_without_reset_retry_or_rewind(self):
+    cases = (
+        "unexpected_failed", "wrong_exit", "signal_kill", "wrong_result", "foreign_pid",
+        "foreign_invocation", "foreign_start", "pending_job", "restart_count", "restarting",
+        "stale_stop", "foreign_cgroup", "remaining_process", "lost_stop_ack", "marker_inode",
+        "config_change", "source_change", "history_advance", "lost_reset_ack",
+        "reset_still_failed", "reset_foreign_invocation", "reset_history_advance",
+        "last_stop_wrong_exit", "last_reset_lost_ack",
+    )
+    for index, case in enumerate(cases):
+        with self.subTest(case=case):
+            if index:
+                self.fresh()
+            failed_stop = 3 if case.startswith("last_") else 1
+            state = {"stops": 0, "resets": 0}
+
+            def setup(kernel):
+                if case == "unexpected_failed":
+                    kernel.unit.update(ActiveState="failed", SubState="failed", MainPID="0")
+                    kernel._processes()
+                response = kernel.response
+
+                def manager(argv, payload):
+                    stopping = argv == target.systemd("stop")
+                    resetting = argv == target.systemd("reset-failed")
+                    if stopping:
+                        state["stops"] += 1
+                    if resetting:
+                        state["resets"] += 1
+                    if stopping and state["stops"] == failed_stop:
+                        state["config_before"] = kernel.os.files[kernel.normal_binding().config]
+                        path = self.root / "native-incident.json"
+                        state["incident_before"] = path.read_bytes() if path.exists() else None
+                        state["starts_before"] = sum(p.argv == target.systemd("start") for p in kernel.processes)
+                    raw = response(argv, payload)
+                    if state["stops"] != failed_stop:
+                        return raw
+                    history = kernel.scope.controller_directory + "/operations.jsonl"
+                    if stopping:
+                        changes = {
+                            "wrong_exit": {"ExecMainStatus": "1"},
+                            "last_stop_wrong_exit": {"ExecMainStatus": "1"},
+                            "signal_kill": {"ExecMainCode": "2", "ExecMainStatus": "9"},
+                            "wrong_result": {"Result": "timeout"},
+                            "foreign_pid": {"ExecMainPID": "7777"},
+                            "foreign_invocation": {"InvocationID": "f" * 32},
+                            "foreign_start": {"ExecMainStartTimestampMonotonic": "1"},
+                            "pending_job": {"Job": "41 /org/freedesktop/systemd1/job/41"},
+                            "restart_count": {"NRestarts": "1"},
+                            "restarting": {"ActiveState": "activating", "SubState": "auto-restart"},
+                            "stale_stop": {"InactiveEnterTimestampMonotonic": "1"},
+                            "foreign_cgroup": {"ControlGroup": "/system.slice/foreign.service"},
+                        }
+                        kernel.unit.update(changes.get(case, {}))
+                        if case == "remaining_process":
+                            kernel.os.files["/sys/fs/cgroup" + kernel.unit["ControlGroup"] + "/cgroup.procs"] = b"7777\n"
+                        elif case == "lost_stop_ack":
+                            kernel.forced_returncodes = {argv: 1}
+                        elif case == "marker_inode":
+                            marker = next(path for path in kernel.os.files if "/99-ygg-test-owner-" in path)
+                            kernel.os.meta[marker].st_ino += 1
+                        elif case == "config_change":
+                            kernel.os.files[kernel.normal_binding().config] += b"# foreign config\n"
+                        elif case == "source_change":
+                            path = kernel.normal_binding().package + "/" + target.LAUNCHER
+                            kernel.os.add(path, kernel.os.files[path] + b"# foreign source\n", mode=0o664)
+                        elif case == "history_advance":
+                            kernel.os.files[history] = b"\n"
+                    if resetting:
+                        if case in {"lost_reset_ack", "last_reset_lost_ack"}:
+                            kernel.forced_returncodes = {argv: 1}
+                        elif case == "reset_still_failed":
+                            kernel.unit.update(ActiveState="failed", SubState="failed", Result="exit-code")
+                        elif case == "reset_foreign_invocation":
+                            kernel.unit["InvocationID"] = "f" * 32
+                        elif case == "reset_history_advance":
+                            kernel.os.files[history] = b"\n"
+                    return raw
+
+                kernel.response = manager
+
+            with self.assertRaises(Exception) as caught:
+                self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                    whole_worker=True, platform_setup=setup
+                )
+            self.assertIn(type(caught.exception).__name__, {"Unknown", "Refusal"})
+            kernel = self.lifecycle_kernel
+            reached_reset = case.startswith("reset_") or case in {"lost_reset_ack", "last_reset_lost_ack"}
+            expected_resets = 0 if case == "unexpected_failed" else failed_stop - 1 + int(reached_reset)
+            self.assertEqual(expected_resets, state["resets"])
+            self.assertEqual(0 if case == "unexpected_failed" else failed_stop, state["stops"])
+            if case != "unexpected_failed":
+                self.assertEqual(state["starts_before"], sum(p.argv == target.systemd("start") for p in kernel.processes))
+                path = self.root / "native-incident.json"
+                self.assertEqual(state["incident_before"], path.read_bytes() if path.exists() else None)
+                if case not in {"config_change"}:
+                    self.assertEqual(state["config_before"], kernel.os.files[kernel.normal_binding().config])
+                record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+                self.assertFalse(record["disarmed"])
+                if reached_reset:
+                    self.assertTrue(record["owned_stops"][-1]["normalization_intent"])
+                    self.assertFalse(record["owned_stops"][-1]["normalization_confirmed"])
+            if "history_advance" in case:
+                self.assertEqual(b"\n", kernel.os.files[kernel.scope.controller_directory + "/operations.jsonl"])
+            self.assertEqual(2 if failed_stop == 3 else 0, len(self.h.deliveries))
+            self.assertFalse(kernel.os.fds)
+
+
+def test_whole_caller_normalized_gc_is_finite_and_reload_cannot_clear_failed_state(self):
+    for index, mode in enumerate(("retained", "cleared")):
+        with self.subTest(manager_metadata=mode):
+            if index:
+                self.fresh()
+
+            def setup(kernel):
+                response = kernel.response
+
+                def manager(argv, payload):
+                    raw = response(argv, payload)
+                    if mode == "cleared" and argv == target.systemd("reset-failed"):
+                        kernel.unit.update(
+                            InvocationID="", ExecMainPID="0", ExecMainCode="0", ExecMainStatus="0",
+                            ExecMainStartTimestampMonotonic="0", InactiveEnterTimestampMonotonic="0",
+                            ControlGroup="",
+                        )
+                    return raw
+
+                kernel.response = manager
+
+            self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                whole_worker=True, platform_setup=setup
+            )
+    self.fresh()
+    kernel, assembly = _native(self)
+    before = dict(kernel.unit)
+    assembly.caller.run(target.systemd("stop"), effect=True)
+    terminal = {key: kernel.unit[key] for key in target.VOLATILE}
+    assembly.caller.run(target.systemd("reload_for_temporary_test"), effect=True)
+    self.assertEqual(terminal, {key: kernel.unit[key] for key in target.VOLATILE})
+    self.assertEqual(("failed", "exit-code", "143", before["MainPID"]), tuple(
+        kernel.unit[key] for key in ("ActiveState", "Result", "ExecMainStatus", "ExecMainPID")
+    ))
+    with self.assertRaisesRegex(target.Unknown, "test_not_positively_active_or_quiescent"):
+        target.parse_unit(target.read_test_unit(assembly.caller.run))
+    self.assertFalse(any(p.argv == target.systemd("reset-failed") for p in kernel.processes))
+
+
+def test_whole_caller_retains_stop_proof_for_delayed_gc_at_quiescent_boundaries(self):
+    # Reviewer's exact first7 schedule, then one coupled start/profile/cleanup
+    # boundary per later stop. This is a finite producer schedule, not retries.
+    schedules = (("active", 1, 7), ("active", 2, 15), ("inactive", 3, 17), ("absent", 3, 25))
+    for index, (original_service, stop_number, show_number) in enumerate(schedules):
+        with self.subTest(original_service=original_service, stop=stop_number, show=show_number):
+            if index:
+                self.fresh()
+            state = {"resets": 0, "shows": 0, "gc_fired": False}
+
+            def setup(kernel):
+                response = kernel.response
+
+                def manager(argv, payload):
+                    if argv == target.systemd("reset-failed"):
+                        state["resets"] += 1
+                    if (argv == target.systemd("show") and state["resets"] == stop_number
+                            and kernel.unit["ActiveState"] == "inactive"):
+                        record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+                        if record["owned_stops"][-1]["normalization_confirmed"]:
+                            state["shows"] += 1
+                            if state["shows"] == show_number:
+                                state["gc_fired"] = True
+                                kernel.unit.update(
+                                    InvocationID="", ExecMainPID="0", ExecMainCode="0", ExecMainStatus="0",
+                                    ExecMainStartTimestampMonotonic="0", InactiveEnterTimestampMonotonic="0",
+                                    ControlGroup="",
+                                )
+                    return response(argv, payload)
+
+                kernel.response = manager
+
+            kernel = self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                whole_worker=True, original_service=original_service, platform_setup=setup
+            )
+            self.assertTrue(state["gc_fired"])
+            self.assertEqual(3, state["resets"])
+            self.assertEqual("active" if original_service == "active" else "inactive", kernel.unit["ActiveState"])
+            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertTrue(record["disarmed"])
+            self.assertTrue(all(row["normalization_confirmed"] for row in record["owned_stops"]))
+
+
+def test_whole_caller_retained_stop_proof_refuses_resurrection_foreign_or_lost_later_read(self):
+    for index, case in enumerate(("resurrect_old", "foreign_invocation", "lost_later_read")):
+        with self.subTest(case=case):
+            if index:
+                self.fresh()
+            state = {"resets": 0, "shows": 0, "gc_fired": False, "bad_fired": False}
+
+            def setup(kernel):
+                response = kernel.response
+
+                def manager(argv, payload):
+                    if argv == target.systemd("reset-failed"):
+                        state["resets"] += 1
+                    if (argv == target.systemd("show") and state["resets"] == 1
+                            and kernel.unit["ActiveState"] == "inactive"):
+                        record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+                        if record["owned_stops"][-1]["normalization_confirmed"]:
+                            state["shows"] += 1
+                            if state["shows"] == 7:
+                                state["gc_fired"] = True
+                                keys = ("InvocationID", "ExecMainPID", "ExecMainCode", "ExecMainStatus",
+                                        "ExecMainStartTimestampMonotonic", "InactiveEnterTimestampMonotonic",
+                                        "ControlGroup")
+                                state["retained"] = {key: kernel.unit[key] for key in keys}
+                                kernel.unit.update(dict(zip(keys, ("", "0", "0", "0", "0", "0", ""))))
+                            if state["shows"] == 9:
+                                state["bad_fired"] = True
+                                if case == "lost_later_read":
+                                    kernel.forced_returncodes = {argv: 1}
+                                else:
+                                    kernel.unit.update(state["retained"])
+                                    if case == "foreign_invocation":
+                                        kernel.unit["InvocationID"] = "f" * 32
+                    return response(argv, payload)
+
+                kernel.response = manager
+
+            with self.assertRaises(Exception) as caught:
+                self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                    whole_worker=True, platform_setup=setup
+                )
+            self.assertIn(type(caught.exception).__name__, {"Unknown", "Refusal"})
+            self.assertTrue(state["gc_fired"] and state["bad_fired"])
+            self.assertEqual(1, state["resets"])
+            kernel = self.lifecycle_kernel
+            effects = [p.argv[1] for p in kernel.processes if p.argv in {
+                target.systemd("stop"), target.systemd("reset-failed"), target.systemd("start")
+            }]
+            self.assertEqual(["stop", "reset-failed"], effects)
+            self.assertFalse(self.h.deliveries)
+            self.assertFalse(kernel.os.fds)
+            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertFalse(record["disarmed"])
+
+
+def test_whole_caller_every_stop_sample_and_profile_transition_refuses_stale_or_foreign_state(self):
+    cases = (
+        ("raw_pair_resurrection", "active"),
+        ("marker_returned_resurrection", "inactive"),
+        ("cleanup_foreign", "inactive"),
+        ("cleanup_foreign", "absent"),
+        ("cleanup_remaining_process", "inactive"),
+        ("cleanup_wrong_profile", "inactive"),
+    )
+    keys = ("InvocationID", "ExecMainPID", "ExecMainCode", "ExecMainStatus",
+            "ExecMainStartTimestampMonotonic", "InactiveEnterTimestampMonotonic", "ControlGroup")
+    cleared = dict(zip(keys, ("", "0", "0", "0", "0", "0", "")))
+    for index, (case, original_service) in enumerate(cases):
+        with self.subTest(case=case, original_service=original_service):
+            if index:
+                self.fresh()
+            state = {"resets": 0, "reloads": 0, "shows": 0, "injected": False}
+
+            def setup(kernel):
+                response = kernel.response
+
+                def manager(argv, payload):
+                    if argv == target.systemd("reset-failed"):
+                        state["resets"] += 1
+                    if argv == target.systemd("reload_for_temporary_test") and state["resets"] == 3:
+                        state["reloads"] += 1
+                        result = response(argv, payload)
+                        if state["reloads"] == 2 and case.startswith("cleanup_"):
+                            state["injected"] = True
+                            if case == "cleanup_foreign":
+                                stamp = str(int(kernel.clock.value * 1_000_000))
+                                kernel.unit.update(
+                                    InvocationID="f" * 32, ExecMainPID="7777", ExecMainCode="1",
+                                    ExecMainStatus="0", ExecMainStartTimestampMonotonic=stamp,
+                                    InactiveEnterTimestampMonotonic=stamp, ControlGroup="",
+                                )
+                            elif case == "cleanup_remaining_process":
+                                kernel.os.add(
+                                    "/sys/fs/cgroup" + kernel.unit["ControlGroup"] + "/cgroup.procs",
+                                    b"7777\n",
+                                )
+                            else:
+                                kernel.unit["KillMode"] = "process"
+                        return result
+                    if argv == target.systemd("show"):
+                        if case == "raw_pair_resurrection" and state["resets"] == 1:
+                            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+                            if record["owned_stops"][-1]["normalization_confirmed"]:
+                                state["shows"] += 1
+                        elif case == "marker_returned_resurrection" and state["reloads"] == 1:
+                            state["shows"] += 1
+                        clear_at, restore_at = (7, 8) if case == "raw_pair_resurrection" else (1, 3)
+                        if case in {"raw_pair_resurrection", "marker_returned_resurrection"}:
+                            if state["shows"] == clear_at:
+                                state["retained"] = {key: kernel.unit[key] for key in keys}
+                                kernel.unit.update(cleared)
+                            elif state["shows"] == restore_at:
+                                state["injected"] = True
+                                kernel.unit.update(state["retained"])
+                    return response(argv, payload)
+
+                kernel.response = manager
+
+            with self.assertRaises(Exception) as caught:
+                self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                    whole_worker=True, original_service=original_service, platform_setup=setup
+                )
+            self.assertIn(type(caught.exception).__name__, {"Unknown", "Refusal"})
+            self.assertTrue(state["injected"])
+            kernel = self.lifecycle_kernel
+            self.assertEqual(1 if case == "raw_pair_resurrection" else 3, state["resets"])
+            self.assertEqual(0 if case == "raw_pair_resurrection" else 2, len(self.h.deliveries))
+            self.assertFalse(kernel.os.fds)
+            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertFalse(record["disarmed"])
+
+
+def test_whole_caller_known_profile_restoration_accepts_one_way_gc_in_every_raw_sample(self):
+    for index, (original_service, reload_number) in enumerate((
+        ("inactive", 1), ("absent", 1), ("inactive", 2), ("absent", 2),
+    )):
+        with self.subTest(original_service=original_service, reload=reload_number):
+            if index:
+                self.fresh()
+            state = {"resets": 0, "reloads": 0, "cleared": False}
+
+            def setup(kernel):
+                response = kernel.response
+                kernel.before_profile = target.unit_profile(kernel.unit)
+
+                def manager(argv, payload):
+                    if argv == target.systemd("reset-failed"):
+                        state["resets"] += 1
+                    result = response(argv, payload)
+                    if argv == target.systemd("reload_for_temporary_test") and state["resets"] == 3:
+                        state["reloads"] += 1
+                        if state["reloads"] == reload_number:
+                            state["cleared"] = True
+                            kernel.unit.update(
+                                InvocationID="", ExecMainPID="0", ExecMainCode="0", ExecMainStatus="0",
+                                ExecMainStartTimestampMonotonic="0", InactiveEnterTimestampMonotonic="0",
+                                ControlGroup="",
+                            )
+                    return result
+
+                kernel.response = manager
+
+            kernel = self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+                whole_worker=True, original_service=original_service, platform_setup=setup
+            )
+            self.assertTrue(state["cleared"])
+            self.assertEqual((3, 2), (state["resets"], state["reloads"]))
+            self.assertEqual(kernel.before_profile, target.unit_profile(kernel.unit))
+            self.assertEqual("inactive", kernel.unit["ActiveState"])
+            self.assertFalse(kernel.os.fds)
+            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+            self.assertTrue(record["disarmed"])
+            self.assertTrue(all(row["normalization_confirmed"] for row in record["owned_stops"]))
 
 
 for _name, _value in list(globals().items()):

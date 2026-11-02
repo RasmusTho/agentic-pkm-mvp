@@ -19,6 +19,7 @@ from app.governance.binding_authority import BindingAuthorizationError
 from app.instance.context_selection import ContextSelectionError
 from app.instance.active_context_service import ActiveContextServiceError
 from app.instance.context_bound_read import ContextBoundReadError
+from app.instance.vault_registry import RegistryQualificationError
 from app.governance.governed_write import GovernedWriteProtocolError
 from app.operations.contracts import OperationContext, OperationRequest
 from app.write_guard import WritesBlockedError
@@ -36,7 +37,8 @@ def _runtime(request: Request, api_key: str | None, session: str | None,
             session_bearer=session, override_bearer=override, **kwargs)
     except (ContextSelectionError, ActiveContextServiceError) as exc:
         raise HTTPException(401, "reselection_required") from exc
-    except (BindingAuthorizationError, GovernedWriteProtocolError, ContextBoundReadError, WritesBlockedError, ActiveContextError) as exc:
+    except (BindingAuthorizationError, GovernedWriteProtocolError, ContextBoundReadError,
+            RegistryQualificationError, WritesBlockedError, ActiveContextError) as exc:
         raise HTTPException(403, "operation_authority_unavailable") from exc
 
 

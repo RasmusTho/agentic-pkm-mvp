@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-29 (#6447 BWS full-source quota and descriptor-headroom cross-reference; repository-only; no live capacity or DEV/TEST verification; prior #6384/#5337 evidence retained)
+Last reviewed: 2026-10-30 (#6479 fixed operations acceptance entrypoint and pending deployed-proof boundary; source only; prior #6447/#6384/#5337 evidence retained)
 Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; this is not a new deployment, release or functional-acceptance receipt.
 Infrastructure reference review: 2026-10-21; other sections retain their individual verification dates.
 Local Colima startup entry reviewed 2026-10-24 against scripts/start_full_system.sh, tests/ops/test_colima_runtime_readiness.py and the isolated/default runtime receipts on Issue #4899; no TARS verification or placement change.
@@ -55,6 +55,18 @@ CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
 - Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
 - Canvas note: `python -m app.cli canvas ...` and `/api/canvas/*` now exist as bounded session surfaces behind `CANVAS_ENABLED`; they are materially supported for bounded co-authoring, but still not part of the default production operator surface.
+
+### Fixed autonomous-operations acceptance
+
+The operations acceptance entrypoint is `tests/operations/live_operations_acceptance.py`;
+[Automated Technical Acceptance](TESTING.md#automated-technical-acceptance) owns its exact TEST/DEV
+commands, native prerequisites, fixed inventory and original-evidence handling. It consumes current
+native candidate/principal/binding authority, qualifies the separately installed SDK/browser, and
+narrows finite Product effects through existing owners. It performs no deployment, restoration,
+principal provisioning or restart. A missing environment or separately authorized backend/WSP
+restart leaves the required scenario blocked. Temporary fixture proof and delivery of #6479 do not
+establish deployed acceptance; the qualified same-candidate TEST/short DEV outcome and post-acceptance
+owner-doc/State promotion remain on #5340/#5329.
 
 ### Native source-persistence failure receipts
 
