@@ -194,8 +194,10 @@ def _validate_private_https_endpoint(endpoint: str) -> str:
     return f"https://{host.lower()}/v1/complete"
 
 
-def _validate_private_ingress_endpoint(endpoint: str) -> str:
-    """Validate an HTTPS origin supplied by host-local VLAN configuration."""
+def _validate_private_ingress_endpoint(
+    endpoint: str, *, tailnet: bool = False
+) -> str:
+    """Validate a host-local HTTPS origin against its declared network path."""
     try:
         parsed = urlsplit(endpoint)
         host = parsed.hostname
@@ -219,7 +221,10 @@ def _validate_private_ingress_endpoint(endpoint: str) -> str:
             raise ValueError(
                 "private ingress endpoint must use a private-network IP literal"
             ) from exc
-        if not any(address in network for network in _PRIVATE_INGRESS_NETWORKS):
+        networks = (
+            (ipaddress.ip_network("100.64.0.0/10"),) if tailnet else _PRIVATE_INGRESS_NETWORKS
+        )
+        if not any(address in network for network in networks):
             raise ValueError(
                 "private ingress endpoint must use a private-network IP literal"
             )
@@ -319,8 +324,10 @@ class CodexRemoteTransport:
             if tls_verify is not True or client_certificate is not None:
                 raise ValueError("Tailscale Serve path must use system TLS trust")
             transport_verify: bool | ssl.SSLContext = True
-        elif path_adapter == "private_https_ingress":
-            self._url = _validate_private_ingress_endpoint(endpoint)
+        elif path_adapter in {"private_https_ingress", "tailnet_mtls_https"}:
+            self._url = _validate_private_ingress_endpoint(
+                endpoint, tailnet=path_adapter == "tailnet_mtls_https"
+            )
             if not isinstance(tls_verify, str) or not tls_verify or client_certificate is None:
                 raise ValueError("private ingress path requires verified mutual TLS")
             transport_verify = _private_ingress_ssl_context(
