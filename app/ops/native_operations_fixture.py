@@ -14,7 +14,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from app.instance.runtime import open_local_operator_principal_store, local_operator_principal_path
@@ -265,7 +265,7 @@ def prepare_fixture(request: dict[str, Any], *, registry_path: Path) -> dict[str
                     writer_identity=principal.local_operator_role_id, write_guard=guard, create_once=True)
                 written = mutation.outcome == "written"
                 authority = gov.record_authority_receipt(decision_token=grant.decision_token,
-                    mutation_receipt=mutation, state_owner="HKA", outcome="applied" if written else "failed",
+                    mutation_receipt=cast(Any, mutation), state_owner="HKA", outcome="applied" if written else "failed",
                     effect_id=identity["operation_id"] + ":" + source["artifact_id"])
                 effects.append(OperationItemOutcome(source["artifact_id"],
                     OperationStatus.SUCCEEDED if written else OperationStatus.CONFLICTED,
