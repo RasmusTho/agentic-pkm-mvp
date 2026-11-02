@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-29 (#6447 BWS full-source quota and descriptor-headroom cross-reference; repository-only; no live capacity or DEV/TEST verification; prior #6384/#5337 evidence retained)
+Last reviewed: 2026-10-30 (#6479 fixed operations acceptance entrypoint and pending deployed-proof boundary; source only; prior #6447/#6384/#5337 evidence retained)
 Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; this is not a new deployment, release or functional-acceptance receipt.
 Infrastructure reference review: 2026-10-21; other sections retain their individual verification dates.
 Local Colima startup entry reviewed 2026-10-24 against scripts/start_full_system.sh, tests/ops/test_colima_runtime_readiness.py and the isolated/default runtime receipts on Issue #4899; no TARS verification or placement change.
@@ -55,6 +55,18 @@ CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
 - Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
 - Canvas note: `python -m app.cli canvas ...` and `/api/canvas/*` now exist as bounded session surfaces behind `CANVAS_ENABLED`; they are materially supported for bounded co-authoring, but still not part of the default production operator surface.
+
+### Fixed autonomous-operations acceptance
+
+The operations acceptance entrypoint is `tests/operations/live_operations_acceptance.py`;
+[Automated Technical Acceptance](TESTING.md#automated-technical-acceptance) owns its exact TEST/DEV
+commands, native prerequisites, fixed inventory and original-evidence handling. It consumes current
+native candidate/principal/binding authority, qualifies the separately installed SDK/browser, and
+narrows finite Product effects through existing owners. It performs no deployment, restoration,
+principal provisioning or restart. A missing environment or separately authorized backend/WSP
+restart leaves the required scenario blocked. Temporary fixture proof and delivery of #6479 do not
+establish deployed acceptance; the qualified same-candidate TEST/short DEV outcome and post-acceptance
+owner-doc/State promotion remain on #5340/#5329.
 
 ### Native source-persistence failure receipts
 
@@ -975,6 +987,9 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
   are removed after every completed run. Legacy TEST receipts remain readable. Manual qualification
   does not grant controller promotion authority. Live activation stays #6170/#3347. See
   [Post-merge heavy tests](development/TEST_STRATEGY_HOT_PATH.md#post-merge-heavy-tests).
+- DEV/TEST heavy and native PG acceptance support an optional verified container memory policy.
+  With no policy, they run without these memory caps and report that isolation is inactive. Choose
+  values only after coordinated measurement; see the [deployment policy contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1).
 - GitHub-visible DEV delivery liveness (#6222) runs in `dev-delivery-liveness.yml` on a schedule.
   Inspect the checker JSON `reason` and its signal workflow runs: the default missed-progress
   deadline is six hours, and the controller activity window is two hours. A fresh terminal DEV
@@ -1349,6 +1364,16 @@ Use the raw health surface separately for investigation; the alert does not repr
 The template's production installation is recorded in the 2026-10-30 receipt below. The existing
 incident continued suppressing duplicate alerts; controlled TEST acceptance remains open under
 #4076. The dated receipts retain their exact source and observation scope.
+
+The [2026-10-30 TEST first-preflight receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6493#issuecomment-6535859691)
+records operation `230149723a60e4c497a04f8efc07a9a9` as `REFUSED` before qualified-worker or drill
+entry: the same-project running-worker selector did not observe exactly one valid ID. This does
+not distinguish worker count from ID shape or establish worker absence or health. The original
+supervisor/cgroup were positively contained and the watch/TEST probe units were absent. The result
+SHA-256 is `542a4448014fc00b91b3cf0a830f4dcdb8a8860febe5325ba4498fcb9a4c7b71`; its separate
+reconciliation SHA-256 is `6a71c89eeaecfd53acc2e16315c8aa153bf0b07529d4a30a27fa6138cacdbfa0`.
+Earlier `UNKNOWN` results remain preserved. No controlled down/recovery or live TEST acceptance
+is claimed; #6493's actual acceptance and final receipt mapping remain open.
 
 The Linux service uses the `heimdal-external-alerts` BWS consumer and the `discord.webhook`
 binding. The BWS token is read through systemd credentials and is removed from the probe child's
