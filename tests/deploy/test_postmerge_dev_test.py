@@ -193,11 +193,11 @@ def test_native_digest_binding_and_manual_request_compatibility(tmp_path, monkey
     from app.ops import postgres_deploy_linux as linux
     requests = []
 
-    def ssh(_argv, **kwargs):
-        requests.append(json.loads(kwargs['input']))
-        return SimpleNamespace(returncode=0, stdout='{"ready":true,"empty":false}')
+    def ssh(_argv, request):
+        requests.append(json.loads(request))
+        return 0, b'{"ready":true,"empty":false}'
 
-    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    monkeypatch.setattr(linux, '_normal_ssh_exchange', ssh)
     remote = linux.SshDeployRemote('ygg-dev')
     remote.prepare(operation, automatic, bootstrap=False)
     assert requests[-1]['plan']['image_digest'] == DIGEST
