@@ -418,11 +418,13 @@ def test_raw_stage_lost_ack_retains_original_unknown_and_never_inserts_again(tmp
 
 
 def test_native_command_imports_without_full_product_cli_dependencies():
+    # The required official SDK already depends on HTTPX and Uvicorn/Click.
+    # Product's web/reloader packages are outside that native-runtime closure.
     script = '''
 import builtins,runpy,sys
 original=builtins.__import__
 def restricted(name,*args,**kwargs):
- if name.split('.')[0] in {'click','httpx','fastapi','watchfiles'}:
+ if name.split('.')[0] in {'fastapi','watchfiles'}:
   raise ImportError('full Product CLI dependency is unavailable in native runtime')
  return original(name,*args,**kwargs)
 builtins.__import__=restricted
