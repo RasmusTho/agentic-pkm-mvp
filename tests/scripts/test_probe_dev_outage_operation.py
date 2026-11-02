@@ -1,4 +1,4 @@
-"""Focused fixed DEV adapter proof. OS files are private; all effects fake."""
+"""Focused DEV proof: fake native effects, plus a confined local stderr producer."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 from types import ModuleType, SimpleNamespace
@@ -84,6 +85,7 @@ SOURCE_FILES = (
     "ops/host-setup/mac-mini/prod_probe.py",
 )
 _FIXTURE_SOURCE = None
+_REAL_POPEN = subprocess.Popen
 
 
 def fixture_source():
@@ -564,7 +566,7 @@ class SourceLog:
                 "_SYSTEMD_CGROUP": owner.unit["ControlGroup"],
                 "_TRANSPORT": "stdout",
                 "_STREAM_ID": runtime.stream,
-                "_PID": runtime.creator.pid,
+                "_PID": runtime.child.pid,
                 "__MONOTONIC_TIMESTAMP": str(int(owner.clock.value * 1_000_000)),
                 "__CURSOR": "fixture-cursor-" + str(owner.serial),
             }
@@ -1121,18 +1123,54 @@ class FixedDevAdapterTests(unittest.TestCase):
         with self.assertRaises(target.Unknown):
             h.adapter.swap_base_url(restore=True)
 
-    def test_failed_confirmation_iteration_error_wrong_creator_or_replayed_cursor_unknown(self):
+    def test_failed_confirmation_iteration_error_foreign_pid_or_replayed_cursor_unknown(self):
         h = self.h
         h.fault_start()
         h.source_cycle()
-        # The source emitted real confirmed/down. Metadata claiming child PID
-        # instead of the inherited stream creator must fail even with correct text.
+        # The source emitted real confirmed/down. A PID belonging to neither
+        # qualified peer must fail even with the correct text and stream.
         original = h.rows[0]["_PID"]
-        h.rows[0]["_PID"] = str(int(original) + 100)
+        h.rows[0]["_PID"] = str(int(original) + 200)
         with self.assertRaises(target.Unknown):
             h.adapter.normal_transitions()
         self.assertEqual(0, h.adapter.transitions.down)
         self.assertEqual(1, len(h.deliveries))
+
+    def test_child_attribution_preserves_stream_and_process_continuity_guards(self):
+        rows = (
+            ("_PID", "99999"),
+            ("_PID", "707"),
+            ("_PID", None),
+            ("_PID", 4241),
+            ("_TRANSPORT", "syslog"),
+            ("_STREAM_ID", "e" * 32),
+            ("_SYSTEMD_CGROUP", "/foreign"),
+            ("_BOOT_ID", "e" * 32),
+            ("_SYSTEMD_INVOCATION_ID", "e" * 32),
+        )
+        for key, value in rows:
+            with self.subTest(field=key, value=value):
+                h = self.fresh()
+                h.fault_start()
+                h.source_cycle()
+                h.rows[0][key] = value
+                with self.assertRaises(target.Unknown):
+                    h.adapter.normal_transitions()
+                self.assertEqual(0, h.adapter.transitions.down)
+                self.assertEqual(1, len(h.deliveries))
+        for name, change in (
+            ("pid_reuse", lambda p: replace(p, start_identity="e" * 64)),
+            ("foreign_parent", lambda p: replace(p, parent="99999")),
+            ("foreign_fd", lambda p: replace(p, stderr_inode=552, stderr_target="socket:[552]")),
+        ):
+            with self.subTest(process=name):
+                h = self.fresh()
+                h.fault_start()
+                h.source_cycle()
+                h.runtime.modify = lambda r: replace(r, child=change(r.child))
+                with self.assertRaises(target.Unknown):
+                    h.adapter.normal_transitions()
+                self.assertEqual(0, h.adapter.transitions.down)
 
     def test_real_source_delivery_failure_cannot_become_down_or_trigger_retry(self):
         h = self.h
@@ -1464,8 +1502,9 @@ class MemoryLinuxOS:
         if path == "/proc/707/root/runtime/producer.json":
             return self.meta[self.kernel.scope.binding.heartbeat]
         if path.endswith("/fd/2"):
-            pid = path.split("/")[2]
-            return LinuxMeta(551 if pid != "707" else 552, kind=stat.S_IFSOCK)
+            socket_link = re.fullmatch(r"socket:\[(\d+)\]", self.links[path])
+            assert socket_link is not None
+            return LinuxMeta(int(socket_link[1]), kind=stat.S_IFSOCK)
         if path not in self.meta:
             raise FileNotFoundError(path)
         return self.meta[path]
@@ -2091,7 +2130,10 @@ class NativeKernel:
                 "_SYSTEMD_UNIT": target.UNIT,
                 "_SYSTEMD_INVOCATION_ID": self.unit["InvocationID"],
                 "_SYSTEMD_CGROUP": self.unit["ControlGroup"],
-                "_PID": self.unit["MainPID"],
+                "_PID": str(
+                    int(self.unit["MainPID"])
+                    + (100 if getattr(self, "journal_origin", "child") == "child" else 0)
+                ),
                 "_TRANSPORT": "stdout",
                 "_STREAM_ID": str(self.incarnation + 3) * 32,
                 "__CURSOR": "native-cursor-" + str(self.serial),
@@ -4552,6 +4594,122 @@ def test_stop_is_bounded_before_effects_and_ambiguous_containment_never_restores
             )
 
 
+def test_normal_popen_stderr_producer_and_whole_caller_origins(self):
+    """Real bootstrap Popen/normal logging, then complete native calls at fake ports."""
+    import signal
+
+    child = """
+import json, os, runpy, socket, sys, time
+from pathlib import Path
+root, scratch = Path(sys.argv[1]), Path(sys.argv[2])
+sys.path.insert(0, str(root / 'ops/host-setup/mac-mini'))
+os.environ['PROBE_STATE_FILE'] = str(scratch / 'absent-incident.json')
+probe = runpy.run_path(str(root / 'ops/host-setup/mac-mini/prod_probe.py'))
+def forbidden(*args, **kwargs):
+    raise AssertionError('no native network in producer fixture')
+socket.socket = socket.getaddrinfo = forbidden
+heartbeat = scratch / 'producer-heartbeat.json'
+heartbeat.write_text(json.dumps({'ts': time.time()}))
+fd = os.fstat(2)
+print(json.dumps({'role': 'child', 'pid': os.getpid(), 'parent': os.getppid(),
+                  'fd': [fd.st_dev, fd.st_ino]}), flush=True)
+assert probe['run_probe'](base_url='http://synthetic.invalid', heartbeat_path=str(heartbeat),
+    heartbeat_stale_seconds=60, channel=probe['NullChannel'](), environment='dev',
+    http_get=lambda *args, **kwargs: (200, {'required_ok': True})) is True
+"""
+    parent = """
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+from app.ops.host_secret_bootstrap import _subprocess_runner
+fd = os.fstat(2)
+print(json.dumps({'role': 'creator', 'pid': os.getpid(),
+                  'fd': [fd.st_dev, fd.st_ino]}), flush=True)
+raise SystemExit(_subprocess_runner(
+    [sys.executable, '-I', '-c', sys.argv[3], sys.argv[1], sys.argv[2]],
+    {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}))
+"""
+    process = _REAL_POPEN(
+        [sys.executable, "-I", "-c", parent, str(PUBLIC), str(self.root), child],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+        start_new_session=True,
+    )
+    try:
+        output, error = process.communicate(timeout=15)
+    except BaseException:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
+        raise
+    finally:
+        process.stdout.close()
+        process.stderr.close()
+    self.assertEqual(0, process.returncode, error.decode())
+    creator, writer = (json.loads(line) for line in output.splitlines())
+    self.assertEqual(creator["pid"], writer["parent"])
+    self.assertNotEqual(creator["pid"], writer["pid"])
+    self.assertEqual(creator["fd"], writer["fd"])
+    lines = error.decode().splitlines()
+    self.assertEqual(1, len(lines))
+    match = target.LOG_FORMAT.fullmatch(lines[0])
+    self.assertIsNotNone(match)
+    self.assertEqual("INFO", match[1])
+    self.assertTrue(match[2].startswith("probe ok:"))
+    # SO_PASSCRED attributes that real writer; legacy stream metadata may name
+    # its creator. Map these observed roles to the fake kernel's exact processes.
+    for origin in (writer["role"], creator["role"]):
+        with self.subTest(origin=origin):
+            self.fresh()
+            result, kernel = whole_native_call(self, temporary_install=True, journal_origin=origin)
+            self.assertEqual(
+                ("PASS", 1, 1, True),
+                (result["status"], result["down"], result["recovery"], result["same_correlation"]),
+            )
+            self.assertGreaterEqual(result["completed_later_suppressions"], 2)
+            self.assertTrue(result["original_lifecycle_and_artifacts_restored"])
+            self.assertTrue(kernel.rows)
+            self.assertTrue(all(row["_TRANSPORT"] == "stdout" for row in kernel.rows))
+
+
+def test_native_journal_rejects_nonproducer_pids_before_effects(self):
+    for pid in ("99999", "707", "4341", 4241, None, "04241"):
+        with self.subTest(pid=pid):
+            self.fresh()
+            kernel, assembly = _native(self)
+            if pid == "4341":
+                binding, group = kernel.scope.binding, kernel.unit["ControlGroup"]
+                kernel._proc(
+                    pid,
+                    "4241",
+                    (
+                        binding.sdk,
+                        "-I",
+                        "-c",
+                        target.HTTP_CHILD_CODE,
+                        binding.package + "/ops/host-setup/mac-mini",
+                    ),
+                    {},
+                    4341,
+                    group,
+                )
+                kernel.os.files["/sys/fs/cgroup" + group + "/cgroup.procs"] += b"4341\n"
+            kernel.rows[-1]["_PID"] = pid
+            with self.assertRaisesRegex(
+                target.Unknown, "actual_creator_child_journal_stream_unqualified"
+            ):
+                target.DevProbeAdapter(
+                    kernel.scope.binding, assembly.caller, assembly.files
+                ).admit()
+            self.assertEqual([], self.h.deliveries)
+            self.assertFalse(
+                any(
+                    p.argv in {target.systemd("start"), target.systemd("stop")}
+                    for p in kernel.processes
+                )
+            )
+
+
 for _name, _value in list(globals().items()):
     if _name.startswith("test_") and callable(_value):
         setattr(NativeBindingTests, _name, _value)
@@ -4570,6 +4728,7 @@ def whole_native_call(
     api_publication=None,
     publication_refused=False,
     directory_mode_drift=None,
+    journal_origin="child",
 ):
     """Current local entry -> serialized program -> first preflight -> real drill."""
     import contextlib, io
@@ -4579,6 +4738,10 @@ def whole_native_call(
         pass
 
     kernel = NativeKernel(case.h)
+    kernel.journal_origin = journal_origin
+    if journal_origin == "creator":
+        for row in kernel.rows:
+            row["_PID"] = kernel.unit["MainPID"]
     kernel.forced_returncodes = {}
     program = fixture_program()
     archive, manifest, _ = fixture_source()
@@ -5203,6 +5366,96 @@ def test_actual_dev_invocation_enforces_bindings_and_custody():
     finally:
         case.doCleanups()
         case.tearDown()
+
+
+def test_actual_dev_cli_rejects_unqualified_child_journal_before_fault():
+    for kind, reason in (
+        ("outsider", "actual_creator_child_journal_stream_unqualified"),
+        ("http", "actual_creator_child_journal_stream_unqualified"),
+        ("ancestry", "fixed_child_ancestry_stream_or_cursor_unbound"),
+        ("stderr", "creator_child_inherited_stream_mapping_unqualified"),
+        ("stream", "ambiguous_inherited_normal_stream"),
+    ):
+        case = NativeBindingTests()
+        case.setUp()
+        captured = []
+        original_processes, original_log = NativeKernel._processes, NativeKernel.log
+
+        def processes(kernel):
+            original_processes(kernel)
+            captured.append(kernel)
+            creator = kernel.unit["MainPID"]
+            if creator == "0":
+                return
+            child = str(int(creator) + 100)
+            if kind == "ancestry":
+                path = "/proc/" + child + "/stat"
+                kernel.os.files[path] = kernel.os.files[path].replace(
+                    ("(python3) S " + creator + " ").encode(), b"(python3) S 99999 "
+                )
+            elif kind == "stderr":
+                kernel.os.links["/proc/" + child + "/fd/2"] = "socket:[552]"
+            elif kind == "http":
+                binding, group = kernel.scope.binding, kernel.unit["ControlGroup"]
+                http = str(int(creator) + 200)
+                kernel._proc(
+                    http,
+                    child,
+                    (
+                        binding.sdk,
+                        "-I",
+                        "-c",
+                        target.HTTP_CHILD_CODE,
+                        binding.package + "/ops/host-setup/mac-mini",
+                    ),
+                    {},
+                    int(http),
+                    group,
+                    stderr=552,
+                )
+                kernel.os.files["/sys/fs/cgroup" + group + "/cgroup.procs"] += (
+                    http + "\n"
+                ).encode()
+
+        def log(kernel, level, message, args):
+            original_log(kernel, level, message, args)
+            if kind == "outsider":
+                kernel.rows[-1]["_PID"] = "99999"
+            elif kind == "http":
+                kernel.rows[-1]["_PID"] = str(int(kernel.unit["MainPID"]) + 200)
+            elif kind == "stream":
+                kernel.rows.append(dict(kernel.rows[-1], _STREAM_ID="e" * 32))
+
+        try:
+            with (
+                case.subTest(kind=kind),
+                patch.object(NativeKernel, "_processes", processes),
+                patch.object(NativeKernel, "log", log),
+                case.assertRaisesRegex(Exception, reason) as refused,
+            ):
+                whole_native_call(case)
+            case.assertEqual("Unknown", type(refused.exception).__name__)
+            kernel = captured[0]
+            case.assertEqual([], case.h.deliveries)
+            case.assertEqual([], kernel.dependencies.socket.created)
+            case.assertFalse(kernel.os.fds)
+            case.assertTrue(all(selector.closed for selector in kernel.selectors))
+            case.assertTrue(
+                all(
+                    stream.closed
+                    for process in kernel.processes
+                    for stream in (process.stdin, process.stdout, process.stderr)
+                )
+            )
+            case.assertFalse(
+                any(
+                    process.argv in {target.systemd("start"), target.systemd("stop")}
+                    for process in kernel.processes
+                )
+            )
+        finally:
+            case.doCleanups()
+            case.tearDown()
 
 
 def test_dev_refusal_and_unknown_preserve_owner_and_state():
