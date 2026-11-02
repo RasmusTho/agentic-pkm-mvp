@@ -300,6 +300,9 @@ def _render_signboard_deploy_compose(
     vault_host_root: Path | None,
     runtime_signboard_root: str = "",
     force_no_active_vault: bool = False,
+    model_access_bindings: dict[str, str] | None = None,
+    channel: str = "dev",
+    runtime_extra: str = "",
 ) -> tuple[dict[str, object], Path, bytes]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     runtime_env = tmp_path / "runtime.env"
@@ -313,7 +316,7 @@ def _render_signboard_deploy_compose(
         )
     if runtime_signboard_root:
         runtime_lines.append(f"SIGNBOARD_ROOT={runtime_signboard_root}")
-    runtime_env.write_text("\n".join(runtime_lines) + "\n", encoding="utf-8")
+    runtime_env.write_text("\n".join(runtime_lines) + "\n" + runtime_extra, encoding="utf-8")
     original_runtime_env = runtime_env.read_bytes()
 
     channel_env = tmp_path / "dev.env"
@@ -324,13 +327,28 @@ def _render_signboard_deploy_compose(
         encoding="utf-8",
     )
 
+    model_env = tmp_path / "model-access.env"
+    if model_access_bindings is not None:
+        model_env.write_text(
+            "".join(f"{key}={value}\n" for key, value in model_access_bindings.items()),
+            encoding="utf-8",
+        )
+    wrapper = tmp_path / "deploy_channel_compose.sh"
+    wrapper.write_text(
+        DEPLOY_COMPOSE_WRAPPER.read_text(encoding="utf-8").replace(
+            MODEL_ACCESS_ENV_FILE, str(model_env)
+        ),
+        encoding="utf-8",
+    )
+    for sibling in ("instance_ownership_host_state.sh", "signboard_root.sh"):
+        shutil.copyfile(DEPLOY_COMPOSE_WRAPPER.parent / sibling, tmp_path / sibling)
     command = """
 set -euo pipefail
 source "$1"
 if [ "${FORCE_NO_ACTIVE_SIGNBOARD:-0}" = "1" ]; then
   resolve_signboard_root_env() { unset SIGNBOARD_ROOT; }
 fi
-deploy_channel_compose "$2" dev docker-compose.dev.yml pkm-dev-signboard-contract \
+deploy_channel_compose "$2" "$4" "docker-compose.$4.yml" "pkm-$4-signboard-contract" \
   "$3" config --format json
 """
     env = os.environ.copy()
@@ -356,9 +374,10 @@ deploy_channel_compose "$2" dev docker-compose.dev.yml pkm-dev-signboard-contrac
             "-c",
             command,
             "signboard-compose-contract",
-            str(DEPLOY_COMPOSE_WRAPPER),
+            str(wrapper),
             str(REPO_ROOT),
             str(channel_env),
+            channel,
         ],
         cwd=REPO_ROOT,
         env=env,
@@ -716,3 +735,100 @@ def test_deploy_channel_runtime_env_vault_binding_ignores_parent_shell_stale_val
                 f"{service} rendered the stale parent-shell {key}: ambient shell "
                 "state overrode the governed channel selection (#3875)"
             )
+
+
+@requires_docker
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_tailnet_model_access_is_scoped_to_product_callers(tmp_path: Path, channel: str) -> None:
+    keys = {"MODEL_ACCESS_EXECUTOR_PATH": "tailnet_mtls", "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT": "https://100.100.20.30:9443"}
+    bindings = {**keys, "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE": "/run/model-access/ca.pem", "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT": "/run/model-access/client.pem", "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY": "/run/model-access/client.key"}
+    compose, _, _ = _render_signboard_deploy_compose(tmp_path / "tailnet", signboard_host_root=None, vault_host_root=None, model_access_bindings=bindings, channel=channel)
+    for name, service in compose["services"].items():
+        env = service.get("environment", {})
+        if name in RUNTIME_SERVICES:
+            assert all(env.get(key) == value for key, value in keys.items())
+        else:
+            assert not set(keys).intersection(env), name
+    prod = _load_compose(REPO_ROOT / "docker-compose.prod.yml")["services"]
+    for service in prod.values():
+        assert not set(keys).intersection(service.get("environment", {}))
+    default_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "default", signboard_host_root=None, vault_host_root=None, channel=channel,
+    )
+    for service in default_compose["services"].values():
+        assert not set(keys).intersection(service.get("environment", {}))
+    vlan_bindings = {key: value for key, value in bindings.items() if key not in keys}
+    vlan_bindings.update(MODEL_ACCESS_EXECUTOR_PATH="vlan", MODEL_ACCESS_CODEX_VLAN_ENDPOINT="https://192.0.2.25:8443")
+    vlan_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "vlan", signboard_host_root=None, vault_host_root=None,
+        model_access_bindings=vlan_bindings, channel=channel,
+    )
+    for name, service in vlan_compose["services"].items():
+        env = service.get("environment", {})
+        assert not set(keys).intersection(env), name
+        if name in RUNTIME_SERVICES:
+            assert env["MODEL_ACCESS_CODEX_VLAN_ENDPOINT"] == vlan_bindings["MODEL_ACCESS_CODEX_VLAN_ENDPOINT"]
+
+
+@requires_docker
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+@pytest.mark.parametrize("protected", [False, True])
+@pytest.mark.parametrize("untrusted_selection", ["tailnet_mtls", "previously-unknown"])
+def test_generic_runtime_cannot_select_tailnet_or_forward_its_values(
+    tmp_path: Path, channel: str, protected: bool, untrusted_selection: str
+) -> None:
+    """Exercise the actual wrapper and Compose dotenv handling in every channel."""
+    keys = {
+        "MODEL_ACCESS_EXECUTOR_PATH": "tailnet_mtls",
+        "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT": "https://100.100.20.30:9443",
+    }
+    bindings = {
+        **keys,
+        "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE": "/run/model-access/ca.pem",
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT": "/run/model-access/client.pem",
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY": "/run/model-access/client.key",
+    }
+    # Include export, colon, whitespace and a multiline quoted unrelated value;
+    # sanitizing lines as though dotenv were a simple properties file corrupts it.
+    extra = (
+        "UNRELATED='first\nMODEL_ACCESS_EXECUTOR_PATH=inside-value\nlast'\n"
+        f"export MODEL_ACCESS_EXECUTOR_PATH = {untrusted_selection}\n"
+        "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT: https://100.101.20.30:9443\n"
+    )
+    compose, runtime, original = _render_signboard_deploy_compose(
+        tmp_path,
+        signboard_host_root=None,
+        vault_host_root=None,
+        model_access_bindings=bindings if protected else None,
+        channel=channel,
+        runtime_extra=extra,
+    )
+    assert runtime.read_bytes() == original
+    for name, service in compose["services"].items():
+        env = service.get("environment", {})
+        if channel == "prod" and name in {
+            "api", "worker", "watcher", "migrate", "source-identity-db-witness",
+            "instance-state-init", "heimdal-capture-watch",
+        }:
+            assert env["MODEL_ACCESS_EXECUTOR_PATH"] == untrusted_selection
+            assert env["MODEL_ACCESS_CODEX_TAILNET_ENDPOINT"] == "https://100.101.20.30:9443"
+        elif name in RUNTIME_SERVICES and protected and channel != "prod":
+            assert all(env.get(key) == value for key, value in keys.items())
+        else:
+            assert all(env.get(key) in (None, "") for key in keys), name
+        if name in RUNTIME_SERVICES:
+            assert env["UNRELATED"] == "first\nMODEL_ACCESS_EXECUTOR_PATH=inside-value\nlast"
+
+
+def test_all_generic_runtime_consumers_have_tailnet_value_overrides() -> None:
+    consumers = set()
+    for compose_file in [BASE_COMPOSE, *REPO_ROOT.glob("docker-compose.*.yml")]:
+        services = _load_compose(compose_file).get("services", {})
+        consumers.update(
+            name for name, service in services.items()
+            if "WATCHER_RUNTIME_ENV_FILE" in str(service.get("env_file", []))
+        )
+    assert consumers == {
+        "api", "worker", "watcher", "migrate", "source-identity-db-witness",
+        "instance-state-init", "heimdal-capture-watch",
+    }

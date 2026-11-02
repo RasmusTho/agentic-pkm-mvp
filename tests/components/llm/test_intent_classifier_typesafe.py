@@ -391,3 +391,21 @@ def test_missing_configuration_and_injected_result_revalidation(monkeypatch, cap
         result = classifier.IntentClassifierCognition(judgment_client=client).classify(intent="Rewrite")
         assert result.intent_class is classifier.IntentClass.UNKNOWN and not result.classified
     assert "private source" not in caplog.text
+
+
+def test_configured_product_intent_client_uses_selected_tailnet_mtls(tmp_path, monkeypatch):
+    certificates = {}
+    for key in ("MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE", "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT", "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY"):
+        path = tmp_path / key
+        path.write_text("synthetic certificate reference")
+        certificates[key] = str(path)
+    for key, value in {**certificates, "MODEL_ACCESS_EXECUTOR_PATH": "tailnet_mtls", "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT": "https://100.100.20.30:9443"}.items():
+        monkeypatch.setenv(key, value)
+    created = []
+    monkeypatch.setattr(classifier, "CodexRemoteTransport", lambda **kwargs: created.append(kwargs) or object())
+    classifier._configured_product_client()
+    assert len(created) == 1
+    assert created[0]["path_adapter"] == "tailnet_mtls_https"
+    assert created[0]["endpoint"] == "https://100.100.20.30:9443"
+    assert created[0]["tls_verify"] == certificates["MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE"]
+    assert created[0]["client_certificate"] == (certificates["MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT"], certificates["MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY"])
