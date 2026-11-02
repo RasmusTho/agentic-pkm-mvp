@@ -623,6 +623,8 @@ def test_tailnet_mtls_profile_is_opt_in_and_preserves_vlan_default(tmp_path: Pat
     env = _host_environment(tmp_path)
     default = resolve_executor_paths("profile.codex_remote_host", environment=env)
     assert [path.path_profile for path in default] == ["ygg_vlan_primary"]
+    env["MODEL_ACCESS_EXECUTOR_PATH"] = "vlan"
+    assert resolve_executor_paths("profile.codex_remote_host", environment=env) == default
     env["MODEL_ACCESS_EXECUTOR_PATH"] = "tailnet_mtls"
     with pytest.raises(ExecutorNetworkConfigurationError, match="path_configuration_missing"):
         resolve_executor_paths("profile.codex_remote_host", environment=env)

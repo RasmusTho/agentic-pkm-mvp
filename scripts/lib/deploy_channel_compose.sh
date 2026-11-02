@@ -755,6 +755,24 @@ services:
       SIGNBOARD_ROOT:
 YAML
   printf '      PKM_ACTIVATION_SCOPE: "%s"\n' "${1:-full}"
+  # Preserve the legacy Compose model when no Tailnet path is selected.
+  # The preflight has already validated and exported these two references;
+  # bare mapping keys forward them without putting values in this temp file.
+  if { [ "${2:-}" = "dev" ] || [ "${2:-}" = "test" ]; } \
+      && [ "${MODEL_ACCESS_EXECUTOR_PATH:-}" = "tailnet_mtls" ]; then
+    cat <<'YAML'
+      MODEL_ACCESS_EXECUTOR_PATH:
+      MODEL_ACCESS_CODEX_TAILNET_ENDPOINT:
+  worker:
+    environment:
+      MODEL_ACCESS_EXECUTOR_PATH:
+      MODEL_ACCESS_CODEX_TAILNET_ENDPOINT:
+  watcher:
+    environment:
+      MODEL_ACCESS_EXECUTOR_PATH:
+      MODEL_ACCESS_CODEX_TAILNET_ENDPOINT:
+YAML
+  fi
 }
 
 # host_secret_contract.json declares the `heimdal-capture-watch` consumer for
@@ -1145,7 +1163,7 @@ deploy_channel_compose() {
     trap 'rm -f -- "${signboard_override_file}" "${compose_stdout_file}" "${compose_stderr_file}"; if [ -n "${runtime_env_snapshot_file}" ]; then rm -f -- "${runtime_env_snapshot_file}"; fi' EXIT
     local active_activation_scope
     active_activation_scope="$(_deploy_channel_pin_activation_scope "${channel_env_file}" "${channel}")" || return $?
-    _deploy_channel_signboard_override_document "${active_activation_scope}" > "${signboard_override_file}"
+    _deploy_channel_signboard_override_document "${active_activation_scope}" "${channel}" > "${signboard_override_file}"
     compose_args+=(-f "${signboard_override_file}")
 
     # Compose gives the caller shell precedence over --env-file values. Pin the

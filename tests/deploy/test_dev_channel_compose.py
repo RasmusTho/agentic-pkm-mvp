@@ -301,6 +301,7 @@ def _render_signboard_deploy_compose(
     runtime_signboard_root: str = "",
     force_no_active_vault: bool = False,
     model_access_bindings: dict[str, str] | None = None,
+    channel: str = "dev",
 ) -> tuple[dict[str, object], Path, bytes]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     runtime_env = tmp_path / "runtime.env"
@@ -347,7 +348,7 @@ source "$1"
 if [ "${FORCE_NO_ACTIVE_SIGNBOARD:-0}" = "1" ]; then
   resolve_signboard_root_env() { unset SIGNBOARD_ROOT; }
 fi
-deploy_channel_compose "$2" dev docker-compose.dev.yml pkm-dev-signboard-contract \
+deploy_channel_compose "$2" "$4" "docker-compose.$4.yml" "pkm-$4-signboard-contract" \
   "$3" config --format json
 """
     env = os.environ.copy()
@@ -376,6 +377,7 @@ deploy_channel_compose "$2" dev docker-compose.dev.yml pkm-dev-signboard-contrac
             str(wrapper),
             str(REPO_ROOT),
             str(channel_env),
+            channel,
         ],
         cwd=REPO_ROOT,
         env=env,
@@ -736,10 +738,11 @@ def test_deploy_channel_runtime_env_vault_binding_ignores_parent_shell_stale_val
 
 
 @requires_docker
-def test_tailnet_model_access_is_scoped_to_product_callers(tmp_path: Path) -> None:
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_tailnet_model_access_is_scoped_to_product_callers(tmp_path: Path, channel: str) -> None:
     keys = {"MODEL_ACCESS_EXECUTOR_PATH": "tailnet_mtls", "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT": "https://100.100.20.30:9443"}
     bindings = {**keys, "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE": "/run/model-access/ca.pem", "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT": "/run/model-access/client.pem", "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY": "/run/model-access/client.key"}
-    compose, _, _ = _render_signboard_deploy_compose(tmp_path / "tailnet", signboard_host_root=None, vault_host_root=None, model_access_bindings=bindings)
+    compose, _, _ = _render_signboard_deploy_compose(tmp_path / "tailnet", signboard_host_root=None, vault_host_root=None, model_access_bindings=bindings, channel=channel)
     for name, service in compose["services"].items():
         env = service.get("environment", {})
         if name in RUNTIME_SERVICES:
@@ -749,3 +752,19 @@ def test_tailnet_model_access_is_scoped_to_product_callers(tmp_path: Path) -> No
     prod = _load_compose(REPO_ROOT / "docker-compose.prod.yml")["services"]
     for service in prod.values():
         assert not set(keys).intersection(service.get("environment", {}))
+    default_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "default", signboard_host_root=None, vault_host_root=None, channel=channel,
+    )
+    for service in default_compose["services"].values():
+        assert not set(keys).intersection(service.get("environment", {}))
+    vlan_bindings = {key: value for key, value in bindings.items() if key not in keys}
+    vlan_bindings.update(MODEL_ACCESS_EXECUTOR_PATH="vlan", MODEL_ACCESS_CODEX_VLAN_ENDPOINT="https://192.0.2.25:8443")
+    vlan_compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "vlan", signboard_host_root=None, vault_host_root=None,
+        model_access_bindings=vlan_bindings, channel=channel,
+    )
+    for name, service in vlan_compose["services"].items():
+        env = service.get("environment", {})
+        assert not set(keys).intersection(env), name
+        if name in RUNTIME_SERVICES:
+            assert env["MODEL_ACCESS_CODEX_VLAN_ENDPOINT"] == vlan_bindings["MODEL_ACCESS_CODEX_VLAN_ENDPOINT"]

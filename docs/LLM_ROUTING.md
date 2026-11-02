@@ -86,7 +86,10 @@ may contain `MODEL_ACCESS_CODEX_VLAN_ENDPOINT`, the three CA/certificate/key pat
 and the optional `MODEL_ACCESS_EXECUTOR_PATH` and `MODEL_ACCESS_CODEX_TAILNET_ENDPOINT` references.
 The deploy wrapper fails closed on duplicate, malformed, or additional keys; it accepts the new
 endpoint only as an HTTPS Tailnet IPv4 literal and requires the identity references when that path
-is selected. Compose does not read the raw file as a service `env_file`, so unrelated settings or
+is selected. For that explicit DEV/TEST selection the governed deploy wrapper adds the two Tailnet
+references only to the Product callers through its private Compose override; without the selection,
+the previous default Compose model is unchanged. Direct standalone Compose invocations do not use
+this wrapper projection. Compose does not read the raw file as a service `env_file`, so unrelated settings or
 credentials cannot leak into Product containers. The file selects no model and activates no route.
 The deploy entrypoint validates this separation before acquiring the channel lock or preparing
 migrations/state. Immediately before a Product-channel Compose invocation, it snapshots the governed

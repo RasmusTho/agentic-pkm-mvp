@@ -157,6 +157,26 @@ def test_missing_optional_model_access_file_clears_inherited_values(
     assert "optional_missing" in result.stderr
 
 
+def test_missing_model_access_does_not_forward_stale_tailnet_selector(tmp_path: Path) -> None:
+    shell = '''
+set -euo pipefail
+source "$1"
+deploy_channel_model_access_runtime_env_preflight "$2"
+_deploy_channel_signboard_override_document full dev
+'''
+    env = os.environ.copy()
+    env.update({"MODEL_ACCESS_EXECUTOR_PATH": "tailnet_mtls",
+                "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT": "https://100.100.20.30:9443"})
+    result = subprocess.run(
+        ["bash", "-c", shell, "model-access-preflight", str(DEPLOY_COMPOSE_LIB),
+         str(tmp_path / "missing.env")],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "MODEL_ACCESS_EXECUTOR_PATH" not in result.stdout
+    assert "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT" not in result.stdout
+
+
 @pytest.mark.parametrize("recovery", ["automatic", "explicit"])
 def test_rollback_retains_valid_existing_model_access_bindings(
     tmp_path: Path, recovery: str,
