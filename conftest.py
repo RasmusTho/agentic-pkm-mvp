@@ -22,7 +22,8 @@ if str(_COMPANION_APP_ROOT) not in sys.path:
     sys.path.insert(0, str(_COMPANION_APP_ROOT))
 
 
-_TEMP_PREFIX = "agentic-pkm-pytest-"
+_TEMP_PREFIX = "pkm-py-"
+_TEMP_LEGACY_PREFIX = "agentic-pkm-pytest-"
 _TEMP_OWNER = ".agentic-pkm-pytest-owner.json"
 _TEMP_FINISHED = ".agentic-pkm-pytest-finished.json"
 _TEMP_CHILD_PREFIX = ".agentic-pkm-pytest-child-"
@@ -36,7 +37,7 @@ class _TempParentBusy(OSError):
 
 def _private_temp_parent(system_temp: Path) -> Path:
     """Create the stable private default without adopting an unsafe path."""
-    parent = system_temp / ("agentic-pkm-pytest-roots-" + str(os.geteuid()))
+    parent = system_temp / ("pkm-" + str(os.geteuid()))
     try:
         parent.mkdir(mode=0o700)
     except FileExistsError:
@@ -191,7 +192,7 @@ def _temp_parent_locks(parent: Path) -> list[tuple[int, int, str]]:
     held: list[tuple[int, int, str]] = []
     try:
         for directory in (parent, *parent.parents):
-            if not directory.name.startswith(_TEMP_PREFIX):
+            if not directory.name.startswith((_TEMP_PREFIX, _TEMP_LEGACY_PREFIX)):
                 continue
             descriptor, identity = _open_temp_lifetime(directory)
             if descriptor is None:

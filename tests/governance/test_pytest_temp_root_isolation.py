@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import select
+import socket
 import subprocess
 import sys
 import threading
@@ -29,7 +30,7 @@ def _dead_pid() -> int:
 
 
 def _candidate(parent: Path, suffix: str, *, pid: int, age_days: int = 8) -> Path:
-    root = parent / ("agentic-pkm-pytest-" + suffix)
+    root = parent / ("pkm-py-" + suffix)
     root.mkdir(mode=0o700)
     (root / "artifact.txt").write_text("synthetic test artifact")
     info = root.stat()
@@ -168,7 +169,7 @@ def test_prunes_expired_inactive_roots_and_preserves_recent_and_active(tmp_path:
 
 def test_cleanup_fails_closed_for_unverifiable_or_active_roots(tmp_path: Path) -> None:
     subject = _root_harness()
-    missing = tmp_path / "agentic-pkm-pytest-missing"
+    missing = tmp_path / "pkm-py-missing"
     missing.mkdir(mode=0o700)
     invalid = _candidate(tmp_path, "invalid", pid=_dead_pid())
     (invalid / subject._TEMP_OWNER).write_text("not json")
@@ -208,14 +209,14 @@ def test_cleanup_is_confined_to_owned_direct_child_namespaces(tmp_path: Path) ->
     foreign = _candidate(outside, "foreign", pid=_dead_pid())
     parent = tmp_path / "parent"
     parent.mkdir(mode=0o700)
-    (parent / "agentic-pkm-pytest-symlink").symlink_to(foreign, target_is_directory=True)
+    (parent / "pkm-py-symlink").symlink_to(foreign, target_is_directory=True)
     generic = parent / "pytest-generic"
     generic.mkdir()
     (generic / "artifact").write_text("retain")
     subject._prune_expired_temp_roots(parent)
     assert (foreign / "artifact.txt").read_text() == "synthetic test artifact"
     assert (generic / "artifact").read_text() == "retain"
-    assert (parent / "agentic-pkm-pytest-symlink").is_symlink()
+    assert (parent / "pkm-py-symlink").is_symlink()
 
 
 def test_cleanup_does_not_follow_links_inside_expired_root(tmp_path: Path) -> None:
@@ -251,7 +252,7 @@ def test_actual_pytest_hook_prunes_only_its_synthetic_parent(tmp_path: Path) -> 
     parent = tmp_path / "controlled-parent"
     parent.mkdir(mode=0o700)
     expired = _candidate(parent, "expired", pid=_dead_pid())
-    unknown = parent / "agentic-pkm-pytest-unknown"
+    unknown = parent / "pkm-py-unknown"
     unknown.mkdir(mode=0o700)
     env["PYTEST_DEBUG_TEMPROOT"] = str(parent)
     (tmp_path / "test_probe.py").write_text("def test_probe(tmp_path):\n    assert tmp_path.is_dir()\n")
@@ -260,7 +261,7 @@ def test_actual_pytest_hook_prunes_only_its_synthetic_parent(tmp_path: Path) -> 
     assert result.returncode == 0, result.stdout + result.stderr
     assert not expired.exists()
     assert unknown.exists()
-    roots = [path for path in parent.iterdir() if path.name.startswith("agentic-pkm-pytest-")]
+    roots = [path for path in parent.iterdir() if path.name.startswith("pkm-py-")]
     assert len(roots) == 2
     created = next(path for path in roots if path != unknown)
     marker = created / ".agentic-pkm-pytest-owner.json"
@@ -427,6 +428,32 @@ def test_nested_pytest_refreshes_parent_retention_after_real_completion(tmp_path
     assert not parent.exists()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux AF_UNIX regression")
+def test_default_namespace_allows_unix_socket(tmp_path: Path) -> None:
+    # Match the long fixture and socket name that exposed Linux's sun_path limit.
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(tmp_path / "listener.sock"))
+
+
+def test_legacy_namespace_is_preserved_and_nested_lifetime_is_held(tmp_path: Path) -> None:
+    subject = _root_harness()
+    current = _candidate(tmp_path, "legacy", pid=_dead_pid())
+    legacy = tmp_path / "agentic-pkm-pytest-legacy"
+    current.rename(legacy)
+    held = subject._temp_parent_locks(legacy)
+    assert any(os.fstat(root_fd).st_ino == legacy.stat().st_ino for _, root_fd, _ in held)
+    try:
+        subject._prune_expired_temp_roots(tmp_path)
+        assert legacy.exists()
+    finally:
+        for descriptor, root_fd, child_name in held:
+            os.unlink(child_name, dir_fd=root_fd)
+            os.close(root_fd)
+            os.close(descriptor)
+    subject._prune_expired_temp_roots(tmp_path)
+    assert legacy.exists()
+
+
 def test_default_parent_is_private_and_unqualified_parent_is_not_pruned(tmp_path: Path) -> None:
     subject = _root_harness()
     system_temp = tmp_path / "system-temp"
@@ -487,7 +514,7 @@ def test_cooperating_parent_locks_exclude_concurrent_changes(tmp_path: Path) -> 
 
 def test_unsafe_default_parent_fails_loud(tmp_path: Path) -> None:
     subject = _root_harness()
-    parent = tmp_path / ("agentic-pkm-pytest-roots-" + str(os.geteuid()))
+    parent = tmp_path / ("pkm-" + str(os.geteuid()))
     parent.symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(OSError, match="not private"):
         subject._private_temp_parent(tmp_path)
