@@ -144,6 +144,12 @@ def native(tmp_path, monkeypatch, request, admitted_bws_caller):
         return subprocess.CompletedProcess(argv, 0, output, '' if kwargs.get('text') else b'')
 
     monkeypatch.setattr(linux.subprocess, 'run', transport)
+
+    def ssh_exchange(argv, request):
+        result = transport(argv, input=request.decode('utf-8'), text=True)
+        return result.returncode, result.stdout.encode('utf-8')
+
+    monkeypatch.setattr(linux, '_normal_ssh_exchange', ssh_exchange)
     yield state
     if supervisor.operation is not None:
         supervisor.operation.activation.set()
