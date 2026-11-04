@@ -5099,6 +5099,37 @@ def open_local_operator_principal_store(registry_path: Path) -> LocalOperatorPri
     return LocalOperatorPrincipalStore(local_operator_principal_path(registry_path))
 
 
+def declare_operations_acceptance_fixture(*, registry_path: Path, binding_id: str,
+                                         operation_id: str) -> int:
+    """Record finite fixture metadata inside an existing admitted operator window.
+
+    This declaration issues no identity, consent, binding or write authority.
+    The explicit native preparer owns its intent and partial-effect receipts.
+    """
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+    from app.instance.scalar_binding_runtime import current_binding_effect_runtime, validate_frozen_binding_runtime
+    from uuid import UUID
+    profile = "native-operations-acceptance.v1"
+
+    if str(UUID(operation_id)) != operation_id:
+        raise RegistryError("invalid original fixture operation")
+    runtime = current_binding_effect_runtime()
+    if (runtime is None or runtime.vault_binding_id != binding_id
+        or runtime.registry_store.path != registry_path):
+        raise RegistryError("fixture declaration requires its admitted binding window")
+    validate_frozen_binding_runtime(runtime)
+    registry = runtime.registry_store
+    snapshot = registry.load()
+    registration = snapshot.registrations[binding_id]
+    if (registration.extensions.get("status") != "initialized"
+        or any(profile in row.extensions for row in snapshot.registrations.values())):
+        raise RegistryError("fixture declaration already exists or binding is uninitialized")
+    updated = registry.update_registration(replace(registration,
+        extensions={**registration.extensions, profile: {"operation_id": operation_id}}),
+        expected_revision=snapshot.revision, _capability=_STORAGE_MUTATION_CAPABILITY)
+    return updated.revision
+
+
 def local_operator_storage_capability() -> object:
     """Hand the sealed storage-mutation capability to MVR-03's durable writers."""
 
