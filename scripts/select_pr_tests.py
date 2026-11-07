@@ -1237,6 +1237,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # binding, idempotent writes, ack/bump) that the worker consumes
             # (#3930); its regressions live in tests/services and tests/workers.
             "app/services/outbox.py",
+            "app/services/outbox_producers.py",
             # Index embedding events are durable outbox producers; run both
             # delivery-worker and memory/indexing coverage for this exact seam.
             "app/outbox/events.py",
