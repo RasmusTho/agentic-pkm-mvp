@@ -811,7 +811,11 @@ class DormantSettingsRebindReconciler:
         except FilesystemIdentityError:
             pass
         completed = self._latest_completed_receipt(before=record.desired_revision)
-        if completed is None or completed.candidate_binding_id != prior:
+        if (completed is None or completed.candidate_binding_id != prior) and not (
+            # MVR-06B: an unbracketed post-handoff revision writes no receipt; durable
+            # intent, not the boot env root, is what the prior binding was running on.
+            snapshot.extensions.get("backgroundSupervisor")
+        ):
             return
         cfg.vault_path = validate_settings_rebind_candidate_root(
             Path(registration.path)  # type: ignore[attr-defined]

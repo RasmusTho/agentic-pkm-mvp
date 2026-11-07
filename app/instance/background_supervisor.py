@@ -201,6 +201,12 @@ def _resolve_handoff_binding(
             return record.candidate_binding_id, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
     if snapshot.default_vault_binding_id is not None:
         return snapshot.default_vault_binding_id, PROVENANCE_COMPATIBILITY_DEFAULT, bridge_revision
+    if legacy_bootstrap_root is None:
+        # A headless one-vault install: the single registration MVR-01B enrolled from the
+        # env bootstrap is durable truth, readable where the vault itself is not mounted.
+        enrolled = list(snapshot.registrations.values())
+        if len(enrolled) == 1 and enrolled[0].extensions.get("provenance") == "legacy_env_bootstrap":
+            return enrolled[0].vault_binding_id, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
     if legacy_bootstrap_root is not None:
         from app.instance.default_vault import (
             VaultSelectionError,
@@ -243,6 +249,7 @@ def run_compatibility_bridge_handoff(
     channel_id: str,
     ownership_root: Path | None,
     legacy_bootstrap_root: Path | None = None,
+    stopped_window_proven: bool = False,
     _capability: Any = None,
 ) -> HandoffReceipt:
     """Retire the #3163 bridge and seat the supervisor in one fail-closed cutover.
@@ -250,7 +257,9 @@ def run_compatibility_bridge_handoff(
     The MVR-05 scalar worker is drained first: the exclusive binding-effect lease on
     the live binding waits out every in-flight shared worker/watcher/settings effect and
     blocks new ones until the commit, so no effect straddles the authority change. The
-    commit itself is a single registry generation.
+    deployment init container deliberately has no vault mount, so the lease cannot prove
+    its root there; a proved stopped window (every consumer stopped) is then the drain.
+    The commit itself is a single registry generation.
     """
 
     from app.instance.settings_rebind import (
@@ -311,7 +320,15 @@ def run_compatibility_bridge_handoff(
             _handoff_fault_point("after_commit")
             return committed
 
-        if binding is not None and ownership_root is not None:
+        root_visible = binding is not None and Path(
+            snapshot.registrations[binding].path
+        ).is_dir()
+        if binding is not None and not root_visible and not stopped_window_proven:
+            raise CapabilityNotReadyError(
+                "the handoff cannot drain a binding whose root is not visible outside a "
+                "proved stopped window"
+            )
+        if binding is not None and ownership_root is not None and root_visible:
             from app.instance.binding_effect_lease import BindingEffectLeaseManager
 
             registration = snapshot.registrations[binding]
@@ -490,9 +507,14 @@ def apply_governed_intent_mutation(
 
 
 def _running(snapshot: RegistrySnapshot, members: tuple[str, ...]) -> tuple[str, ...]:
-    """Members a lifecycle can actually run (a removed registration stays failed intent)."""
+    """Members a lifecycle can actually run (removed or sealed members stay failed intent)."""
 
-    return tuple(item for item in members if item in snapshot.registrations)
+    return tuple(
+        item
+        for item in members
+        if item in snapshot.registrations
+        and snapshot.registrations[item].extensions.get(LIFECYCLE_STATE_KEY) is None
+    )
 
 
 def repair_background_intent_for_transfer(
@@ -880,7 +902,7 @@ class BackgroundLifecycleSupervisor:
         """Wait out in-flight shared effects of the old generation before rotating."""
 
         from app.instance.binding_effect_lease import (
-            BindingEffectLeaseTimeout,
+            BindingEffectLeaseError,
             OwnershipFenceUnavailable,
         )
 
@@ -899,11 +921,14 @@ class BackgroundLifecycleSupervisor:
         except OwnershipFenceUnavailable:
             # The fence refuses every new holder; resolution below fails closed.
             return True
-        except BindingEffectLeaseTimeout:
+        except BindingEffectLeaseError as exc:
+            if lifecycle.binding_id not in self.registry.load().registrations:
+                return True  # the removal commit retired this binding's lease state
             logger.error(
-                "background lifecycle drain timed out consumer=%s binding=%s",
+                "background lifecycle drain not proven consumer=%s binding=%s: %s",
                 self.consumer,
                 lifecycle.binding_id,
+                exc,
             )
             return False
 

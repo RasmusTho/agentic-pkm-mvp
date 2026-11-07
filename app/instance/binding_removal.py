@@ -34,7 +34,7 @@ drain + commit.
 **Reactivation** (``binding-reactivation.json``)::
 
     intent -> ownership_reactivated -> registered_reactivating -> derived_invalidated
-           -> rescanned -> rebuild_receipted -> complete
+           -> rescanned -> rebuild_receipted -> healthy -> rebound -> complete
 
 The binding is restored from its tombstone in the sealed ``reactivating`` state with an
 advanced content epoch; every binding-keyed derived projection family in
@@ -50,6 +50,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -93,6 +94,8 @@ from app.instance.vault_registry import (
 if TYPE_CHECKING:
     from app.instance.runtime import InstanceRegistryRuntime
 
+logger = logging.getLogger(__name__)
+
 REMOVAL_SCHEMA = "agentic-pkm.binding-removal.v1"
 REMOVAL_PHASES = (
     "intent",
@@ -114,6 +117,8 @@ REACTIVATION_PHASES = (
     "derived_invalidated",
     "rescanned",
     "rebuild_receipted",
+    "healthy",
+    "rebound",
     "complete",
 )
 REBUILD_RECEIPT_SCHEMA = "agentic-pkm.binding-rebuild-receipt.v1"
@@ -169,11 +174,14 @@ class _Journal:
         finally:
             os.close(descriptor)
 
-    def save(self, intent: dict[str, Any], phase: str) -> None:
+    def persist(self, intent: dict[str, Any]) -> None:
         from app.instance.instance_state import _atomic_private_write
 
-        intent["phase"] = phase
         _atomic_private_write(self.path, json.dumps(intent, sort_keys=True).encode())
+
+    def save(self, intent: dict[str, Any], phase: str) -> None:
+        intent["phase"] = phase
+        self.persist(intent)
         _fault_point(f"{self.schema.rsplit('.', 2)[-2]}:{phase}")
 
     def load(self) -> dict[str, Any] | None:
@@ -302,7 +310,7 @@ class BindingRemovalCoordinator:
             # A typed refusal (watcher timeout, revision race, drain timeout) before
             # the commit leaves the source authoritative. Any other exception is a
             # process failure: the durable journal is the recovery authority.
-            if self.journal.before(intent, "committed"):
+            if self.journal.before(intent, "committed") and not self._tombstoned(intent):
                 self._compensate(intent)
             raise
 
@@ -319,7 +327,11 @@ class BindingRemovalCoordinator:
             if activation is not None:
                 from app.instance.settings_rebind import compatibility_ingress_window
 
-                intent["journal_before"] = activation.store.read().as_payload()
+                if "journal_before" not in intent:
+                    # Durable before the prepare: a crash between the two must still
+                    # compensate to the true prior revision, not the prepared one.
+                    intent["journal_before"] = activation.store.read().as_payload()
+                    self.journal.persist(intent)
                 with compatibility_ingress_window(runtime.registry, transition=True):
                     prepared = activation.store.prepare(
                         candidate_binding_id=intent["candidate_binding_id"]
@@ -335,9 +347,9 @@ class BindingRemovalCoordinator:
             self.journal.save(intent, "final_scanned")
         if before(intent, "committed"):
             self._commit(intent, source)
-            self._leases().retire_binding_state(binding_id)
             self.journal.save(intent, "committed")
         if before(intent, "buffer_drained"):
+            self._retire_lease_state(binding_id)
             if activation is not None and intent.get("journal_moves"):
                 record = activation.store.read()
                 if activation.watcher_enabled:
@@ -367,6 +379,23 @@ class BindingRemovalCoordinator:
         if tombstone is None:
             raise RegistryError("binding removal completed without its tombstone")
         return tombstone
+
+    def _tombstoned(self, intent: dict[str, Any]) -> bool:
+        """A commit that became durable before it raised can only roll forward."""
+
+        binding_id = intent["binding_id"]
+        snapshot = self.runtime.registry.load()
+        return binding_id not in snapshot.registrations and binding_id in snapshot.removal_tombstones
+
+    def _retire_lease_state(self, binding_id: str) -> None:
+        """Best effort post-commit; reactivation retries it strictly before re-registering."""
+
+        from app.instance.binding_effect_lease import BindingEffectLeaseError
+
+        try:
+            self._leases().retire_binding_state(binding_id)
+        except BindingEffectLeaseError as exc:
+            logger.warning("retiring removed binding lease state deferred: %s", exc)
 
     def _leases(self) -> Any:
         from app.instance.binding_effect_lease import BindingEffectLeaseManager
@@ -620,13 +649,21 @@ PG_BINDING_KEYED_RETAINED_TABLES: tuple[str, ...] = (
 )
 
 
+def _database_configured() -> bool:
+    """Named configuration, not reachability: an outage is a failure, not an absence."""
+
+    from app.services.outbox import _self_owned_database_is_named
+
+    return _self_owned_database_is_named() or (os.getenv("STORE_BACKEND") or "").lower() == "pg"
+
+
 def _invalidate_pg_tables(binding_id: str, root: Path) -> dict[str, Any]:
     del root
-    from app.stores.pg import pg_available
-
-    if not pg_available():
+    if not _database_configured():
         # No database is configured for this runtime: nothing durable to invalidate.
         return {"tables": [], "skipped": "no_database"}
+    # A configured but unreachable database raises here: the binding stays sealed and the
+    # journal stays before ``derived_invalidated``. It must never record a false skip.
     from app.stores.pg import _connect
 
     cleared: list[str] = []
@@ -761,9 +798,7 @@ def _production_rebuild(
 def _rebuild_vault_projections(root: Path, binding_id: str) -> list[str]:
     """Replace the binding-scoped projections whose source of truth is the vault itself."""
 
-    from app.stores.pg import pg_available
-
-    if not pg_available():
+    if not _database_configured():
         return []
     from app.jobs.episodes_projection import rebuild_episodes_projection
     from app.standing_questions.projection import (
@@ -798,6 +833,9 @@ class BindingReactivationCoordinator:
             existing = self.journal.load()
             if existing is not None and existing["phase"] != "complete":
                 return self._run(existing)
+            removal = BindingRemovalCoordinator(self.runtime).journal.load()
+            if removal is not None and removal["phase"] != "complete":
+                raise RegistryError("an incomplete binding removal requires recovery first")
             identity = resolve_filesystem_root_identity(root)
             matches = [
                 tombstone
@@ -873,10 +911,40 @@ class BindingReactivationCoordinator:
         if before(intent, "rebuild_receipted"):
             intent["rebuild_receipt"] = self._write_rebuild_receipt(intent)
             self.journal.save(intent, "rebuild_receipted")
-        if before(intent, "complete"):
+        if before(intent, "healthy"):
             self._mark_healthy(intent)
+            self.journal.save(intent, "healthy")
+        if before(intent, "rebound"):
+            self._rebind_explicit_member(binding_id, root)
+            self.journal.save(intent, "rebound")
+        if before(intent, "complete"):
             self.journal.save(intent, "complete")
         return runtime.registry.load().registrations[binding_id]
+
+    def _rebind_explicit_member(self, binding_id: str, root: Path) -> None:
+        """An explicit member kept as failed intent resumes through the two-phase journal.
+
+        Removal stopped its lifecycle by clearing the phase journal; the intent never left,
+        so healthy again means running again. Compatibility intent is never re-enrolled.
+        """
+
+        snapshot = self.runtime.registry.load()
+        intent = stored_intent(snapshot)
+        if (
+            intent is None
+            or intent.mode == INTENT_MODE_COMPATIBILITY
+            or binding_id not in intent.background_vault_binding_ids
+        ):
+            return
+        record = _activation(self.runtime).store.read()
+        if record.candidate_binding_id == binding_id:
+            return
+        _activation(self.runtime).activate_background(
+            candidate_binding_id=binding_id,
+            candidate_root=root,
+            intent=replace(intent, revision=intent.revision + 1),
+        )
+        emit_background_intent_event(self.runtime.registry.load(), reason="binding_removal")
 
     def _register_reactivating(self, intent: dict[str, Any], tombstone: RemovalTombstone) -> None:
         registry = self.runtime.registry

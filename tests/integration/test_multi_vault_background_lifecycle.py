@@ -776,7 +776,7 @@ def test_registration_removal_activates_after_all_consumer_floors(tmp_path, monk
     )]
     + [("reactivation", phase) for phase in (
         "intent", "ownership_reactivated", "registered_reactivating", "derived_invalidated",
-        "rescanned", "rebuild_receipted",
+        "rescanned", "rebuild_receipted", "healthy", "rebound",
     )],
 )
 def test_production_removal_and_reactivation_recover_after_every_durable_phase(
@@ -813,9 +813,17 @@ def test_production_removal_and_reactivation_recover_after_every_durable_phase(
     snapshot = runtime.registry.load()
     registration = snapshot.registrations.get(binding)
     lease = runtime.ledger.load().leases.get(binding)
-    # No early access and no dual ownership at any crash point.
+    # No early access and no dual ownership at any crash point, on every write route:
+    # effect-leased holders and the carrier-free compatibility ingress alike.
     if registration is not None and registration.extensions.get("lifecycleState"):
         assert _shared_refused(runtime, binding, root)
+        from app.instance.settings_rebind import RegistryError, SettingsRebindStore
+
+        try:
+            admitted = SettingsRebindStore(runtime.registry).compatibility_binding_id()
+        except RegistryError:
+            admitted = None
+        assert admitted != binding
     if registration is None:
         assert binding in snapshot.removal_tombstones
     assert not (registration is not None and binding in snapshot.removal_tombstones)
@@ -1230,3 +1238,204 @@ def test_binding_lifecycle_cli_removes_recovers_and_reactivates(tmp_path, monkey
     reactivated = cli("binding-reactivate", *common, "--root", second.path)
     assert reactivated["_exit_code"] == 0, reactivated
     assert reactivated["content_epoch"] == 2 and second.path not in str(reactivated)
+
+
+def test_removal_recovery_after_prepare_crash_compensates_to_the_true_prior_revision(
+    tmp_path, monkeypatch
+) -> None:
+    from app.instance import binding_removal
+    from app.instance.binding_effect_lease import BindingEffectLeaseTimeout
+    from app.instance.runtime import open_default_vault_service
+    from tests._mvr_default_vault_harness import reopen_runtime
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
+    binding = second.vault_binding_id
+
+    # Crash after the journal prepare but before its phase is saved.
+    original_save = binding_removal._Journal.save
+
+    def crash_on_prepared(self, intent, phase):
+        if phase == "prepared":
+            raise _ProcessCrash(phase)
+        original_save(self, intent, phase)
+
+    monkeypatch.setattr(binding_removal._Journal, "save", crash_on_prepared)
+    with pytest.raises(_ProcessCrash):
+        runtime.remove(binding)
+    monkeypatch.setattr(binding_removal._Journal, "save", original_save)
+
+    # Recovery then meets a typed drain refusal: the source must be fully restored.
+    def refuse(self, source):
+        raise BindingEffectLeaseTimeout("injected drain refusal")
+
+    monkeypatch.setattr(binding_removal.BindingRemovalCoordinator, "_drain", refuse)
+    restarted = reopen_runtime(runtime, tmp_path)
+    with pytest.raises(BindingEffectLeaseTimeout):
+        restarted.recover_removal()
+    assert background_ids(restarted) == (binding,)
+    record = restarted.open_settings_rebind_store().read()
+    assert record.candidate_binding_id == binding
+    lifecycle = supervisor(restarted).start()
+    assert lifecycle.status == "running" and lifecycle.binding_id == binding
+
+
+def test_failure_after_durable_tombstone_rolls_forward_and_never_compensates(
+    tmp_path, monkeypatch
+) -> None:
+    from app.instance import binding_removal
+    from app.instance.binding_effect_lease import (
+        BindingEffectLeaseError,
+        BindingEffectLeaseManager,
+    )
+    from app.instance.runtime import open_default_vault_service
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
+    binding = second.vault_binding_id
+
+    def refuse(self, binding_id):
+        raise BindingEffectLeaseError("injected retirement refusal")
+
+    monkeypatch.setattr(BindingEffectLeaseManager, "retire_binding_state", refuse)
+    tombstone = runtime.remove(binding)
+    assert tombstone.vault_binding_id == binding
+    assert runtime.ledger.active_owner(binding) is None
+    assert background_ids(runtime) == ()
+    assert binding_removal.BindingRemovalCoordinator(runtime).recover() is None
+
+    # A commit that became durable and then raised also rolls forward on recovery.
+    monkeypatch.undo()
+    bind_runtime_env(monkeypatch, runtime)
+    stub_settings_reload(monkeypatch)
+    runtime.reactivate_removed(Path(second.path))
+    open_default_vault_service(runtime.layout.registry_path).set(binding)
+    registry_cls = type(runtime.registry)
+    original = registry_cls.commit_background_transition
+
+    def commit_then_raise(self, **kwargs):
+        original(self, **kwargs)
+        from app.instance.settings_rebind import RegistryError
+
+        raise RegistryError("injected failure after the durable commit")
+
+    monkeypatch.setattr(registry_cls, "commit_background_transition", commit_then_raise)
+    with pytest.raises(Exception, match="after the durable commit"):
+        runtime.remove(binding)
+    monkeypatch.setattr(registry_cls, "commit_background_transition", original)
+    assert binding in runtime.registry.load().removal_tombstones
+    assert runtime.recover_removal() is not None
+    assert runtime.ledger.active_owner(binding) is None
+
+
+def test_reactivation_refused_during_incomplete_removal(tmp_path, monkeypatch) -> None:
+    from app.instance.settings_rebind import RegistryError
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+
+    def crash(name: str) -> None:
+        if name == "binding-removal:committed":
+            raise _ProcessCrash(name)
+
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", crash)
+    with pytest.raises(_ProcessCrash):
+        runtime.remove(second.vault_binding_id)
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", lambda name: None)
+    with pytest.raises(RegistryError, match="requires recovery first"):
+        runtime.reactivate_removed(Path(second.path))
+    assert runtime.recover_removal() is not None
+    assert runtime.reactivate_removed(Path(second.path)).extensions["contentEpoch"] == 2
+
+
+def test_unreachable_configured_database_leaves_reactivation_sealed(tmp_path, monkeypatch) -> None:
+    from app.instance.binding_removal import BindingReactivationCoordinator
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    binding, root = second.vault_binding_id, Path(second.path)
+    runtime.remove(binding)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody@127.0.0.1:1/unreachable")
+    with pytest.raises(Exception):
+        runtime.reactivate_removed(root)
+    registration = runtime.registry.load().registrations[binding]
+    assert registration.extensions["lifecycleState"] == "reactivating"
+    assert BindingReactivationCoordinator(runtime).journal.load()["phase"] == "registered_reactivating"
+    assert _shared_refused(runtime, binding, root)
+
+
+def test_empty_intent_to_a_different_binding_runs_under_an_enabled_watcher(
+    tmp_path, monkeypatch
+) -> None:
+    """Production posture (WATCHER_ENABLE=1): no re-arm refusal against the boot env root."""
+    from app.instance.runtime import open_default_vault_service
+    from app.watcher import registry as watcher_registry
+
+    runtime, first, second, config = _watched_instance(tmp_path, monkeypatch)
+    drive_watcher_during_waits(monkeypatch, config)
+    assert admin(runtime).remove(first.vault_binding_id)["explicit_empty"] is True
+    watcher_registry.run_registry_once(config)
+    silent = Path(first.path) / "while-explicit-empty.md"
+    silent.write_text("nobody watches this\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config)
+    assert str(silent) not in outbox_paths(tmp_path)
+
+    # A governed add of a binding that is not the boot env root takes effect and survives
+    # a process restart (fresh config) without moving foreground selection.
+    added = admin(runtime).add(second.vault_binding_id)
+    assert added["background_vault_binding_ids"] == [second.vault_binding_id]
+    note = Path(second.path) / "watched-after-add.md"
+    note.write_text("adopted from durable intent\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config)
+    assert str(note) in outbox_paths(tmp_path)
+    restarted_note = Path(second.path) / "watched-after-restart.md"
+    restarted_note.write_text("still durable\n", encoding="utf-8")
+    watcher_registry.run_registry_forever(config, max_ticks=1)
+    assert str(restarted_note) in outbox_paths(tmp_path)
+    assert str(silent) not in outbox_paths(tmp_path)
+
+    # Compatibility no-vault to a default on another binding, same posture.
+    monkeypatch.undo()
+    runtime2, first2, second2, config2 = _watched_instance(tmp_path / "compat", monkeypatch)
+    drive_watcher_during_waits(monkeypatch, config2)
+    defaults = open_default_vault_service(runtime2.layout.registry_path)
+    defaults.set(second2.vault_binding_id)
+    runtime2.remove(second2.vault_binding_id)
+    assert background_ids(runtime2) == ()
+    runtime2.reactivate_removed(Path(second2.path))
+    defaults.set(second2.vault_binding_id)
+    assert background_ids(runtime2) == (second2.vault_binding_id,)
+    note2 = Path(second2.path) / "watched-after-default.md"
+    note2.write_text("default-driven\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config2)
+    assert str(note2) in outbox_paths(tmp_path / "compat")
+
+
+def test_explicit_member_reactivation_resumes_its_watcher(tmp_path, monkeypatch) -> None:
+    from app.instance.runtime import _preflight_runtime
+    from app.watcher import registry as watcher_registry
+
+    runtime, first, second, config = _watched_instance(tmp_path, monkeypatch)
+    drive_watcher_during_waits(monkeypatch, config)
+    admin(runtime).remove(first.vault_binding_id)
+    admin(runtime).add(second.vault_binding_id)
+    watcher_registry.run_registry_once(config)
+    runtime.remove(second.vault_binding_id)
+    # Loudly failed member: retained, never silently dropped.
+    assert background_ids(runtime) == (second.vault_binding_id,)
+    assert supervisor(runtime).start().status == "failed"
+
+    runtime.reactivate_removed(Path(second.path))
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id == second.vault_binding_id
+    assert _preflight_runtime(
+        channel=runtime.layout.channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        consumer="watcher",
+    ) == 0
+    note = Path(second.path) / "watched-after-reactivation.md"
+    note.write_text("running again\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config)
+    assert str(note) in outbox_paths(tmp_path)

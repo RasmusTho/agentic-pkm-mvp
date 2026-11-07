@@ -753,7 +753,10 @@ class BindingEffectLeaseManager:
                 value = self._validate_state(
                     vault_binding_id, json.loads(self._read_private_text(path))
                 )
-                if value["sharedHolders"] or value["exclusivePending"] or value["exclusiveHolder"]:
+                holders = [*value["sharedHolders"], *value["exclusivePending"]]
+                if value["exclusiveHolder"] is not None:
+                    holders.append(value["exclusiveHolder"])
+                if any(self._holder_alive(holder) for holder in holders):
                     raise BindingEffectLeaseError("a retired binding still has lease holders")
                 os.unlink(path)
             journal = self._journal_path(vault_binding_id)

@@ -2362,6 +2362,10 @@ def _enter_background_lifecycle_fence(
         cfg.enable = False
         return
     cfg.vault_path = Path(lifecycle.root)
+    if not cfg.enable and _as_bool(env_str("WATCHER_ENABLE")):
+        # A requested watcher that went idle adopts the durable binding, e.g. explicit-empty
+        # followed by a governed add. ``WATCHER_ENABLE=0`` stays disabled.
+        cfg.enable = True
 
 
 def _run_spec_tick(
@@ -3062,6 +3066,19 @@ def run_registry_forever(
             # is the cleared vault, so stay idle exactly like the long-lived loop.
             cfg.enable = False
             idle_without_binding = True
+        if startup_rebind_cycle is None or startup_rebind_cycle.mode not in {
+            "prepared",
+            "committed",
+            "recovery",
+        }:
+            from app.instance.background_supervisor import durable_background_root
+
+            durable, durable_root = durable_background_root()
+            if durable and durable_root is None:
+                # MVR-06B: durable empty intent never compiles the boot env root.
+                idle_without_binding = True
+            elif durable and durable_root is not None:
+                cfg.vault_path = durable_root
         # `watcher run` is the production entrypoint.  Compile its bound vault at
         # boot just as API and worker do; the registry config is authoritative for
         # this process and need not depend on VAULT_ROOT being set separately.

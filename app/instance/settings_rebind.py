@@ -451,15 +451,22 @@ class SettingsRebindStore:
         """
 
         if _background_intent_mode(self._registry) == "explicit":
-            return _foreground_compatibility_binding(self._registry)
-        current = self.read()
-        if current.phase == "prepared":
-            raise RegistryError("compatibility handoff is awaiting commit")
-        if current.candidate_binding_id is None:
-            raise RegistryError("compatibility binding is not selected")
-        if current.reload_revision not in {None, current.desired_revision}:
-            raise RegistryError("compatibility handoff is awaiting settings reload")
-        return current.candidate_binding_id
+            binding_id = _foreground_compatibility_binding(self._registry)
+        else:
+            current = self.read()
+            if current.phase == "prepared":
+                raise RegistryError("compatibility handoff is awaiting commit")
+            if current.candidate_binding_id is None:
+                raise RegistryError("compatibility binding is not selected")
+            if current.reload_revision not in {None, current.desired_revision}:
+                raise RegistryError("compatibility handoff is awaiting settings reload")
+            binding_id = current.candidate_binding_id
+        registration = self._registry.load().registrations.get(binding_id)
+        if registration is not None and registration.extensions.get("lifecycleState") is not None:
+            # MVR-06B: carrier-free writes take no effect lease, so the draining-removal
+            # or reactivating seal is enforced at this admission point too.
+            raise RegistryError("compatibility binding is sealed by its registration lifecycle")
+        return binding_id
 
 
 def require_compatibility_binding_ready(
@@ -837,7 +844,14 @@ class SettingsRebindActivation:
         if prepared.phase != "prepared":
             return prepared
 
-        if self.watcher_enabled:
+        # MVR-06B: after the handoff a revision with no prior binding has no old root to
+        # bracket, so nothing waits for a watcher; the running watcher adopts the committed
+        # durable binding (never the boot env root) through its lifecycle fence.
+        unbracketed = (
+            prepared.prior_binding_id is None
+            and _background_intent_mode(self.store._registry) is not None
+        )
+        if self.watcher_enabled and not unbracketed:
             _activation_fault_point("acknowledge")
             self._wait_for_stage(prepared, required_stage="acknowledged")
         else:
@@ -927,6 +941,8 @@ class SettingsRebindActivation:
             )
 
     def _wait_for_completed_if_enabled(self, record: SettingsRebindRecord) -> None:
+        if record.phase == "no_lifecycle" and _background_intent_mode(self.store._registry):
+            return  # an unbracketed post-handoff revision writes no watcher receipt
         if self.watcher_enabled:
             _activation_fault_point("resume")
             self._wait_for_stage(record, required_stage="completed")

@@ -123,8 +123,33 @@ def test_env_only_single_vault_upgrade_preserves_compatibility_watcher(
     assert durable_background_state(runtime.registry.load()) is None
     assert runtime.registry.load().registrations == before.registrations
 
-    receipt = handoff_through_cli(runtime, legacy_bootstrap_root=Path(first.path))
+    # The shipped deploy step runs where the vault is not mounted and passes no root: the
+    # single enrolled env bootstrap is durable truth, and the stopped window is the drain.
+    from app.instance.background_supervisor import run_compatibility_bridge_handoff
+
+    root = Path(first.path)
+    unmounted = tmp_path / "vault-not-mounted"
+    root.rename(unmounted)
+    try:
+        with pytest.raises(Exception, match="not visible outside a proved stopped window"):
+            run_compatibility_bridge_handoff(
+                runtime.registry,
+                channel_id=runtime.layout.channel_id,
+                ownership_root=runtime.ledger.root,
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
+        handed = run_compatibility_bridge_handoff(
+            runtime.registry,
+            channel_id=runtime.layout.channel_id,
+            ownership_root=runtime.ledger.root,
+            stopped_window_proven=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+    finally:
+        unmounted.rename(root)
+    receipt = handoff_through_cli(runtime)
     assert receipt["_exit_code"] == 0, receipt
+    assert receipt["handed_off"] is False and handed.handed_off is True
     after = runtime.registry.load()
     assert set(after.registrations) == set(before.registrations)
     assert background_ids(runtime) == (first.vault_binding_id,)

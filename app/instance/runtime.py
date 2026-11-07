@@ -5246,9 +5246,18 @@ def _start_background_supervisor(runtime: InstanceRegistryRuntime, consumer: str
         return
     if snapshot.settings_rebind is not None:
         record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
-        running = tuple(item for item in state.binding_ids if item in snapshot.registrations)
+        running = tuple(
+            item
+            for item in state.binding_ids
+            if item in snapshot.registrations
+            and snapshot.registrations[item].extensions.get("lifecycleState") is None
+        )
         journal = () if record.candidate_binding_id is None else (record.candidate_binding_id,)
-        if record.phase != "prepared" and journal != running:
+        candidate = snapshot.registrations.get(record.candidate_binding_id or "")
+        # A sealed candidate is a removal/reactivation awaiting recovery, whose watcher must
+        # be able to start and acknowledge; it reconciles from its own journal.
+        sealed = candidate is not None and candidate.extensions.get("lifecycleState") is not None
+        if record.phase != "prepared" and not sealed and journal != running:
             raise RegistryError(
                 "the settings rebind phase journal disagrees with durable background intent"
             )
@@ -5400,17 +5409,18 @@ def _background_command(args: argparse.Namespace) -> int:
                         channel=args.channel,
                         nonce=proof.get("nonce"),
                     )
-                    bootstrap = (
-                        args.legacy_bootstrap_root
-                        or os.getenv("WATCHER_VAULT_PATH", "").strip()
-                        or os.getenv("VAULT_ROOT", "").strip()
-                        or None
-                    )
+                    # Only an explicit operator root is resolved here: the init container
+                    # has no vault mount, so the env bootstrap comes from durable enrollment.
                     handoff = run_compatibility_bridge_handoff(
                         registry,
                         channel_id=args.channel,
                         ownership_root=args.host_global_root,
-                        legacy_bootstrap_root=Path(bootstrap) if bootstrap else None,
+                        legacy_bootstrap_root=(
+                            Path(args.legacy_bootstrap_root)
+                            if args.legacy_bootstrap_root
+                            else None
+                        ),
+                        stopped_window_proven=True,
                         _capability=local_operator_storage_capability(),
                     )
             payload = handoff.as_dict()
