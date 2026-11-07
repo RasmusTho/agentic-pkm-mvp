@@ -773,14 +773,27 @@ gate also fails on a stale allowlist entry, so exemptions cannot accumulate.
 
 ### Watcher required-delivery cursor semantics
 
-Source: `app/watcher/registry.py::_emit_changed_entry` (#4203 / #4214).
+Source: `app/watcher/registry.py::_emit_changed_entry` (#4203 / #4214 / #6554).
 
 `app/watcher/registry.py::db_outbox_required()` is `True` when `WATCHER_REQUIRE_DB_OUTBOX` is set
 **or** when `STORE_BACKEND=pg` — the shipped production default (`config/runtime.defaults.env`). It
 reads like an opt-in switch; it is not, and production runs with required delivery on.
 
-Scope of the guarantee below: **the emission step only.** Once `_emit_changed_entry` reaches the
-emission, the emission and its durable observation cursor are one state transition:
+An eligible changed observation temporarily suppressed by debounce or rate limiting keeps its
+previous delivery cursor. A later ordinary scan can therefore deliver the latest stable observation
+after the window, including after a watcher restart. Existing sidecar entries remain marked present
+for scan reconciliation; a file never delivered does not acquire a delivered observation merely
+because it was throttled. One checkpointed priority path reserves the next available rate slot for
+an older deferred observation while ordinary bounded scanning and settings processing continue.
+It is a scheduling hint, never direct file-access or replay authority: current scope and policy are
+rechecked, and a vault, binding or relevant watcher-configuration change clears the old hint.
+The hint is released if its own file cannot be read, or if a scan completes with errors without
+reaching it; an unrelated error does not release a priority actually encountered in that generation.
+Errors remain visible and failed observations are not marked delivered. Intentional policy and
+settings-control skips retain their own semantics.
+
+Once `_emit_changed_entry` reaches the emission, the emission and its durable observation cursor
+are one state transition:
 
 - if the emission raises, the pre-observation `state.files` entry is restored (or removed when the
   file was previously unseen) and the exception propagates, so the next tick re-observes the
@@ -790,12 +803,8 @@ emission, the emission and its durable observation cursor are one state transiti
 - the cursor advances exactly once, after a successful emission; a subsequent tick over the same
   unchanged file emits nothing.
 
-**Known gap this guarantee does NOT cover.** `_emit_changed_entry` advances the `mtime`/`hash` cursor
-*before* the debounce/rate-limit check, and that check `return None`s without emitting and without
-rolling the cursor back; `_collect_changed_entries` then never re-detects the file. With the shipped
-`configs/watchers.yaml` (`rate_limit_per_min: 30`, `debounce_ms: 1500`) a bulk vault change
-permanently drops every observation past the limit. This drop is pre-existing and out of scope here —
-it is documented rather than claimed away.
+The fix does not reconstruct observations already dropped by older watcher versions or authorize
+replay of historical dead letters. Runtime adoption still depends on deployment of the new code.
 
 ### Vault-watcher delete tombstone durability
 

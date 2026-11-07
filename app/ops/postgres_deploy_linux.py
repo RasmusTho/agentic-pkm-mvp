@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import hashlib
 import itertools
 import json
+import logging
 import os
 from pathlib import Path
 import pwd
@@ -25,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, cast
 from uuid import UUID, uuid4
 from urllib.parse import urlencode, quote
 
@@ -35,6 +36,7 @@ from app.config.database import (
     host_database_fields,
 )
 from app.ops.bws_secret_reader import BwsReaderConfig, BwsSecretReader
+from app.ops.bws_source_image_cache import SourceImageCapacityUnavailable
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
 from app.ops.host_secret_controller import PreserveJournalBodyError
 from app.ops.native_web_acceptance import NativeWebRefusal, WEB_PROFILE
@@ -1289,6 +1291,22 @@ def _source_worker_user(config: LinuxConfig) -> str:
     return f"{config.uid}:{config.gid}"
 
 
+def _bind_nonproduction_image_endpoint(env: dict[str, str]) -> None:
+    """Keep governed image selection on the official local Docker endpoint."""
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+
+    if (env.get('APP_IMAGE_REPOSITORY', '') not in {'', IMAGE_REPOSITORY}
+            or env.get('DOCKER_HOST', 'unix:///var/run/docker.sock') not in {
+                '', 'unix:///var/run/docker.sock', 'unix:///run/docker.sock',
+            }
+            or env.get('DOCKER_CONTEXT', '') not in {'', 'default'}
+            or any(env.get(key) for key in ('DOCKER_TLS', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH'))):
+        raise PostgresDeployError()
+    env.pop('DOCKER_CONTEXT', None)
+    env['DOCKER_HOST'] = 'unix:///var/run/docker.sock'
+    env['APP_IMAGE_REPOSITORY'] = IMAGE_REPOSITORY
+
+
 class LinuxEffects:
     def __init__(self, config: LinuxConfig) -> None:
         self.config = config
@@ -1334,6 +1352,8 @@ class LinuxEffects:
             # any ambient host selector for this exact invocation.
             env['APP_IMAGE_TAG'] = candidate.revision
             env['APP_IMAGE_DIGEST_SUFFIX'] = '@' + candidate.image_digest
+            if cfg.channel in {'dev', 'test'}:
+                _bind_nonproduction_image_endpoint(env)
         # Native authority is never inherited from the supervisor or shell.
         env.pop('MVR03_PRINCIPAL_CUTOVER', None)
         for key in _CUTOVER_ENV:
@@ -1419,6 +1439,12 @@ class LinuxEffects:
             env['COMPOSE_PROFILES'] = ''
         # Installed runtime input is configuration, not request authorization.
         env.pop('MVR03_PRINCIPAL_CUTOVER', None)
+        if candidate is not None and cfg.channel in {'dev', 'test'}:
+            # Installed container values are not allowed to replace the
+            # authenticated candidate or its local daemon selection.
+            _bind_nonproduction_image_endpoint(env)
+            env['APP_IMAGE_TAG'] = candidate.revision
+            env['APP_IMAGE_DIGEST_SUFFIX'] = '@' + cast(str, candidate.image_digest)
         return env
 
     def compose(
@@ -1458,6 +1484,10 @@ class LinuxEffects:
             if set(source_snapshot.unset_environment) & dict(
                 source_snapshot.child_environment
             ).keys():
+                raise PostgresDeployError()
+            if candidate is not None and cfg.channel in {'dev', 'test'} and set(source_snapshot.unset_environment) & {
+                'DOCKER_HOST', 'APP_IMAGE_REPOSITORY', 'APP_IMAGE_TAG', 'APP_IMAGE_DIGEST_SUFFIX',
+            }:
                 raise PostgresDeployError()
             for key in source_snapshot.unset_environment:
                 if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None:
@@ -1501,6 +1531,70 @@ class LinuxEffects:
             ensure_candidate_object(self.config, plan.revision)
         require_file_protocol(self.config.root, plan.revision)
         self.qualify_authority_cutover(plan)
+
+    def readback_source_identity(
+        self, operation_id: str, revision: str, image_digest: str,
+        selected: AuthorityCutover, producer_kind: str,
+    ) -> dict[str, Any]:
+        """Read one exact terminal request and finish its retained cleanup only."""
+        from app.ops.native_source_identity_persistence import validate_receipt
+
+        try:
+            if (self.config.channel not in {'dev', 'test'} or str(UUID(operation_id)) != operation_id
+                    or re.fullmatch(r'[0-9a-f]{40}', revision) is None
+                    or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
+                    or producer_kind not in {'vault-alpha', 'registry'}):
+                raise PostgresDeployError()
+            selected.validate()
+            stem = self.config.journal.directory / f'{self.config.channel}-source-identity-{operation_id}'
+            request = _private_json(Path(str(stem) + '.request.json'))
+            receipt = validate_receipt(_private_json(Path(str(stem) + '.json')))
+            expected = {
+                'contract': ('native-source-identity-persistence-request.v3' if producer_kind == 'registry'
+                             else 'native-source-identity-persistence-request.v2'),
+                'operation_id': operation_id, 'channel': self.config.channel, 'revision': revision,
+                'image_digest': image_digest, 'authority_cutover': {
+                    'binding_id': selected.binding_id, 'root': selected.root,
+                    'ownership_root': selected.ownership_root,
+                },
+            }
+            if producer_kind == 'registry':
+                expected['producer_kind'] = producer_kind
+            fields = {'installed_fingerprint', 'execution_fingerprint', 'writers', 'container_root', 'vault_overlay'}
+            if (set(request) != set(expected) | fields
+                    or any(request.get(key) != value for key, value in expected.items())
+                    or receipt['operation_id'] != operation_id or receipt['channel'] != self.config.channel
+                    or receipt['revision'] != revision
+                    or (producer_kind == 'registry' and receipt.get('producer_kind') != producer_kind)
+                    or (producer_kind == 'vault-alpha' and 'producer_kind' in receipt)
+                    or any(not isinstance(request.get(key), str)
+                           or re.fullmatch(r'[0-9a-f]{64}', request[key]) is None
+                           for key in ('installed_fingerprint', 'execution_fingerprint'))
+                    or not isinstance(request.get('writers'), list)
+                    or any(service not in {'api', 'worker', 'watcher', 'heimdal-capture-watch', 'companion-ui'}
+                           for service in request['writers'])
+                    or len(set(request['writers'])) != len(request['writers'])
+                    or request.get('container_root') not in {selected.root, '/app/vault'}
+                    or request.get('vault_overlay') not in {
+                        'docker-compose.full-host-vault.yml', 'docker-compose.legacy-vault.yml',
+                    }):
+                raise PostgresDeployError()
+            owner = {'kind': 'source-identity-persistence', 'channel': self.config.channel,
+                     'operation_id': operation_id}
+            if producer_kind == 'registry':
+                owner['producer_kind'] = producer_kind
+            owns_lock = self.channel_lock_owner() == (json.dumps(owner, sort_keys=True) + '\n').encode()
+            self.reconcile_source_identity_cleanup(
+                operation_id, revision, image_digest, selected, owner, list(request['writers']),
+                request['installed_fingerprint'], request['container_root'], request['vault_overlay'],
+                allow_legacy_mount_order=_legacy_mount_cleanup_allowed(
+                    receipt, producer_exists=os.path.lexists(Path(str(stem) + '.producer.json')),
+                    owns_lock=owns_lock,
+                ),
+            )
+            return receipt
+        except Exception:
+            raise PostgresDeployError() from None
 
     def persist_source_identity(
         self, operation_id: str, revision: str, image_digest: str,
@@ -2232,7 +2326,10 @@ class LinuxEffects:
             )
         image_ref = IMAGE_REPOSITORY + '@' + plan.image_digest
         try:
-            rows = json.loads(_command(['docker', 'image', 'inspect', image_ref], timeout=30))
+            rows = json.loads(_command(
+                ['docker', '--host', 'unix:///var/run/docker.sock', 'image', 'inspect', image_ref],
+                env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}, timeout=30,
+            ))
         except (ValueError, TypeError, json.JSONDecodeError):
             raise PostgresDeployError() from None
         image_environment_keys: set[str] = set()
@@ -2909,6 +3006,8 @@ class LinuxEffects:
             raise PostgresDeployError()
         self.source.verify()
         env = self.environment(plan.authority_cutover) if plan.authority_cutover else self.environment()
+        if plan.channel in {'dev', 'test'} and plan.image_digest is not None:
+            _bind_nonproduction_image_endpoint(env)
         # A supervisor environment variable is ambient to every operation. Only
         # the persisted request may authorize this one deployment's migration.
         env.pop('DEPLOY_ACK_FORWARD_ONLY', None)
@@ -2973,14 +3072,20 @@ class LinuxEffects:
                 path.unlink()
 
     def _pg_runner(self, operation_id: str, plan: DeployPlan) -> Any:
+        from app.ops.acceptance_memory import AcceptanceMemoryError, load_policy
         from app.ops.pg_acceptance_runner import PgAcceptanceRunner
         if (not plan.automatic or self.config.channel != plan.channel
             or plan.image_digest is None or self.operation_id not in {None, operation_id}):
             raise PostgresDeployError()
+        try:
+            memory_policy = load_policy(plan.channel)
+        except AcceptanceMemoryError:
+            logging.getLogger(__name__).error('acceptance_memory_policy_invalid channel=%s profile=pg', plan.channel)
+            raise PostgresDeployError() from None
         return PgAcceptanceRunner(self.config.root, self.config.journal.directory,
                                   sha=plan.revision, digest=plan.image_digest,
                                   channel=plan.channel, operation_id=operation_id,
-                                  deadline_signal=_emit_pg_deadline)
+                                  deadline_signal=_emit_pg_deadline, memory_policy=memory_policy)
 
     def verify(self, operation_id: str, plan: DeployPlan) -> dict[str, Any]:
         receipt = self.config.journal.read()
@@ -4681,8 +4786,10 @@ class DeploymentSupervisor:
         if data.get('action') == 'test-recovery-release-instance-state':
             with self.mutex:
                 return self._test_recovery_release_instance_state(data)
-        if data.get('action') in {'source-identity-persist', 'source-identity-diagnose'}:
+        if data.get('action') in {'source-identity-persist', 'source-identity-diagnose',
+                                  'source-identity-persistence-readback'}:
             diagnostic = data['action'] == 'source-identity-diagnose'
+            readback_only = data['action'] == 'source-identity-persistence-readback'
             current_state = data.get('source_mode') == 'current-state'
             source_keys = {
                 'action', 'operation_id', 'revision', 'image_digest', 'authority_cutover',
@@ -4707,6 +4814,7 @@ class DeploymentSupervisor:
                     or ('source_mode' in data and not current_state)
                     or ('cleanup_only' in data and type(data['cleanup_only']) is not bool)
                     or (diagnostic and (not current_state or 'producer_kind' in data))
+                    or (readback_only and ('source_mode' in data or 'cleanup_only' in data))
                     or (current_state and not diagnostic and producer_kind != 'registry')
                 ):
                     raise PostgresDeployError()
@@ -4726,6 +4834,10 @@ class DeploymentSupervisor:
                         or self.config.journal.bound_plan(prior.operation_id) != self.operation.plan):
                         raise PostgresDeployError()
                 effects = LinuxEffects(self.config)
+                if readback_only:
+                    return {'source_identity_persistence': effects.readback_source_identity(
+                        operation_id, revision, image_digest, selected, producer_kind,
+                    )}
                 if diagnostic:
                     return {'source_identity_diagnostic': effects.diagnose_source_identity(
                         operation_id, revision, image_digest, selected,
@@ -5239,7 +5351,7 @@ class SshDeployRemote:
     def persist_source_identity(
         self, operation_id: str, revision: str, image_digest: str,
         selected: AuthorityCutover, producer_kind: str = 'vault-alpha',
-        *, current_state: bool = False, cleanup_only: bool = False,
+        *, current_state: bool = False, cleanup_only: bool = False, readback_only: bool = False,
     ) -> dict[str, Any]:
         """Invoke the fixed DEV/TEST source-persistence RPC."""
         from app.ops.native_source_identity_persistence import validate_receipt
@@ -5252,6 +5364,7 @@ class SshDeployRemote:
                 or re.fullmatch(r'sha256:[0-9a-f]{64}', image_digest) is None
                 or producer_kind not in {'vault-alpha', 'registry'}
                 or type(current_state) is not bool or type(cleanup_only) is not bool
+                or type(readback_only) is not bool or (readback_only and (current_state or cleanup_only))
                 or (current_state and producer_kind != 'registry')
                 or (cleanup_only and not current_state)
             ):
@@ -5262,7 +5375,7 @@ class SshDeployRemote:
         if channel not in {'dev', 'test'}:
             raise PostgresDeployError()
         payload: dict[str, Any] = {
-            'action': 'source-identity-persist',
+            'action': 'source-identity-persistence-readback' if readback_only else 'source-identity-persist',
             'operation_id': operation_id,
             'revision': revision,
             'image_digest': image_digest,
@@ -5303,6 +5416,14 @@ class SshDeployRemote:
             return receipt
         except Exception:
             raise PostgresDeployError() from None
+
+    def readback_source_identity(
+        self, operation_id: str, revision: str, image_digest: str,
+        selected: AuthorityCutover, producer_kind: str,
+    ) -> dict[str, Any]:
+        return self.persist_source_identity(
+            operation_id, revision, image_digest, selected, producer_kind, readback_only=True,
+        )
 
     def diagnose_source_identity(
         self, operation_id: str, revision: str, image_digest: str,
@@ -5592,6 +5713,7 @@ def qualify_heavy(config: LinuxConfig, operation_id: str) -> dict[str, Any]:
     channel resource: the disposable container and work tree are owned by this
     operation under the journal directory. It never gates channel advancement.
     """
+    from app.ops.acceptance_memory import AcceptanceMemoryError, load_policy
     from app.ops.heavy_acceptance import HeavyAcceptanceError
     from app.ops.heavy_acceptance_runner import HeavyAcceptanceRunner
     from app.ops.pg_acceptance import require_pass
@@ -5603,10 +5725,15 @@ def qualify_heavy(config: LinuxConfig, operation_id: str) -> dict[str, Any]:
         raise HeavyAcceptanceError('expected_committed_native_operation_required')
     proof = receipt.pg_acceptance
     require_pass(proof, proof['source_sha'], proof['image_digest'], config.channel, operation_id)
+    try:
+        memory_policy = load_policy(config.channel)
+    except AcceptanceMemoryError:
+        raise HeavyAcceptanceError('acceptance_memory_policy_invalid') from None
     ensure_candidate_object(config, proof['source_sha'])
     return HeavyAcceptanceRunner(config.root, config.journal.directory, sha=proof['source_sha'],
                                  digest=proof['image_digest'], channel=config.channel,
-                                 operation_id=operation_id).verify()
+                                 operation_id=operation_id,
+                                 memory_limit=memory_policy.heavy if memory_policy is not None else None).verify()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -5730,6 +5857,13 @@ def main(argv: list[str] | None = None) -> int:
             result = rpc(args.channel, request)
             print(json.dumps(result, sort_keys=True))
         return 0
+    except SourceImageCapacityUnavailable:
+        if (args.action == 'rpc' and isinstance(rpc_request, dict)
+                and rpc_request.get('action') == 'source-installation'):
+            print(json.dumps({'refused': True, 'reason': 'capacity_guard_unavailable'}, sort_keys=True))
+        else:
+            print('image capacity guard unavailable', file=sys.stderr)
+        return 78
     except UnknownDeployFenceRefused as exc:
         if (args.action == 'rpc' and isinstance(rpc_request, dict)
             and rpc_request.get('action') == 'reconcile-unknown'):

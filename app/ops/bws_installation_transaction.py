@@ -249,6 +249,9 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "channel_owner_check",
     "caller_census",
     "current_writer_snapshot",
+    "source_pull_unresolved",
+    "source_pull_complete_before_backup",
+    "source_pull_not_started",
     "authority_cutover",
     "candidate_verification",
     "old_disk_state",
@@ -1980,11 +1983,7 @@ def _verify_candidate_checkout(root: Path, revision: str) -> None:
         _refuse()
 
 
-def _verify_candidate(candidate_root: Path, request: dict[str, str]) -> None:
-    from app.ops.pg_acceptance import IMAGE_REPOSITORY
-    from app.ops.bws_installation_lifecycle import ENV as _LIFECYCLE_ENV
-    from app.ops.postgres_deploy_linux import _command
-
+def _verify_candidate_git(candidate_root: Path, request: dict[str, str]) -> None:
     try:
         if not isinstance(candidate_root, Path) or not candidate_root.is_absolute():
             _refuse()
@@ -2005,6 +2004,16 @@ def _verify_candidate(candidate_root: Path, request: dict[str, str]) -> None:
                    and isinstance(node.value, ast.Constant) and node.value.value == 1
                    for node in protocol.body):
             _refuse()
+    except Exception:
+        _refuse()
+
+
+def _verify_candidate_image(request: dict[str, str]) -> None:
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+    from app.ops.bws_installation_lifecycle import ENV as _LIFECYCLE_ENV
+    from app.ops.postgres_deploy_linux import _command
+
+    try:
         image_ref = IMAGE_REPOSITORY + "@" + request["image_digest"]
         rows = json.loads(_command(
             ["docker", "--host", "unix:///var/run/docker.sock", "image", "inspect", image_ref],
@@ -2017,6 +2026,11 @@ def _verify_candidate(candidate_root: Path, request: dict[str, str]) -> None:
             _refuse()
     except Exception:
         _refuse()
+
+
+def _verify_candidate(candidate_root: Path, request: dict[str, str]) -> None:
+    _verify_candidate_git(candidate_root, request)
+    _verify_candidate_image(request)
 
 
 def _require_writer_snapshot(value: object, request: dict[str, str]) -> _WriterSnapshot:
@@ -2417,6 +2431,8 @@ class _NativePorts:
         self._caller_profile_sent = False
         self._caller_source_modules: list[dict[str, object]] | None = None
         self._verified_candidate_sha: str | None = None
+        self._source_image_pull_required = False
+        self._source_image_prepared = False
         self.early_refusal_sources_bound = False
         caller_root = getattr(sys, "_yggdrasil_bws_candidate_checkout", None)
         self.caller_root = Path(caller_root) if type(caller_root) is str else None
@@ -2439,6 +2455,7 @@ class _NativePorts:
             channel, mode="exclusive", operation_id=request["operation_id"],
             candidate_sha=request["candidate_sha"], image_digest=request["image_digest"],
             bundle_name=request["bundle_name"], caller_checkout=self.caller_root,
+            image_pull=self._source_image_pull_required,
         )
 
     def verify_caller_checkout(self, request: dict[str, str]) -> None:
@@ -2452,8 +2469,29 @@ class _NativePorts:
         self.verify_caller_checkout(request)
         if self.caller_root is None:
             _refuse()
-        _verify_candidate(self.caller_root, request)
+        if self._source_image_prepared:
+            _verify_candidate_git(self.caller_root, request)
+        else:
+            _verify_candidate(self.caller_root, request)
         self._verified_candidate_sha = request["candidate_sha"]
+
+    def preflight_source_image(self, request: dict[str, str]) -> None:
+        """Keep the existing cached path working; reject unavailable pull guard early."""
+        if self.caller_root is None:
+            _refuse()
+        _verify_candidate_git(self.caller_root, request)
+        try:
+            _verify_candidate_image(request)
+        except Exception:
+            from app.ops.bws_source_image_cache import require_capacity_guard
+            require_capacity_guard()
+            self._source_image_pull_required = True
+
+    def prepare_source_image(self, owner: Any, request: dict[str, str]) -> None:
+        if self._source_image_pull_required:
+            from app.ops.bws_source_image_cache import prepare_image
+            prepare_image(owner, request["candidate_sha"], request["image_digest"])
+            self._source_image_prepared = True
 
     def verify_caller_sources(self, request: dict[str, str]) -> None:
         """Bind already imported caller modules to the exact candidate before any backup write."""
@@ -2608,6 +2646,9 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
     verify_checkout = getattr(ports, "verify_caller_checkout", None)
     if callable(verify_checkout):
         verify_checkout(request)
+    preflight_source_image = getattr(ports, "preflight_source_image", None)
+    if callable(preflight_source_image):
+        preflight_source_image(request)
     config = ports.configuration(channel)
     if config.channel != channel:
         _refuse()
@@ -2637,6 +2678,9 @@ def _execute_source_installation(channel: str, raw_request: object, ports: Any) 
     prebackup_gate = "channel_lock_entry"
 
     with ports.admission(channel, request) as admission:
+        prepare_source_image = getattr(ports, "prepare_source_image", None)
+        if callable(prepare_source_image):
+            prepare_source_image(admission, request)
         def publish_terminal_receipt() -> None:
             nonlocal terminal_receipt_attempted, terminal_receipt_published
             if receipt is None:
@@ -3116,4 +3160,10 @@ def reconcile_source_installation(channel: str, request: object) -> dict[str, ob
             if terminal:
                 effects.retire_reconciled_channel_lock(handle, expected_owner=expected_owner)
 
-    return reconcile_installation_operation(channel, request, retire=close_transaction_lock)
+    def prove_before_backup(_owner: dict[str, object]) -> None:
+        config = LinuxConfig.load(channel)
+        if config.channel != channel or LinuxEffects(config).channel_lock_owner() is not None:
+            raise RuntimeError("bws_source_installation_recovery_refused")
+
+    return reconcile_installation_operation(channel, request, retire=close_transaction_lock,
+                                            prove_before_backup=prove_before_backup)

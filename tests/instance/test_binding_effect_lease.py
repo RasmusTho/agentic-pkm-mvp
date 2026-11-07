@@ -188,17 +188,49 @@ def test_lease_bookkeeping_does_not_rotate_binding_revision(tmp_path) -> None:
     vault = tmp_path / "vaults" / "binding-a"
     before = manager.registry_store.load()
     binding_revision = binding_revision_for(before, "binding-a")
+    qualification = manager.registry_store.read_qualification_state()[1]
 
     with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
         inside = manager.registry_store.load()
         assert inside.revision == before.revision
         assert binding_revision_for(inside, "binding-a") == binding_revision
         assert manager.persisted_state("binding-a")["generation"] == 1
+        assert manager.registry_store.read_qualification_state()[1] == qualification
 
     after = manager.registry_store.load()
     assert after.revision == before.revision
     assert binding_revision_for(after, "binding-a") == binding_revision
     assert manager.persisted_state("binding-a")["generation"] == 2
+    assert manager.registry_store.read_qualification_state()[1] == qualification
+
+
+def test_qualification_refuses_malformed_native_lease_without_repair(tmp_path) -> None:
+    from app.instance.vault_registry import RegistryError, _split_rendered, _render_markdown_settings
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+        pass
+    registry = manager.registry_store
+    frontmatter, body = _split_rendered(registry.path.read_text(), registry.path)
+    frontmatter["bindingEffectLeases"]["binding-a"]["generation"] = "unqualified"
+    payload = _render_markdown_settings(frontmatter, body).encode()
+    registry.path.write_bytes(payload)
+    last_good = registry.snapshot_path.read_bytes()
+    with pytest.raises(RegistryError):
+        registry.read_qualification_state()
+    assert registry.path.read_bytes() == payload
+    assert registry.snapshot_path.read_bytes() == last_good
+
+
+def test_ordinary_read_lease_preserves_native_normalization_behavior(tmp_path) -> None:
+    manager = _build_manager(tmp_path, "binding-a")
+    vault = tmp_path / "vaults" / "binding-a"
+    registry = manager.registry_store
+    original = registry.path.read_bytes()
+    registry.path.write_bytes(original + b"Ordinary native body normalization.\n")
+    with manager.shared_effect("binding-a", channel_id="dev", root=vault, timeout=1):
+        assert manager.observe("binding-a").shared_count == 1
+    assert b"Ordinary native body normalization" not in registry.path.read_bytes()
 
 
 @pytest.mark.parametrize("binding_id", [" binding-a ", "vault-å"])

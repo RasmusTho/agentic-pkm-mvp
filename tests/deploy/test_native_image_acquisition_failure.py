@@ -78,8 +78,9 @@ def _owner(tmp_path, monkeypatch, channel='dev', database='db'):
         if argv[:2] == ['docker', 'compose']:
             assert argv[-2:] == ['pull', 'api']
             return result
-        if argv[:3] == ['docker', 'image', 'inspect']:
+        if argv[:5] == ['docker', '--host', 'unix:///var/run/docker.sock', 'image', 'inspect']:
             assert argv[-1] == IMAGE_REPOSITORY + '@' + DIGEST
+            assert kwargs['env'] == {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
             return subprocess.CompletedProcess(argv, 0, json.dumps(image), '')
         pytest.fail('unexpected external effect')
 
@@ -187,7 +188,7 @@ def test_canonical_helper_failure_preserves_owner_ordering_and_compatibility(
     calls.clear()
     effects.require_source_identity_candidate(plan, selected, acquire=acquire, source_snapshot=snapshot)
     assert len(calls) == (4 if acquire else 3)
-    assert calls[-1][0][:3] == ['docker', 'image', 'inspect']
+    assert calls[-1][0][:5] == ['docker', '--host', 'unix:///var/run/docker.sock', 'image', 'inspect']
     for invalid_image in (
         [{**image[0], 'RepoDigests': [IMAGE_REPOSITORY + '@sha256:' + 'e' * 64]}],
         [{**image[0], 'Config': {'Labels': {'org.opencontainers.image.revision': 'e' * 40}, 'Env': []}}],

@@ -251,6 +251,10 @@ def composed(tmp_path, monkeypatch, request):
             return ''
         if argv[:3] == ['docker', 'volume', 'inspect']:
             return json.dumps([{'Mountpoint': str(runtime.registry.path.parent.parent)}])
+        if argv[:5] == ['docker', '--host', 'unix:///var/run/docker.sock', 'image', 'inspect']:
+            assert kwargs['env'] == {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
+            return json.dumps([{'Config': {'Labels': {'org.opencontainers.image.revision': REVISION}},
+                                'RepoDigests': ['ghcr.io/rasmustho/pkm-app@' + DIGEST]}])
         if argv[:3] == ['docker', 'image', 'inspect']:
             return json.dumps([{'Config': {'Labels': {'org.opencontainers.image.revision': REVISION}},
                                 'RepoDigests': ['ghcr.io/rasmustho/pkm-app@' + DIGEST]}])
@@ -481,6 +485,47 @@ def test_composed_current_state_diagnostic_preserves_stopped_watcher(composed, s
     assert len(composed.state.credential_paths) == 1
     assert all(not path.exists() for path in composed.state.credential_paths)
     assert linux.LinuxEffects(composed.cfg).channel_lock_owner() is None
+
+
+@pytest.mark.parametrize("key,value", [
+    ("DOCKER_HOST", "tcp://foreign.invalid:2375"),
+    ("DOCKER_CONTEXT", "foreign"),
+    ("APP_IMAGE_REPOSITORY", "foreign.invalid/image"),
+])
+def test_source_acquisition_rejects_installed_foreign_image_selectors(composed, key, value):
+    selected = composed.selected
+    channel = composed.cfg.channel
+    plan = DeployPlan(channel, REVISION, ("api",), ("postgres-api",), image_digest=DIGEST,
+                      authority_cutover=selected)
+    snapshot = SimpleNamespace(
+        child_environment=(("DATABASE_URL", f"postgresql+psycopg:///?host=db&port=5432&dbname=app_{channel}&user=app"),
+                           (key, value)),
+        unset_environment=(), container_root="/app/vault", vault_overlay="docker-compose.legacy-vault.yml",
+        host_root=selected.root,
+    )
+    with pytest.raises(linux.PostgresDeployError):
+        linux.LinuxEffects(composed.cfg).source_compose_invocation(cutover=selected, candidate=plan,
+                                                                  source_snapshot=snapshot)
+
+
+def test_source_acquisition_keeps_authenticated_image_after_installed_values(composed):
+    selected = composed.selected
+    channel = composed.cfg.channel
+    plan = DeployPlan(channel, REVISION, ("api",), ("postgres-api",), image_digest=DIGEST,
+                      authority_cutover=selected)
+    snapshot = SimpleNamespace(
+        child_environment=(("DATABASE_URL", f"postgresql+psycopg:///?host=db&port=5432&dbname=app_{channel}&user=app"),
+                           ("APP_IMAGE_TAG", "foreign"), ("APP_IMAGE_DIGEST_SUFFIX", "@sha256:" + "c" * 64)),
+        unset_environment=(), container_root="/app/vault", vault_overlay="docker-compose.legacy-vault.yml",
+        host_root=selected.root,
+    )
+    argv, env = linux.LinuxEffects(composed.cfg).source_compose_invocation(
+        cutover=selected, candidate=plan, source_snapshot=snapshot,
+    )
+    assert argv[:2] == ["docker", "compose"]
+    assert env["APP_IMAGE_TAG"] == REVISION and env["APP_IMAGE_DIGEST_SUFFIX"] == "@" + DIGEST
+    assert env["APP_IMAGE_REPOSITORY"] == "ghcr.io/rasmustho/pkm-app"
+    assert env["DOCKER_HOST"] == "unix:///var/run/docker.sock"
 
 
 @pytest.mark.parametrize('fault', ['registry', 'owner', 'pending-host', 'pending-native', 'channel',

@@ -178,9 +178,39 @@ python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <
 The root
 `conftest.py` provisions and validates a unique `PYTEST_DEBUG_TEMPROOT` namespace
 before collection for every invocation. An inherited debug root supplies the parent
-directory; each process still receives a fresh child namespace. Setup failure aborts
-before tests execute, with no shared-root fallback. Namespaces are retained for
-diagnosis; the harness does not delete another run's temporary artifacts.
+directory; each process still receives a fresh direct child namespace. Without an
+inherited root, the harness uses a stable UID-owned private directory beneath the
+system temporary directory. Setup failure aborts before tests execute, with no
+shared-root fallback. Each new namespace records its
+owner and keeps a shared lifetime lock, including locks on marked parent namespaces
+for nested pytest runs. On normal completion it records the end time; a nested run
+also extends the retention of its marked ancestors. On a later invocation the harness
+may remove only its marked direct-child namespaces at least seven days after completion,
+when the owner is absent and the exclusive cleanup lock is available. Missing or
+malformed markers, interrupted runs without a complete end record, uncertain child runs,
+live or unknown owners, symlinks, and failed checks are preserved. Existing unmarked
+namespaces are not migrated or removed; cleanup is best effort and leaves uncertain
+evidence intact. Automatic cleanup is limited to UID-owned 0700 parents on qualified
+ownership-enforcing mounts and uses a common parent lock shared by cooperating harnesses
+around namespace changes. macOS `noowners` and unknown filesystem semantics are not
+qualified; mount identity is rechecked before moving or deleting a candidate. A
+candidate with another mount, special files, or uninspectable entries is preserved. The
+parent listing and each candidate scan have a limit of 100,000 entries and share a
+five-second pre-rename budget; an unfinished root requires separately qualified
+maintenance. This does not interrupt a stalled filesystem call or
+bound deletion after rename. An
+unqualified default mount fails setup; an inherited unqualified parent remains available
+for isolated tests without pruning. A same-UID
+or root process deliberately bypassing that advisory lock is outside this boundary;
+an inherited parent that cannot be qualified still supports isolated tests but is
+never pruned. Markers on confirmed `noowners` enclosing mounts are left untouched;
+qualified enclosing namespaces retain lifetime fences. If an enclosing marker exists
+but its mount probe is inconclusive, setup fails rather than dropping its fence. On a qualified mount, a marked enclosing
+namespace whose owner marker cannot be safely opened and pinned fails setup rather
+than being treated as unmarked legacy.
+A valid busy lock is waited on for at most 30 seconds, then setup fails
+loudly; cleanup holds it only for final identity checks and the rename, not recursive
+deletion. A malformed default-parent lock also fails setup before collection.
 
 ### Validation-readiness diagnostic
 

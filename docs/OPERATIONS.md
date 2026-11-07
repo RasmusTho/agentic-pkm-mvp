@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-29 (#6447 BWS full-source quota and descriptor-headroom cross-reference; repository-only; no live capacity or DEV/TEST verification; prior #6384/#5337 evidence retained)
+Last reviewed: 2026-11-02 (#6549 Model Access source support and activation boundary; #6479 fixed operations acceptance entrypoint and pending deployed-proof boundary; source only; prior #6447/#6384/#5337 evidence retained)
 Current infrastructure observation reference: 2026-10-21, `yggdrasil-infra/CURRENT_STATUS.md`; this is not a new deployment, release or functional-acceptance receipt.
 Infrastructure reference review: 2026-10-21; other sections retain their individual verification dates.
 Local Colima startup entry reviewed 2026-10-24 against scripts/start_full_system.sh, tests/ops/test_colima_runtime_readiness.py and the isolated/default runtime receipts on Issue #4899; no TARS verification or placement change.
@@ -20,6 +20,7 @@ BWS host-admin target-scope repository evidence (2026-10-28): `app/ops/postgres_
 Last verified against: scripts/postmerge_channel_bug.py::advance_channel_ref, .github/workflows/postmerge-channel-bug.yml and tests/deploy/test_postmerge_dev_test.py::test_channel_refs_advance_only_on_green_verdicts / ::test_dev_hold_pins_ref_and_records_candidates (#6226 repository-only ref/hold proof); scripts/postmerge_dev_test.py and tests/deploy/test_postmerge_dev_test.py::test_test_promotion_requires_passing_dev_heavy_verdict (#6227 repository-only dev-heavy gate evidence); requirements-bws-deploy.txt (host SDK closure), scripts/install_postmerge_controller.py, scripts/postmerge_controller.py, scripts/postmerge_dev_test.py, scripts/dev_delivery_liveness.py and tests/deploy/test_postmerge_dev_test.py::test_controller_runs_from_pinned_tooling / ::test_controller_self_check_fails_loud (#6225 repository-only pinned tooling and startup proof); scripts/postmerge_dev_test.py::engage_pause and tests/deploy/test_postmerge_dev_test.py::test_kill_switch_pauses_until_expiry (#6224 repository-only pause evidence); scripts/dev_delivery_liveness.py and tests/governance/test_dev_delivery_liveness_workflow.py (#6222 repository-only liveness evidence); scripts/postmerge_dev_test.py, scripts/postmerge_channel_bug.py and tests/deploy/test_postmerge_dev_test.py (#6223 repository-only rolling channel-bug evidence); scripts/companion_ui_postdeploy_smoke.sh::preflight and tests/companion_ui/test_gateway_postdeploy_smoke.py::test_collection_preflight_classifies_captured_output_without_pipe_race (#6079 repository-only evidence), docs/MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md, app/api/routes/ask.py::ask_voice, app/chat/voice_session.py::VoiceSessions, tests/voice/test_session_transcript.py::test_only_write_is_appendonly_transcript (VOICE-04 repository evidence), docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/KARAKEEP_MIMER_ACQUISITION/README.md, docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md, docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md, config/secrets/host_secret_contract.json, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, app/ops/native_source_bootstrap.py, scripts/deploy_channel.sh, tests/deploy/test_deploy_channel_script.py::test_native_deploy_rebuilds_source_projection_before_health_gate, tests/deploy/test_deploy_channel_script.py::test_native_api_source_selector_refuses_before_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_unbound_api_preserves_idle_without_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_prepares_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_refuses_unavailable_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_preserves_selected_embedding_identity, Issue #6069 candidate containing origin/main 8ec709f (repository-only; no live channel verification), tests/ops/test_ci_workflow.py::test_not_pg_steps_have_room_for_selected_coverage, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-14
 TypeSafe credential boundary evidence: config/secrets/host_secret_contract.json; tests/ops/test_host_secret_contract.py::test_typesafe_key_uses_non_prod_project_and_marr_only_consumer, tests/ops/test_secret_admin.py::test_typesafe_import_targets_non_prod_and_rejects_other_channels, and tests/architecture/test_typesafe_runtime_boundary.py::test_runtime_key_stays_on_marr_and_callers_keep_separate_policy; Issue #5808 follows Issue #5801 / PR #5803 on 2026-10-07. Repository-only fake/injected-source evidence; no live BWS permission or host/provider verification.
 TypeSafe Builder CKM repository evidence: app/builderops/ckm/judgment.py, app/model_access/ckm_judgment_executor.py, tests/builderops/ckm/test_semantic_typesafe.py, and Issue #5768 on 2026-10-05; fake-provider proofs only, with runtime disabled and no live host or provider verification.
+Model Access Tailnet repository evidence: `app/model_access/executor_network_policy.py`, `scripts/lib/deploy_channel_compose.sh`, and `tests/deploy/test_dev_channel_compose.py::test_tailnet_model_access_is_scoped_to_product_callers` (#6549); synthetic and local Compose proof only, not a host activation or route acceptance.
 TypeSafe DEV actual-consumer evidence: the [2026-10-21 Product receipt and external cleanup](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6288#issuecomment-6309809365) and [preserved Builder receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5764#issuecomment-6203507688) verify the separate synthetic calls. Both allowances are consumed, temporary listeners/processes are absent, and ordinary routes remain disabled; broader #5667 and TEST/PROD activation keep their separate gates.
 # Operations Playbook
 
@@ -55,6 +56,18 @@ CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
 - Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
 - Canvas note: `python -m app.cli canvas ...` and `/api/canvas/*` now exist as bounded session surfaces behind `CANVAS_ENABLED`; they are materially supported for bounded co-authoring, but still not part of the default production operator surface.
+
+### Fixed autonomous-operations acceptance
+
+The operations acceptance entrypoint is `tests/operations/live_operations_acceptance.py`;
+[Automated Technical Acceptance](TESTING.md#automated-technical-acceptance) owns its exact TEST/DEV
+commands, native prerequisites, fixed inventory and original-evidence handling. It consumes current
+native candidate/principal/binding authority, qualifies the separately installed SDK/browser, and
+narrows finite Product effects through existing owners. It performs no deployment, restoration,
+principal provisioning or restart. A missing environment or separately authorized backend/WSP
+restart leaves the required scenario blocked. Temporary fixture proof and delivery of #6479 do not
+establish deployed acceptance; the qualified same-candidate TEST/short DEV outcome and post-acceptance
+owner-doc/State promotion remain on #5340/#5329.
 
 ### Native source-persistence failure receipts
 
@@ -975,6 +988,13 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
   are removed after every completed run. Legacy TEST receipts remain readable. Manual qualification
   does not grant controller promotion authority. Live activation stays #6170/#3347. See
   [Post-merge heavy tests](development/TEST_STRATEGY_HOT_PATH.md#post-merge-heavy-tests).
+- DEV/TEST heavy and native PG acceptance support an optional verified container memory policy.
+  With no policy, they run without these memory caps and report that isolation is inactive. Choose
+  values only after coordinated measurement; see the [deployment policy contract](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture-1).
+- DEV/TEST base Compose services and the native PG/heavy acceptance containers specify bounded Docker
+  json-file logs. Existing containers acquire these limits only on controlled recreation; separate
+  containers and other storage consumers remain outside this setting. See the
+  [deployment procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure).
 - GitHub-visible DEV delivery liveness (#6222) runs in `dev-delivery-liveness.yml` on a schedule.
   Inspect the checker JSON `reason` and its signal workflow runs: the default missed-progress
   deadline is six hours, and the controller activity window is two hours. A fresh terminal DEV
@@ -1033,7 +1053,14 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
 - The accepted Model Access route uses VLAN mTLS to the loopback-bound Mac mini Codex CLI
   executor. See [the dated infrastructure status](https://github.com/RasmusTho/yggdrasil-infra/blob/main/CURRENT_STATUS.md)
   for installed and observed services. A merged adapter or running listener does not establish
-  persistent Product routing, inference qualification or release acceptance.
+  persistent Product routing, inference qualification or release acceptance. DEV/TEST source support
+  also permits a separately configured Tailnet mTLS path through the governed deploy wrapper; host
+  ingress, channel activation and verification remain separate operational steps.
+- `scripts/check_model_access_certificates.py` checks explicitly supplied DEV/TEST public server,
+  client and CA files against a server IP and a validity margin. For example, pass `--channel dev`,
+  `--server`, `--client`, `--ca` and `--server-ip`; `--min-days` defaults to 30. It does not inspect
+  private keys, discover the files used by running services, renew certificates, or establish live
+  mTLS health. Actual rotation and adoption remain separate operational work.
 - For the explicit `openai_api` evaluation transport, the executor may start through
   `scripts/start_model_access_executor.sh` as the dev-only `model-access-executor` Keychain consumer
   of `openai.api-key` (#6386). Switching the launchd job to that launcher and the owner's one-time
@@ -1350,6 +1377,16 @@ The template's production installation is recorded in the 2026-10-30 receipt bel
 incident continued suppressing duplicate alerts; controlled TEST acceptance remains open under
 #4076. The dated receipts retain their exact source and observation scope.
 
+The [2026-10-30 TEST first-preflight receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6493#issuecomment-6535859691)
+records operation `230149723a60e4c497a04f8efc07a9a9` as `REFUSED` before qualified-worker or drill
+entry: the same-project running-worker selector did not observe exactly one valid ID. This does
+not distinguish worker count from ID shape or establish worker absence or health. The original
+supervisor/cgroup were positively contained and the watch/TEST probe units were absent. The result
+SHA-256 is `542a4448014fc00b91b3cf0a830f4dcdb8a8860febe5325ba4498fcb9a4c7b71`; its separate
+reconciliation SHA-256 is `6a71c89eeaecfd53acc2e16315c8aa153bf0b07529d4a30a27fa6138cacdbfa0`.
+Earlier `UNKNOWN` results remain preserved. No controlled down/recovery or live TEST acceptance
+is claimed; #6493's actual acceptance and final receipt mapping remain open.
+
 The Linux service uses the `heimdal-external-alerts` BWS consumer and the `discord.webhook`
 binding. The BWS token is read through systemd credentials and is removed from the probe child's
 environment; only a short-lived mode-0600 runtime file carries the declared webhook binding.
@@ -1357,10 +1394,19 @@ The fixed Linux launcher and shared probe source accept explicit `dev`, `test`, 
 DEV and TEST bind this consumer to `non-prod` and `shared/discord.webhook`, while PROD uses `prod`.
 Endpoint, heartbeat, state, and alert-channel inputs remain explicit. The existing
 `scripts/install_host_probe.py` installer remains TEST/PROD-only; its shared
-`/opt/yggdrasil/host-probe` package is not a DEV installation plan. Native DEV configuration,
-installation, baseline, and drill qualification remain pending with the Product keeper. DEV
-source support does not upgrade the dated production installation below or satisfy #4076's
-pending live TEST AC4.
+`/opt/yggdrasil/host-probe` package is not a DEV installation plan.
+The [2026-11-02 accepted DEV receipt](https://github.com/RasmusTho/agentic-pkm-mvp/pull/6509#issuecomment-6572302498)
+records operation `062b7585684f4a4b9f89921957a3f300` on `ygg-dev`, using probe source
+`afb7990f61a97a5616e7c4a795578ddca1ca1b4e` and the normal fixed `heimdal-external-alerts`
+consumer. Independent readyz, required health and worker-heartbeat/backing checks qualified the
+baseline before temporary installation. The controlled probe-target fault produced one confirmed
+down, two later completed duplicate-suppression cycles, and one recovery with the same correlation.
+The original service and state were absent and were restored absent; configuration, runtime paths
+and temporary artifacts were restored, the independent guard was disarmed, and all original
+processes, resources and transport were positively closed. Normal incident/controller/ACK history
+was not rewound. This proves the bounded DEV drill, not a permanent installation, future health,
+an application upgrade, or #4076's still-pending controlled live TEST AC4. The dated production
+installation below retains its separate source and observation scope.
 The service has no Docker startup dependency and reads the worker heartbeat from the host volume.
 The prior Mac LaunchAgent and plist remain legacy templates. The installer
 `scripts/install_host_probe.py` prints a plan by default; host writes require `--apply` from a clean

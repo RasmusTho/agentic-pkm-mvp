@@ -2,6 +2,13 @@
   "invariant": "INV-EF1",
   "rows": [
     {
+      "artifact": "scripts/probe_test_outage_operation.py",
+      "category": "ii",
+      "why_load_bearing": "Issue #6493 fixes the sole registered native caller worktree; this path is an authority anchor, not a portable default. The bounded operation refuses a different executing file or working directory and separately authenticates the current Issue lease and worktree registration.",
+      "disposition": "stay",
+      "issue": "#6493"
+    },
+    {
       "artifact": "docs/CLOUD_SECRET_PROVISIONING/ADMINISTER_SECRETS_VALUE_FREE.md",
       "category": "iii",
       "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
@@ -2996,6 +3003,13 @@
       "why_load_bearing": "The #6244 actual conformant manual experiment retains exact supported local-interpreter argv or frozen carried instructions. These immutable evidence bytes are load-bearing provenance, not a Product default, launcher, credential or new policy.",
       "disposition": "stay",
       "issue": "#6244"
+    },
+    {
+      "artifact": "scripts/probe_dev_outage_operation.py",
+      "category": "ii",
+      "why_load_bearing": "The bounded #6505 DEV operation authenticates its exact claimed local worktree, branch and executing entry before transport. This fixed personal checkout is an operation-specific caller authority anchor, not a Product path default or live target qualification.",
+      "disposition": "stay",
+      "issue": "#6505"
     }
   ]
 }

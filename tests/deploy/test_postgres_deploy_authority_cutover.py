@@ -500,12 +500,13 @@ def test_host_cli_produces_explicit_cutover_without_inferred_ack(target, monkeyp
 
     monkeypatch.setattr(host, 'deploy_from_host', deploy)
     args = ['test', target.plan.revision, '--existing-secrets-only', '--operation-id', identifier,
+            '--image-digest', 'sha256:' + 'b' * 64,
             '--authority-cutover-binding', target.selected.binding_id,
             '--authority-cutover-root', target.selected.root,
             '--authority-cutover-ownership-root', target.selected.ownership_root]
     assert host.main(args) == 0
     selected, kwargs = captured.pop()
-    assert selected == target.plan and not selected.ack_forward_only
+    assert selected == replace(target.plan, image_digest='sha256:' + 'b' * 64) and not selected.ack_forward_only
     assert kwargs['allow_bootstrap'] is False and kwargs['operation_id'] == identifier
     assert host.main([*args, '--automatic']) == 78
     assert host.main([value for value in args if value != '--existing-secrets-only']) == 78

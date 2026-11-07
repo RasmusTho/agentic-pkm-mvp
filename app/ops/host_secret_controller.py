@@ -30,6 +30,54 @@ class PreserveJournalBodyError(Exception):
     """Marker for a typed downstream refusal that must survive journal scope."""
 
 
+def _validate_deploy_image_binding(raw: object, target: object) -> None:
+    """Validate the exact value-free deploy plan carried by every host event."""
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+    try:
+        if type(raw) is not str or len(raw) > 16384 or target not in {"dev", "test"}:
+            raise ValueError()
+        binding = json.loads(raw)
+        if (type(binding) is not dict or set(binding) != {
+                "schema", "repository", "channel", "revision", "image_digest", "plan_fingerprint",
+            }
+                or binding["schema"] != "host-deploy-image-binding.v1"
+                or binding["repository"] != IMAGE_REPOSITORY
+                or binding["channel"] != target
+                or type(binding["revision"]) is not str
+                or re.fullmatch(r"[0-9a-f]{40}", binding["revision"]) is None
+                or type(binding["image_digest"]) is not str
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", binding["image_digest"]) is None
+                or type(binding["plan_fingerprint"]) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", binding["plan_fingerprint"]) is None
+                or raw != json.dumps(binding, sort_keys=True, separators=(",", ":"))):
+            raise ValueError()
+    except Exception:
+        raise HostSecretAdmissionError() from None
+
+
+def _validate_source_image_binding(raw: object, target: object) -> None:
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+
+    try:
+        if type(raw) is not str or len(raw) > 4096 or target not in {"dev", "test"}:
+            raise ValueError()
+        binding = json.loads(raw)
+        if (type(binding) is not dict
+                or set(binding) != {"schema", "repository", "channel", "revision", "image_digest", "plan_fingerprint"}
+                or binding["schema"] != "host-source-image-binding.v1"
+                or binding["repository"] != IMAGE_REPOSITORY or binding["channel"] != target
+                or type(binding["revision"]) is not str
+                or re.fullmatch(r"[0-9a-f]{40}", binding["revision"]) is None
+                or type(binding["image_digest"]) is not str
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", binding["image_digest"]) is None
+                or type(binding["plan_fingerprint"]) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", binding["plan_fingerprint"]) is None
+                or raw != json.dumps(binding, sort_keys=True, separators=(",", ":"))):
+            raise ValueError()
+    except Exception:
+        raise HostSecretAdmissionError() from None
+
+
 _KINDS = {
     "check", "import", "token-push", "deploy", "bootstrap", "source-persistence",
     "operator-identity-restoration", "source-diagnostic",
@@ -80,6 +128,9 @@ class HostSecretOperation:
         producer_kind: str | None = None,
         source_mode: str | None = None,
         source_request_fingerprint: str | None = None,
+        deploy_image_binding: str | None = None,
+        source_image_binding: str | None = None,
+        reconciliation_only: bool = False,
     ) -> None:
         self._journal_fd = journal_fd
         self.operation_id = operation_id
@@ -97,6 +148,9 @@ class HostSecretOperation:
         self.producer_kind = producer_kind
         self.source_mode = source_mode
         self.source_request_fingerprint = source_request_fingerprint
+        self.deploy_image_binding = deploy_image_binding
+        self.source_image_binding = source_image_binding
+        self.reconciliation_only = reconciliation_only
 
     def _record(self, stage: str, source: str | None = None) -> None:
         if not self._active or self._finished or self._completed_result is not None:
@@ -119,6 +173,10 @@ class HostSecretOperation:
         if self.source_mode is not None:
             record["source_mode"] = self.source_mode
             record["source_request_fingerprint"] = self.source_request_fingerprint
+        if self.kind == "deploy" and self.deploy_image_binding is not None:
+            record["deploy_image_binding"] = self.deploy_image_binding
+        if self.kind == "source-persistence" and self.source_image_binding is not None:
+            record["source_image_binding"] = self.source_image_binding
         raw = (json.dumps(record, sort_keys=True) + "\n").encode()
         # A partial write or failed fsync leaves a poison/pending journal, never admission.
         if os.write(self._journal_fd, raw) != len(raw):
@@ -144,7 +202,8 @@ class HostSecretOperation:
 
     def prepare_mutation(self) -> None:
         """Persist before the first remote effect; caller already holds the host lock."""
-        if self.kind == "check" or (self.kind == "token-push" and not self._prepared):
+        if (self.reconciliation_only or self.kind == "check"
+                or (self.kind == "token-push" and not self._prepared)):
             raise HostSecretAdmissionError()
         if self._deferred_prepared:
             self._record("prepared")
@@ -195,7 +254,7 @@ class HostSecretOperation:
             and evidence.result == "failed"
             and evidence.source == _SOURCE_PERSISTENCE_ABSENCE_SOURCE
             and (
-                self._mutation_started
+                self._prepared
                 or (
                     self._completed_result == "failed"
                     and self._completed_source == _SOURCE_PERSISTENCE_ABSENCE_SOURCE
@@ -372,14 +431,22 @@ class HostSecretController:
                 elif record["kind"] == "deploy":
                     base_fields = {"operation_id", "kind", "target", "stage", "source"}
                     if frozenset(record) not in {
-                        frozenset(base_fields), frozenset(base_fields | {"allow_bootstrap"})
+                        frozenset(base_fields), frozenset(base_fields | {"allow_bootstrap"}),
+                        frozenset(base_fields | {"allow_bootstrap", "deploy_image_binding"}),
                     }:
                         raise HostSecretAdmissionError()
                     if "allow_bootstrap" in record and type(record["allow_bootstrap"]) is not bool:
                         raise HostSecretAdmissionError()
+                    if "deploy_image_binding" in record:
+                        _validate_deploy_image_binding(record["deploy_image_binding"], record["target"])
                 elif record["kind"] in {"source-persistence", "source-diagnostic"}:
                     base_fields = {"operation_id", "kind", "target", "stage", "source"}
-                    if frozenset(record) not in {
+                    binding_fields = {"source_image_binding"} if "source_image_binding" in record else set()
+                    if (binding_fields and record["kind"] != "source-persistence"):
+                        raise HostSecretAdmissionError()
+                    if binding_fields:
+                        _validate_source_image_binding(record["source_image_binding"], record["target"])
+                    if frozenset(set(record) - binding_fields) not in {
                         frozenset(base_fields), frozenset(base_fields | {"producer_kind"}),
                         frozenset(base_fields | {"producer_kind", "source_mode", "source_request_fingerprint"}),
                         frozenset(base_fields | {"source_mode", "source_request_fingerprint"}),
@@ -430,11 +497,15 @@ class HostSecretController:
                         raise HostSecretAdmissionError()
                     if record["kind"] == "deploy" and record.get("allow_bootstrap") != pending.get("allow_bootstrap"):
                         raise HostSecretAdmissionError()
+                    if (record["kind"] == "deploy"
+                            and record.get("deploy_image_binding") != pending.get("deploy_image_binding")):
+                        raise HostSecretAdmissionError()
                     if (
                         record["kind"] in {"source-persistence", "source-diagnostic"}
                         and (record.get("producer_kind") != pending.get("producer_kind")
                              or record.get("source_mode") != pending.get("source_mode")
-                             or record.get('source_request_fingerprint') != pending.get('source_request_fingerprint'))
+                             or record.get('source_request_fingerprint') != pending.get('source_request_fingerprint')
+                             or record.get('source_image_binding') != pending.get('source_image_binding'))
                     ):
                         raise HostSecretAdmissionError()
                     if record["stage"] == "failed" and (
@@ -484,7 +555,7 @@ class HostSecretController:
                             or (
                                 record["kind"] in {"source-persistence", "source-diagnostic"}
                                 and record["stage"] == "failed"
-                                and pending["stage"] == "sent"
+                                and pending["stage"] in {"prepared", "sent"}
                                 and record["source"] == _SOURCE_PERSISTENCE_ABSENCE_SOURCE
                             )
                             or (
@@ -526,6 +597,7 @@ class HostSecretController:
         readback: Callable[[str, str, str], TerminalEvidence],
         *,
         expected: tuple[str, str, bool | None] | None = None,
+        expected_deploy_image_binding: str | None = None,
     ) -> None:
         """Read authoritative operation-specific terminal evidence under the host lock.
 
@@ -540,12 +612,24 @@ class HostSecretController:
                 pending["kind"], pending["target"], pending.get("allow_bootstrap")
             ) != expected:
                 raise HostSecretAdmissionError()
+            if (pending["kind"] == "deploy" and pending.get("deploy_image_binding") is not None
+                    and pending.get("deploy_image_binding") != expected_deploy_image_binding):
+                raise HostSecretAdmissionError()
             prior_generation = pending.get("prior_generation")
             allow_bootstrap = pending.get("allow_bootstrap")
             if prior_generation is not None and not isinstance(prior_generation, str):
                 raise HostSecretAdmissionError()
             if allow_bootstrap is not None and not isinstance(allow_bootstrap, bool):
                 raise HostSecretAdmissionError()
+            source_fields: dict[str, str | None] = {}
+            for key in (
+                "producer_kind", "source_mode", "source_request_fingerprint",
+                "source_image_binding", "deploy_image_binding",
+            ):
+                value = pending.get(key)
+                if value is not None and not isinstance(value, str):
+                    raise HostSecretAdmissionError()
+                source_fields[key] = value
             operation = HostSecretOperation(
                 descriptor,
                 str(pending["operation_id"]),
@@ -555,6 +639,11 @@ class HostSecretController:
                 allow_bootstrap=allow_bootstrap,
                 prepared=pending["kind"] == "token-push",
                 mutation_started=pending["stage"] == "sent",
+                producer_kind=source_fields["producer_kind"],
+                source_mode=source_fields["source_mode"],
+                source_request_fingerprint=source_fields["source_request_fingerprint"],
+                source_image_binding=source_fields["source_image_binding"],
+                deploy_image_binding=source_fields["deploy_image_binding"],
             )
             try:
                 evidence = readback(operation.operation_id, operation.kind, operation.target)
@@ -686,12 +775,16 @@ class HostSecretController:
         producer_kind: str = "vault-alpha",
         current_state: bool = False,
         request_fingerprint: str | None = None,
+        source_image_binding: str | None = None,
+        reconciliation_only: bool = False,
+        allow_legacy_cleanup: bool = False,
     ) -> Iterator[tuple[HostSecretOperation, bool]]:
         """Admit one DEV/TEST ordinary-producer operation under the host lock."""
         with self._source_operation(
             target, operation_id=operation_id, producer_kind=producer_kind,
             current_state=current_state, diagnostic=False,
-            request_fingerprint=request_fingerprint,
+            request_fingerprint=request_fingerprint, source_image_binding=source_image_binding,
+            reconciliation_only=reconciliation_only, allow_legacy_cleanup=allow_legacy_cleanup,
         ) as result:
             yield result
 
@@ -704,6 +797,8 @@ class HostSecretController:
             target, operation_id=operation_id, producer_kind="vault-alpha",
             current_state=True, diagnostic=True,
             request_fingerprint=request_fingerprint,
+            source_image_binding=None,
+            reconciliation_only=False, allow_legacy_cleanup=False,
         ) as result:
             yield result
 
@@ -711,9 +806,13 @@ class HostSecretController:
     def _source_operation(
         self, target: str, *, operation_id: str, producer_kind: str,
         current_state: bool, diagnostic: bool,
-        request_fingerprint: str | None,
+        request_fingerprint: str | None, source_image_binding: str | None,
+        reconciliation_only: bool, allow_legacy_cleanup: bool,
     ) -> Iterator[tuple[HostSecretOperation, bool]]:
         if target not in {"dev", "test"}:
+            raise HostSecretAdmissionError()
+        if (type(reconciliation_only) is not bool or type(allow_legacy_cleanup) is not bool
+                or (allow_legacy_cleanup and diagnostic)):
             raise HostSecretAdmissionError()
         if (producer_kind not in {"vault-alpha", "registry"}
             or type(current_state) is not bool
@@ -723,6 +822,10 @@ class HostSecretController:
             or (not current_state and request_fingerprint is not None)):
             raise HostSecretAdmissionError()
         kind = "source-diagnostic" if diagnostic else "source-persistence"
+        if source_image_binding is not None:
+            if diagnostic:
+                raise HostSecretAdmissionError()
+            _validate_source_image_binding(source_image_binding, target)
         mode = "current-state" if current_state else None
         try:
             if str(UUID(operation_id)) != operation_id:
@@ -739,6 +842,10 @@ class HostSecretController:
                 != ("registry" if producer_kind == "registry" else None)
                 or pending.get("source_mode") != mode
                 or pending.get('source_request_fingerprint') != request_fingerprint
+                or (pending.get('source_image_binding') != source_image_binding
+                    and not (pending.get('source_image_binding') is None
+                             and (reconciliation_only or allow_legacy_cleanup))
+                    and not (reconciliation_only and source_image_binding is None))
             ):
                 raise HostSecretAdmissionError()
             completed = None
@@ -763,10 +870,19 @@ class HostSecretController:
                         != ("registry" if producer_kind == "registry" else None)
                         or last.get("source_mode") != mode
                         or last.get('source_request_fingerprint') != request_fingerprint
+                        or (last.get('source_image_binding') != source_image_binding
+                            and not (last.get('source_image_binding') is None
+                                     and (reconciliation_only or allow_legacy_cleanup))
+                            and not (reconciliation_only and source_image_binding is None))
                     ):
                         raise HostSecretAdmissionError()
                     completed = str(last["stage"])
                     completed_source = str(last["source"])
+            stored_binding = (pending.get("source_image_binding") if pending else
+                              last.get("source_image_binding") if completed is not None else source_image_binding)
+            if stored_binding is not None and not isinstance(stored_binding, str):
+                raise HostSecretAdmissionError()
+            legacy_cleanup = stored_binding is None and source_image_binding is not None and (pending or completed)
             operation = HostSecretOperation(
                 descriptor, operation_id, kind, target,
                 prepared=pending is not None,
@@ -776,6 +892,8 @@ class HostSecretController:
                 producer_kind=("registry" if producer_kind == "registry" else None),
                 source_mode=mode,
                 source_request_fingerprint=request_fingerprint,
+                source_image_binding=stored_binding,
+                reconciliation_only=reconciliation_only or bool(legacy_cleanup),
             )
             resumed = pending is not None or completed is not None
             if not resumed:
@@ -870,18 +988,25 @@ class HostSecretController:
 
     @contextmanager
     def deploy_operation(
-        self, target: str, *, allow_bootstrap: bool | None = None, operation_id: str | None = None
+        self, target: str, *, allow_bootstrap: bool | None = None, operation_id: str | None = None,
+        deploy_image_binding: str | None = None,
+        reconciliation_only: bool = False, allow_legacy_terminal: bool = False,
     ) -> Iterator[tuple[HostSecretOperation, bool]]:
         """Resume only the same channel/ID; the remote receipt remains authority."""
-        if target not in _TARGETS - {"shared"} or (
+        if (type(reconciliation_only) is not bool or type(allow_legacy_terminal) is not bool
+            or target not in _TARGETS - {"shared"} or (
             allow_bootstrap is not None and type(allow_bootstrap) is not bool
-        ):
+        )):
             raise HostSecretAdmissionError()
         if operation_id is not None and (
             target not in {'dev', 'test'} or allow_bootstrap is not False
             or str(UUID(operation_id)) != operation_id
         ):
             raise HostSecretAdmissionError()
+        if deploy_image_binding is not None:
+            if allow_bootstrap is None:
+                raise HostSecretAdmissionError()
+            _validate_deploy_image_binding(deploy_image_binding, target)
         with self._locked_journal(wait=True) as descriptor:
             pending = self._pending(descriptor)
             if pending and (pending["kind"] != "deploy" or pending["target"] != target):
@@ -890,6 +1015,9 @@ class HostSecretController:
                 # Legacy pending deployment records have no mode. Reconcile their
                 # matching remote receipt before a new request can adopt the ID.
                 raise HostSecretAdmissionError()
+            if pending and pending.get("deploy_image_binding") != deploy_image_binding:
+                if not (reconciliation_only and pending.get("deploy_image_binding") is None):
+                    raise HostSecretAdmissionError()
             if pending and operation_id is not None and pending['operation_id'] != operation_id:
                 raise HostSecretAdmissionError()
             completed = None
@@ -912,15 +1040,25 @@ class HostSecretController:
                         and last['stage'] == _OPERATOR_UNKNOWN_CLEANUP_RESULT
                         and last['source'] == _DEPLOY_UNKNOWN_FENCE_SOURCE
                     )
+                    legacy_terminal = (last.get('deploy_image_binding') is None
+                                       and (reconciliation_only or allow_legacy_terminal))
                     if (last['kind'] != 'deploy' or last['target'] != target
                         or last.get('allow_bootstrap') is not False
+                        or (last.get('deploy_image_binding') != deploy_image_binding and not legacy_terminal)
                         or not terminal_matches):
                         raise HostSecretAdmissionError()
                     completed = str(last['stage'])
                     completed_source = str(last['source'])
+            stored_binding = (pending.get("deploy_image_binding") if pending else
+                              last.get("deploy_image_binding") if completed is not None else deploy_image_binding)
+            if stored_binding is not None and not isinstance(stored_binding, str):
+                raise HostSecretAdmissionError()
             operation = HostSecretOperation(descriptor,
                 str(pending["operation_id"]) if pending else operation_id or str(uuid4()), "deploy", target,
                 allow_bootstrap=allow_bootstrap,
+                deploy_image_binding=stored_binding,
+                reconciliation_only=(reconciliation_only or (completed is not None and stored_binding is None
+                                                               and deploy_image_binding is not None)),
                 mutation_started=bool(pending and pending.get('stage') == 'sent'),
                 completed_result=completed, completed_source=completed_source)
             # Read-only host preflight holds the same lock but does not leave a

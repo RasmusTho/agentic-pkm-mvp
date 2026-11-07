@@ -2566,7 +2566,8 @@ def test_separate_candidate_helper_reaches_real_worker_and_ordinary_producer(
             return json.dumps(rows)
         if argv[:3] == ["docker", "volume", "inspect"]:
             return json.dumps([{"Mountpoint": str(state_root)}])
-        if argv[:3] == ["docker", "image", "inspect"]:
+        if argv[:5] == ["docker", "--host", "unix:///var/run/docker.sock", "image", "inspect"]:
+            assert kwargs['env'] == {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
             candidate_checks.append("inspect")
             return json.dumps([{
                 "Config": {"Labels": {"org.opencontainers.image.revision": REVISION}},

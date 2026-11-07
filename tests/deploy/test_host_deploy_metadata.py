@@ -25,6 +25,7 @@ METADATA = {
 }
 SECRET_CANARY = 'fake-token-must-stay-private'
 RUNTIME_CANARY = 'fake-password-must-stay-private'
+IMAGE_DIGEST = 'sha256:' + 'b' * 64
 
 
 @pytest.fixture
@@ -121,7 +122,44 @@ os.open, os.fstat = vm_open, vm_fstat
 
 
 def invoke(channel='test'):
-    return host.main([channel, 'a' * 40, '--existing-secrets-only', '--ack-forward-only'])
+    return host.main([channel, 'a' * 40, '--existing-secrets-only', '--ack-forward-only',
+                      '--image-digest', IMAGE_DIGEST])
+
+
+@pytest.mark.parametrize('channel', ('dev', 'test'))
+def test_nonprod_deploy_without_digest_refuses_before_metadata_read(entrypoint, capsys, channel):
+    assert host.main([channel, 'a' * 40, '--existing-secrets-only']) == 78
+    assert entrypoint.calls == [] and entrypoint.admissions == []
+    assert capsys.readouterr().err == 'DEV/TEST deployment requires --image-digest from the verified image build\n'
+
+
+@pytest.mark.parametrize('channel', ('dev', 'test'))
+def test_automatic_producer_passes_digest_through_real_host_metadata_path(entrypoint, monkeypatch, capsys, channel):
+    from scripts import postmerge_dev_test as driver
+
+    candidate = driver.Candidate('a' * 40, IMAGE_DIGEST, 123, 1, 456)
+    metadata_transport = subprocess.run
+    plans = []
+
+    def deploy(_admin, _remote, plan, **kwargs):
+        plans.append(plan)
+        return DeployReceipt(candidate.operation_id(channel), channel, 'deploy', 'failed', 'failed')
+
+    def child_or_metadata(argv, **kwargs):
+        if argv[0] == sys.executable and '-c' in argv:
+            child_args = argv[6:]
+            assert child_args[-2:] == ['--image-digest', IMAGE_DIGEST]
+            status = host.main(child_args)
+            captured = capsys.readouterr()
+            return subprocess.CompletedProcess(argv, status, captured.out, captured.err)
+        return metadata_transport(argv, **kwargs)
+
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+    monkeypatch.setattr(subprocess, 'run', child_or_metadata)
+    receipt = driver.native_deploy(channel, candidate)
+    assert receipt['terminal_result'] == 'failed'
+    assert len(plans) == 1 and plans[0].image_digest == candidate.digest
+    assert [event for event in entrypoint.events if event.startswith('read:')] == ['read:' + channel]
 
 
 def test_prod_cli_forwards_target_host_plan_without_reading_it_on_control_host(entrypoint, capsys):
@@ -179,6 +217,7 @@ def test_host_entrypoint_recovers_installed_metadata(entrypoint, capsys, channel
             ORGANIZATION, NON_PROD, PROD)
         assert admin.target_project_scope is None
     assert remote.host == 'ygg-' + channel and plan.channel == channel
+    assert plan.image_digest == IMAGE_DIGEST
     assert plan.ack_forward_only is True and allow_bootstrap is False
     assert os.environ == environment_before
     output = capsys.readouterr()

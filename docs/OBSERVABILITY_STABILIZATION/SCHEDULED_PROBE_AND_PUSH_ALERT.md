@@ -140,6 +140,16 @@ This retires only the named local consumer and does not assert physical-asset or
 equivalence. Issue #4076 remains open for the qualified isolated TEST outage/recovery drill;
 production installation and local retirement are not the TEST acceptance receipt.
 
+The [2026-10-30 TEST first-preflight receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6493#issuecomment-6535859691)
+records operation `230149723a60e4c497a04f8efc07a9a9` as `REFUSED`: its same-project running-worker
+selector did not observe exactly one valid ID. That count-or-ID-shape refusal does not establish
+worker absence or health. The original supervisor and cgroup were positively contained, the watch
+and TEST probe units were absent, and no qualified-worker or drill entry occurred. Result SHA-256
+`542a4448014fc00b91b3cf0a830f4dcdb8a8860febe5325ba4498fcb9a4c7b71` and reconciliation SHA-256
+`6a71c89eeaecfd53acc2e16315c8aa153bf0b07529d4a30a27fa6138cacdbfa0` identify that evidence.
+Earlier attempts retain their separate `UNKNOWN` results and positive containment receipts.
+Controlled down/recovery acceptance and its final owner-doc mapping remain open under #6493.
+
 ## Purpose
 
 Give the single operator one always-on signal that prod is actually serving: a
@@ -161,9 +171,14 @@ The fixed Linux `heimdal-external-alerts` consumer source supports explicit DEV,
 DEV and TEST resolve only `non-prod` / `shared/discord.webhook`; PROD uses the existing `prod`
 binding. Endpoint, heartbeat, state, and alert-channel configuration remain explicit. The existing
 installer remains TEST/PROD-only, and its shared `/opt/yggdrasil/host-probe` package is not a DEV
-installation plan. Native DEV configuration, installation, healthy baseline, effect window, drill,
-and restoration remain separately qualified with the Product keeper. No live DEV proof is claimed,
-and #4076's controlled live TEST AC4 remains pending.
+installation plan. The [2026-11-02 accepted DEV drill](https://github.com/RasmusTho/agentic-pkm-mvp/pull/6509#issuecomment-6572302498)
+qualified a healthy baseline before temporary probe installation and ran through the normal fixed
+consumer: one confirmed down, two later completed duplicate-suppression cycles, and one recovery
+with the same correlation. It restored the original absent service and state, configuration and
+runtime paths, removed the temporary probe artifacts, and positively closed the original processes,
+resources and transport without rewinding normal history. This is bounded DEV acceptance, not a
+permanent DEV installation or a continuing health guarantee. Each later operation still requires its
+own qualified baseline and compatible keeper window; #4076's controlled live TEST AC4 remains pending.
 The source template leads with `DEV hälsoproblem`, `TEST hälsoproblem`, or `PROD hälsoproblem`, not a
 claim of total outage. It names failed required checks from the finite health-producer mapping
 and mandatory runtime database, worker and model components. Optional failures are excluded;

@@ -199,6 +199,8 @@ deploy_channel_model_access_runtime_env_preflight() {
   local bindings assignment key value
   local -a model_access_keys=(
     MODEL_ACCESS_CODEX_VLAN_ENDPOINT
+    MODEL_ACCESS_EXECUTOR_PATH
+    MODEL_ACCESS_CODEX_TAILNET_ENDPOINT
     MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE
     MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT
     MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY
@@ -223,6 +225,7 @@ deploy_channel_model_access_runtime_env_preflight() {
     RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON:-python3}" - 2>/dev/null <<'PY'
 from __future__ import annotations
 
+import ipaddress
 import os
 from pathlib import PurePosixPath
 import sys
@@ -231,6 +234,8 @@ from urllib.parse import urlsplit
 
 allowed = {
     "MODEL_ACCESS_CODEX_VLAN_ENDPOINT",
+    "MODEL_ACCESS_EXECUTOR_PATH",
+    "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT",
     "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE",
     "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT",
     "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY",
@@ -261,7 +266,10 @@ for line in content.splitlines():
         refuse()
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         refuse()
-    if key == "MODEL_ACCESS_CODEX_VLAN_ENDPOINT":
+    if key == "MODEL_ACCESS_EXECUTOR_PATH":
+        if value not in {"", "vlan", "tailnet_mtls"}:
+            refuse()
+    elif key in {"MODEL_ACCESS_CODEX_VLAN_ENDPOINT", "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT"}:
         try:
             endpoint = urlsplit(value)
             hostname = endpoint.hostname
@@ -275,9 +283,25 @@ for line in content.splitlines():
             or endpoint.password is not None
         ):
             refuse()
+        if key == "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT":
+            try:
+                valid_tailnet = ipaddress.ip_address(hostname) in ipaddress.ip_network("100.64.0.0/10")
+                valid_port = endpoint.port is None or 1 <= endpoint.port <= 65535
+            except ValueError:
+                refuse()
+            if not valid_tailnet or not valid_port or endpoint.path not in {"", "/"} or endpoint.query or endpoint.fragment:
+                refuse()
     elif value and not PurePosixPath(value).is_absolute():
         refuse()
     values[key] = value
+
+if values.get("MODEL_ACCESS_EXECUTOR_PATH") == "tailnet_mtls" and not all(
+    values.get(key) for key in (
+        "MODEL_ACCESS_CODEX_TAILNET_ENDPOINT", "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE",
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT", "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY",
+    )
+):
+    refuse()
 
 for key in sorted(allowed):
     sys.stdout.write(f"{key}={values.get(key, '')}\n")
@@ -291,7 +315,7 @@ PY
     key="${assignment%%=*}"
     value="${assignment#*=}"
     case "${key}" in
-      MODEL_ACCESS_CODEX_VLAN_ENDPOINT|MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE|MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT|MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY)
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT|MODEL_ACCESS_EXECUTOR_PATH|MODEL_ACCESS_CODEX_TAILNET_ENDPOINT|MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE|MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT|MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY)
         export "${key}=${value}"
         ;;
       *)
@@ -318,6 +342,8 @@ deploy_channel_model_access_preflight() {
   local key
   local -a model_access_keys=(
     MODEL_ACCESS_CODEX_VLAN_ENDPOINT
+    MODEL_ACCESS_EXECUTOR_PATH
+    MODEL_ACCESS_CODEX_TAILNET_ENDPOINT
     MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE
     MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT
     MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY
@@ -358,7 +384,6 @@ _deploy_channel_snapshot_runtime_env_file() {
 from __future__ import annotations
 
 import os
-import shutil
 import stat
 
 
@@ -374,6 +399,7 @@ except FileNotFoundError:
     # Preserve the existing optional env_file behavior while pinning absence:
     # Compose receives an empty private file, so a later path replacement is
     # never picked up during this deployment.
+    print("clean")
     raise SystemExit(0)
 except OSError:
     refuse()
@@ -402,7 +428,19 @@ try:
             snapshot_fd, "wb"
         ) as snapshot:
             snapshot_fd = -1
-            shutil.copyfileobj(source, snapshot)
+            # Inspect the exact bytes supplied to Compose, without parsing or
+            # rewriting its dotenv grammar (which supports multiline values).
+            # A conservative substring match is safe even inside comments or
+            # values and avoids disclosing any contents in the result.
+            reserved = (b"MODEL_ACCESS_EXECUTOR_PATH", b"MODEL_ACCESS_CODEX_TAILNET_ENDPOINT")
+            overlap = max(map(len, reserved)) - 1
+            previous = b""
+            detected = False
+            while chunk := source.read(1024 * 1024):
+                combined = previous + chunk
+                detected = detected or any(key in combined for key in reserved)
+                previous = combined[-overlap:]
+                snapshot.write(chunk)
             snapshot.flush()
         after = os.fstat(source_fd)
         if (
@@ -419,6 +457,7 @@ try:
             after.st_ctime_ns,
         ):
             refuse()
+        print("reserved" if detected else "clean")
     finally:
         if snapshot_fd >= 0:
             os.close(snapshot_fd)
@@ -722,6 +761,17 @@ _deploy_channel_pin_activation_scope() {
 }
 
 _deploy_channel_signboard_override_document() {
+  local channel="${2:-}" reserved="${3:-clean}" service
+  local selected=0
+  if { [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; } \
+      && [ "${MODEL_ACCESS_EXECUTOR_PATH:-}" = "tailnet_mtls" ]; then
+    selected=1
+  fi
+  # PROD keeps its existing service environment. Its resolver ignores the
+  # DEV/TEST-only selector even when an old runtime file contains that name.
+  if [ "${channel}" = "prod" ]; then
+    reserved=clean
+  fi
   cat <<'YAML'
 services:
   api:
@@ -729,6 +779,40 @@ services:
       SIGNBOARD_ROOT:
 YAML
   printf '      PKM_ACTIVATION_SCOPE: "%s"\n' "${1:-full}"
+  # Preserve the legacy Compose model when no Tailnet path is selected.
+  # The preflight has already validated and exported these two references;
+  # bare mapping keys forward them without putting values in this temp file.
+  if [ "${selected}" = 1 ]; then
+    cat <<'YAML'
+      MODEL_ACCESS_EXECUTOR_PATH:
+      MODEL_ACCESS_CODEX_TAILNET_ENDPOINT:
+YAML
+  elif [ "${reserved}" = reserved ]; then
+    printf '      MODEL_ACCESS_EXECUTOR_PATH: ""\n      MODEL_ACCESS_CODEX_TAILNET_ENDPOINT: ""\n'
+  fi
+  if [ "${selected}" = 1 ]; then
+    cat <<'YAML'
+  worker:
+    environment:
+      MODEL_ACCESS_EXECUTOR_PATH:
+      MODEL_ACCESS_CODEX_TAILNET_ENDPOINT:
+  watcher:
+    environment:
+      MODEL_ACCESS_EXECUTOR_PATH:
+      MODEL_ACCESS_CODEX_TAILNET_ENDPOINT:
+YAML
+  elif [ "${reserved}" = reserved ]; then
+    for service in worker watcher; do
+      printf '  %s:\n    environment:\n      MODEL_ACCESS_EXECUTOR_PATH: ""\n      MODEL_ACCESS_CODEX_TAILNET_ENDPOINT: ""\n' "${service}"
+    done
+  fi
+  if [ "${reserved}" = reserved ]; then
+    # These are the other services that consume WATCHER_RUNTIME_ENV_FILE.
+    # Empty values override that generic file without forwarding its values.
+    for service in migrate source-identity-db-witness instance-state-init heimdal-capture-watch; do
+      printf '  %s:\n    environment:\n      MODEL_ACCESS_EXECUTOR_PATH: ""\n      MODEL_ACCESS_CODEX_TAILNET_ENDPOINT: ""\n' "${service}"
+    done
+  fi
 }
 
 # host_secret_contract.json declares the `heimdal-capture-watch` consumer for
@@ -1103,7 +1187,7 @@ deploy_channel_compose() {
     # form), so a private temp file does not weaken the runtime env ownership
     # boundary the earlier in-memory-only comment protected.
     local signboard_override_file compose_stdout_file compose_stderr_file compose_rc
-    local runtime_env_snapshot_file
+    local runtime_env_snapshot_file runtime_reserved=clean
     signboard_override_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-signboard-override.XXXXXX")"
     compose_stdout_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-compose-stdout.XXXXXX")"
     compose_stderr_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-compose-stderr.XXXXXX")"
@@ -1119,8 +1203,6 @@ deploy_channel_compose() {
     trap 'rm -f -- "${signboard_override_file}" "${compose_stdout_file}" "${compose_stderr_file}"; if [ -n "${runtime_env_snapshot_file}" ]; then rm -f -- "${runtime_env_snapshot_file}"; fi' EXIT
     local active_activation_scope
     active_activation_scope="$(_deploy_channel_pin_activation_scope "${channel_env_file}" "${channel}")" || return $?
-    _deploy_channel_signboard_override_document "${active_activation_scope}" > "${signboard_override_file}"
-    compose_args+=(-f "${signboard_override_file}")
 
     # Compose gives the caller shell precedence over --env-file values. Pin the
     # governed selectors here so a stale parent shell cannot swap the selected
@@ -1130,11 +1212,14 @@ deploy_channel_compose() {
     # model-access file between preflight and reading its env_file. The copy is
     # a service env_file, never a CLI --env-file, so DSNs are not interpolated.
     if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
-      _deploy_channel_snapshot_runtime_env_file \
-        "${runtime_env_file}" "${model_access_env_file}" "${runtime_env_snapshot_file}" || return $?
+      runtime_reserved="$(_deploy_channel_snapshot_runtime_env_file \
+        "${runtime_env_file}" "${model_access_env_file}" "${runtime_env_snapshot_file}")" || return $?
+      case "${runtime_reserved}" in clean|reserved) ;; *) return 78 ;; esac
       deploy_channel_runtime_identity_matches_snapshot "${runtime_env_snapshot_file}" || return $?
       runtime_env_ref="${runtime_env_snapshot_file}"
     fi
+    _deploy_channel_signboard_override_document "${active_activation_scope}" "${channel}" "${runtime_reserved}" > "${signboard_override_file}"
+    compose_args+=(-f "${signboard_override_file}")
     export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
     if [ "${DEPLOY_TTS_CONFIG_GOVERNED:-0}" = "1" ]; then
       export TTS_ENABLED="${DEPLOY_TTS_ENABLED}"

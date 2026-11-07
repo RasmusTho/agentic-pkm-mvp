@@ -24,7 +24,7 @@ import subprocess
 import sys
 import time
 from typing import Callable, Iterator, NoReturn, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 _RECEIPT_DIRECTORY = Path("/var/lib/yggdrasil/bws-deploy-convergence")
 # Keep the owner marker beside its durable receipt namespace. A reboot releases
@@ -246,6 +246,9 @@ _PREBACKUP_REFUSAL_GATES = frozenset({
     "channel_owner_check",
     "caller_census",
     "current_writer_snapshot",
+    "source_pull_unresolved",
+    "source_pull_complete_before_backup",
+    "source_pull_not_started",
     "authority_cutover",
     "candidate_verification",
     "old_disk_state",
@@ -303,6 +306,34 @@ def _refuse() -> NoReturn:
 
 def _sha256(value: object) -> bool:
     return type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _validate_image_store(store: object) -> None:
+    if (type(store) is not dict
+            or set(store) != {"daemon_id", "data_root", "device", "inode", "driver", "driver_type",
+                              "daemon_pid", "daemon_start_ticks", "daemon_boot_id"}
+            or type(store["daemon_id"]) is not str
+            or re.fullmatch(r"[A-Za-z0-9:._-]{1,256}", store["daemon_id"]) is None
+            or type(store["data_root"]) is not str
+            or not Path(store["data_root"]).is_absolute()
+            or str(Path(store["data_root"])) != store["data_root"]
+            or any(part in {".", ".."} for part in Path(store["data_root"]).parts)
+            or any(not isinstance(value, int) or isinstance(value, bool) or value < 0
+                   for value in (store["device"], store["inode"]))
+            or type(store["daemon_pid"]) is not int or store["daemon_pid"] <= 1
+            or type(store["daemon_start_ticks"]) is not str or not store["daemon_start_ticks"].isdecimal()
+            or type(store["daemon_boot_id"]) is not str
+            or type(store["driver"]) is not str or type(store["driver_type"]) is not str
+            or (store["driver"], store["driver_type"]) not in {
+                ("overlay2", "legacy"), ("overlayfs", "io.containerd.snapshotter.v1"),
+            }
+            or store["inode"] == 0):
+        _refuse()
+    try:
+        if str(UUID(store["daemon_boot_id"])) != store["daemon_boot_id"]:
+            _refuse()
+    except Exception:
+        _refuse()
 
 
 def _receipt_generations(
@@ -889,24 +920,32 @@ def _terminal_receipt(owner: dict[str, object]) -> dict[str, object]:
 
 
 def _require_unused_receipt_slot(operation_id: str) -> None:
-    """Never admit an operation ID whose durable receipt name already exists."""
-    parent = None
+    """Never reuse an operation with a receipt or an earlier cache binding."""
+    parent = binding_parent = None
     try:
         parent, _ = _open_directory(_RECEIPT_DIRECTORY)
         name = f"bws-source-installation-{operation_id}.receipt.json"
-        try:
-            os.stat(name, dir_fd=parent, follow_symlinks=False)
-        except FileNotFoundError:
-            return
-        _refuse()
+        binding_parent, _ = _open_directory(_RUNTIME_DIRECTORY)
+        for descriptor, selected in (
+            (parent, name),
+            (binding_parent, f"bws-source-installation-{operation_id}.image-intent.json"),
+            (binding_parent, f"bws-source-installation-{operation_id}.image-binding.json"),
+            (binding_parent, f"bws-source-installation-{operation_id}.image-pull-finished.json"),
+        ):
+            try:
+                os.stat(selected, dir_fd=descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            _refuse()
     except Exception:
         _refuse()
     finally:
-        if parent is not None:
-            try:
-                os.close(parent)
-            except OSError:
-                _refuse()
+        for opened in (binding_parent, parent):
+            if opened is not None:
+                try:
+                    os.close(opened)
+                except OSError:
+                    _refuse()
 
 
 def _open_lock(parent_fd: int, name: str, *, create: bool) -> tuple[int, os.stat_result]:
@@ -1032,11 +1071,113 @@ def _recovery_unresolved(reason: str) -> dict[str, object]:
     return {"source_installation": {"status": "unresolved", "reason": reason}}
 
 
+def _write_operation_receipt(operation_id: str, raw: bytes) -> None:
+    if len(raw) > 4096:
+        _refuse()
+    parent = None
+    name = f"bws-source-installation-{operation_id}.receipt.json"
+    try:
+        parent, _ = _open_directory(_RECEIPT_DIRECTORY)
+        _publish_private_operation_record(parent, name, raw)
+    except Exception:
+        _refuse()
+    finally:
+        if parent is not None:
+            os.close(parent)
+
+
+
+def _read_image_companion(parent: int, name: str) -> bytes | None:
+    descriptor = None
+    try:
+        try:
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _CLOEXEC, dir_fd=parent)
+        except FileNotFoundError:
+            return None
+        info = os.fstat(descriptor)
+        named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != _OWNER_UID or info.st_gid != _OWNER_GID
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                or not 0 < info.st_size <= 4096 or os.get_inheritable(descriptor)
+                or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino)):
+            _refuse()
+        raw = os.pread(descriptor, info.st_size + 1, 0)
+        if len(raw) != info.st_size:
+            _refuse()
+        return raw
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _source_pull_recovery_gate(parent: int, owner: dict[str, object]) -> tuple[str, bytes, bytes | None, bytes | None]:
+    """Validate this owner's immutable image binding and optional completion."""
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+
+    prefix = f"bws-source-installation-{owner['operation_id']}"
+    intent_raw = _read_image_companion(parent, prefix + ".image-intent.json")
+    if intent_raw is None:
+        _refuse()
+    try:
+        intent = json.loads(intent_raw, object_pairs_hook=_unique)
+        if (type(intent) is not dict
+                or set(intent) != {"schema", "operation_id", "channel", "candidate_sha", "image_digest", "repository"}
+                or intent["schema"] != "bws-source-image-intent.v1"
+                or intent["repository"] != IMAGE_REPOSITORY
+                or any(intent[key] != owner[key] for key in ("operation_id", "channel", "candidate_sha", "image_digest"))):
+            _refuse()
+    except Exception:
+        _refuse()
+    binding_raw = _read_image_companion(parent, prefix + ".image-binding.json")
+    if binding_raw is None:
+        if _read_image_companion(parent, prefix + ".image-pull-finished.json") is not None:
+            _refuse()
+        return "source_pull_not_started", intent_raw, None, None
+    try:
+        binding = json.loads(binding_raw, object_pairs_hook=_unique)
+        if (type(binding) is not dict
+                or set(binding) != {"schema", "operation_id", "channel", "candidate_sha", "image_digest",
+                                    "repository", "store"}
+                or binding["schema"] != "bws-source-image-binding.v1"
+                or binding["repository"] != IMAGE_REPOSITORY
+                or any(binding[key] != owner[key] for key in ("operation_id", "channel", "candidate_sha", "image_digest"))):
+            _refuse()
+        _validate_image_store(binding["store"])
+        finished_raw = _read_image_companion(parent, prefix + ".image-pull-finished.json")
+        if finished_raw is None:
+            return "source_pull_unresolved", intent_raw, binding_raw, None
+        finished = json.loads(finished_raw, object_pairs_hook=_unique)
+        if (type(finished) is not dict
+                or finished != {"schema": "bws-source-image-pull-finished.v1",
+                                "operation_id": owner["operation_id"],
+                                "image_binding_sha256": hashlib.sha256(binding_raw).hexdigest()}):
+            _refuse()
+        return "source_pull_complete_before_backup", intent_raw, binding_raw, finished_raw
+    except Exception:
+        _refuse()
+
+
+def _receipt_absent(operation_id: str) -> bool:
+    parent = None
+    try:
+        parent, _ = _open_directory(_RECEIPT_DIRECTORY)
+        try:
+            os.stat(f"bws-source-installation-{operation_id}.receipt.json", dir_fd=parent,
+                    follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        return False
+    finally:
+        if parent is not None:
+            os.close(parent)
+
+
 def reconcile_installation_operation(
     channel: str,
     request: object,
     *,
     retire: Callable[[dict[str, object], dict[str, object]], None] | None = None,
+    prove_before_backup: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     """Recover one lost source-install response without adopting or replaying it.
 
@@ -1059,13 +1200,9 @@ def reconcile_installation_operation(
             return _recovery_unresolved("runtime_state_missing")
         try:
             global_fd, global_info = _open_lock(parent, _GLOBAL_LOCK, create=False)
-            channel_fd, channel_info = _open_lock(
-                parent, f"{channel}.source-installation.lock", create=False,
-            )
         except Exception:
             return _recovery_unresolved("runtime_state_missing")
         global_identity = (global_info.st_dev, global_info.st_ino)
-        channel_identity = (channel_info.st_dev, channel_info.st_ino)
         try:
             fcntl.flock(global_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
@@ -1073,10 +1210,24 @@ def reconcile_installation_operation(
                 return _recovery_unresolved("global_lock_active")
             return _recovery_unresolved("lock_recheck_failed")
         try:
+            channel_fd, channel_info = _open_lock(
+                parent, f"{channel}.source-installation.lock", create=False,
+            )
+        except Exception:
+            return _recovery_unresolved("runtime_state_missing")
+        channel_identity = (channel_info.st_dev, channel_info.st_ino)
+        try:
             fcntl.flock(channel_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             if exc.errno in {errno.EACCES, errno.EAGAIN}:
                 return _recovery_unresolved("channel_lock_active")
+            return _recovery_unresolved("lock_recheck_failed")
+
+        # Verify both named lock inodes before using them as recovery authority.
+        named_global = os.stat(_GLOBAL_LOCK, dir_fd=parent, follow_symlinks=False)
+        named_channel = os.stat(f"{channel}.source-installation.lock", dir_fd=parent, follow_symlinks=False)
+        if ((named_global.st_dev, named_global.st_ino) != global_identity
+                or (named_channel.st_dev, named_channel.st_ino) != channel_identity):
             return _recovery_unresolved("lock_recheck_failed")
 
         if (os.pread(global_fd, 1, 0) or os.pread(channel_fd, 4097, 0) == b""
@@ -1094,7 +1245,28 @@ def reconcile_installation_operation(
         try:
             receipt = _terminal_receipt(owner)
         except InstallationAdmissionRefused:
-            return _recovery_unresolved("receipt_invalid")
+            if prove_before_backup is None or not _receipt_absent(cast(str, owner["operation_id"])):
+                return _recovery_unresolved("receipt_invalid")
+            try:
+                image_evidence = _source_pull_recovery_gate(parent, owner)
+                if os.pread(channel_fd, 4097, 0) != owner_raw or os.pread(global_fd, 1, 0):
+                    return _recovery_unresolved("lock_recheck_failed")
+                prove_before_backup(owner)
+                if (_source_pull_recovery_gate(parent, owner) != image_evidence
+                        or os.pread(channel_fd, 4097, 0) != owner_raw or os.pread(global_fd, 1, 0)):
+                    return _recovery_unresolved("lock_recheck_failed")
+                receipt = {
+                    "schema": _RECEIPT_SCHEMA, "operation_id": owner["operation_id"],
+                    "channel": owner["channel"], "candidate_sha": owner["candidate_sha"],
+                    "image_digest": owner["image_digest"], "old_generation_sha256": None,
+                    "new_generation_sha256": None, "backup_manifest_sha256": None,
+                    "status": "refused_before_backup", "prebackup_gate": image_evidence[0],
+                }
+                raw = (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+                _write_operation_receipt(cast(str, owner["operation_id"]), raw)
+                receipt = _terminal_receipt(owner)
+            except Exception:
+                return _recovery_unresolved("receipt_invalid")
 
         # Re-read every identity and marker after receipt validation.  A
         # replacement pathname or changed owner is not evidence for recovery.
@@ -1235,8 +1407,12 @@ def require_active_installation_owner(
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             _refuse()
         global_named = os.stat(_GLOBAL_LOCK, dir_fd=parent, follow_symlinks=False)
+        channel_named = os.stat(name, dir_fd=parent, follow_symlinks=False)
         if ((global_info.st_dev, global_info.st_ino) != (global_named.st_dev, global_named.st_ino)
-                or os.pread(global_descriptor, 1, 0)):
+                or (info.st_dev, info.st_ino) != (channel_named.st_dev, channel_named.st_ino)
+                or os.pread(descriptor, 4097, 0) != raw
+                or os.pread(global_descriptor, 1, 0)
+                or not _receipt_absent(operation_id)):
             _refuse()
         return owner
     except Exception:
@@ -1248,6 +1424,102 @@ def require_active_installation_owner(
                     os.close(fd)
                 except OSError:
                     pass
+
+
+def _publish_private_operation_record(parent: int, name: str, raw: bytes) -> None:
+    """Publish a complete record under the already-held exclusive source locks."""
+    descriptor = readback = None
+    temporary = f".{name}.{uuid4().hex}.tmp"
+    created = published = False
+    try:
+        try:
+            os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            _refuse()
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _CLOEXEC,
+                             0o600, dir_fd=parent)
+        created = True
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != _OWNER_UID or info.st_gid != _OWNER_GID
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                or os.get_inheritable(descriptor) or os.write(descriptor, raw) != len(raw)):
+            _refuse()
+        os.fsync(descriptor)
+        try:
+            os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            _refuse()
+        # Every cooperating publisher holds both source EX locks throughout;
+        # no other publisher can create this name between the check and rename.
+        os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+        published = True
+        readback = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _CLOEXEC, dir_fd=parent)
+        actual = os.fstat(readback)
+        named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if ((actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino)
+                or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino)
+                or os.pread(readback, len(raw) + 1, 0) != raw):
+            _refuse()
+        os.fsync(parent)
+    except Exception:
+        _refuse()
+    finally:
+        for fd in (readback, descriptor):
+            if fd is not None:
+                os.close(fd)
+        if created and not published:
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+
+
+def _publish_source_owner(lease: InstallationAdmission, name: str, raw: bytes) -> None:
+    """Replace the channel inode atomically while the global EX lock fences readers."""
+    temporary = f".{lease.channel}.source-owner-{uuid4().hex}.tmp"
+    descriptor = None
+    created = False
+    renamed = False
+    try:
+        descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _CLOEXEC,
+                             0o600, dir_fd=lease._parent_fd)
+        created = True
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != _OWNER_UID or info.st_gid != _OWNER_GID
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1 or os.get_inheritable(descriptor)):
+            _refuse()
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.write(descriptor, raw) != len(raw):
+            _refuse()
+        os.fsync(descriptor)
+        if os.pread(descriptor, len(raw) + 1, 0) != raw:
+            _refuse()
+        lease._verify_lock(owner=False)
+        _require_exclusive_lock(lease._parent_fd, _GLOBAL_LOCK, lease._global_identity)
+        _require_exclusive_lock(lease._parent_fd, name, lease._lock_identity)
+        os.replace(temporary, name, src_dir_fd=lease._parent_fd, dst_dir_fd=lease._parent_fd)
+        renamed = True
+        old_fd = lease._lock_fd
+        lease._lock_fd = descriptor
+        lease._lock_identity = (info.st_dev, info.st_ino)
+        descriptor = None
+        os.close(old_fd)
+        os.fsync(lease._parent_fd)
+        lease._verify_lock(owner=True)
+    except Exception:
+        _refuse()
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if created and not renamed:
+            try:
+                os.unlink(temporary, dir_fd=lease._parent_fd)
+            except FileNotFoundError:
+                pass
 
 
 @dataclass
@@ -1268,6 +1540,64 @@ class InstallationAdmission:
     _completed: bool = False
     _closed: bool = False
     _start_authorization: bytes | None = None
+    _image_binding_sha256: str | None = None
+    _image_pull: bool = False
+
+    def bind_image_cache(self, store: dict[str, object]) -> None:
+        """Durably bind this source owner to one Docker store before a pull.
+
+        The existing owner wire format is also read by the installed launcher.
+        Keep it unchanged; the immutable per-operation companion is retained in
+        the same source-operation directory and is never an independent owner.
+        """
+        from app.ops.pg_acceptance import IMAGE_REPOSITORY
+
+        if self.mode != "exclusive" or self._completed or not self._image_pull:
+            _refuse()
+        _validate_image_store(store)
+        self._verify_lock(owner=True)
+        intent_raw = _read_image_companion(
+            self._parent_fd, f"bws-source-installation-{self.operation_id}.image-intent.json",
+        )
+        try:
+            intent = json.loads(cast(bytes, intent_raw), object_pairs_hook=_unique)
+            if intent != {
+                "schema": "bws-source-image-intent.v1", "operation_id": self.operation_id,
+                "channel": self.channel, "candidate_sha": self.candidate_sha, "image_digest": self.image_digest,
+                "repository": IMAGE_REPOSITORY,
+            }:
+                _refuse()
+        except Exception:
+            _refuse()
+        raw = (json.dumps({
+            "schema": "bws-source-image-binding.v1",
+            "operation_id": self.operation_id,
+            "channel": self.channel,
+            "candidate_sha": self.candidate_sha,
+            "image_digest": self.image_digest,
+            "repository": IMAGE_REPOSITORY,
+            "store": store,
+        }, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+        name = f"bws-source-installation-{self.operation_id}.image-binding.json"
+        self._write_image_companion(name, raw)
+        self._image_binding_sha256 = hashlib.sha256(raw).hexdigest()
+
+    def finish_image_pull(self) -> None:
+        """Record that this exact pull was observed before source mutation starts."""
+        if self._image_binding_sha256 is None:
+            _refuse()
+        raw = (json.dumps({
+            "schema": "bws-source-image-pull-finished.v1",
+            "operation_id": self.operation_id,
+            "image_binding_sha256": self._image_binding_sha256,
+        }, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+        name = f"bws-source-installation-{self.operation_id}.image-pull-finished.json"
+        self._write_image_companion(name, raw)
+
+    def _write_image_companion(self, name: str, raw: bytes) -> None:
+        self._verify_lock(owner=True)
+        _publish_private_operation_record(self._parent_fd, name, raw)
+        self._verify_lock(owner=True)
 
     def _verify_lock(self, *, owner: bool) -> None:
         if (self._closed or os.get_inheritable(self._parent_fd)
@@ -1483,49 +1813,7 @@ class InstallationAdmission:
         return dict(receipt)
 
     def _write_receipt(self, raw: bytes) -> None:
-        if len(raw) > 4096:
-            _refuse()
-        parent = None
-        descriptor = None
-        readback = None
-        name = f"bws-source-installation-{self.operation_id}.receipt.json"
-        try:
-            parent, _ = _open_directory(_RECEIPT_DIRECTORY)
-            descriptor = os.open(
-                name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _CLOEXEC,
-                0o600, dir_fd=parent,
-            )
-            before = os.fstat(descriptor)
-            if (not stat.S_ISREG(before.st_mode) or before.st_uid != _OWNER_UID or before.st_gid != _OWNER_GID
-                    or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
-                    or os.get_inheritable(descriptor)):
-                _refuse()
-            offset = 0
-            while offset < len(raw):
-                count = os.write(descriptor, raw[offset:])
-                if count <= 0:
-                    _refuse()
-                offset += count
-            os.fsync(descriptor)
-            readback = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _CLOEXEC,
-                               dir_fd=parent)
-            actual = os.fstat(readback)
-            named = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            if ((actual.st_dev, actual.st_ino) != (before.st_dev, before.st_ino)
-                    or (named.st_dev, named.st_ino) != (before.st_dev, before.st_ino)
-                    or os.pread(readback, len(raw) + 1, 0) != raw
-                    or os.get_inheritable(readback)):
-                _refuse()
-            os.fsync(parent)
-        except Exception:
-            _refuse()
-        finally:
-            for fd in (readback, descriptor, parent):
-                if fd is not None:
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
+        _write_operation_receipt(cast(str, self.operation_id), raw)
 
     def complete(self, receipt: dict[str, object]) -> dict[str, object]:
         """Publish one operation-bound receipt before clearing the owner marker."""
@@ -1575,9 +1863,11 @@ def installation_admission(
     image_digest: str | None = None,
     bundle_name: str | None = None,
     caller_checkout: Path | None = None,
+    image_pull: bool = False,
 ) -> Iterator[InstallationAdmission]:
     """Hold one fixed DEV/TEST caller reservation without adopting old state."""
-    if channel not in {"dev", "test"} or mode not in {"shared", "exclusive"}:
+    if (channel not in {"dev", "test"} or mode not in {"shared", "exclusive"}
+            or type(image_pull) is not bool or (image_pull and mode != "exclusive")):
         _refuse()
     if mode == "exclusive":
         try:
@@ -1614,6 +1904,7 @@ def installation_admission(
             channel, mode, operation_id, candidate_sha, image_digest, bundle_name,
             caller_identity, parent, global_fd, lock_fd, (parent_info.st_dev, parent_info.st_ino),
             (global_info.st_dev, global_info.st_ino), (lock_info.st_dev, lock_info.st_ino),
+            _image_pull=image_pull,
         )
         parent = global_fd = lock_fd = None
         if mode == "shared":
@@ -1632,16 +1923,37 @@ def installation_admission(
                         or prior_owner["operation_id"] == operation_id):
                     _refuse()
                 os.ftruncate(lease._lock_fd, 0)
+                os.fsync(lease._lock_fd)
                 if os.pread(lease._lock_fd, 1, 0) != b"":
                     _refuse()
         if mode == "exclusive":
+            if image_pull:
+                from app.ops.pg_acceptance import IMAGE_REPOSITORY
+                lease._verify_lock(owner=False)
+                _require_exclusive_lock(lease._parent_fd, _GLOBAL_LOCK, lease._global_identity)
+                _require_exclusive_lock(lease._parent_fd, name, lease._lock_identity)
+                if lease.caller_identity is None:
+                    _refuse()
+                _verify_live_caller(lease.caller_identity)
+                intent = (json.dumps({
+                    "schema": "bws-source-image-intent.v1", "operation_id": operation_id,
+                    "channel": channel, "candidate_sha": candidate_sha, "image_digest": image_digest,
+                    "repository": IMAGE_REPOSITORY,
+                }, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+                _publish_private_operation_record(lease._parent_fd,
+                    f"bws-source-installation-{operation_id}.image-intent.json", intent)
+                _require_exclusive_lock(lease._parent_fd, _GLOBAL_LOCK, lease._global_identity)
+                _require_exclusive_lock(lease._parent_fd, name, lease._lock_identity)
             raw = _owner_bytes(lease)
-            if os.lseek(lease._lock_fd, 0, os.SEEK_SET) != 0:
-                _refuse()
-            if os.write(lease._lock_fd, raw) != len(raw):
-                _refuse()
-            os.fsync(lease._lock_fd)
-            lease._verify_lock(owner=True)
+            if image_pull:
+                _publish_source_owner(lease, name, raw)
+            else:
+                if os.lseek(lease._lock_fd, 0, os.SEEK_SET) != 0:
+                    _refuse()
+                if os.write(lease._lock_fd, raw) != len(raw):
+                    _refuse()
+                os.fsync(lease._lock_fd)
+                lease._verify_lock(owner=True)
         yield lease
         if mode == "exclusive" and not lease._completed:
             _refuse()

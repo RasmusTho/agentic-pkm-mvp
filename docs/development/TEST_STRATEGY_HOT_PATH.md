@@ -72,6 +72,30 @@ coverage. Unknown sibling config paths remain unowned and refuse; no config
 prefix or text-only runtime exception is introduced. The regression is
 `tests/scripts/test_select_pr_tests.py::test_activation_scope_helper_selects_api_and_native_deploy_coverage`.
 
+The fixed operations-acceptance API producer and three exact `app/ops/` producer/guard/probe
+modules also select the operations suite. This keeps their official SDK, admission, refusal,
+receipt and assembled TEST/DEV checks attached to later source changes. The blocking browser
+workflow installs the complete Product requirements and the separate sidecar distribution, then executes the exact served-operations and
+composed human/agent recovery targets with a two-case, zero-skip JUnit check. This source proof
+does not qualify a deployed channel; `docs/TESTING.md :: Automated Technical Acceptance` owns that
+separate same-candidate outcome.
+
+The same browser lane explicitly executes ten response/readback-ownership cases, including
+real native no-receipt CAS, UNKNOWN journal records, unavailable reads, lost replies and scope
+replacement, with a separate exact zero-skip JUnit inventory. The two served acceptance targets
+also delay original native observations past the one-second receipt-poll interval. They preserve
+the existing native effects and assert the original conflict instead of replacing its status.
+Private original browser traces remain on the qualified host; public CI retains only finite
+typed status facts and their original hashes, plus the actual JUnit results.
+
+The ordinary Unit watchdog remains 120 seconds. Four composed operations-acceptance cases
+perform multiple real SDK/native/HTTP journeys in one case: SDK profile/parity, recovery and
+assembled DEV have explicit 360-second watchdogs, and assembled TEST has 600 seconds. This
+retains an actual finite thread watchdog while admitting the complete fixed inventory under
+parallel CI load; the SDK/profile case hit the original 120-second watchdog, and assembled TEST
+took 131–140 seconds in isolated local proof. These case budgets do not alter the runner's
+one-hour qualification expiry, native API timeouts, scenario set or finite effect authority.
+
 ### Exact PR intake and publication source scope
 
 The bounded route is available only when a change includes one of these exact source paths or one
@@ -504,6 +528,13 @@ effort improved before adopting further changes.
   before packing other targets. Sibling units of either module never share a process; with four
   available processes all four long units start in different processes. This preserves the selected
   inventory and existing bounds; an actual current-head CI result remains the timing evidence.
+  [PR #6565 partition 1](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41424311217/job/125207364182)
+  timed out after 5400 seconds with source RPC, deploy-channel nodes and large dispatcher modules
+  together. The placement rule also keeps each preplanned deploy-channel unit in a distinct
+  process, while retaining the four-process cap, 120-second ordinary watchdog, admitted
+  case-specific watchdogs, 5400-second partition ceiling, 120-minute step and 135-minute waiter.
+  The mixed-workload regression proves placement and exact node accounting deterministically;
+  this PR's CI exercises its own selection, while consumer runtime remains unmeasured until rerun.
   A later [#6522 run 41310399802](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41310399802)
   reached the previous 3300-second partition limit at 99%, leaving the serial boundary unrun.
   The 5400-second per-partition limit within a 120-minute scoped step adds finite execution margin;
@@ -815,6 +846,12 @@ already-selected coverage, not an independent source-only subsystem owner.
 - `scripts/select_pr_tests.py :: HEAVY_PR_DEFERRED_TARGETS` filters heavy targets already selected by subsystem ownership or the full-suite route. It keeps a selected heavy target only when the PR changes a listed input, or a non-test file inside the target (a `conftest.py` or helper). Otherwise the selector drops it and reports it as `deferred_targets` (stdout and `GITHUB_OUTPUT`). The full-suite lane skips the deferred shard and logs `SHARD DEFERRED`. A changed test module inside a deferred directory still runs as its own changed-file target.
 - The only entry today is `tests/deploy`. Its retention triggers cover repo files it reads directly: deploy scripts and `scripts/lib/**`, compose files, requirements files, `Dockerfile`, `ops/**`, `config/deploy/**`, release-channel code (`app/release_channels/**`), and the `app/` modules it loads by path. These include copied fixture inputs, so the inventory is not an independent dependency-owner map. It took ~1497 s of PR #6134's 2287 s unit step and timed out PR #6152, because `ops_deploy` owns all of `scripts/`. A census test keeps the trigger set covering every existing repo file that `tests/deploy` references (#6155 review). The rolling channel-bug workflow (`.github/workflows/postmerge-channel-bug.yml`) and receiver (`scripts/postmerge_channel_bug.py`) are direct deploy-test inputs; the workflow also has exact `ops_deploy` ownership so a workflow-only edit selects that coverage alongside governance checks. Add a target only with a timing receipt.
 - VM execution: after the private host controller (`scripts/postmerge_dev_test.py`) commits a candidate's native `dev` deployment, it runs `qualify-heavy dev <operation-id>` through the existing `yggdrasil-bws-deploy` launcher on `ygg-dev`, whose action allowlist admits `qualify-heavy` (#6205). This is repository support from #6227; live host activation remains #6170 and release qualification remains #3347. `app/ops/heavy_acceptance_runner.py` runs `app/ops/heavy_acceptance.py` (profile `postmerge-heavy.v1`) in the admitted image against a scratch depth-1 Git checkout of the exact candidate SHA (as `actions/checkout` provides): network none, read-only root, dropped capabilities, and the host Docker CLI and compose plugin mounted read-only without a socket. It resolves the targets with `select_pr_tests.py`'s own `HEAVY_PR_DEFERRED_TARGETS`, the PR marker expression and the 120-second thread watchdog. An empty selection, a failure, an error, or a docker-gated skip is not a pass. The controller promotes that exact candidate to `test` only after a passing heavy verdict. A failed/refused verdict holds that candidate without replay; later admitted builds still proceed to `dev`. No heavy result gates or reverts a merge to `main`, and `postmerge-pg.v1` is unchanged. The controller runs the profile synchronously, so the next candidate's deployment waits for it, bounded by the profile's 60-minute deadline.
+- An optional root-owned per-channel policy can bound the heavy container and both PG acceptance
+  containers' RAM and combined RAM/swap. The runners verify configured limits and terminal OOM/
+  exit state; an absent policy keeps current execution and emits an explicit inactive advisory.
+  Limits require measured per-host qualification and operator adoption, not a guessed default.
+  They do not bound separate host test shells or other writers; see the deployment owner's
+  `CI deployment automation posture` for configuration, measurement and residual risk.
 - Verdict back to GitHub: the controller dispatches `.github/workflows/post-merge-heavy-tests.yml` once per dev candidate with bounded inputs (SHA, `passed`/`failed`/`refused`, operation ID, counts, refusal reason, up to 20 failing node IDs). The existing host client uses Actions read/write, Contents read and Metadata read only; no additional scope is required. Failing node IDs are masked to the input grammar, and the dispatch is retried twice before it is recorded as failed. Verdict runs are grouped per SHA, so one never displaces another commit's pending verdict. `scripts/post_merge_heavy_tests_verdict.py` validates the inputs and that the SHA is on `main`; the run records the `post-merge-heavy-tests/ygg` commit status and is red unless the verdict passed. A malformed or off-`main` verdict is red too.
 - Missing-verdict watchdog: the workflow runs hourly. When no `main` commit at or after the newest commit older than 6 hours carries a ygg status (or an earlier fallback status), it is red with reason "no ygg verdict" and runs the GitHub-hosted heavy job for that SHA as fallback, recorded as `post-merge-heavy-tests/fallback`. The fallback is red even when its tests pass, because the VM path is broken; a fallback never grants controller test-promotion eligibility. A `workflow_dispatch` without a verdict runs the GitHub-hosted job on demand. The per-push GitHub-hosted run is retired.
 - Crash/restart: a durable intent precedes both the heavy run and its dispatch. An interrupted run becomes a refused verdict instead of rerunning; an uncertain dispatch is not sent again after restart. A terminal native dev deployment failure persists a one-time `refused` verdict with reason `dev_deploy_failed`. Legacy terminal test-VM checkpoints remain readable and are not replayed.

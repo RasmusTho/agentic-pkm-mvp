@@ -804,15 +804,37 @@ The present deployment path has several distinct authorities:
   Replace that route with a supported repository-owned producer before relying on complete
   accounting; do not promote a transient carrier into a second source of authority.
 
-The supported producer must fsync an immutable, value-free binding of operation ID, channel,
+The supported source pre-pull must fsync an immutable, value-free binding of operation ID, channel,
 revision, official repository, index digest and qualified Docker store into the existing durable
-operation authority **before** the first cache-affecting pull or remote dispatch. The admitted
-native request and source-installation owner/receipt must match that binding. A changed binding,
+operation authority **before** the pull. An ordinary host deploy or source-persistence request
+must bind the same operation and exact image identity before cache-affecting dispatch; its host
+record may leave the store unscoped when the native receiver has not yet qualified it. In that
+case every store the operation could have reached must protect that digest until authenticated
+evidence narrows the scope. Reapply this protection when a possible store is later discovered,
+remounted or cloned; do not limit it to daemons active at the original dispatch. A missing possible
+store, or an unresolved mapping from the digest to image IDs and aliases, prevents reclamation
+wherever protection cannot be proved. Capacity
+admission must separately qualify the actual effect store and all potentially affected resources
+before dispatch; an unscoped host record does not establish capacity admission. The admitted
+native request and source-installation owner/receipt must match the image identity. A changed binding,
 including two digests for the same source SHA, is not the same request. A source pull that
 fails, loses transport or has no native receipt retains its binding and its uncertainty; it is
 never automatically replayed. The migration must identify the actual supported callers and
 account for the previously used operator-controlled path, rather than assuming all earlier
 pulls entered a native journal.
+
+The repository-owned source producer retains an image intent before publishing its source owner,
+an image binding before pull, and a pull-completion companion only after a verified response.
+Recovery can close a source installation before backup when its exact intent and absence of a
+channel owner are proved, while retaining the image evidence. A `source_pull_unresolved` refusal
+describes the source installation only: it does not prove that the Docker pull has terminated or
+permit its possible capacity budget to be removed from admission accounting. Inventory must preserve orphan intents and all retained companions
+even after the source owner becomes terminal. A missing or malformed companion cannot establish
+a negative outcome. The new pull is closed by default until the capacity guard is delivered;
+an already cached verified candidate remains usable. Do not retire the existing operational
+pre-pull route or claim live adoption until producer, protection and guard are installed and
+separately verified on each channel. Manual DEV/TEST host deploys require an immutable image
+digest from the verified build before cache-affecting dispatch.
 
 For old host-only or pre-admission UNKNOWN operations without a bound digest, authenticate and
 retain the original operation-bound request or other existing owner evidence if it exists. Record
@@ -1028,6 +1050,34 @@ Only a passing heavy result completes the dev verdict, advances its last-green h
 that exact candidate's test deployment. A red/refused result holds this candidate without replay;
 later admitted builds proceed to dev. A terminal dev deployment failure dispatches a persisted,
 one-time `refused` verdict with reason `dev_deploy_failed`.
+
+The DEV/TEST native heavy and PG acceptance runners support an optional per-channel memory policy
+at `/etc/yggdrasil/bws-deploy/<channel>.acceptance-memory.json`. A missing file preserves existing
+execution and emits `acceptance_memory_policy_unconfigured ... isolation=inactive`; no numeric
+limit is silently invented. The file must be a single root-owned, mode `0600` regular file and its
+JSON object must contain exactly `version: 1` and `heavy`, `pg_db`, `pg_tests` objects. Each profile
+object has integer byte values `memory` and `memory_swap`; the latter is the combined RAM-plus-swap
+limit, at least `memory`. Each RAM limit is at least 6 MiB; all three RAM limits together must not
+exceed the guest's physical RAM because heavy can overlap a later PG run. Each container's
+permitted swap is `memory_swap - memory`; their combined swap budgets must also
+fit the guest's measured `SwapTotal`. These totals do not reserve RAM or swap for services.
+Invalid, unreadable or
+unqualified configured policy refuses the affected acceptance run. Configured limits are applied to
+the exact disposable containers and checked through Docker before start and after execution; an OOM
+or unsuccessful container exit cannot produce a passing result. Missing policy does not change the
+normal service containers, Docker daemon defaults or PROD.
+
+Qualify values separately on each guest before creating the optional file. In a coordinated test
+window, observe representative complete heavy and PG profiles, including the two concurrent PG
+containers and charged tmpfs; retain the operation identity and cgroup-v2 `memory.peak` and
+`memory.swap.peak` while each owned container still exists, or explicitly mark a sampled substitute
+as an incomplete peak. Measure concurrent service/OS consumption and available RAM, add a justified
+margin for variation and overlap, then choose finite values that leave that margin. Recheck actual
+Docker `Memory`/`MemorySwap`, successful verdict and service health after activation. If a profile
+does not fit, adjust its qualified budget or add capacity; do not reinterpret a killed test as green.
+No full-profile peak or live adoption is established by this repository change. Standalone host shell
+tests, unrelated containers, daemon/kernel overhead and uncontrolled writers remain outside these
+limits, and a sample or individual cgroup limit is not an absolute reservation against global OOM.
 
 The controller dispatches `.github/workflows/post-merge-heavy-tests.yml` once with the bounded
 verdict, using the existing Actions read/write, Contents read, Metadata read client only. A durable
@@ -1354,6 +1404,18 @@ does not establish a usable answer path.
 ## Deploy procedure
 
 The deploy procedure is the same shape for every channel; only the pin target and the migration-ack posture differ (`prod` is the strictest). It assumes the build-once/promote model above.
+
+The DEV and TEST channel overlays configure Docker's `json-file` driver with a
+`50m` maximum file size and three files for each base Compose service. The
+post-merge PG and heavy acceptance runners apply the same policy to their own
+disposable containers. This finite retention discards older container logs;
+preserve any required diagnostics through the normal evidence workflow before
+they rotate. Docker applies the settings when a container is created: existing
+containers retain their previous settings until a separately authorized,
+controlled recreation. This describes repository configuration, not live
+adoption. It does not cover standalone rerun containers, separate Karakeep or
+scalar-rollback-only services, application-owned files, or accumulated images.
+The PROD configuration and Docker daemon defaults are unchanged.
 
 ### Explicit native principal cutover (DEV/TEST)
 

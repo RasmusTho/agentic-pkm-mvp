@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,7 +21,7 @@ from app.ops.host_secret_controller import (
 )
 from app.ops.postgres_deploy import (
     AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
-    deploy_from_host,
+    deploy_from_host, host_deploy_image_binding,
 )
 from app.ops.postgres_deploy_linux import (
     SshDeployRemote, UnknownDeployFenceRefused, source_identity_request_fingerprint,
@@ -30,6 +31,24 @@ from app.ops.secret_admin import SecretAdmin
 
 _ADMIN_METADATA_KEYS = ('BWS_ORGANIZATION_ID', 'BWS_NON_PROD_PROJECT_ID', 'BWS_PROD_PROJECT_ID')
 _NON_PROD_METADATA_KEYS = ('BWS_ORGANIZATION_ID', 'BWS_NON_PROD_PROJECT_ID')
+
+
+def _source_image_binding(channel: str, revision: str, digest: str, selected: AuthorityCutover,
+                          producer_kind: str, current_state: bool) -> str:
+    """Bind public image selectors and a fingerprint without journaling private paths."""
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+    request = {
+        'channel': channel, 'revision': revision, 'image_digest': digest,
+        'authority_cutover': {'binding_id': selected.binding_id, 'root': selected.root,
+                              'ownership_root': selected.ownership_root},
+        'producer_kind': producer_kind, 'current_state': current_state,
+    }
+    encoded = json.dumps(request, sort_keys=True, separators=(',', ':')).encode()
+    return json.dumps({
+        'schema': 'host-source-image-binding.v1', 'repository': IMAGE_REPOSITORY,
+        'channel': channel, 'revision': revision, 'image_digest': digest,
+        'plan_fingerprint': hashlib.sha256(encoded).hexdigest(),
+    }, sort_keys=True, separators=(',', ':'))
 # Stdlib-only code sent to the existing strict aliases: it requires no checkout
 # update on the VMs and opens only canonical non-secret channel configuration.
 _CHANNEL_METADATA_READER = '''
@@ -719,6 +738,10 @@ def main(argv: list[str] | None = None) -> int:
                 or args.ack_forward_only
             ):
                 raise PostgresDeployError()
+            image_binding = None
+            if not args.diagnose_source_identity and args.image_digest is not None and cutover is not None:
+                image_binding = _source_image_binding(args.channel, args.revision, args.image_digest,
+                                                      cutover, args.source_producer_kind, args.current_state_source)
             source_operation = (
                 controller.source_diagnostic_operation(args.channel, operation_id=args.operation_id,
                                                       request_fingerprint=request_fingerprint)
@@ -726,22 +749,22 @@ def main(argv: list[str] | None = None) -> int:
                 else controller.source_persistence_operation(
                     args.channel, operation_id=args.operation_id,
                     producer_kind=args.source_producer_kind,
+                    reconciliation_only=True,
+                    **dict[str, Any]({'source_image_binding': image_binding} if image_binding is not None else {}),
                     **dict[str, Any]({'current_state': True, 'request_fingerprint': request_fingerprint}
                                     if args.current_state_source else {}),
                 )
                 if args.source_producer_kind == 'registry'
                 else controller.source_persistence_operation(
                     args.channel, operation_id=args.operation_id,
+                    reconciliation_only=True,
+                    **dict[str, Any]({'source_image_binding': image_binding} if image_binding is not None else {}),
                 )
             )
             with source_operation as (operation, resumed):
                 if (
                     not resumed
                     or operation.completed_result not in {None, 'failed'}
-                    or (
-                        operation.completed_result is None
-                        and not operation.mutation_started
-                    )
                 ):
                     raise PostgresDeployError()
                 remote = SshDeployRemote('ygg-' + args.channel)
@@ -833,23 +856,39 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise PostgresDeployError()
             remote = SshDeployRemote('ygg-' + args.channel)
+            image_binding = _source_image_binding(args.channel, args.revision, args.image_digest,
+                                                  cutover, args.source_producer_kind, args.current_state_source)
             source_operation = (
                 controller.source_persistence_operation(
                     args.channel, operation_id=args.operation_id,
                     producer_kind=args.source_producer_kind,
+                    source_image_binding=image_binding,
+                    allow_legacy_cleanup=True,
                     **dict[str, Any]({'current_state': True, 'request_fingerprint': request_fingerprint}
                                     if args.current_state_source else {}),
                 )
                 if args.source_producer_kind == 'registry'
                 else controller.source_persistence_operation(
-                    args.channel, operation_id=args.operation_id,
+                    args.channel, operation_id=args.operation_id, source_image_binding=image_binding,
+                    allow_legacy_cleanup=True,
                 )
             )
             with source_operation as (operation, _resumed):
                 if operation.completed_source == 'native-absence-proof':
                     raise PostgresDeployError()
-                if operation.completed_result is None:
+                if _resumed and not args.current_state_source and operation.completed_result is None:
+                    raise PostgresDeployError()
+                if operation.completed_result is None and not operation.mutation_started:
                     operation.prepare_mutation()
+                if operation.completed_result is not None and not args.current_state_source:
+                    result = remote.readback_source_identity(
+                        operation.operation_id, args.revision, args.image_digest,
+                        cutover, args.source_producer_kind,
+                    )
+                    if result['terminal_state'] != operation.completed_result:
+                        raise PostgresDeployError()
+                    print(json.dumps(result, sort_keys=True))
+                    return 0 if result['terminal_state'] == 'committed' else 78
                 result = (
                     remote.persist_source_identity(
                         operation.operation_id, args.revision, args.image_digest,
@@ -897,6 +936,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 with controller.deploy_operation(
                     args.channel, allow_bootstrap=False, operation_id=args.operation_id,
+                    deploy_image_binding=host_deploy_image_binding(plan), reconciliation_only=True,
                 ) as (operation, resumed):
                     if not resumed:
                         raise UnknownDeployFenceRefused('host_pending_operation_matches_requested_id')
@@ -1076,15 +1116,21 @@ def main(argv: list[str] | None = None) -> int:
 
             if args.operation_id is not None:
                 with controller.deploy_operation(args.channel, allow_bootstrap=False,
-                                                 operation_id=args.operation_id) as (operation, resumed):
+                                                 operation_id=args.operation_id,
+                                                 deploy_image_binding=host_deploy_image_binding(plan),
+                                                 reconciliation_only=True) as (operation, resumed):
                     if not resumed:
                         raise PostgresDeployError()
                     operation.finish(readback(operation.operation_id, 'deploy', args.channel))
             else:
-                controller.reconcile(readback, expected=('deploy', args.channel, False))
+                controller.reconcile(readback, expected=('deploy', args.channel, False),
+                                     expected_deploy_image_binding=host_deploy_image_binding(plan))
             receipt = receipts[-1]
             print(json.dumps(receipt.payload(), sort_keys=True))
             return 0
+        if plan.channel in {'dev', 'test'} and plan.image_digest is None:
+            print('DEV/TEST deployment requires --image-digest from the verified image build', file=sys.stderr)
+            return 78
         admin = _configured_deploy_admin(plan, controller)
         options = {'operation_id': args.operation_id} if args.operation_id is not None else {}
         receipt = deploy_from_host(admin, SshDeployRemote('ygg-' + args.channel), plan,
