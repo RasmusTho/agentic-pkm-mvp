@@ -1,1 +1,0 @@
-{"correlation_id": "43b693fd-6740-43b7-8f75-3d2c061660af", "environment": "dev", "failures": ["readyz unreachable", "/api/health unreachable"], "status": "down", "ts": 1800000000}
