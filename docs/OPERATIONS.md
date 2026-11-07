@@ -865,10 +865,13 @@ Available only after the opt-in `background-supervisor-handoff`; before it these
 python -m app.instance.runtime background-binding-list --registry-path <registry>
 python -m app.instance.runtime background-binding-add --registry-path <registry> --vault-binding-id <id>
 python -m app.instance.runtime background-binding-remove --registry-path <registry> --vault-binding-id <id>
-python -m app.instance.runtime binding-remove --channel <c> --registry-path <registry> --host-global-root <h> --vault-binding-id <id> [--replacement-default-binding-id <id>]
-python -m app.instance.runtime binding-reactivate --channel <c> --registry-path <registry> --host-global-root <h> --root <vault-root>
-python -m app.instance.runtime binding-lifecycle-recover --channel <c> --registry-path <registry> --host-global-root <h>
+python -m app.instance.runtime binding-remove --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> [--watcher-state-dir <dir>] --vault-binding-id <id> [--replacement-default-binding-id <id>]
+python -m app.instance.runtime binding-reactivate --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> [--watcher-state-dir <dir>] --root <vault-root>
+python -m app.instance.runtime binding-lifecycle-recover --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> [--watcher-state-dir <dir>]
 ```
+
+`--watcher-posture running` needs the watcher's `WATCHER_STATE_DIR`, so the removal waits for the
+watcher's final old-root scan and drain receipts. State `absent` only when no watcher runs.
 
 - A background lifecycle reporting `failed` performs no vault effect and never redirects to another
   binding. Read `failure`, repair the named cause, and let the next cycle reconcile; a removed

@@ -880,7 +880,20 @@ class BackgroundLifecycleSupervisor:
             return current.status != "failed"
         if registration.extensions.get(LIFECYCLE_STATE_KEY) in SEALED_LIFECYCLE_STATES:
             return current.status != "failed"
-        return _binding_revision(snapshot, binding) != current.binding_revision
+        if _binding_revision(snapshot, binding) != current.binding_revision:
+            return True
+        if current.status != "running":
+            return False
+        # A verdict or delegation change has no registry revision of its own, so only a
+        # fresh decision can observe it; rotation then re-resolves or fails loudly.
+        from app.instance.scalar_binding_runtime import _authorize_binding
+
+        try:
+            verdict = _authorize_binding(snapshot, binding, self.registry.path)
+            role_now = self._role()
+        except Exception:
+            return True
+        return f"{verdict.epoch}|auth-epoch-{role_now.auth_epoch}" != current.authorization_epoch
 
     def reconcile(self) -> BackgroundLifecycle:
         """Converge from durable registry revision + auth epoch (hints only accelerate).

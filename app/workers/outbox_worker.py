@@ -58,9 +58,7 @@ from app.services.outbox_envelope_preflight import (
     OutboxEnvelopeUpgradeBlocked,
     require_upgrade_drained,
 )
-from app.instance.background_supervisor import BackgroundLifecycleStale
 from app.workers.outbox_binding_gate import (
-    OutboxBindingDeferred,
     eligible_worker_bindings,
     required_worker_binding_stamp,
     worker_effect_window,
@@ -364,6 +362,24 @@ def _resolve_worker_binding_runtime(vault_root: Path | None) -> Any:
     return runtime
 
 
+def _background_lifecycle_failed() -> bool:
+    """A sealed or removed durable member has no root, yet it is failed, not healthy idle."""
+
+    from app.instance.background_supervisor import process_background_supervisor
+
+    try:
+        supervisor = process_background_supervisor("worker")
+    except Exception:
+        return False  # the tick's own resolver fails closed on this registry read
+    if supervisor is None:
+        return False
+    lifecycle = supervisor.reconcile()
+    if lifecycle.status != "failed":
+        return False
+    logger.error("worker tick blocked: background lifecycle is failed: %s", lifecycle.failure)
+    return True
+
+
 _SETTINGS_BINDING: dict[str, str] = {}
 
 
@@ -402,6 +418,8 @@ def run_once(
     preserving the loud misconfiguration contract.
     """
     if _resolve_optional_vault_root(vault_root) is None:
+        if _background_lifecycle_failed():
+            return WorkerTickResult(state="background_lifecycle_failed", processed=0)
         logger.debug("outbox worker tick idled: no vault selected")
         return WorkerTickResult(state="no_vault", processed=0)
 
@@ -2359,6 +2377,7 @@ def run(
         WORKER_LAST_TICK_TIMESTAMP.set(time.time())
         tick_vault_root = _resolve_optional_vault_root(None)
         no_vault_idle = tick_vault_root is None
+        lifecycle_blocked = no_vault_idle and _background_lifecycle_failed()
         if no_vault_idle:
             # No-vault idle guard (#2407): match run_once's runtime decision. With
             # no vault selected the production loop must not poll/dispatch
@@ -2372,7 +2391,6 @@ def run(
                 BackgroundLifecycleBlocked,
             )
 
-            lifecycle_blocked = False
             try:
                 binding_runtime = (
                     None
@@ -2546,11 +2564,6 @@ def run(
                         raise
 
                     ack_outbox(message["id"])
-        except (OutboxBindingDeferred, BackgroundLifecycleStale) as exc:
-            # MVR-06B: the binding was sealed or moved between resolution and the shared
-            # lease. Nothing was effected and the row stays queued; re-resolve next tick.
-            logger.warning("worker dispatch deferred: %s", exc)
-
         except Exception:
             errors_total += 1
             logger.exception("worker loop failed")

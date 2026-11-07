@@ -207,6 +207,16 @@ class _Journal:
 def _activation(runtime: InstanceRegistryRuntime) -> Any:
     from app.instance.settings_rebind import SettingsRebindActivation
 
+    # A headless CLI does not inherit the watcher service's env, so it states the posture
+    # explicitly; otherwise a live watcher's final scan could be skipped silently.
+    posture = getattr(runtime, "lifecycle_watcher_posture", None)
+    if posture is not None:
+        return SettingsRebindActivation(
+            runtime.registry,
+            watcher_state_dir=posture["state_dir"],
+            watcher_enabled=posture["enabled"],
+            watcher_requested=posture["enabled"],
+        )
     return SettingsRebindActivation.from_environment(runtime.registry)
 
 
@@ -827,16 +837,23 @@ class BindingReactivationCoordinator:
         )
 
     def reactivate_root(self, root: Path) -> VaultRegistration:
-        snapshot = self.runtime.registry.load()
-        _require_consumer_floors(snapshot)
+        _require_consumer_floors(self.runtime.registry.load())
         with self.journal.locked():
+            identity = resolve_filesystem_root_identity(root)
             existing = self.journal.load()
             if existing is not None and existing["phase"] != "complete":
+                if not same_filesystem_root(
+                    resolve_filesystem_root_identity(Path(existing["tombstone"]["path"])),
+                    identity,
+                ):
+                    raise RegistryError("another binding reactivation requires recovery first")
                 return self._run(existing)
             removal = BindingRemovalCoordinator(self.runtime).journal.load()
             if removal is not None and removal["phase"] != "complete":
                 raise RegistryError("an incomplete binding removal requires recovery first")
-            identity = resolve_filesystem_root_identity(root)
+            # Read under the lock: a waiter must not plan from a tombstone that the holder
+            # it waited for has already consumed.
+            snapshot = self.runtime.registry.load()
             matches = [
                 tombstone
                 for tombstone in snapshot.removal_tombstones.values()

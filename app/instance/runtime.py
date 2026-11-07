@@ -143,6 +143,8 @@ class InstanceRegistryRuntime:
         self.registry = VaultRegistryStore(layout.registry_path)
         self.ledger = ledger
         self._legacy_path = legacy_path or (layout.root / "legacy-app-local.md")
+        #: Headless removal/reactivation states its watcher posture explicitly (MVR-06B).
+        self.lifecycle_watcher_posture: dict[str, Any] | None = None
 
     @classmethod
     def for_paths(
@@ -5316,6 +5318,12 @@ def _binding_lifecycle_command(
         args.host_global_root,
         initialize_layout=False,
     )
+    if args.watcher_posture == "running" and args.watcher_state_dir is None:
+        raise ValueError("--watcher-posture running requires --watcher-state-dir")
+    runtime.lifecycle_watcher_posture = {
+        "enabled": args.watcher_posture == "running",
+        "state_dir": args.watcher_state_dir,
+    }
     if args.command == "binding-remove":
         tombstone = runtime.remove(
             args.vault_binding_id,
@@ -6445,6 +6453,8 @@ def _main(argv: list[str] | None = None) -> int:
         if name in {"binding-remove", "binding-reactivate", "binding-lifecycle-recover"}:
             command.add_argument("--channel", required=True)
             command.add_argument("--host-global-root", type=Path, required=True)
+            command.add_argument("--watcher-posture", choices=("running", "absent"), required=True)
+            command.add_argument("--watcher-state-dir", type=Path, default=None)
         if name == "binding-remove":
             command.add_argument("--vault-binding-id", required=True)
             command.add_argument("--replacement-default-binding-id", default=None)

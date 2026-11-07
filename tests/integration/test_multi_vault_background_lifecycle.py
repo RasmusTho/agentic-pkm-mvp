@@ -1245,7 +1245,14 @@ def test_binding_lifecycle_cli_removes_recovers_and_reactivates(tmp_path, monkey
         "--channel", runtime.layout.channel_id,
         "--host-global-root", str(runtime.ledger.root),
         "--consumer", "cli",
+        "--watcher-posture", "absent",
     )
+    # A stated running watcher needs its state dir; the posture is never inherited or guessed.
+    no_state_dir = cli(
+        "binding-remove", *common[:-1], "running", "--vault-binding-id", second.vault_binding_id
+    )
+    assert no_state_dir["_exit_code"] != 0 and "watcher-state-dir" in no_state_dir["error"]
+    assert second.vault_binding_id in runtime.registry.load().registrations
     removed = cli("binding-remove", *common, "--vault-binding-id", second.vault_binding_id)
     assert removed["_exit_code"] == 0, removed
     assert removed["state"] == "removed" and second.path not in str(removed)
@@ -1606,7 +1613,7 @@ def test_worker_recompiles_settings_when_its_durable_binding_moves(tmp_path, mon
     assert reloads == [Path(second.path).resolve()]
 
 
-def test_sealed_or_stale_dispatch_defers_the_row_instead_of_stopping_the_worker(
+def test_sealed_dispatch_is_deferred_and_the_next_tick_blocks_without_a_crash(
     tmp_path, monkeypatch
 ) -> None:
     from app.instance.scalar_binding_runtime import resolve_background_worker_runtime
@@ -1633,15 +1640,11 @@ def test_sealed_or_stale_dispatch_defers_the_row_instead_of_stopping_the_worker(
     with pytest.raises(OutboxBindingDeferred, match="sealed"):
         with worker_effect_window(message, runtime=worker):
             raise AssertionError("a sealed binding admitted a dispatch")
-    # The worker loop's deferral clause names exactly these classes.
-    source = Path(outbox_worker_source()).read_text(encoding="utf-8")
-    assert "except (OutboxBindingDeferred, BackgroundLifecycleStale)" in source
-
-
-def outbox_worker_source() -> str:
+    # The deferred row stays queued for the restarted worker, whose next tick is a blocked
+    # idle rather than a crash loop while the binding stays sealed.
     from app.workers import outbox_worker
 
-    return outbox_worker.__file__
+    assert outbox_worker.run_once().state == "background_lifecycle_failed"
 
 
 def test_journal_disagreement_is_loud_but_does_not_wedge_consumer_startup(
@@ -1672,3 +1675,68 @@ def test_journal_disagreement_is_loud_but_does_not_wedge_consumer_startup(
         consumer="worker",
     ) == 0
     assert "disagrees with durable background intent" in caplog.text
+
+
+def test_failed_durable_member_is_reported_failed_not_healthy_idle(tmp_path, monkeypatch) -> None:
+    from app.workers import outbox_worker
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    admin(runtime).remove(first.vault_binding_id)
+    assert outbox_worker.run_once().state == "no_vault"  # truthful explicit-empty idle
+    admin(runtime).add(second.vault_binding_id)
+    runtime.remove(second.vault_binding_id)  # retained as loudly failed intent
+    assert outbox_worker.run_once().state == "background_lifecycle_failed"
+    admin(runtime).remove(second.vault_binding_id)
+    assert outbox_worker.run_once().state == "no_vault"
+
+
+def test_gov_verdict_change_rotates_rather_than_stalling_the_lifecycle(
+    tmp_path, monkeypatch
+) -> None:
+    from app.governance.binding_authority import RegistryBindingAuthorizer
+    from app.governance import binding_authority
+
+    runtime, first, _extra = mvr06b_instance(tmp_path, monkeypatch)
+    sup = supervisor(runtime)
+    held = sup.start()
+    original = RegistryBindingAuthorizer.authorize
+
+    def moved_epoch(self, request):
+        return binding_authority.BindingVerdict(
+            **{**original(self, request).__dict__, "epoch": "moved-epoch"}
+        )
+
+    monkeypatch.setattr(RegistryBindingAuthorizer, "authorize", moved_epoch)
+    rotated = sup.reconcile()
+    assert rotated.generation == held.generation + 1
+    assert rotated.status == "running" and rotated.authorization_epoch.startswith("moved-epoch|")
+    with sup.effect() as lifecycle:
+        assert lifecycle.generation == rotated.generation
+
+
+def test_reactivation_refuses_another_roots_incomplete_journal(tmp_path, monkeypatch) -> None:
+    from app.instance.settings_rebind import RegistryError
+
+    runtime, first, extras = mvr06a_instance(tmp_path, extra_roots=("two", "three"))
+    bind_runtime_env(monkeypatch, runtime)
+    assert handoff_through_cli(runtime)["_exit_code"] == 0
+    stub_settings_reload(monkeypatch)
+    second, third = extras
+    runtime.remove(second.vault_binding_id)
+    runtime.remove(third.vault_binding_id)
+
+    def crash(name: str) -> None:
+        if name == "binding-reactivation:derived_invalidated":
+            raise _ProcessCrash(name)
+
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", crash)
+    with pytest.raises(_ProcessCrash):
+        runtime.reactivate_removed(Path(second.path))
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", lambda name: None)
+    with pytest.raises(RegistryError, match="another binding reactivation"):
+        runtime.reactivate_removed(Path(third.path))
+    assert third.vault_binding_id in runtime.registry.load().removal_tombstones
+    # The same root resumes, and only then can the other root proceed.
+    assert runtime.reactivate_removed(Path(second.path)).vault_binding_id == second.vault_binding_id
+    assert runtime.reactivate_removed(Path(third.path)).vault_binding_id == third.vault_binding_id
