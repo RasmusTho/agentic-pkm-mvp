@@ -187,6 +187,7 @@ def _resolve_handoff_binding(
     from app.instance.settings_rebind import SettingsRebindRecord
 
     bridge_revision = 0
+    bridge_cleared = False
     if snapshot.settings_rebind is not None:
         record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
         bridge_revision = record.desired_revision
@@ -203,6 +204,9 @@ def _resolve_handoff_binding(
             if record.candidate_binding_id not in snapshot.registrations:
                 raise RegistryError("the live bridge binding is not registered")
             return record.candidate_binding_id, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
+        # A completed clear keeps the cleared binding as prior; ``candidate`` and ``prior``
+        # both empty is never-bound (#5644), even when a first selection was cancelled.
+        bridge_cleared = record.prior_binding_id is not None
     if snapshot.default_vault_binding_id is not None:
         return snapshot.default_vault_binding_id, PROVENANCE_COMPATIBILITY_DEFAULT, bridge_revision
     if legacy_bootstrap_root is not None:
@@ -220,7 +224,7 @@ def _resolve_handoff_binding(
                 "the legacy bootstrap root is not one already-enrolled binding"
             ) from exc
         return binding, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
-    if bridge_revision > 0 or not snapshot.registrations:
+    if bridge_cleared or not snapshot.registrations:
         # The live bridge durably cleared its binding, or there is no vault at all.
         return None, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
     enrolled = list(snapshot.registrations.values())

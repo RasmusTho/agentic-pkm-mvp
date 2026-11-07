@@ -738,6 +738,14 @@ class SettingsRebindActivation:
 
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
+        if prior.phase == "prepared":
+            # This attempt resumed a crashed one, so what it read is the prepared revision,
+            # not the binding to restore. That binding is the revision's own prior.
+            prior = replace(
+                prior,
+                candidate_binding_id=prior.prior_binding_id,
+                prior_binding_id=None,
+            )
         with compatibility_ingress_window(self.store._registry, transition=True):
             snapshot = self.store._registry.load()
             current = self.store.read()
@@ -790,14 +798,39 @@ class SettingsRebindActivation:
         background_intent: BackgroundBindingIntent | None = None,
     ) -> SettingsRebindRecord:
         current = self.store.read()
-        if background_intent is not None and current.candidate_binding_id == candidate_binding_id:
-            if current.phase == "prepared":
-                raise RegistryError("settings rebind already has a prepared revision")
-            # The running binding does not move: commit only the intent revision.
+        if (
+            background_intent is not None
+            and current.candidate_binding_id == candidate_binding_id
+            and current.phase != "prepared"
+        ):
+            # The running binding does not move: commit only the intent revision. (A prepared
+            # revision with this candidate is a crashed attempt, resumed below.)
             from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+            from app.instance.background_intent import (
+                BACKGROUND_INTENT_KEY,
+                BackgroundBindingIntent,
+            )
 
             with compatibility_ingress_window(self.store._registry, transition=True):
                 snapshot = self.store._registry.load()
+                stored = BackgroundBindingIntent.from_payload(
+                    snapshot.extensions[BACKGROUND_INTENT_KEY]
+                )
+                running = tuple(
+                    item
+                    for item in stored.effective_binding_ids()
+                    if item in snapshot.registrations
+                )
+                target = () if candidate_binding_id is None else (candidate_binding_id,)
+                if current.phase == "no_lifecycle" and running != target:
+                    # A crash between the acknowledgement and the commit: this revision was
+                    # never committed, so finish it instead of mistaking it for a no-op.
+                    self.store.commit_selection(
+                        desired_revision=current.desired_revision,
+                        selection=None,
+                        background_intent=background_intent,
+                    )
+                    return self._reload_if_needed(self.store.read(), candidate_root)
                 self.store._registry.commit_background_intent(
                     background_intent,
                     expected_revision=snapshot.revision,

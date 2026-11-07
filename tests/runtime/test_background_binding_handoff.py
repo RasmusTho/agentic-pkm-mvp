@@ -550,3 +550,96 @@ def test_explicit_mode_precondition_follows_foreground_and_honors_the_seal(
         mutation._current_proof(token, request=None, api_key=None, registry=runtime.registry)
     with pytest.raises(mutation.CompatibilityMutationError, match="sealed"):
         mutation._registered_root(runtime.registry, second.vault_binding_id)
+
+
+def test_cancelled_first_selection_is_not_a_cleared_bridge_at_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#5644's never-bound ``cancelled`` journal keeps the env-only migration truthful."""
+    from dataclasses import replace
+
+    from app.instance.background_supervisor import _resolve_handoff_binding
+    from app.instance.settings_rebind import SettingsRebindRecord
+
+    runtime, first, _extra = mvr06a_instance(tmp_path, extra_roots=())
+    snapshot = runtime.registry.load()
+    enrolled = replace(
+        snapshot.registrations[first.vault_binding_id],
+        extensions={"provenance": "legacy_env_bootstrap"},
+    )
+    never_bound = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="cancelled",
+        lifecycle_posture="watcher",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    state = replace(
+        snapshot,
+        registrations={first.vault_binding_id: enrolled},
+        default_vault_binding_id=None,
+        default_vault_provenance=None,
+        settings_rebind=never_bound.as_payload(),
+    )
+    assert _resolve_handoff_binding(state, None)[0] == first.vault_binding_id
+    cleared = replace(never_bound, phase="committed", prior_binding_id=first.vault_binding_id)
+    assert (
+        _resolve_handoff_binding(replace(state, settings_rebind=cleared.as_payload()), None)[0]
+        is None
+    )
+
+
+@pytest.mark.parametrize("command", ["add", "remove"])
+def test_crashed_governed_mutation_converges_on_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    from app.instance import settings_rebind
+    from app.instance.runtime import _preflight_runtime
+
+    class Crash(BaseException):
+        pass
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    if command == "add":
+        admin(runtime).remove(first.vault_binding_id)
+        target, expected = second.vault_binding_id, (second.vault_binding_id,)
+    else:
+        target, expected = first.vault_binding_id, ()
+
+    def crash(point: str) -> None:
+        if point == "acknowledge":
+            raise Crash(point)
+
+    monkeypatch.setattr(settings_rebind, "_activation_fault_point", crash)
+    with pytest.raises(Crash):
+        getattr(admin(runtime), command)(target)
+    assert runtime.open_settings_rebind_store().read().phase == "prepared"
+    monkeypatch.setattr(settings_rebind, "_activation_fault_point", lambda point: None)
+
+    # A retry that fails at the commit leaves durable intent untouched ...
+    def refuse(self, *a, **k):
+        raise settings_rebind.RegistryError("injected commit refusal")
+
+    original = settings_rebind.SettingsRebindStore.commit_selection
+    monkeypatch.setattr(settings_rebind.SettingsRebindStore, "commit_selection", refuse)
+    with pytest.raises(settings_rebind.RegistryError):
+        getattr(admin(runtime), command)(target)
+    monkeypatch.setattr(settings_rebind.SettingsRebindStore, "commit_selection", original)
+
+    # ... and the next retry converges, with consumers able to start.
+    getattr(admin(runtime), command)(target)
+    assert background_ids(runtime) == expected
+    record = runtime.open_settings_rebind_store().read()
+    assert record.candidate_binding_id == (expected[0] if expected else None)
+    assert record.phase != "prepared"
+    assert (
+        _preflight_runtime(
+            channel=runtime.layout.channel_id,
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            consumer="worker",
+        )
+        == 0
+    )
