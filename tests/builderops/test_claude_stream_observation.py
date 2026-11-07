@@ -98,3 +98,34 @@ def test_missing_identity_on_nonterminal_event_keeps_outcome_unknown(event_type)
     observed.observe(event(type="result", subtype="success", session_id=SESSION, is_error=False, result="{}"))
     with pytest.raises(IssueSessionLaunchError):
         observed.terminal(0)
+
+
+@pytest.mark.parametrize("bad_stage", ["init", "result", "nested"])
+def test_duplicate_json_keys_never_produce_success(bad_stage):
+    entries = []
+    observed = ClaudeStreamObservation(SESSION, entries.append)
+    if bad_stage == "init":
+        observed.observe('{"type":"system","subtype":"init","session_id":"other","session_id":"' + SESSION + '"}')
+        assert entries == []
+    else:
+        observed.observe(event(type="system", subtype="init", session_id=SESSION))
+        if bad_stage == "result":
+            observed.observe('{"type":"result","subtype":"success","is_error":false,"session_id":"other","session_id":"' + SESSION + '","result":"{}"}')
+        else:
+            observed.observe(event(type="result", subtype="success", session_id=SESSION, is_error=False, result='{"status":"failed","status":"completed"}'))
+    with pytest.raises(IssueSessionLaunchError):
+        observed.terminal(0)
+
+
+def test_unsafe_model_is_rejected_by_planner_and_direct_command():
+    from app.builderops.epic_dispatch import EpicDispatchError, build_dispatch_plan
+    from app.builderops.issue_delivery_worker_isolation import IssueWorkerIsolationError, _validate_direct_claude_command
+    from tests.builderops.test_epic_dispatch import _candidate
+
+    with pytest.raises(EpicDispatchError, match="model"):
+        build_dispatch_plan(independent_issue_numbers=[3001], run_id="invalid-model", candidates=[_candidate(3001, risk="high")],
+                            runtime_targets=["claude"], carrier_target={"capability": "sol", "model": "vendor/claude-model", "reasoning_effort": "high"})
+    command = ["claude", "--print", "--output-format", "stream-json", "--verbose", "--session-id", SESSION,
+               "--model", "vendor/claude-model", "--effort", "high", "--permission-mode", "acceptEdits"]
+    with pytest.raises(IssueWorkerIsolationError, match="model"):
+        _validate_direct_claude_command(command)

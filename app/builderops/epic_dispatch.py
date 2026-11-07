@@ -1452,7 +1452,12 @@ def validate_issue_delivery_plan(
     ):
         raise EpicDispatchError("Issue delivery runtime must bind the complete Codex target")
     if expected_carrier == "claude":
-        if not runtime["model"] or runtime["reasoning_effort"] not in {"low", "medium", "high", "xhigh", "max"}:
+        from app.builderops.claude_issue_delivery import validate_claude_model
+        try:
+            validate_claude_model(runtime["model"])
+        except ValueError as exc:
+            raise EpicDispatchError("Claude target model is invalid") from exc
+        if runtime["reasoning_effort"] not in {"low", "medium", "high", "xhigh", "max"}:
             raise EpicDispatchError("Claude target is incomplete")
         return plan
     try:
@@ -1769,6 +1774,11 @@ def _build_tcd_decision(
     if runtime_target == "claude":
         if carrier_target is None or carrier_target.get("capability") not in {"luna", "terra", "sol"} or not isinstance(carrier_target.get("model"), str) or not carrier_target["model"] or carrier_target.get("reasoning_effort") not in {"low", "medium", "high", "xhigh", "max"} or model_override is not None or capability_override is not None:
             raise EpicDispatchError("Claude planning target is invalid")
+        from app.builderops.claude_issue_delivery import validate_claude_model
+        try:
+            validate_claude_model(carrier_target["model"])
+        except ValueError as exc:
+            raise EpicDispatchError("Claude target model is invalid") from exc
         runtime_model_hint.update(carrier_target)
     else:
         resolved_target = resolve_execution_target(

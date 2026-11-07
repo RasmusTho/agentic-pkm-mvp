@@ -1029,6 +1029,11 @@ def _carrier_binding_fields(value: Any, profile: Mapping[str, Any]) -> dict[str,
     ):
         raise IssueDeliveryContractError("carrier binding does not match the execution target")
     from uuid import UUID
+    from app.builderops.claude_issue_delivery import validate_claude_model
+    try:
+        validate_claude_model(binding.get("model"))
+    except ValueError as exc:
+        raise IssueDeliveryContractError("carrier model identifier is invalid") from exc
     try:
         session_id = _text(binding.get("session_id"), "carrier session id", limit=36)
         session = UUID(session_id)

@@ -607,6 +607,8 @@ class _ProductionWorkerTransport:
         self.lose_response_after_entry = lose_response_after_entry
         self.lose_response_before_entry = False
         self.buffer_unicode_event = False
+        self.stream_unicode_event = False
+        self.streamed_events: list[str] = []
         self.calls = 0
         self.commands: list[list[str]] = []
         self.entry_observed_during_call = False
@@ -692,6 +694,7 @@ class _ProductionWorkerTransport:
         )
         if not self.buffer_unicode_event:
             callback(started + "\n")
+            self.streamed_events.append(started)
         if self.lose_response_after_entry:
             error = RuntimeError("simulated runner response loss after entry")
             error.session_id = session_id  # type: ignore[attr-defined]
@@ -729,9 +732,13 @@ class _ProductionWorkerTransport:
         )
         if claude:
             completed = json.dumps({"type": "result", "subtype": "success", "session_id": session_id, "is_error": False, "result": json.dumps(receipt)})
-        assistant = json.dumps({"type": "assistant", "session_id": session_id, "message": {"content": "before\u2028after"}}, ensure_ascii=False) if self.buffer_unicode_event else None
+        assistant = json.dumps({"type": "assistant", "session_id": session_id, "message": {"content": "before\u2028after"}}, ensure_ascii=False) if self.buffer_unicode_event or self.stream_unicode_event else None
+        if self.stream_unicode_event:
+            callback(assistant + "\n")
+            self.streamed_events.append(assistant)
         if not self.buffer_unicode_event:
             callback(completed + "\n")
+            self.streamed_events.append(completed)
         self.completed = True
         return subprocess.CompletedProcess(
             args=[],
@@ -1101,6 +1108,8 @@ def issue_delivery_production_harness(
         host_candidate: bool = False,
         claude: bool = False,
         generated_plan_observer: Callable[[Mapping[str, Any]], None] | None = None,
+        tamper_command_hash: bool = False,
+        before_prepare: Callable[..., None] | None = None,
     ) -> _ProductionHarness:
         nonlocal counter
         # Candidate-v3 is the explicitly bounded second-consumer composition.
@@ -1351,6 +1360,19 @@ def issue_delivery_production_harness(
             if generated_plan_observer is None:
                 plan["context_packs"][0]["delivery_sources"] = delivery_source_pair(manifest)
             launcher, worker_transport = _production_worker_components(case=case, checkout=checkout, worktree=worktree, base_sha=base_sha, approval=manifest, effect_kind=effect_kind, registry=registry, revoke_before_effect=revoke_before_effect, lose_response_after_entry=lose_response_after_entry, claude=True)
+            if tamper_command_hash:
+                profile_file = launcher._isolation_runner._profile_file
+                profile_document = json.loads(profile_file.read_text())
+                command = launcher.command(plan["context_packs"][0])
+                command[0] = profile_document["carrier_executable"]["path"]
+                command[command.index("--session-id") + 1] = str(uuid4())
+                profile_document["command_sha256"] = canonical_command_sha256(command)
+                profile_file.write_text(json.dumps(profile_document, sort_keys=True, separators=(",", ":")))
+                profile_sha = file_sha256(profile_file)
+                manifest["carrier_binding"]["isolation_profile_sha256"] = profile_sha
+                launcher._carrier_binding = dict(manifest["carrier_binding"])
+                launcher._expected_profile_sha256 = profile_sha
+                launcher._isolation_runner._expected_profile_sha256 = profile_sha
             manifest["context"]["content_hash"] = canonical_hash(plan["context_packs"][0])
             manifest["context"]["expected_plan_hash"] = canonical_hash(plan)
             def qualified(request):
@@ -1411,6 +1433,8 @@ def issue_delivery_production_harness(
             )
             return launcher
 
+        if before_prepare is not None:
+            before_prepare(destination, owner, approval, worker_transport)
         prepared_worker = PreparedIssueDeliveryWorker.create(
             approval=approval,
             destination=destination,

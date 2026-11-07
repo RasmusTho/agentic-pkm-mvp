@@ -1316,8 +1316,11 @@ def _validate_direct_claude_command(command: Sequence[str]) -> None:
         or command[9] != "--effort" or command[10] not in {"low", "medium", "high", "xhigh", "max"}
         or command[11:] != ["--permission-mode", "acceptEdits"]):
         raise IssueWorkerIsolationError("worker isolation direct Claude command is invalid")
-    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", command[8]) is None:
-        raise IssueWorkerIsolationError("worker isolation Claude model is invalid")
+    from app.builderops.claude_issue_delivery import validate_claude_model
+    try:
+        validate_claude_model(command[8])
+    except ValueError as exc:
+        raise IssueWorkerIsolationError("worker isolation Claude model is invalid") from exc
     try:
         if str(UUID(command[6])) != command[6]:
             raise ValueError

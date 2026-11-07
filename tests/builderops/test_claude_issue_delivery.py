@@ -312,15 +312,79 @@ def test_claude_revoked_at_each_pre_entry_fence(issue_delivery_production_harnes
 
 
 @pytest.mark.pg
-def test_claude_buffered_stream_keeps_unicode_line_separator(issue_delivery_production_harness):
+@pytest.mark.parametrize("streamed", [False, True])
+def test_claude_buffered_stream_keeps_unicode_line_separator(issue_delivery_production_harness, streamed):
     from app.builderops.epic_dispatch import dispatch_issue_sessions
     from tests.builderops.test_issue_delivery_operation import _production_adapter
 
     harness = issue_delivery_production_harness(claude=True)
-    harness.worker_transport.buffer_unicode_event = True
+    harness.worker_transport.buffer_unicode_event = not streamed
+    harness.worker_transport.stream_unicode_event = streamed
     approval = harness.approval
     result = dispatch_issue_sessions(approval["context"]["dispatch_plan"], _production_adapter(harness),
                                      expected_plan_hash=approval["context"]["expected_plan_hash"])
     assert "candidate_ready" in json.dumps(result)
     assert harness.worker_transport.calls == 1
     assert result["sessions"][0]["session_id"] == approval["carrier_binding"]["session_id"]
+    if streamed:
+        events = harness.worker_transport.streamed_events
+        assert [json.loads(event)["type"] for event in events] == ["system", "assistant", "result"]
+        assert "\u2028" in events[1]
+
+
+@pytest.mark.pg
+def test_invalid_claude_model_refused_at_producers_before_preparation(issue_delivery_production_harness, monkeypatch):
+    from app.builderops.control_plane.client import ControlPlaneConflictError, ControlPlaneNotFoundError, ControlPlaneProtocolError
+    from app.builderops.control_plane.issue_delivery import canonical_hash, strip_server_fields
+    from app.builderops.epic_dispatch import EpicDispatchError
+
+    invalid_model = "--invalid-model-option"
+    candidate = _candidate(5001, risk="high")
+    with pytest.raises((EpicDispatchError, ValueError)):
+        build_dispatch_plan(independent_issue_numbers=[5001], run_id="bad-carrier-plan", candidates=[candidate],
+            runtime_targets=["claude"], carrier_target={**TARGET, "model": invalid_model})
+
+    harness = issue_delivery_production_harness(claude=True)
+    manifest = deepcopy(strip_server_fields(harness.approval))
+    plan = manifest["context"]["dispatch_plan"]
+    for runtime in (plan["decisions"][0]["runtime_model_hint"], plan["context_packs"][0]["runtime"], plan["epic_run_state_update"]["dispatch_decisions"][0]["runtime_model_hint"]):
+        runtime["model"] = invalid_model
+    manifest["profile"]["resolved"]["model"] = invalid_model
+    profile = manifest["profile"]
+    profile["content_hash"] = canonical_hash({k: v for k, v in profile.items() if k != "content_hash"})
+    manifest["carrier_binding"]["model"] = invalid_model
+    manifest["context"]["content_hash"] = canonical_hash(plan["context_packs"][0])
+    manifest["context"]["expected_plan_hash"] = canonical_hash(plan)
+    prepare_calls = []
+    monkeypatch.setattr(harness.destination, "prepare", lambda *_: prepare_calls.append(True))
+    with pytest.raises(ControlPlaneProtocolError):
+        harness.owner.issue_delivery_preview(manifest=manifest)
+    forged = deepcopy(harness.approval)
+    forged.update(manifest)
+    launcher = harness.prepared_worker.launcher
+    with pytest.raises((ValueError, ControlPlaneProtocolError, ControlPlaneConflictError)):
+        executor.PreparedIssueDeliveryWorker.create(approval=forged, destination=harness.destination,
+            launcher_factory=lambda _: launcher, carrier_profile_file=launcher._isolation_runner._profile_file,
+            authority_client=harness.host, carrier_launcher=launcher)
+    assert prepare_calls == [] and harness.worker_transport.calls == 0
+    for kind in ("reservation", "attempt"):
+        with pytest.raises(ControlPlaneNotFoundError):
+            harness.owner.issue_delivery_operation_record_read(repository=harness.approval["repository"], record_id=f"issue-delivery-{kind}:{harness.approval['operation_key']}")
+
+
+@pytest.mark.pg
+def test_wrong_approved_command_hash_refused_before_preparation(issue_delivery_production_harness, monkeypatch):
+    from app.builderops.control_plane.client import ControlPlaneNotFoundError
+
+    observed = {}
+    def before_prepare(destination, owner, approval, transport):
+        observed.update(owner=owner, approval=approval, transport=transport, prepare_calls=[])
+        monkeypatch.setattr(destination, "prepare", lambda *_: observed["prepare_calls"].append(True))
+    with pytest.raises(ValueError, match="approved carrier command differs from isolation profile"):
+        issue_delivery_production_harness(claude=True, tamper_command_hash=True, before_prepare=before_prepare)
+    assert observed and observed["prepare_calls"] == []
+    assert observed["transport"].calls == 0
+    approval = observed["approval"]
+    for kind in ("reservation", "attempt"):
+        with pytest.raises(ControlPlaneNotFoundError):
+            observed["owner"].issue_delivery_operation_record_read(repository=approval["repository"], record_id=f"issue-delivery-{kind}:{approval['operation_key']}")

@@ -5,12 +5,29 @@ Provider output is observation only; the host owns admission and effects.
 from __future__ import annotations
 
 import json
+import re
 from uuid import UUID
 from typing import Any, Callable, Mapping
 
 from app.builderops.epic_dispatch import IssueSessionLaunchError
 
 _MAX_LINE_BYTES = 256 * 1024
+
+
+def validate_claude_model(value: object) -> str:
+    """Accept only a bounded, unambiguous direct-argv model identifier."""
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", value) is None:
+        raise ValueError("Claude model identifier is invalid")
+    return value
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
 
 
 class ClaudeStreamObservation:
@@ -33,7 +50,7 @@ class ClaudeStreamObservation:
             self.invalid = True
             return
         try:
-            event = json.loads(line)
+            event = json.loads(line, object_pairs_hook=_unique_object)
         except (ValueError, TypeError):
             self.invalid = True
             return
@@ -68,7 +85,7 @@ class ClaudeStreamObservation:
             self.invalid = True
             return
         try:
-            result = json.loads(payload)
+            result = json.loads(payload, object_pairs_hook=_unique_object)
         except ValueError:
             self.invalid = True
             return

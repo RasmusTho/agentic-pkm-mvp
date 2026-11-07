@@ -2787,6 +2787,15 @@ class PreparedIssueDeliveryWorker:
             bound = document.get("approval", document) if isinstance(document, Mapping) else None
             if bound != dict(approval):
                 raise ValueError("carrier launcher approval file differs")
+            from app.builderops.issue_delivery_worker_isolation import (
+                _validate_direct_claude_command, canonical_command_sha256,
+            )
+            context = approval["context"]["dispatch_plan"]["context_packs"][0]
+            command = carrier_launcher.command(context)
+            _validate_direct_claude_command(command)
+            direct_command = [profile.codex_executable.path, *command[1:]]
+            if canonical_command_sha256(direct_command) != profile.command_sha256:
+                raise ValueError("approved carrier command differs from isolation profile")
         frozen = destination.prepare(approval)
         launcher = carrier_launcher if approval.get("contract_version") == "fca-issue-delivery.v4" else launcher_factory(frozen)
         if not isinstance(launcher, ContentOnlyIssueDeliverySessionLauncher):
