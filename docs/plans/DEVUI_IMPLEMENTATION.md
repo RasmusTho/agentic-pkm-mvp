@@ -105,7 +105,7 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 | Live status | `DeliveryRunView.v1` | Specified target, not delivered |
 | Delivery truth | GitHub/dispatcher/Git/CI/review/merge/closure | Existing authority |
 | Results | `DeliveryReceipt.v2` and attempt-terminal evidence | Receipt seam delivered; complete attempt terminality target |
-| Visual base | Yggdrasil Design System and tested Cockpit patterns | The connected read-only repository shell is delivered by PR #5157; visual handoff, VM102 deployment, and owner acceptance remain targets |
+| Visual base | Yggdrasil Design System and tested Cockpit patterns | PR #5157 supplies the connected read-only repository shell; #4982 supplies illustrative unified-journey design evidence. Fixture-bound BSC validation, complete accessibility, VM102 deployment, and owner acceptance remain separate targets |
 
 The [current-state owner](../DEVUI.md#current-state-and-target) binds these distinctions to the
 repository and live #5181 evidence. A composer, shell, managed listener, admitted source, deployed
