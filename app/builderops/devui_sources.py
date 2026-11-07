@@ -38,7 +38,7 @@ from app.builderops.control_plane.client import (
 )
 from app.builderops.control_plane.models import EnvelopeValidationError, canonical_repository
 from app.builderops.control_plane.issue_delivery import (
-    QUALIFIED_REPOSITORY, CANDIDATE_CONTRACT_VERSION, TWO_SOURCE_VERSIONS, SECOND_REPOSITORY,
+    QUALIFIED_REPOSITORY, CANDIDATE_CONTRACT_VERSIONS, TWO_SOURCE_VERSIONS, SECOND_REPOSITORY,
 )
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}\Z")
@@ -271,7 +271,7 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
         if (
             not isinstance(delivery, dict)
             or set(delivery) != expected
-            or delivery.get("contract") != (CANDIDATE_TASK_CONTRACT if isinstance(sources, dict) and sources.get("contract_version") == CANDIDATE_CONTRACT_VERSION else ISSUE_DELIVERY_TASK_CONTRACT)
+            or delivery.get("contract") != (CANDIDATE_TASK_CONTRACT if isinstance(sources, dict) and sources.get("contract_version") in CANDIDATE_CONTRACT_VERSIONS else ISSUE_DELIVERY_TASK_CONTRACT)
             or type(delivery.get("task_record_version")) is not int
             or delivery["task_record_version"] < 1
             or (delivery.get("contract") == CANDIDATE_TASK_CONTRACT and delivery["task_record_version"] != row["version"])
