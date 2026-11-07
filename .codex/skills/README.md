@@ -320,7 +320,11 @@ bounded evidence; all other Builder skills either continue to use `AGENTS.md :: 
 Development` for their own capability choice or remain outside execution routing. The Product-lane
 `mimer-*` client family is intentionally excluded from this Builder inventory. The active worker
 carrier for this inventory is Codex; any Claude references elsewhere are compatibility, historical,
-or design-provenance material and do not authorize invocation.
+or design-provenance material and do not authorize invocation. Dormant future adapter work follows
+`docs/development/BUILDER_SYSTEM_PROCESS_MAP.md :: Current active Builder carrier`: it must reuse
+the existing owner-admission, protected executor, isolation, effect and source-readback boundaries.
+Qualification, host activation, real owner controls and owner acceptance remain separate gates;
+compatibility artifacts and isolated pilots grant none of them.
 
 | Skill | Phase 1 disposition | Reason |
 |---|---|---|
