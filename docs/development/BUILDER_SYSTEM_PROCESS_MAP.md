@@ -46,6 +46,13 @@ Codex is the only active Builder worker carrier. The executable instruction and 
 `AGENTS.md` → `.codex/skills/README.md :: Skill routing` → the selected `.codex/skills/**`
 workflow and active `.codex/agents/**` role adapter.
 
+The repository also contains a dormant Claude native CLI implementation for the protected
+one-Issue path. A versioned approval binds its target, executable and isolation profile; the
+existing host-owned verifier port has no default implementation. Without a separately installed
+verifier backed by current qualification and revocation evidence, the path refuses before
+destination preparation and process entry. Injected tests do not establish Linux-host
+qualification, activation, a live owner trial, or owner acceptance. Stop remains unsupported.
+
 `CLAUDE.md` and retained Claude execution-role references are non-operational compatibility and
 provenance material only. They do not authorize launching Claude, reading Anthropic credentials,
 or selecting a provider/model target. The owner has directed the Builder System toward two real
@@ -56,8 +63,8 @@ change the current operating path.
 Claude, must be replaceable execution carriers behind the same governed operation, not separate
 workflow or effect authorities. This target revises #5205's blanket future-carrier restriction only
 to permit a separately qualified transition; Codex remains the only active carrier. The existing
-inactive `ClaudeCarrierAdapter` is compatibility metadata, not a launcher or an admission grant.
-A future implementation must satisfy all of these boundaries before operation:
+`ClaudeCarrierAdapter` remains compatibility metadata; the dormant protected launcher is not an admission grant.
+Any operation using either carrier must satisfy all of these boundaries:
 
 - **Admission and identity.** The existing authenticated owner-admission and immutable approval
   manifest must bind the selected carrier family, executable identity (including verified content

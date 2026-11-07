@@ -32,6 +32,7 @@ from app.builderops.control_plane.client import (
 from app.builderops.issue_delivery_effect_executor import (
     BuilderOpsIssueDeliveryEffectLedger,
     ContentOnlyIssueDeliverySessionLauncher,
+    ClaudeContentOnlyIssueDeliverySessionLauncher,
     DestinationBinding,
     EXECUTOR_ARTIFACT,
     EffectAuthorityReadback,
@@ -368,7 +369,7 @@ class _Transport:
             outcome=self.readbacks.pop(0),
             evidence={
                 "source": "github-authoritative-readback",
-                **({"effect_repository": self.readback_repository_override or request.effect_repository} if request.approval.get("contract_version") in {"fca-issue-delivery.v2", "fca-issue-delivery.v3"} else {}),
+                **({"effect_repository": self.readback_repository_override or request.effect_repository} if request.approval.get("contract_version") in {"fca-issue-delivery.v2", "fca-issue-delivery.v3", "fca-issue-delivery.v4"} else {}),
                 "observed_target_sha256": self.readback_target_override
                 or canonical_hash(request.target.model_dump(mode="json")),
             },
@@ -604,7 +605,9 @@ class _ProductionWorkerTransport:
         self.registry = registry
         self.revoke_before_effect = revoke_before_effect
         self.lose_response_after_entry = lose_response_after_entry
+        self.lose_response_before_entry = False
         self.calls = 0
+        self.commands: list[list[str]] = []
         self.entry_observed_during_call = False
         self.completed = False
         self.pre_entry_check: Callable[[], None] | None = None
@@ -671,16 +674,19 @@ class _ProductionWorkerTransport:
         command: Sequence[str],
         **kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
-        del command
+        self.commands.append(list(command))
         self.calls += 1
         if self.pre_entry_check is not None:
             self.pre_entry_check()
+        if self.lose_response_before_entry:
+            raise RuntimeError("simulated runner response loss before entry")
         callback = kwargs.get("on_stdout_line")
         if not callable(callback):
             raise AssertionError("streaming production runner callback is missing")
-        session_id = f"session-production-{self.effect_kind}"
+        claude = self.approval["contract_version"] == "fca-issue-delivery.v4"
+        session_id = self.approval["carrier_binding"]["session_id"] if claude else f"session-production-{self.effect_kind}"
         started = json.dumps(
-            {"type": "thread.started", "thread_id": session_id},
+            {"type": "system", "subtype": "init", "session_id": session_id} if claude else {"type": "thread.started", "thread_id": session_id},
             sort_keys=True,
         )
         callback(started + "\n")
@@ -691,7 +697,7 @@ class _ProductionWorkerTransport:
         if self.revoke_before_effect:
             self._revoke_destination()
         receipt = _production_worker_receipt()
-        if self.approval["contract_version"] == "fca-issue-delivery.v3":
+        if self.approval["contract_version"] in {"fca-issue-delivery.v3", "fca-issue-delivery.v4"}:
             root = Path(self.approval["destination"]["worktree"])
             (root / "docs").mkdir(exist_ok=True)
             (root / "docs/guide.md").write_text("# Candidate\n\nPrepared content.\n")
@@ -702,9 +708,9 @@ class _ProductionWorkerTransport:
                 "status": "completed", "summary": "Prepared documentation",
                 "validation": [{"name": "documentation", "outcome": "passed", "summary": "Content checked"}],
             }
-        if self.approval["contract_version"] != "fca-issue-delivery.v3":
+        if self.approval["contract_version"] not in {"fca-issue-delivery.v3", "fca-issue-delivery.v4"}:
             receipt["worktree"] = "approved-worktree"
-        if self.effect_kind != "claim" and self.approval["contract_version"] != "fca-issue-delivery.v3":
+        if self.effect_kind != "claim" and self.approval["contract_version"] not in {"fca-issue-delivery.v3", "fca-issue-delivery.v4"}:
             kinds = ("publication", "merge", "closure") if self.effect_kind == "delivery" else (self.effect_kind,)
             receipt["effect_requests"] = [
                 {"effect_kind": kind, "target": self._effect_target(kind)} for kind in kinds
@@ -719,6 +725,8 @@ class _ProductionWorkerTransport:
             },
             sort_keys=True,
         )
+        if claude:
+            completed = json.dumps({"type": "result", "subtype": "success", "session_id": session_id, "is_error": False, "result": json.dumps(receipt)})
         callback(completed + "\n")
         self.completed = True
         return subprocess.CompletedProcess(
@@ -782,8 +790,10 @@ def _production_worker_components(
     registry: CredentialRegistry,
     revoke_before_effect: bool,
     lose_response_after_entry: bool,
+    claude: bool = False,
 ) -> tuple[
     ContentOnlyIssueDeliverySessionLauncher,
+    ClaudeContentOnlyIssueDeliverySessionLauncher,
     _ProductionWorkerTransport,
 ]:
     """Build the real Linux-systemd/content-only composition for PG tests."""
@@ -861,14 +871,18 @@ def _production_worker_components(
             owner_gid=0,
         ),
     }
+    identities["/opt/claude/bin/claude"] = ExecutableIdentity(path="/opt/claude/bin/claude", device=41, inode=42, sha256="5" * 64, mode=0o755, owner_uid=0, owner_gid=0)
     direct_launcher = CodexIssueSessionLauncher(
         repo_root=worktree,
         precreated_worktree_only=True,
     )
-    direct_command = direct_launcher.command(
-        approval["context"]["dispatch_plan"]["context_packs"][0]
-    )
-    direct_command[0] = identities["/opt/codex/bin/codex"].path
+    if not claude:
+        direct_command = direct_launcher.command(approval["context"]["dispatch_plan"]["context_packs"][0])
+        direct_command[0] = identities["/opt/codex/bin/codex"].path
+    else:
+        session_id = approval["carrier_binding"]["session_id"]
+        target = approval["carrier_binding"]
+        direct_command = [identities["/opt/claude/bin/claude"].path, "--print", "--output-format", "stream-json", "--verbose", "--session-id", session_id, "--model", target["model"], "--effort", target["reasoning_effort"], "--permission-mode", "acceptEdits"]
     worktree_stat = worktree.stat()
     git_stat = git_directory.stat()
     common_stat = common_directory.stat()
@@ -931,6 +945,11 @@ def _production_worker_components(
         },
         "isolation_properties_sha256": REQUIRED_SYSTEMD_PROPERTIES_SHA256,
     }
+    if claude:
+        profile_document.update(contract="builderops_issue_delivery_worker_isolation_profile.v2", profile_version=2, carrier="claude", carrier_executable=identities["/opt/claude/bin/claude"].__dict__)
+        profile_document.pop("codex_executable")
+        profile_document["model_auth"]["reference"] = "claude-worker-subscription-v1"
+        profile_document["environment"]["PATH"] = "/opt/claude/bin:/usr/bin:/bin"
     profile_file = case / "worker-isolation.json"
     profile_file.write_text(
         json.dumps(profile_document, sort_keys=True, separators=(",", ":")),
@@ -970,7 +989,11 @@ def _production_worker_components(
             return os.stat_result(values)
         return metadata
 
-    launcher = ContentOnlyIssueDeliverySessionLauncher(
+    if claude:
+        approval["carrier_binding"]["isolation_profile_sha256"] = profile_sha
+    launcher_type = ClaudeContentOnlyIssueDeliverySessionLauncher if claude else ContentOnlyIssueDeliverySessionLauncher
+    launcher = launcher_type(
+        **({"approval": approval} if claude else {}),
         repo_root=worktree,
         effect_gate_approval_file=approval_file,
         effect_gate_checkout_root=checkout,
@@ -1003,7 +1026,7 @@ def _production_worker_components(
             "sub_state": "dead" if runner.completed else "running", "result": "success", "restart": "no", "job": "",
             "cgroup_populated": 0 if runner.completed else 1, "worker_processes": [] if runner.completed else [123],
             "aperture_writer_uids": [worker.uid],
-        }) if approval["contract_version"] == "fca-issue-delivery.v3" else None,
+        }) if approval["contract_version"] in {"fca-issue-delivery.v3", "fca-issue-delivery.v4"} else None,
     )
     return launcher, runner
 
@@ -1072,9 +1095,11 @@ def issue_delivery_production_harness(
         bifrost: bool = False,
         documentation_owner: bool = False,
         host_candidate: bool = False,
+        claude: bool = False,
     ) -> _ProductionHarness:
         nonlocal counter
         # Candidate-v3 is the explicitly bounded second-consumer composition.
+        host_candidate = host_candidate or claude
         bifrost = bifrost or host_candidate
         counter += 1
         case = tmp_path / f"production-{counter}"
@@ -1173,7 +1198,7 @@ def issue_delivery_production_harness(
             subprocess.run(["git", "init", "--initial-branch=main", str(workflow_root)], check=True, capture_output=True)
             for key, val in (("user.email", "test@example.com"), ("user.name", "Host Test")):
                 subprocess.run(["git", "-C", str(workflow_root), "config", key, val], check=True)
-            for path in FRESH_EXECUTION_DEPENDENCIES:
+            for path in set(FRESH_EXECUTION_DEPENDENCIES) | ({"app/builderops/claude_issue_delivery.py"} if claude else set()):
                 target = workflow_root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(REPO_ROOT / path, target)
@@ -1183,12 +1208,12 @@ def issue_delivery_production_harness(
             workflow_sha = subprocess.run(["git", "-C", str(workflow_root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
             template = _bifrost_manifest()
             if host_candidate:
-                template["contract_version"] = "fca-issue-delivery.v3"
+                template["contract_version"] = "fca-issue-delivery.v4" if claude else "fca-issue-delivery.v3"
                 template["target_policies"]["rasmustho/bifrost"]["allowed_effects"].append(
                     "git.issue-delivery.candidate-prepare.v1")
                 manifest["workflow"]["host_candidate_contract"] = "fca-host-candidate.v1"
                 artifacts = [{"path": path, "sha256": _sha((workflow_root / path).read_bytes())}
-                             for path in sorted(CANDIDATE_ARTIFACTS)]
+                             for path in sorted(CANDIDATE_ARTIFACTS | ({"app/builderops/claude_issue_delivery.py"} if claude else set()))]
                 manifest["workflow"].update(artifacts=artifacts, content_hash=canonical_hash(artifacts))
             if parent:
                 template["target_policies"][REPOSITORY]["allowed_effects"].append("github.issue-delivery.parent-evidence.v1")
@@ -1290,14 +1315,43 @@ def issue_delivery_production_harness(
             runtime = executor_module.HostIssueDeliveryExecutorRuntime(repository_authority=repository_authority, credentials=credentials,
                 transport=_Transport(), isolation_profile_sha256="1" * 64, live_binding_reader=current_facts, trusted_workflow_root=workflow_root)
             monkeypatch.setattr(executor_module, "_HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME", runtime)
+        launcher = worker_transport = None
+        if claude:
+            from dataclasses import replace
+            from app.builderops.control_plane.issue_delivery import delivery_source_pair
+            worktree.parent.mkdir(parents=True)
+            subprocess.run(["git", "-C", str(checkout), "worktree", "add", "-b", str(manifest["destination"]["branch"]), str(worktree), base_sha], check=True, capture_output=True)
+            manifest["workflow"]["launcher"] = "app/builderops/issue_delivery_effect_executor.py::ClaudeContentOnlyIssueDeliverySessionLauncher.launch"
+            plan = manifest["context"]["dispatch_plan"]
+            plan["runtime_targets"] = ["claude"]
+            for hint in (plan["decisions"][0]["runtime_model_hint"], plan["context_packs"][0]["runtime"], plan["epic_run_state_update"]["dispatch_decisions"][0]["runtime_model_hint"]):
+                hint.update(runtime="claude", carrier="claude", model="claude-test", reasoning_effort="high")
+            profile = manifest["profile"]
+            profile["resolved"].update(carrier="claude", model="claude-test", reasoning_effort="high")
+            profile["content_hash"] = canonical_hash({k: v for k, v in profile.items() if k != "content_hash"})
+            manifest["carrier_binding"] = {"carrier": "claude", "model": "claude-test", "reasoning_effort": "high", "executable_sha256": "5" * 64, "isolation_profile_sha256": "0" * 64, "session_id": str(uuid4())}
+            plan["context_packs"][0]["delivery_sources"] = delivery_source_pair(manifest)
+            launcher, worker_transport = _production_worker_components(case=case, checkout=checkout, worktree=worktree, base_sha=base_sha, approval=manifest, effect_kind=effect_kind, registry=registry, revoke_before_effect=revoke_before_effect, lose_response_after_entry=lose_response_after_entry, claude=True)
+            manifest["context"]["content_hash"] = canonical_hash(plan["context_packs"][0])
+            manifest["context"]["expected_plan_hash"] = canonical_hash(plan)
+            def qualified(request):
+                now = datetime.now(timezone.utc)
+                return {"binding": deepcopy(request), "state": "qualified", "revocation": "current", "session_freshness": "verified-absent", "source": "fixture-host", "observed_at": now.isoformat(), "expires_at": (now + timedelta(minutes=2)).isoformat()}
+            runtime = replace(runtime, isolation_profile_sha256=launcher.expected_profile_sha256, carrier_qualification_verifier=qualified)
+            monkeypatch.setattr(executor_module, "_HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME", runtime)
+        if claude:
+            from app.builderops.control_plane.issue_delivery import normalize_manifest
+            normalize_manifest(manifest)
         preview = owner.issue_delivery_preview(manifest=manifest)
         if preview_observer is not None:
             preview_observer(preview)
         approval = owner.issue_delivery_start(decision="start", manifest=preview["manifest"])[
             "approval"
         ]
-        worktree.parent.mkdir(parents=True)
-        subprocess.run(
+        if not claude:
+            worktree.parent.mkdir(parents=True)
+        if not claude:
+            subprocess.run(
             [
                 "git",
                 "-C",
@@ -1314,7 +1368,11 @@ def issue_delivery_production_harness(
         )
         destination = GitIssueDeliveryDestination()
         preparation_observed: list[bool] = []
-        launcher, worker_transport = _production_worker_components(
+        if claude:
+            launcher.effect_gate_approval_file.write_text(json.dumps({"approval": approval}, sort_keys=True, separators=(",", ":")))
+            worker_transport.approval = approval
+        else:
+            launcher, worker_transport = _production_worker_components(
             case=case,
             checkout=checkout,
             worktree=worktree,
@@ -1338,6 +1396,7 @@ def issue_delivery_production_harness(
             approval=approval,
             destination=destination,
             launcher_factory=launcher_factory,
+            **({"carrier_profile_file": launcher._isolation_runner._profile_file, "authority_client": host, "carrier_launcher": launcher} if claude else {}),
         )
         frozen = prepared_worker.frozen_destination
         ledger = BuilderOpsIssueDeliveryEffectLedger(

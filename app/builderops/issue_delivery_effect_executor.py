@@ -29,7 +29,7 @@ from app.builderops.control_plane.client import (
     ControlPlaneNotFoundError,
 )
 from app.builderops.control_plane.issue_delivery import (
-    CANDIDATE_CONTRACT_VERSION, TWO_SOURCE_VERSIONS, delivery_source_pair,
+    CANDIDATE_CONTRACT_VERSIONS, TWO_SOURCE_VERSIONS, delivery_source_pair,
     tracking_repository, workflow_artifacts,
 )
 from app.builderops.control_plane.models import canonical_repository
@@ -90,7 +90,7 @@ def _verify_executing_authority_code(approval: Mapping[str, Any], root: Path | N
     version = approval.get("contract_version")
     if version == "fca-issue-delivery.v1":
         revision = approval["source"]["revision"]
-    elif version in {"fca-issue-delivery.v2", "fca-issue-delivery.v3"}:
+    elif version in {"fca-issue-delivery.v2", "fca-issue-delivery.v3", "fca-issue-delivery.v4"}:
         revision = approval["workflow"]["source_revision"]
     else:
         raise refuse("has an unsupported approval version")
@@ -143,7 +143,8 @@ def _verify_executing_authority_code(approval: Mapping[str, Any], root: Path | N
         raise refuse("approved commit tree identity is malformed") from exc
     executing_root = Path(__file__).absolute().parents[2]
     source_bytes: dict[str, bytes] = {}
-    for name in sorted(FRESH_EXECUTION_DEPENDENCIES):
+    dependencies = FRESH_EXECUTION_DEPENDENCIES | ({"app/builderops/claude_issue_delivery.py"} if version == "fca-issue-delivery.v4" else set())
+    for name in sorted(dependencies):
         oid = root_tree
         parts = name.split("/")
         for index, part in enumerate(parts):
@@ -278,7 +279,7 @@ class WorkerIsolationBinding(_StrictModel):
     )
     isolation_contract: Literal["builderops_issue_delivery_worker_isolation_receipt.v1"]
     profile_id: str = Field(min_length=1, max_length=64)
-    profile_version: Literal[1]
+    profile_version: Literal[1, 2]
     profile_sha256: str = Field(pattern=_HEX_64)
     receipt_sha256: str = Field(pattern=_HEX_64)
     executor_uid: int = Field(ge=0)
@@ -701,7 +702,7 @@ class IssueDeliveryEffectRequest(_StrictModel):
 
     @model_validator(mode="after")
     def _closed_identity(self) -> "IssueDeliveryEffectRequest":
-        candidate_version = self.approval.get("contract_version") == CANDIDATE_CONTRACT_VERSION
+        candidate_version = self.approval.get("contract_version") in CANDIDATE_CONTRACT_VERSIONS
         if (self.contract == "builderops.issue-delivery-effect.v2") != candidate_version:
             raise ValueError("effect wire version does not match approval")
         if self.effect_kind == "candidate_prepare" and not candidate_version:
@@ -856,7 +857,7 @@ class IssueDeliveryEffectReceipt:
         _safe_receipt_value(value)
         if self.delivery_sources is not None:
             value["delivery_sources"] = dict(self.delivery_sources)
-            if self.delivery_sources.get("contract_version") == CANDIDATE_CONTRACT_VERSION:
+            if self.delivery_sources.get("contract_version") in CANDIDATE_CONTRACT_VERSIONS:
                 value["contract"] = "builderops.issue-delivery-effect-receipt.v2"
         return value
 
@@ -1371,7 +1372,7 @@ class IssueDeliveryHostExecutor:
         return dict(observed)
 
     def prepare_candidate(self, approval: Mapping[str, Any], bindings: Mapping[str, Any]) -> CandidateTarget:
-        if approval.get("contract_version") != CANDIDATE_CONTRACT_VERSION or self._prepared_worker is None:
+        if approval.get("contract_version") not in CANDIDATE_CONTRACT_VERSIONS or self._prepared_worker is None:
             raise ValueError("candidate preparation requires the v3 host composition")
         self._completion_bindings = dict(bindings)
         self._completion = self._prepared_worker.launcher.completed_worker_observation(bindings)
@@ -1439,9 +1440,9 @@ class IssueDeliveryHostExecutor:
     def execute(
         self, request: IssueDeliveryEffectRequest
     ) -> IssueDeliveryEffectReceipt:
-        if request.approval.get("contract_version") == CANDIDATE_CONTRACT_VERSION and self._prepared_worker is None:
+        if request.approval.get("contract_version") in CANDIDATE_CONTRACT_VERSIONS and self._prepared_worker is None:
             raise ValueError("reconstructed candidate permits readback only")
-        if request.approval.get("contract_version") == CANDIDATE_CONTRACT_VERSION and request.effect_kind not in {"claim", "candidate_prepare"}:
+        if request.approval.get("contract_version") in CANDIDATE_CONTRACT_VERSIONS and request.effect_kind not in {"claim", "candidate_prepare"}:
             raise ValueError("v3 remote continuation is not implemented")
         self._validate_static_request(request, current_artifacts=False)
         frozen = self._request_destination(request)
@@ -2644,7 +2645,7 @@ class ContentOnlyIssueDeliverySessionLauncher(LinuxSystemdCodexIssueSessionLaunc
     """The #5559 OS-principal launcher with a closed content-only prompt."""
 
     def prompt(self, context_pack: Mapping[str, Any]) -> str:
-        if context_pack.get("delivery_sources", {}).get("contract_version") == CANDIDATE_CONTRACT_VERSION:
+        if context_pack.get("delivery_sources", {}).get("contract_version") in CANDIDATE_CONTRACT_VERSIONS:
             return ("Edit only the approved documentation content. Git administration and all effects belong to the host. "
                     "Return only JSON with contract=builderops.issue-delivery-content-result.v1, status=completed|failed, "
                     "summary, validation=[{name,outcome=passed|failed|not_run,summary}]. No identities or effect proposals.\n"
@@ -2666,6 +2667,69 @@ class ContentOnlyIssueDeliverySessionLauncher(LinuxSystemdCodexIssueSessionLaunc
         )
 
 
+class ClaudeContentOnlyIssueDeliverySessionLauncher(ContentOnlyIssueDeliverySessionLauncher):
+    """Native Claude transport behind the same host-owned containment."""
+
+    def __init__(self, *, approval: Mapping[str, Any], **kwargs: Any) -> None:
+        binding = approval.get("carrier_binding")
+        if not isinstance(binding, Mapping) or binding.get("carrier") != "claude":
+            raise ValueError("Claude launcher requires its exact approved binding")
+        self._carrier_binding = dict(binding)
+        self._session_id = str(binding["session_id"])
+        super().__init__(carrier="claude", expected_worker_executable_sha256=str(binding["executable_sha256"]), **kwargs)
+
+    def command(self, context_pack: Mapping[str, Any], *, execution_routing: Mapping[str, Any] | None = None) -> list[str]:
+        if execution_routing is not None or context_pack.get("runtime", {}).get("carrier") != "claude":
+            raise ValueError("Claude launcher cannot route or substitute another carrier")
+        runtime = context_pack["runtime"]
+        if any(runtime.get(key) != self._carrier_binding[key] for key in ("model", "reasoning_effort")):
+            raise ValueError("Claude target differs from approval")
+        if self._planned_worktree(context_pack).resolve(strict=True) != self.repo_root:
+            raise ValueError("Claude worktree differs from approval")
+        return ["claude", "--print", "--output-format", "stream-json", "--verbose", "--session-id", self._session_id,
+                "--model", str(runtime["model"]), "--effort", str(runtime["reasoning_effort"]), "--permission-mode", "acceptEdits"]
+
+    def launch(self, context_pack: Mapping[str, Any], *, execution_routing: Mapping[str, Any] | None = None,
+               on_entry: Callable[[str], None] | None = None, effect_gate: Callable[..., Mapping[str, Any]] | None = None,
+               pre_process_entry: Callable[[], None] | None = None, pre_spawn_entry: Callable[[], None] | None = None) -> Mapping[str, Any]:
+        from app.builderops.claude_issue_delivery import ClaudeStreamObservation
+        if effect_gate is not None:
+            issue, destination = context_pack.get("issue_contract"), context_pack.get("branch_worktree_plan")
+            sources = context_pack.get("delivery_sources")
+            if not isinstance(issue, Mapping) or not isinstance(destination, Mapping) or not isinstance(sources, Mapping):
+                raise ValueError("Claude context lacks its exact target")
+            effect_gate("repository_worktree", target={"repository": sources.get("repository"), "issue_number": issue.get("number"),
+                "checkout": str(self.effect_gate_checkout_root), "worktree": destination.get("worktree"), "branch": destination.get("branch")})
+        self._isolation_runner.reset()
+        self._isolation_runner.set_pre_process_entry(pre_process_entry)
+        self._isolation_runner.set_pre_spawn_entry(pre_spawn_entry)
+        def entered(session_id: str) -> None:
+            if self._completion_reader is not None:
+                unit = str(self.completed_isolation_receipt()["unit_identity"])
+                self._entered_containment = dict(self._completion_reader(unit))
+            if on_entry is not None:
+                on_entry(session_id)
+        observation = ClaudeStreamObservation(self._session_id, entered)
+        count = 0
+        def line_received(line: str) -> None:
+            nonlocal count
+            count += 1
+            observation.observe(line)
+        try:
+            result = self._isolation_runner(self.command(context_pack, execution_routing=execution_routing), cwd=self.repo_root,
+                input=self.prompt(context_pack), capture_output=True, text=True, check=False,
+                env={"BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE": str(self.effect_gate_approval_file)} if self.effect_gate_approval_file else None,
+                on_stdout_line=line_received)
+        finally:
+            self._isolation_runner.set_pre_process_entry(None)
+            self._isolation_runner.set_pre_spawn_entry(None)
+        for line in result.stdout.splitlines()[count:]:
+            observation.observe(line)
+        terminal = observation.terminal(result.returncode)
+        terminal["isolation_receipt"] = self.completed_isolation_receipt()
+        return terminal
+
+
 @dataclass(frozen=True)
 class PreparedIssueDeliveryWorker:
     """Host prepares/freezes destination before constructing the child launcher."""
@@ -2685,11 +2749,53 @@ class PreparedIssueDeliveryWorker:
             [FrozenIssueDeliveryDestination],
             ContentOnlyIssueDeliverySessionLauncher,
         ],
+        carrier_profile_file: Path | None = None,
+        authority_client: BuilderOpsControlPlaneClient | None = None,
+        carrier_launcher: ClaudeContentOnlyIssueDeliverySessionLauncher | None = None,
     ) -> "PreparedIssueDeliveryWorker":
+        if approval.get("contract_version") == "fca-issue-delivery.v4":
+            if not isinstance(authority_client, BuilderOpsControlPlaneClient):
+                raise ValueError("authenticated carrier approval authority is unavailable")
+            authority = authority_client.issue_delivery_authority(manifest=approval, purpose="execute")
+            if (authority.get("approval") != dict(approval) or authority.get("purpose") != "execute"
+                or authority.get("operation_key") != approval.get("operation_key")
+                or type(authority.get("authority_epoch")) is not int):
+                raise ValueError("authenticated carrier approval authority differs")
+            verify_installed_carrier_qualification(approval, authority_epoch=authority["authority_epoch"])
+            from app.builderops.issue_delivery_worker_isolation import _load_profile
+            binding = approval["carrier_binding"]
+            if carrier_profile_file is None:
+                raise ValueError("approved carrier isolation profile is unavailable")
+            profile = _load_profile(carrier_profile_file, binding["isolation_profile_sha256"])
+            if profile.carrier != "claude" or profile.codex_executable.sha256 != binding["executable_sha256"]:
+                raise ValueError("approved carrier executable or profile changed")
+            if (type(carrier_launcher) is not ClaudeContentOnlyIssueDeliverySessionLauncher
+                or carrier_launcher._carrier_binding != dict(binding)
+                or carrier_launcher._isolation_runner._profile_file != carrier_profile_file
+                or carrier_launcher.expected_profile_sha256 != binding["isolation_profile_sha256"]
+                or carrier_launcher.repo_root != Path(str(approval["destination"]["worktree"])).resolve()):
+                raise ValueError("carrier launcher differs from approved preflight")
+            if carrier_launcher.effect_gate_checkout_root != Path(str(approval["destination"]["checkout"])).resolve():
+                raise ValueError("carrier launcher checkout differs from approval")
+            try:
+                document = json.loads(carrier_launcher.effect_gate_approval_file.read_text(encoding="utf-8"))
+            except (AttributeError, OSError, ValueError) as exc:
+                raise ValueError("carrier launcher approval file is unavailable") from exc
+            bound = document.get("approval", document) if isinstance(document, Mapping) else None
+            if bound != dict(approval):
+                raise ValueError("carrier launcher approval file differs")
         frozen = destination.prepare(approval)
-        launcher = launcher_factory(frozen)
+        launcher = carrier_launcher if approval.get("contract_version") == "fca-issue-delivery.v4" else launcher_factory(frozen)
         if not isinstance(launcher, ContentOnlyIssueDeliverySessionLauncher):
             raise ValueError("Issue-delivery child lacks the content-only OS boundary")
+        if isinstance(launcher, ClaudeContentOnlyIssueDeliverySessionLauncher) != (approval.get("contract_version") == "fca-issue-delivery.v4"):
+            raise ValueError("Issue-delivery launcher differs from approved carrier")
+        if isinstance(launcher, ClaudeContentOnlyIssueDeliverySessionLauncher) and (
+            launcher._carrier_binding != dict(approval["carrier_binding"])
+            or launcher._isolation_runner._profile_file != carrier_profile_file
+            or launcher.expected_profile_sha256 != approval["carrier_binding"]["isolation_profile_sha256"]
+        ):
+            raise ValueError("prepared launcher differs from preflight carrier profile")
         return cls(
             approval=dict(approval),
             destination=destination,
@@ -2763,6 +2869,7 @@ class HostIssueDeliveryExecutorRuntime:
     worker_id: str = "issue-delivery-host"
     trusted_workflow_root: Path | None = None
     completion_reader: Callable[[str], Mapping[str, Any]] | None = None
+    carrier_qualification_verifier: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
 
 
 _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME: HostIssueDeliveryExecutorRuntime | None = None
@@ -2788,6 +2895,52 @@ def install_host_issue_delivery_executor_runtime(
     _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME = runtime
 
 
+def verify_installed_carrier_qualification(approval: Mapping[str, Any], *, authority_epoch: int) -> None:
+    """Require a fresh independent host observation for the v4 carrier.
+
+    The verifier is a privileged host dependency, never a manifest or CLI
+    value. Its future implementation owns source authentication and revocation;
+    this adapter only checks the returned observation and exact binding.
+    """
+    runtime = _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME
+    if runtime is None or runtime.carrier_qualification_verifier is None:
+        raise ValueError("host carrier qualification verifier is unavailable")
+    if type(authority_epoch) is not int or authority_epoch < 0:
+        raise ValueError("current carrier authority epoch is unavailable")
+    binding = approval.get("carrier_binding")
+    if not isinstance(binding, Mapping):
+        raise ValueError("approved carrier binding is unavailable")
+    expected = {
+        "operation_key": approval.get("operation_key"),
+        "approval_id": approval.get("approval_id"),
+        "approval_manifest_hash": approval.get("approval_manifest_hash"),
+        "authority_epoch": authority_epoch,
+        "carrier_binding": dict(binding),
+    }
+    if not isinstance(expected["approval_manifest_hash"], str) or re.fullmatch(_HEX_64, expected["approval_manifest_hash"]) is None:
+        raise ValueError("authenticated carrier approval is unavailable")
+    if binding.get("isolation_profile_sha256") != runtime.isolation_profile_sha256:
+        raise ValueError("host isolation profile differs from carrier approval")
+    try:
+        verifier_input = json.loads(json.dumps(expected))
+        observed = runtime.carrier_qualification_verifier(verifier_input)
+        if not isinstance(observed, Mapping) or observed.get("binding") != expected:
+            raise ValueError("host carrier qualification binding differs")
+        if (observed.get("state") != "qualified" or observed.get("revocation") != "current"
+            or observed.get("session_freshness") != "verified-absent"):
+            raise ValueError("host carrier qualification is unavailable or revoked")
+        source = observed.get("source")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("host carrier qualification source is unavailable")
+        observed_at = datetime.fromisoformat(str(observed.get("observed_at")).replace("Z", "+00:00"))
+        expires_at = datetime.fromisoformat(str(observed.get("expires_at")).replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        if observed_at.tzinfo is None or expires_at.tzinfo is None or not (0 <= (now - observed_at).total_seconds() <= 60) or expires_at <= now:
+            raise ValueError("host carrier qualification is stale")
+    except Exception as exc:
+        raise ValueError("host carrier qualification could not be verified") from exc
+
+
 def build_host_issue_delivery_executor(
     *,
     approval: Mapping[str, Any],
@@ -2805,8 +2958,18 @@ def build_host_issue_delivery_executor(
     if runtime is None:
         raise ValueError("Issue-delivery host executor runtime is unavailable")
     terminal = None
+    if approval.get("contract_version") == "fca-issue-delivery.v4" and prepared is not None:
+        authority = client.issue_delivery_authority(manifest=approval, purpose="execute")
+        if (authority.get("approval") != dict(approval) or authority.get("purpose") != "execute"
+            or authority.get("operation_key") != approval.get("operation_key")
+            or type(authority.get("authority_epoch")) is not int):
+            raise ValueError("authenticated carrier approval authority differs")
+        verify_installed_carrier_qualification(approval, authority_epoch=authority["authority_epoch"])
+        if (type(prepared.launcher) is not ClaudeContentOnlyIssueDeliverySessionLauncher
+            or prepared.launcher._carrier_binding != approval.get("carrier_binding")):
+            raise ValueError("protected carrier launcher differs from approval")
     if prepared is None:
-        if approval.get("contract_version") != CANDIDATE_CONTRACT_VERSION or runtime.completion_reader is None:
+        if approval.get("contract_version") not in CANDIDATE_CONTRACT_VERSIONS or runtime.completion_reader is None:
             raise ValueError("candidate readback composition is unavailable")
         terminal = client.issue_delivery_operation_record_read(
             repository=str(approval["repository"]),
@@ -2828,7 +2991,7 @@ def build_host_issue_delivery_executor(
         if prepared.launcher.expected_profile_sha256 != runtime.isolation_profile_sha256:
             raise ValueError("Issue-delivery prepared worker profile differs from host pin")
         destination, frozen = prepared.destination, prepared.frozen_destination
-    if approval.get("contract_version") == CANDIDATE_CONTRACT_VERSION:
+    if approval.get("contract_version") in CANDIDATE_CONTRACT_VERSIONS:
         if runtime.completion_reader is None:
             raise ValueError("Issue-delivery host completion observer is unavailable")
         if prepared is not None:

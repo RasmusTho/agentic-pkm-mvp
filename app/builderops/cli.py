@@ -87,6 +87,7 @@ from app.builderops.issue_delivery_operation import (
 )
 from app.builderops.issue_delivery_effect_executor import (
     ContentOnlyIssueDeliverySessionLauncher,
+    ClaudeContentOnlyIssueDeliverySessionLauncher,
     GitIssueDeliveryDestination,
     PreparedIssueDeliveryWorker,
     build_host_issue_delivery_executor,
@@ -2448,6 +2449,7 @@ def dispatch_plan(
             runtime_targets=runtime_targets or ("codex",),
             active_leases=active_leases,
             run_state=state,
+            carrier_target=payload.get("carrier_target"),
         )
     except (EpicDispatchError, EpicRunStateError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -2554,7 +2556,7 @@ def dispatch_sessions(
             }
             if observation.worker_receipt is not None:
                 session["worker_receipt"] = observation.worker_receipt
-                if approval.get("contract_version") == "fca-issue-delivery.v3":
+                if approval.get("contract_version") in {"fca-issue-delivery.v3", "fca-issue-delivery.v4"}:
                     from app.builderops.control_plane.issue_delivery import validate_content_result
                     session["status"] = validate_content_result(observation.worker_receipt)["status"]
                     # Observation is historical; no local readback-capable executor
@@ -2612,16 +2614,30 @@ def dispatch_sessions(
                 raise click.ClickException(
                     "repo-root must equal the approved checkout or dedicated worktree"
                 )
+            if approval.get("contract_version") == "fca-issue-delivery.v4":
+                from app.builderops.issue_delivery_worker_isolation import _load_profile
+                carrier_binding = approval["carrier_binding"]
+                if worker_isolation_profile_sha256 != carrier_binding["isolation_profile_sha256"]:
+                    raise click.ClickException("worker isolation profile differs from approval")
+                isolation_profile = _load_profile(worker_isolation_profile_file, worker_isolation_profile_sha256)
+                if isolation_profile.carrier != "claude" or isolation_profile.codex_executable.sha256 != carrier_binding["executable_sha256"]:
+                    raise click.ClickException("worker executable differs from approval")
             destination_guard = GitIssueDeliveryDestination()
+            carrier_launcher = None
+            if approval.get("contract_version") == "fca-issue-delivery.v4":
+                carrier_launcher = ClaudeContentOnlyIssueDeliverySessionLauncher(
+                    approval=approval, repo_root=Path(str(destination["worktree"])),
+                    profile_file=worker_isolation_profile_file, expected_profile_sha256=worker_isolation_profile_sha256,
+                    effect_gate_approval_file=approval_file, effect_gate_checkout_root=Path(str(destination["checkout"])),
+                )
             prepared = PreparedIssueDeliveryWorker.create(
-                approval=approval,
-                destination=destination_guard,
+                approval=approval, destination=destination_guard,
+                carrier_profile_file=worker_isolation_profile_file if carrier_launcher else None,
+                authority_client=client if carrier_launcher else None, carrier_launcher=carrier_launcher,
                 launcher_factory=lambda frozen: ContentOnlyIssueDeliverySessionLauncher(
-                    repo_root=frozen.binding.worktree,
-                    profile_file=worker_isolation_profile_file,
+                    repo_root=frozen.binding.worktree, profile_file=worker_isolation_profile_file,
                     expected_profile_sha256=worker_isolation_profile_sha256,
-                    effect_gate_approval_file=approval_file,
-                    effect_gate_checkout_root=frozen.binding.checkout,
+                    effect_gate_approval_file=approval_file, effect_gate_checkout_root=frozen.binding.checkout,
                 ),
             )
             protected_executor = build_host_issue_delivery_executor(

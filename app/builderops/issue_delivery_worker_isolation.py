@@ -315,6 +315,7 @@ class _CredentialIdentity:
 
 @dataclass(frozen=True)
 class _IsolationProfile:
+    carrier: str
     profile_id: str
     profile_version: int
     profile_sha256: str
@@ -517,6 +518,7 @@ def _load_profile(path: Path, expected_sha256: str) -> _IsolationProfile:
         parsed = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise IssueWorkerIsolationError("worker isolation profile is invalid") from exc
+    is_claude = isinstance(parsed, Mapping) and parsed.get("contract") == "builderops_issue_delivery_worker_isolation_profile.v2"
     document = _strict_mapping(
         parsed,
         keys=frozenset(
@@ -532,7 +534,7 @@ def _load_profile(path: Path, expected_sha256: str) -> _IsolationProfile:
                 "systemd_run",
                 "environment_executable",
                 "git_executable",
-                "codex_executable",
+                *( {"carrier", "carrier_executable"} if is_claude else {"codex_executable"} ),
                 "command_sha256",
                 "environment",
                 "isolation_properties_sha256",
@@ -540,10 +542,10 @@ def _load_profile(path: Path, expected_sha256: str) -> _IsolationProfile:
         ),
         label="profile",
     )
-    if document["contract"] != ISOLATION_PROFILE_CONTRACT:
+    if document["contract"] != ("builderops_issue_delivery_worker_isolation_profile.v2" if is_claude else ISOLATION_PROFILE_CONTRACT):
         raise IssueWorkerIsolationError("worker isolation profile contract is invalid")
     profile_id = _validated_text(document["profile_id"], label="profile id", pattern=_SAFE_ID)
-    if document["profile_version"] != 1:
+    if document["profile_version"] != (2 if is_claude else 1) or (is_claude and document["carrier"] != "claude"):
         raise IssueWorkerIsolationError("worker isolation profile version is unsupported")
     executor = _profile_principal(document["executor"], label="executor principal")
     worker = _profile_principal(document["worker"], label="worker principal")
@@ -636,7 +638,7 @@ def _load_profile(path: Path, expected_sha256: str) -> _IsolationProfile:
         ),
         "Git executable": _profile_executable(document["git_executable"], label="Git executable"),
         "Codex executable": _profile_executable(
-            document["codex_executable"], label="Codex executable"
+            document["carrier_executable" if is_claude else "codex_executable"], label="Claude executable" if is_claude else "Codex executable"
         ),
     }
     if any(
@@ -645,8 +647,9 @@ def _load_profile(path: Path, expected_sha256: str) -> _IsolationProfile:
     ):
         raise IssueWorkerIsolationError("worker isolation executable owner is invalid")
     return _IsolationProfile(
+        carrier="claude" if is_claude else "codex",
         profile_id=profile_id,
-        profile_version=1,
+        profile_version=2 if is_claude else 1,
         profile_sha256=observed_hash,
         executor=executor,
         worker=worker,
@@ -1305,6 +1308,23 @@ def _validate_direct_codex_command(command: Sequence[str], *, worktree: Path) ->
         raise IssueWorkerIsolationError("worker isolation direct Codex command is invalid")
 
 
+def _validate_direct_claude_command(command: Sequence[str]) -> None:
+    from uuid import UUID
+    _validate_command_parts(command)
+    if (len(command) != 13 or command[:5] != ["claude", "--print", "--output-format", "stream-json", "--verbose"]
+        or command[5] != "--session-id" or command[7] != "--model"
+        or command[9] != "--effort" or command[10] not in {"low", "medium", "high", "xhigh", "max"}
+        or command[11:] != ["--permission-mode", "acceptEdits"]):
+        raise IssueWorkerIsolationError("worker isolation direct Claude command is invalid")
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", command[8]) is None:
+        raise IssueWorkerIsolationError("worker isolation Claude model is invalid")
+    try:
+        if str(UUID(command[6])) != command[6]:
+            raise ValueError
+    except ValueError as exc:
+        raise IssueWorkerIsolationError("worker isolation Claude session identity is invalid") from exc
+
+
 def _systemd_properties(profile: _IsolationProfile) -> tuple[str, ...]:
     return (
         f"User={profile.worker.uid}",
@@ -1356,7 +1376,7 @@ def _executable_set_digest(profile: _IsolationProfile) -> str:
                 ("systemd", profile.systemd_run),
                 ("environment", profile.environment_executable),
                 ("git", profile.git_executable),
-                ("codex", profile.codex_executable),
+                (profile.carrier, profile.codex_executable),
             )
         }
     )
@@ -1396,7 +1416,11 @@ class _SystemdWorkerRunner:
         unit_token: Callable[[], str],
         clock: Callable[[], str],
         platform_name: str,
+        carrier: str = "codex",
+        expected_worker_executable_sha256: str | None = None,
     ) -> None:
+        self._carrier = carrier
+        self._expected_worker_executable_sha256 = expected_worker_executable_sha256
         self._profile_file = profile_file
         self._expected_profile_sha256 = expected_profile_sha256
         self._principal_resolver = principal_resolver
@@ -1429,7 +1453,7 @@ class _SystemdWorkerRunner:
             ("systemd", profile.systemd_run),
             ("environment", profile.environment_executable),
             ("Git", profile.git_executable),
-            ("Codex", profile.codex_executable),
+            ("Codex" if profile.carrier == "codex" else "Claude", profile.codex_executable),
         ):
             if self._executable_resolver(configured.path) != configured:
                 raise IssueWorkerIsolationError(
@@ -1558,11 +1582,18 @@ class _SystemdWorkerRunner:
         if self._platform_name != "linux":
             raise IssueWorkerIsolationError("worker isolation host is unsupported")
         profile = _load_profile(self._profile_file, self._expected_profile_sha256)
+        if profile.carrier != self._carrier:
+            raise IssueWorkerIsolationError("worker isolation carrier differs from approval")
+        if self._carrier == "claude" and profile.codex_executable.sha256 != self._expected_worker_executable_sha256:
+            raise IssueWorkerIsolationError("worker isolation executable differs from approval")
         if cwd.resolve() != profile.worktree.path:
             raise IssueWorkerIsolationError("worker isolation worktree changed")
         if capture_output is not True or text is not True or check is not False:
             raise IssueWorkerIsolationError("worker isolation process boundary is invalid")
-        _validate_direct_codex_command(command, worktree=profile.worktree.path)
+        if self._carrier == "claude":
+            _validate_direct_claude_command(command)
+        else:
+            _validate_direct_codex_command(command, worktree=profile.worktree.path)
         direct_command = [profile.codex_executable.path, *command[1:]]
         if canonical_command_sha256(direct_command) != profile.command_sha256:
             raise IssueWorkerIsolationError("worker isolation command changed")
@@ -1619,7 +1650,7 @@ class _SystemdWorkerRunner:
             raise IssueWorkerIsolationError("worker isolation protected credential changed")
         self._validate_executable_set(profile)
         child_environment = {
-            "CODEX_HOME": str(profile.model_auth_home.path),
+            **({"CODEX_HOME": str(profile.model_auth_home.path)} if self._carrier == "codex" else {"CLAUDE_CONFIG_DIR": str(profile.model_auth_home.path)}),
             "HOME": str(profile.model_auth_home.path),
             **profile.environment,
         }
@@ -1856,6 +1887,8 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
         .strftime("%Y-%m-%dT%H:%M:%SZ"),
         platform_name: str = platform.system(),
         completion_reader: Callable[[str], Mapping[str, Any]] | None = None,
+        carrier: str = "codex",
+        expected_worker_executable_sha256: str | None = None,
     ) -> None:
         self._completion_reader = completion_reader
         self._entered_containment: dict[str, Any] | None = None
@@ -1876,6 +1909,8 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
             unit_token=unit_token,
             clock=clock,
             platform_name=platform_name,
+            carrier=carrier,
+            expected_worker_executable_sha256=expected_worker_executable_sha256,
         )
         super().__init__(
             repo_root=repo_root,

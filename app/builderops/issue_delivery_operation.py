@@ -32,7 +32,7 @@ from app.builderops.control_plane.issue_delivery import (
     manifest_hash,
     normalize_manifest,
     delivery_source_pair,
-    CANDIDATE_CONTRACT_VERSION, TWO_SOURCE_VERSIONS,
+    CANDIDATE_CONTRACT_VERSIONS, TWO_SOURCE_VERSIONS,
     tracking_repository,
 )
 from app.builderops.control_plane.models import EnvelopeValidationError, canonical_repository
@@ -229,7 +229,7 @@ def _read_operation_record(
     if not isinstance(record, dict) or record.get("record_type") != "BuilderOpsReceipt":
         raise IssueDeliveryOperationRefused("destination receipt is malformed")
     payload = record.get("payload")
-    version = 2 if approval.get("contract_version") == CANDIDATE_CONTRACT_VERSION and kind == "terminal" else 1
+    version = 2 if approval.get("contract_version") in CANDIDATE_CONTRACT_VERSIONS and kind == "terminal" else 1
     if (
         not isinstance(payload, Mapping)
         or payload.get("schema") != f"builderops.issue-delivery-{kind}.v{version}"
@@ -399,7 +399,7 @@ def observe_issue_delivery_operation(
     terminal_payload = terminal["payload"]
     if terminal_payload.get("attempt_receipt_hash") != _record_hash(attempt):
         raise IssueDeliveryOperationRefused("destination terminal receipt is malformed")
-    refs = _valid_host_effect_refs(terminal_payload.get("host_effect_refs"), maximum=7 if value["contract_version"] == CANDIDATE_CONTRACT_VERSION else 5)
+    refs = _valid_host_effect_refs(terminal_payload.get("host_effect_refs"), maximum=7 if value["contract_version"] in CANDIDATE_CONTRACT_VERSIONS else 5)
     if terminal["state"] == "launch_unknown":
         if terminal_payload.get("worker_receipt") is not None:
             raise IssueDeliveryOperationRefused("launch-unknown receipt cannot claim a worker outcome")
@@ -431,7 +431,7 @@ def observe_issue_delivery_operation(
         or entry["payload"].get("session_id") != session_id
     ):
         raise IssueDeliveryOperationRefused("destination terminal receipt is malformed")
-    if value["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+    if value["contract_version"] in CANDIDATE_CONTRACT_VERSIONS:
         from app.builderops.issue_delivery_readback import candidate_continuation
         try:
             task = client.get_task(repository=repository, task_id=f"issue-delivery-{approval_id}")
@@ -617,7 +617,7 @@ class IssueDeliveryOperationAdapter:
             raise IssueDeliveryOperationRefused("launcher repository root differs from approval")
         bound_launcher: IssueSessionLauncher | None
         recovering = (
-            value["contract_version"] == CANDIDATE_CONTRACT_VERSION
+            value["contract_version"] in CANDIDATE_CONTRACT_VERSIONS
             and launcher is None
             and protected_executor is not None
             and getattr(protected_executor, "recovered_candidate_terminal", None) is not None
@@ -648,6 +648,8 @@ class IssueDeliveryOperationAdapter:
         self.live_binding_reader = live_binding_reader or _default_live_binding_reader
         self.protected_executor = protected_executor
         self.require_protected_composition = require_protected_composition
+        if value["contract_version"] == "fca-issue-delivery.v4" and not require_protected_composition:
+            raise IssueDeliveryOperationRefused("carrier delivery requires protected composition")
         if require_protected_composition:
             from app.builderops.issue_delivery_effect_executor import (
                 ContentOnlyIssueDeliverySessionLauncher,
@@ -1058,7 +1060,7 @@ class IssueDeliveryOperationAdapter:
             raise IssueDeliveryOperationRefused("approved effect executor artifacts are unavailable")
         request = IssueDeliveryEffectRequest.model_validate(
             {
-                "contract": "builderops.issue-delivery-effect.v2" if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else "builderops.issue-delivery-effect.v1",
+                "contract": "builderops.issue-delivery-effect.v2" if self.approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS else "builderops.issue-delivery-effect.v1",
                 "effect_kind": effect_kind,
                 "approval": self.approval,
                 "approval_id": self.approval_id,
@@ -1266,7 +1268,7 @@ class IssueDeliveryOperationAdapter:
         if state != _RECORD_STATES[kind] and not (kind == "terminal" and state == "launch_unknown"):
             raise IssueDeliveryOperationRefused("destination receipt state is invalid")
         payload = {
-            "schema": f"builderops.issue-delivery-{kind}.v{2 if self.approval['contract_version'] == CANDIDATE_CONTRACT_VERSION and kind == 'terminal' else 1}",
+            "schema": f"builderops.issue-delivery-{kind}.v{2 if self.approval['contract_version'] in CANDIDATE_CONTRACT_VERSIONS and kind == 'terminal' else 1}",
             "repository": self.repository,
             "operation_type": OPERATION_TYPE,
             "operation_key": self.operation_key,
@@ -1408,9 +1410,9 @@ class IssueDeliveryOperationAdapter:
         )
         if not isinstance(destination_resource_key, str) or len(destination_resource_key) != 64:
             raise IssueDeliveryOperationRefused("destination attempt resource identity is malformed")
-        refs = _valid_host_effect_refs(list(host_effect_refs or []), maximum=7 if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else 5)
+        refs = _valid_host_effect_refs(list(host_effect_refs or []), maximum=7 if self.approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS else 5)
         return self._write("terminal", state, {"attempt_receipt_hash": _record_hash(attempt), "destination_resource_key": destination_resource_key, "entry_receipt_hash": _record_hash(entry) if state == "terminal" and entry is not None else None, "session_id": session_id, "worker_receipt": terminal_worker_receipt, "host_effect_refs": refs, "observed_at": self.now(),
-            **({"candidate_binding": dict(candidate_binding) if candidate_binding else None} if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else {})})
+            **({"candidate_binding": dict(candidate_binding) if candidate_binding else None} if self.approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS else {})})
 
     def _selected_context(self, context_pack: Mapping[str, Any]) -> None:
         context = self.approval["context"]
@@ -1501,7 +1503,7 @@ class IssueDeliveryOperationAdapter:
             if terminal.get("state") != "terminal":
                 raise IssueDeliveryOperationError("existing launch is unresolved; replacement launch is forbidden", session_id=(entry or {}).get("payload", {}).get("session_id"))
             payload = terminal["payload"]
-            if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+            if self.approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS:
                 executor = _require_protected_host_executor(self.protected_executor)
                 refs = list(payload["host_effect_refs"])
                 state = "unknown"
@@ -1536,8 +1538,12 @@ class IssueDeliveryOperationAdapter:
         if self._read("attempt") is not None:
             raise IssueDeliveryOperationError("existing launch attempt has no observed entry; replacement launch is forbidden")
         self._require_launcher_binding()
+        if self.approval["contract_version"] == "fca-issue-delivery.v4":
+            from app.builderops.issue_delivery_effect_executor import verify_installed_carrier_qualification
+            authority = self._authority("repository_worktree", target=self._default_target("repository_worktree"))
+            verify_installed_carrier_qualification(self.approval, authority_epoch=authority["authority_epoch"])
         self.reserve()
-        if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+        if self.approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS:
             self._candidate_task()
         _attempt, owns_attempt = self._record_attempt()
         if not owns_attempt:
@@ -1565,14 +1571,21 @@ class IssueDeliveryOperationAdapter:
                 )
 
                 def pre_process_entry() -> None:
+                    if self.approval["contract_version"] == "fca-issue-delivery.v4":
+                        from app.builderops.issue_delivery_effect_executor import verify_installed_carrier_qualification
+                        authority = self._authority("repository_worktree", target=self._default_target("repository_worktree"))
+                        verify_installed_carrier_qualification(self.approval, authority_epoch=authority["authority_epoch"])
                     protected_executor.bind_completed_worker()
                     pre_entry_host_refs.append(self._execute_pre_entry_claim())
 
                 launch_kwargs["pre_process_entry"] = pre_process_entry
-                launch_kwargs["pre_spawn_entry"] = lambda: self._authority(
-                    "repository_worktree",
-                    target=self._default_target("repository_worktree"),
-                )
+                def pre_spawn_entry() -> None:
+                    authority = self._authority("repository_worktree", target=self._default_target("repository_worktree"))
+                    if self.approval["contract_version"] == "fca-issue-delivery.v4":
+                        from app.builderops.issue_delivery_effect_executor import verify_installed_carrier_qualification
+                        verify_installed_carrier_qualification(self.approval, authority_epoch=authority["authority_epoch"])
+
+                launch_kwargs["pre_spawn_entry"] = pre_spawn_entry
             if self.launcher is None:
                 raise IssueDeliveryOperationRefused("readback recovery cannot launch a worker")
             result = self.launcher.launch(context_pack, **launch_kwargs)
@@ -1589,7 +1602,7 @@ class IssueDeliveryOperationAdapter:
                 raise IssueDeliveryOperationError("launcher returned no observed session entry")
             entry = self.record_entry(session_id=session_id)
             receipt = result.get("worker_receipt")
-            if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+            if self.approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS:
                 from app.builderops.control_plane.issue_delivery import validate_content_result
                 receipt = validate_content_result(receipt)
                 if receipt["status"] != "completed":
