@@ -256,9 +256,9 @@ source-owned attention claim attached to a stable subject, never a devUI backlog
 - Missing, stale, unread, unsupported, unavailable, or unlinked question evidence withdraws the
   attention claim rather than producing an inferred owner request.
 
-This is deferred interaction-design input, not current delivered behavior. Claude Design access is
-currently unavailable, so the handoff remains blocked without blocking the nonvisual contracts and
-adapters below.
+This remains target interaction guidance, not a delivered owner decision or runtime behavior.
+The [FCP-02 design handoff](VALIDATE_FOCUS_CONVERSATION_DESIGN.md#normalized-interaction-handoff)
+records its fixture-bound treatment and evidence limits; parent acceptance remains separate.
 
 ### Typed command preview
 
@@ -426,7 +426,7 @@ policy. A deviation is evidence for an existing repair route, not a new workflow
 | Model Inquiry invocation adapter | Submits one authenticated proposal operation key through the existing skill and maps destination readback/receipt/failure states | Delivered by FCP-04 through one concrete skill facade, including manual delegation and nonvisual fixtures. |
 | Authenticated Start admission | Proves that the caller approving a durable/cost-bearing effect is the admitted owner | FCP-04 implements exact immutable approval and current per-verb permissions in the existing service; live scoped credential/service activation remains separate. Loopback read admission is insufficient. |
 | Destination-owned operation key and readback | Prevents refresh/restart from launching the same proposal twice without a devUI store | FCP-04 implements reservation, one-time entry and authenticated lookup in existing Model Inquiry artifacts. Runtime use requires a conforming operator-owned wrapper; unsupported protocol refuses before reservation. |
-| Governed Yggdrasil visual handoff | Resolves layout, accessibility, unresolved-question treatment, external-port affordance, and command salience | FCP-02 follows the stable FCP-01/FCP-03/FCP-04 fixtures. External design access blocks this handoff and later visual implementation only. |
+| Governed Yggdrasil visual handoff | Resolves layout, accessibility, unresolved-question treatment, external-port affordance, and command salience | FCP-02 normalizes a governed static handoff over the delivered FCP-01/FCP-03/FCP-04 fixtures. Live activation, visual implementation and parent/owner acceptance remain separate. |
 | Local audience/auth policy | Current CKM/devUI read seam is single-operator local | Keep first slice local; route any audience expansion through the existing access-policy path. |
 | Builder System source registry/coverage composition | Required for a truthful control lens | Separate BSC specification issue after this boundary lands. Reuse DOCS_INDEX, skill contracts, process map, BuilderOps records, and live evidence. |
 | General devUI delivery command chain | Required for later GitHub/repository delivery commands | Remains governed and blocked through #3603, #4168–#4170, #3793, and related acceptance; not a dependency of Start Model Inquiry. |
@@ -456,11 +456,11 @@ from implementation tests.
 | 1 | [FCP-01 — Compose Subject-Centred Focus (#4694)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4694) | Target contracts and read-only subject composition with explicit correlation | Delivered by PR #4703 |
 | 2 | [FCP-03 — Open External Conversation Port (#4696)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4696) | Nonvisual canonical pack/export adapter and non-authoritative disposition contract | Delivered by PR #4704 |
 | 3 | [FCP-04 — Start Model Inquiry from Exact Preview (#4697)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697) | Authenticated proposal validation, destination-owned operation-key admission, Start/Hold, and honest receipt/readback/ambiguity | Nonvisual implementation and production-seam fixtures delivered; live host/service activation and visual acceptance remain separate |
-| 4 | [FCP-02 — Validate Focus and Conversation Design (#4695)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4695) | Governed Yggdrasil handoff over stable fixtures, including unresolved-owner-question treatment and accessibility/degraded-state receipts | Depends on FCP-01/FCP-03/FCP-04 fixtures; technically blocked while external handoff is unavailable |
+| 4 | [FCP-02 — Validate Focus and Conversation Design (#4695)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4695) | Governed Yggdrasil handoff over stable fixtures, including unresolved-owner-question treatment and accessibility/degraded-state receipts | Fixture-bound governed design evidence recorded in FCP-02; no runtime or parent acceptance implied |
 | Separate | [Builder System Control lens specification (#4698)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4698) | Detailed source/state contract, coverage/deviation semantics, visual boundary, and later task split | Active separate docs line; not a Focus child |
 
-The nonvisual FCP-01/FCP-03/FCP-04 implementations and fixtures are delivered. FCP-02 retains
-the external design handoff and its fresh availability check. The parent remains a validation hub
+The nonvisual FCP-01/FCP-03/FCP-04 implementations and fixtures are delivered. FCP-02 records
+a separate static design handoff and its own source and accessibility evidence. The parent remains a validation hub
 and never becomes ready work. Builder System Control is filed separately so its meta-governance
 context cannot leak into the Focus capability flow.
 

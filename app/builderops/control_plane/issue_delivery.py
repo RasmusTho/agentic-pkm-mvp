@@ -22,7 +22,9 @@ from app.builderops.control_plane.models import canonical_repository
 CONTRACT_VERSION = "fca-issue-delivery.v1"
 SECOND_CONTRACT_VERSION = "fca-issue-delivery.v2"
 CANDIDATE_CONTRACT_VERSION = "fca-issue-delivery.v3"
-TWO_SOURCE_VERSIONS = frozenset({SECOND_CONTRACT_VERSION, CANDIDATE_CONTRACT_VERSION})
+CARRIER_CONTRACT_VERSION = "fca-issue-delivery.v4"
+CANDIDATE_CONTRACT_VERSIONS = frozenset({CANDIDATE_CONTRACT_VERSION, CARRIER_CONTRACT_VERSION})
+TWO_SOURCE_VERSIONS = frozenset({SECOND_CONTRACT_VERSION, *CANDIDATE_CONTRACT_VERSIONS})
 SECOND_REPOSITORY = "rasmustho/bifrost"
 OPERATION_TYPE = "deliver_ready_issue"
 RECORD_TYPE = "IssueDeliveryApproval"
@@ -58,6 +60,8 @@ CANDIDATE_WORKFLOW_ARTIFACTS = REQUIRED_WORKFLOW_ARTIFACTS | frozenset({
 
 
 def workflow_artifacts(version: str) -> frozenset[str]:
+    if version == CARRIER_CONTRACT_VERSION:
+        return CANDIDATE_WORKFLOW_ARTIFACTS | {"app/builderops/claude_issue_delivery.py"}
     if version == CANDIDATE_CONTRACT_VERSION:
         return CANDIDATE_WORKFLOW_ARTIFACTS
     if version in {CONTRACT_VERSION, SECOND_CONTRACT_VERSION}:
@@ -478,6 +482,7 @@ def _dispatch_plan_fields(
     context_pack_id: str,
     channel: str,
     repo_root: str,
+    contract_version: str = CONTRACT_VERSION,
 ) -> dict[str, Any]:
     """Validate the complete one-Issue frozen plan admitted by FCA-ID-A."""
 
@@ -490,6 +495,7 @@ def _dispatch_plan_fields(
             context_pack_id=context_pack_id,
             channel=channel,
             repo_root=Path(repo_root),
+            expected_carrier="claude" if contract_version == CARRIER_CONTRACT_VERSION else "codex",
         )
     except Exception as exc:
         raise IssueDeliveryContractError(
@@ -499,7 +505,7 @@ def _dispatch_plan_fields(
 
 
 def _context_fields(
-    value: Any, *, issue_number: int, channel: str, repo_root: str
+    value: Any, *, issue_number: int, channel: str, repo_root: str, contract_version: str = CONTRACT_VERSION
 ) -> dict[str, Any]:
     context = _mapping(value, "context")
     if "content_hash" not in context:
@@ -526,6 +532,7 @@ def _context_fields(
         context_pack_id=pack_id,
         channel=channel,
         repo_root=repo_root,
+        contract_version=contract_version,
     )
     if expected_plan_hash != canonical_hash(plan):
         raise IssueDeliveryContractError(
@@ -548,7 +555,7 @@ def _context_fields(
     }
 
 
-def _execution_profile_fields(value: Any) -> dict[str, Any]:
+def _execution_profile_fields(value: Any, *, contract_version: str = CONTRACT_VERSION) -> dict[str, Any]:
     """Require a closed, resolved execution and verification profile."""
 
     profile = _mapping(value, "profile")
@@ -581,7 +588,7 @@ def _execution_profile_fields(value: Any) -> dict[str, Any]:
     if reasoning_effort not in _REASONING_EFFORTS:
         raise IssueDeliveryContractError("resolved execution reasoning effort is unsupported")
     carrier = _text(resolved.get("carrier"), "resolved execution carrier", limit=32)
-    if carrier not in _CARRIERS:
+    if carrier not in (_CARRIERS | {"claude"} if contract_version == CARRIER_CONTRACT_VERSION else _CARRIERS):
         raise IssueDeliveryContractError("resolved execution carrier is unsupported")
     verification = _mapping(profile.get("verification_profile"), "verification profile")
     if set(verification) != {"content_hash", "criterion_hashes"}:
@@ -681,7 +688,9 @@ def _workflow_fields(value: Any, *, contract_version: str = CONTRACT_VERSION) ->
     if entrypoint != WORKFLOW_ENTRYPOINT:
         raise IssueDeliveryContractError("workflow entrypoint is not approved")
     launcher = _text(workflow.get("launcher"), "workflow launcher", limit=1024)
-    if launcher != WORKFLOW_LAUNCHER:
+    expected_launcher = ("app/builderops/issue_delivery_effect_executor.py::ClaudeContentOnlyIssueDeliverySessionLauncher.launch"
+                         if contract_version == CARRIER_CONTRACT_VERSION else WORKFLOW_LAUNCHER)
+    if launcher != expected_launcher:
         raise IssueDeliveryContractError("workflow launcher is not approved")
     _artifacts_present, artifacts_raw = _coalesce_aliases(
         workflow, ("artifacts", "artifact_manifest"), "workflow artifact manifest"
@@ -710,7 +719,7 @@ def _workflow_fields(value: Any, *, contract_version: str = CONTRACT_VERSION) ->
     artifacts.sort(key=lambda item: item["path"])
     if paths != workflow_artifacts(contract_version):
         raise IssueDeliveryContractError("workflow artifact manifest is incomplete or unrelated")
-    if contract_version == CANDIDATE_CONTRACT_VERSION and workflow.get("host_candidate_contract") != "fca-host-candidate.v1":
+    if contract_version in CANDIDATE_CONTRACT_VERSIONS and workflow.get("host_candidate_contract") != "fca-host-candidate.v1":
         raise IssueDeliveryContractError("host candidate contract is required")
     if workflow_hash != canonical_hash(artifacts):
         raise IssueDeliveryContractError("workflow hash does not bind its artifact manifest")
@@ -985,7 +994,7 @@ def _second_consumer_bindings(value: dict[str, Any]) -> None:
         expected_effects = {
             f"github.issue-delivery.{effect}.v1" for effect in effects
         }
-        if value["contract_version"] == CANDIDATE_CONTRACT_VERSION and repository == SECOND_REPOSITORY:
+        if value["contract_version"] in CANDIDATE_CONTRACT_VERSIONS and repository == SECOND_REPOSITORY:
             expected_effects.add("git.issue-delivery.candidate-prepare.v1")
         if set(_list_of_text(policy["allowed_effects"], "target effects")) != expected_effects:
             raise IssueDeliveryContractError("target effect grants are not exact")
@@ -1008,6 +1017,38 @@ def _second_consumer_bindings(value: dict[str, Any]) -> None:
     pack = value["context"]["dispatch_plan"]["context_packs"][0]
     if pack.get("delivery_sources") != delivery_source_pair(value):
         raise IssueDeliveryContractError("frozen plan must retain the exact source pair")
+
+
+def _carrier_binding_fields(value: Any, profile: Mapping[str, Any]) -> dict[str, Any]:
+    binding = _mapping(value, "carrier binding")
+    if set(binding) != {"carrier", "model", "reasoning_effort", "executable_sha256", "isolation_profile_sha256", "session_id"}:
+        raise IssueDeliveryContractError("carrier binding fields are incomplete")
+    resolved = profile["resolved"]
+    if binding.get("carrier") != "claude" or any(
+        binding.get(key) != resolved[key] for key in ("carrier", "model", "reasoning_effort")
+    ):
+        raise IssueDeliveryContractError("carrier binding does not match the execution target")
+    from uuid import UUID
+    from app.builderops.claude_issue_delivery import validate_claude_model
+    try:
+        validate_claude_model(binding.get("model"))
+    except ValueError as exc:
+        raise IssueDeliveryContractError("carrier model identifier is invalid") from exc
+    try:
+        session_id = _text(binding.get("session_id"), "carrier session id", limit=36)
+        session = UUID(session_id)
+        if str(session) != session_id or session.version != 4:
+            raise ValueError
+    except ValueError as exc:
+        raise IssueDeliveryContractError("carrier session id must be a canonical UUIDv4") from exc
+    return {
+        "carrier": "claude",
+        "session_id": session_id,
+        "model": _text(binding.get("model"), "carrier model", limit=256),
+        "reasoning_effort": _text(binding.get("reasoning_effort"), "carrier reasoning", limit=32),
+        "executable_sha256": _sha(binding.get("executable_sha256"), "carrier executable hash"),
+        "isolation_profile_sha256": _sha(binding.get("isolation_profile_sha256"), "carrier isolation profile hash"),
+    }
 
 
 def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -1049,12 +1090,15 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             issue_number=issue["number"],
             channel=destination["channel"],
             repo_root=destination["checkout"],
+            contract_version=version,
         )
         workflow = _workflow_fields(raw.get("workflow"), contract_version=version)
-        profile = _execution_profile_fields(raw.get("profile"))
+        profile = _execution_profile_fields(raw.get("profile"), contract_version=version)
         selected_context = context["dispatch_plan"]["context_packs"][0]
         runtime = selected_context["runtime"]
         resolved = profile["resolved"]
+        carrier_binding = (_carrier_binding_fields(raw.get("carrier_binding"), profile)
+                           if version == CARRIER_CONTRACT_VERSION else None)
         dispatch_plan = context["dispatch_plan"]
         branch_worktree_plan = selected_context["branch_worktree_plan"]
         context_issue = selected_context["issue_contract"]
@@ -1171,6 +1215,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             "workflow": workflow,
             "destination": destination,
             "profile": profile,
+            **({"carrier_binding": carrier_binding} if carrier_binding is not None else {}),
             "permitted_effects": effects,
             "explicit_non_effects": non_effects,
             "parent_evidence": parent,

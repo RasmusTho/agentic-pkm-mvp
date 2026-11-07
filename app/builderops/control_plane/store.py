@@ -1232,7 +1232,7 @@ class PostgresBuilderOpsStore:
     def _validate_candidate_task_transition(conn: Any, repository: str, task_id: str, state: str,
                                            request: Mapping[str, Any], previous: Mapping[str, Any] | None) -> None:
         """Use the native task lock/version for v3 projection integrity, never effect authority."""
-        from app.builderops.control_plane.issue_delivery import CANDIDATE_CONTRACT_VERSION
+        from app.builderops.control_plane.issue_delivery import CANDIDATE_CONTRACT_VERSIONS
         from app.builderops.issue_delivery_readback import CANDIDATE_TASK_CONTRACT, _task_binding, candidate_continuation
         old = previous.get("payload", {}) if previous else {}
         binding = request.get("issue_delivery", {})
@@ -1246,7 +1246,7 @@ class PostgresBuilderOpsStore:
         row = conn.execute("SELECT payload FROM builderops_records WHERE repository=%s AND record_id=%s",
                            (repository, f"issue-delivery-approval:{binding.get('approval_id')}")).fetchone()
         approval = row.get("payload") if row else None
-        if (not isinstance(approval, Mapping) or approval.get("contract_version") != CANDIDATE_CONTRACT_VERSION
+        if (not isinstance(approval, Mapping) or approval.get("contract_version") not in CANDIDATE_CONTRACT_VERSIONS
             or task_id != f"issue-delivery-{approval['approval_id']}" or state not in {"ready", "claimed"}):
             raise StateConflict("candidate native task requires its admitted v3 approval")
         proposed = {"repository": repository, "state": state, "version": version, "payload": request}
