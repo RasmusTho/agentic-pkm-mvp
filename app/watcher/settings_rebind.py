@@ -447,6 +447,14 @@ class DormantSettingsRebindReconciler:
             return RebindCycle(record=record, mode="dormant", receipt=None)
         if record.phase == "no_lifecycle":
             return RebindCycle(record=record, mode="no_lifecycle", receipt=None)
+        if (
+            record.phase == "prepared"
+            and record.prior_binding_id is None
+            and snapshot.extensions.get("backgroundSupervisor")
+        ):
+            # MVR-06B: no running binding means no old root to bracket, and this candidate
+            # is not committed yet. Scan nothing; the lifecycle fence adopts it after commit.
+            return RebindCycle(record=record, mode="refused", receipt=None)
         if record.phase == "prepared" and self.cleared_before(record):
             # A restart may load the enabled env config before a foreign selection
             # replaces the completed CLEAR. Restore that durable idle posture before

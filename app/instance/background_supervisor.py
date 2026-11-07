@@ -76,6 +76,10 @@ SEALED_LIFECYCLE_STATES = frozenset({LIFECYCLE_DRAINING_REMOVAL, LIFECYCLE_REACT
 
 BACKGROUND_CAPABILITY_DOMAIN = b"agentic-pkm.background-capability.v1"
 BACKGROUND_CONTEXT_SCOPE = "background"
+#: Provenance of a registration enrolled from a pre-registry single-vault install.
+LEGACY_ENROLLMENT_PROVENANCES = frozenset(
+    {"legacy_env_bootstrap", "authenticated_legacy_owner_inventory"}
+)
 #: The handoff holds the ingress fence exclusively while it drains; a holder that never
 #: exits must fail the cutover (bridge stays authoritative), not wedge it.
 HANDOFF_DRAIN_TIMEOUT_SECONDS = 60.0
@@ -201,12 +205,6 @@ def _resolve_handoff_binding(
             return record.candidate_binding_id, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
     if snapshot.default_vault_binding_id is not None:
         return snapshot.default_vault_binding_id, PROVENANCE_COMPATIBILITY_DEFAULT, bridge_revision
-    if legacy_bootstrap_root is None:
-        # A headless one-vault install: the single registration MVR-01B enrolled from the
-        # env bootstrap is durable truth, readable where the vault itself is not mounted.
-        enrolled = list(snapshot.registrations.values())
-        if len(enrolled) == 1 and enrolled[0].extensions.get("provenance") == "legacy_env_bootstrap":
-            return enrolled[0].vault_binding_id, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
     if legacy_bootstrap_root is not None:
         from app.instance.default_vault import (
             VaultSelectionError,
@@ -222,7 +220,20 @@ def _resolve_handoff_binding(
                 "the legacy bootstrap root is not one already-enrolled binding"
             ) from exc
         return binding, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
-    return None, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
+    if bridge_revision > 0 or not snapshot.registrations:
+        # The live bridge durably cleared its binding, or there is no vault at all.
+        return None, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
+    enrolled = list(snapshot.registrations.values())
+    if len(enrolled) == 1 and enrolled[0].extensions.get("provenance") in LEGACY_ENROLLMENT_PROVENANCES:
+        # A headless one-vault install: the single registration MVR-01B enrolled is durable
+        # truth, readable where the vault itself is not mounted.
+        return enrolled[0].vault_binding_id, PROVENANCE_COMPATIBILITY_HANDOFF, bridge_revision
+    # Registered vaults with no bridge binding, no default, and no provable bootstrap: never
+    # persist no-vault by omission, which would idle a running watcher.
+    raise RegistryError(
+        "the handoff cannot prove which binding the watcher runs on; set the instance "
+        "default or pass --legacy-bootstrap-root"
+    )
 
 
 @dataclass(frozen=True)
@@ -256,9 +267,8 @@ def run_compatibility_bridge_handoff(
 
     The MVR-05 scalar worker is drained first: the exclusive binding-effect lease on
     the live binding waits out every in-flight shared worker/watcher/settings effect and
-    blocks new ones until the commit, so no effect straddles the authority change. The
-    deployment init container deliberately has no vault mount, so the lease cannot prove
-    its root there; a proved stopped window (every consumer stopped) is then the drain.
+    blocks new ones until the commit, so no effect straddles the authority change. Inside
+    a proved stopped window every consumer is already stopped, so that proof is the drain.
     The commit itself is a single registry generation.
     """
 
@@ -320,15 +330,9 @@ def run_compatibility_bridge_handoff(
             _handoff_fault_point("after_commit")
             return committed
 
-        root_visible = binding is not None and Path(
-            snapshot.registrations[binding].path
-        ).is_dir()
-        if binding is not None and not root_visible and not stopped_window_proven:
-            raise CapabilityNotReadyError(
-                "the handoff cannot drain a binding whose root is not visible outside a "
-                "proved stopped window"
-            )
-        if binding is not None and ownership_root is not None and root_visible:
+        # A proved stopped window is the drain: every consumer is stopped, and the init
+        # container may see no vault or the image's own directory at the registered path.
+        if binding is not None and ownership_root is not None and not stopped_window_proven:
             from app.instance.binding_effect_lease import BindingEffectLeaseManager
 
             registration = snapshot.registrations[binding]
@@ -1055,7 +1059,13 @@ def revoke_background_role_fenced(
     _require_storage_mutation_capability(_capability)
     snapshot = registry.load()
     state = durable_background_state(snapshot)
-    bindings = () if state is None else _running(snapshot, state.binding_ids)
+    # Sealed members included: a draining binding can still hold an in-flight effect, and
+    # its exclusive lease stays available for exactly this kind of change.
+    bindings = (
+        ()
+        if state is None
+        else tuple(item for item in state.binding_ids if item in snapshot.registrations)
+    )
     leases = BindingEffectLeaseManager.for_runtime(
         registry_store=registry,
         ownership_root=ownership_root,

@@ -123,21 +123,15 @@ def test_env_only_single_vault_upgrade_preserves_compatibility_watcher(
     assert durable_background_state(runtime.registry.load()) is None
     assert runtime.registry.load().registrations == before.registrations
 
-    # The shipped deploy step runs where the vault is not mounted and passes no root: the
-    # single enrolled env bootstrap is durable truth, and the stopped window is the drain.
+    # The shipped deploy step passes no root and may see no vault, or the image's own empty
+    # directory at the registered path: durable enrollment and the stopped window suffice.
     from app.instance.background_supervisor import run_compatibility_bridge_handoff
 
     root = Path(first.path)
     unmounted = tmp_path / "vault-not-mounted"
     root.rename(unmounted)
+    root.mkdir()  # a different directory (different inode) than the leased host mount
     try:
-        with pytest.raises(Exception, match="not visible outside a proved stopped window"):
-            run_compatibility_bridge_handoff(
-                runtime.registry,
-                channel_id=runtime.layout.channel_id,
-                ownership_root=runtime.ledger.root,
-                _capability=STORAGE_MUTATION_CAPABILITY,
-            )
         handed = run_compatibility_bridge_handoff(
             runtime.registry,
             channel_id=runtime.layout.channel_id,
@@ -146,6 +140,7 @@ def test_env_only_single_vault_upgrade_preserves_compatibility_watcher(
             _capability=STORAGE_MUTATION_CAPABILITY,
         )
     finally:
+        root.rmdir()
         unmounted.rename(root)
     receipt = handoff_through_cli(runtime)
     assert receipt["_exit_code"] == 0, receipt
@@ -305,15 +300,28 @@ def test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated(
     holder = threading.Thread(target=worker_effect)
     holder.start()
     assert in_flight.wait(5)
+    from app.instance.background_supervisor import run_compatibility_bridge_handoff
+
     result: dict = {}
-    handoff = threading.Thread(target=lambda: result.update(handoff_through_cli(runtime)))
+
+    def live_handoff() -> None:
+        # Outside a proved stopped window nothing has stopped the worker: the exclusive
+        # lease must drain it before the commit.
+        result["receipt"] = run_compatibility_bridge_handoff(
+            runtime.registry,
+            channel_id=runtime.layout.channel_id,
+            ownership_root=runtime.ledger.root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+    handoff = threading.Thread(target=live_handoff)
     handoff.start()
     time.sleep(0.5)
     assert durable_background_state(runtime.registry.load()) is None  # still draining
     release.set()
     holder.join(10)
     handoff.join(30)
-    assert result.get("_exit_code") == 0, result
+    assert result["receipt"].handed_off is True
 
     # The replacement consumes explicit versioned binding state.
     versioned = resolve_background_worker_runtime(vault_root=Path(first.path))
@@ -440,3 +448,105 @@ def test_explicit_mode_keeps_foreground_compatibility_binding_on_foreground_sele
     open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
     assert live_compatibility_binding_id() == second.vault_binding_id
     assert background_ids(runtime) == ()
+
+
+def test_handoff_refuses_to_persist_no_vault_when_registrations_are_unproven(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests._mvr03_principal_harness import provisioned_instance
+    from tests._mvr06_background_harness import (
+        record_mvr05_floor,
+        run_background_cutover_through_cli,
+    )
+    from app.instance.settings_rebind import _install_dormant_settings_rebind
+
+    runtime, first, _extra, _principal = provisioned_instance(
+        tmp_path, extra_roots=("two",), set_instance_default=False
+    )
+    record_mvr05_floor(runtime)
+    _install_dormant_settings_rebind(runtime.registry, _capability=STORAGE_MUTATION_CAPABILITY)
+    assert run_background_cutover_through_cli(runtime)["_exit_code"] == 0
+    bind_runtime_env(monkeypatch, runtime)
+
+    refused = handoff_through_cli(runtime)
+    assert refused["_exit_code"] == 1 and "cannot prove" in refused["error"]
+    assert durable_background_state(runtime.registry.load()) is None
+    # The operator names the running root and the handoff completes.
+    assert handoff_through_cli(runtime, legacy_bootstrap_root=Path(first.path))["_exit_code"] == 0
+    assert background_ids(runtime) == (first.vault_binding_id,)
+
+
+def test_inventory_enrolled_single_vault_resolves_without_a_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from app.instance.background_supervisor import _resolve_handoff_binding
+
+    runtime, first, _extra = mvr06a_instance(tmp_path, extra_roots=())
+    snapshot = runtime.registry.load()
+    enrolled = replace(
+        snapshot.registrations[first.vault_binding_id],
+        extensions={"provenance": "authenticated_legacy_owner_inventory"},
+    )
+    unbound = replace(
+        snapshot,
+        registrations={first.vault_binding_id: enrolled},
+        default_vault_binding_id=None,
+        default_vault_provenance=None,
+        settings_rebind=None,
+    )
+    assert _resolve_handoff_binding(unbound, None)[0] == first.vault_binding_id
+
+
+def test_explicit_mode_precondition_follows_foreground_and_honors_the_seal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from app.api import compatibility_mutation as mutation
+    from app.instance.vault_registry import RegistryError
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    principal = SimpleNamespace(principal=SimpleNamespace(principal_id="operator"))
+    monkeypatch.setattr(
+        mutation,
+        "build_selection_service",
+        lambda store: SimpleNamespace(derive=lambda *a, **k: principal),
+    )
+    monkeypatch.setattr(mutation, "resolve_auth_subject", lambda request, api_key: "trusted_loopback")
+
+    # Explicit background intent on another binding: the foreground token stays valid.
+    admin(runtime).remove(first.vault_binding_id)
+    admin(runtime).add(second.vault_binding_id)
+    token = mutation.issue_compatibility_precondition(
+        binding_id=first.vault_binding_id, principal_id="operator", registry=runtime.registry
+    )
+    proof = mutation._current_proof(token, request=None, api_key=None, registry=runtime.registry)
+    assert proof.binding_id == first.vault_binding_id
+    assert mutation._registered_root(runtime.registry, first.vault_binding_id) == Path(first.path)
+
+    # A token issued before a seal is refused after it, on the proof and on the root.
+    from app.instance.runtime import open_default_vault_service
+
+    open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
+    admin(runtime).remove(second.vault_binding_id)
+    token = mutation.issue_compatibility_precondition(
+        binding_id=second.vault_binding_id, principal_id="operator", registry=runtime.registry
+    )
+
+    class Crash(BaseException):
+        pass
+
+    def crash(name: str) -> None:
+        if name == "binding-removal:reserved":
+            raise Crash(name)
+
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", crash)
+    with pytest.raises(Crash):
+        runtime.remove(second.vault_binding_id)
+    with pytest.raises((mutation.CompatibilityMutationError, RegistryError)):
+        mutation._current_proof(token, request=None, api_key=None, registry=runtime.registry)
+    with pytest.raises(mutation.CompatibilityMutationError, match="sealed"):
+        mutation._registered_root(runtime.registry, second.vault_binding_id)

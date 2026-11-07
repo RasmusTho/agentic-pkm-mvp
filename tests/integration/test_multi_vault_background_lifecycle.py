@@ -282,7 +282,7 @@ def _watched_instance(tmp_path, monkeypatch, *, handoff: bool = True):
     return runtime, first, second, config
 
 
-@pytest.mark.parametrize("fault", ["drain", "before_commit", "registry_write"])
+@pytest.mark.parametrize("fault", ["before_commit", "registry_write"])
 def test_settings_spine_bridge_handoff_is_atomic(tmp_path, monkeypatch, fault) -> None:
     from app.watcher import registry as watcher_registry
 
@@ -1439,3 +1439,85 @@ def test_explicit_member_reactivation_resumes_its_watcher(tmp_path, monkeypatch)
     note.write_text("running again\n", encoding="utf-8")
     watcher_registry.run_registry_once(config)
     assert str(note) in outbox_paths(tmp_path)
+
+
+def test_unbracketed_candidate_is_not_scanned_before_commit(tmp_path, monkeypatch) -> None:
+    """Re-adding the boot root from empty intent: nothing is emitted until the commit."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+    from app.watcher import registry as watcher_registry
+
+    runtime, first, second, config = _watched_instance(tmp_path, monkeypatch)
+    drive_watcher_during_waits(monkeypatch, config)
+    admin(runtime).remove(first.vault_binding_id)
+    watcher_registry.run_registry_once(config)
+    note = Path(first.path) / "written-while-empty.md"
+    note.write_text("not bound yet\n", encoding="utf-8")
+    original_store_ack = type(SettingsRebindActivation(runtime.registry).store).acknowledge_no_lifecycle
+    observed_before_commit: list[bool] = []
+
+    def tick_then_ack(self, *, desired_revision):
+        # A watcher tick lands exactly inside the prepared window.
+        watcher_registry.run_registry_once(config)
+        observed_before_commit.append(str(note) in outbox_paths(tmp_path))
+        return original_store_ack(self, desired_revision=desired_revision)
+
+    monkeypatch.setattr(
+        type(SettingsRebindActivation(runtime.registry).store),
+        "acknowledge_no_lifecycle",
+        tick_then_ack,
+    )
+    admin(runtime).add(first.vault_binding_id)
+    assert observed_before_commit == [False]
+    watcher_registry.run_registry_once(config)
+    assert str(note) in outbox_paths(tmp_path)  # adopted only after the durable commit
+
+
+def test_revocation_waits_for_an_effect_on_a_draining_binding(tmp_path, monkeypatch) -> None:
+    import threading
+
+    from app.instance.background_supervisor import revoke_background_role_fenced
+    from app.instance.runtime import open_background_role_store, open_default_vault_service
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
+    sup = supervisor(runtime)
+    sup.start()
+    role_store = open_background_role_store(runtime.layout.registry_path)
+    held, release = threading.Event(), threading.Event()
+
+    def effect() -> None:
+        with sup.effect():
+            held.set()
+            release.wait(10)
+
+    in_flight = threading.Thread(target=effect)
+    in_flight.start()
+    assert held.wait(5)
+
+    def crash(name: str) -> None:
+        if name == "binding-removal:reserved":
+            raise _ProcessCrash(name)
+
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", crash)
+    with pytest.raises(_ProcessCrash):
+        runtime.remove(second.vault_binding_id)  # sealed, effect still in flight
+    done: dict = {}
+    revoker = threading.Thread(
+        target=lambda: done.update(
+            record=revoke_background_role_fenced(
+                registry=runtime.registry,
+                role_store=role_store,
+                ownership_root=runtime.ledger.root,
+                channel_id=runtime.layout.channel_id,
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
+        )
+    )
+    revoker.start()
+    revoker.join(0.5)
+    assert revoker.is_alive() and not done  # waits for the in-flight effect
+    release.set()
+    in_flight.join(10)
+    revoker.join(10)
+    assert done["record"].status == "revoked"
