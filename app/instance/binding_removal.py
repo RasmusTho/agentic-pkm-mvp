@@ -664,10 +664,10 @@ def _invalidate_pg_tables(binding_id: str, root: Path) -> dict[str, Any]:
         return {"tables": [], "skipped": "no_database"}
     # A configured but unreachable database raises here: the binding stays sealed and the
     # journal stays before ``derived_invalidated``. It must never record a false skip.
-    from app.stores.pg import _connect
+    from app.db.db import conn_rw
 
     cleared: list[str] = []
-    with _connect() as conn:
+    with conn_rw() as conn:
         with conn.cursor() as cur:
             for table in PG_BINDING_KEYED_DERIVED_TABLES:
                 cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (f"public.{table}",))
