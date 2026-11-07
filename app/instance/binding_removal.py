@@ -38,8 +38,9 @@ drain + commit.
 
 The binding is restored from its tombstone in the sealed ``reactivating`` state with an
 advanced content epoch; every binding-keyed derived projection family in
-:data:`DERIVED_PROJECTION_FAMILIES` is invalidated, a production full rescan manifest is
-taken, and a durable rebuild receipt is written before the reservation clears. Failure
+:data:`DERIVED_PROJECTION_FAMILIES` is invalidated, a production full rescan re-emits and
+settles every admitted note under the reconciler admission, and a durable rebuild receipt is
+written before the reservation clears. Failure
 leaves the binding ``reactivating`` (sealed, degraded). Historical receipts keep the
 retired epoch through the registry ``bindingLineage`` record.
 """
@@ -69,6 +70,7 @@ from app.instance.background_intent import (
     PROVENANCE_COMPATIBILITY_HANDOFF,
 )
 from app.instance.background_supervisor import (
+    _authorize_content,
     LIFECYCLE_DRAINING_REMOVAL,
     LIFECYCLE_REACTIVATING,
     LIFECYCLE_STATE_KEY,
@@ -261,6 +263,7 @@ class BindingRemovalCoordinator:
                 )
             if replacement == binding_id or replacement not in snapshot.registrations:
                 raise RegistryError("replacement default must be another current registration")
+            _authorize_content(snapshot, replacement, self.runtime.registry.path)
         post_default = (
             replacement if removes_default else snapshot.default_vault_binding_id
         )
@@ -539,10 +542,36 @@ class BindingRemovalCoordinator:
         source = VaultRegistration(**intent["source"])
         if intent.get("journal_moves") and intent.get("journal_before") is not None:
             activation = _activation(self.runtime)
+            prior = SettingsRebindRecord.from_payload(intent["journal_before"])
             activation._cancel_before_commit(
-                SettingsRebindRecord.from_payload(intent["journal_before"]),
-                expected_candidate_binding_id=intent["candidate_binding_id"],
+                prior, expected_candidate_binding_id=intent["candidate_binding_id"]
             )
+            # An acknowledged revision is no longer ``prepared`` but its commit never
+            # ran (the registration is still live), so the source binding is restored.
+            snapshot = registry.load()
+            current_record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
+            if (
+                current_record.phase == "no_lifecycle"
+                and current_record.desired_revision == intent["journal_revision"]
+            ):
+                # The registry admits a journal change only with a revision advance, so
+                # the restoration is its own monotonic compensating revision.
+                restored = current_record.desired_revision + 1
+                registry.set_settings_rebind_state(
+                    replace(
+                        current_record,
+                        desired_revision=restored,
+                        applied_revision=restored,
+                        phase="cancelled",
+                        lifecycle_posture="watcher",
+                        prior_binding_id=prior.prior_binding_id,
+                        candidate_binding_id=prior.candidate_binding_id,
+                        reload_revision=restored,
+                        scalar_drain_revision=restored,
+                    ).as_payload(),
+                    expected_revision=snapshot.revision,
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                )
         snapshot = registry.load()
         current = snapshot.registrations.get(binding_id)
         if current is not None and current.extensions.get("removalId") == intent["removal_id"]:
@@ -615,68 +644,131 @@ def _invalidate_pg_tables(binding_id: str, root: Path) -> dict[str, Any]:
     return {"tables": cleared}
 
 
-def _invalidate_watcher_cursors(binding_id: str, root: Path) -> dict[str, Any]:
-    """Forget per-file watcher/settings observation cursors for the retired epoch."""
-
-    del binding_id
-    state_dir_raw = os.getenv("WATCHER_STATE_DIR", "").strip()
-    if not state_dir_raw:
-        return {"cursors": 0}
-    state_dir = Path(state_dir_raw).expanduser()
-    removed = 0
-    if state_dir.is_dir():
-        identity = resolve_filesystem_root_identity(root)
-        for item in sorted(state_dir.glob("*.json")):
-            try:
-                payload = json.loads(item.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            vault_path = payload.get("vault_path") if isinstance(payload, dict) else None
-            if not isinstance(vault_path, str):
-                continue
-            try:
-                same = same_filesystem_root(
-                    resolve_filesystem_root_identity(Path(vault_path)), identity
-                )
-            except Exception:
-                continue
-            if same:
-                item.unlink()
-                removed += 1
-    return {"cursors": removed}
-
-
 def _invalidate_context_caches(binding_id: str, root: Path) -> dict[str, Any]:
-    """Rotate binding-keyed caches: their identity carries the binding revision."""
+    """Binding-keyed context/retrieval caches key on the revision reactivation advanced."""
 
     del root
     return {"rotated_by": "binding_revision", "binding_id": binding_id}
 
 
 #: (family, invalidator). Object/file/vector/index/retrieval/episode/standing-question
-#: rows live in the binding-keyed PostgreSQL tables; watcher/settings cursors and
-#: context caches are the process-side projections.
+#: rows live in the binding-keyed PostgreSQL tables; in-memory context caches rotate on
+#: the binding revision that the reactivating registration advances.
 DERIVED_PROJECTION_FAMILIES: tuple[tuple[str, Callable[[str, Path], dict[str, Any]]], ...] = (
     ("binding_keyed_tables", _invalidate_pg_tables),
-    ("watcher_cursors", _invalidate_watcher_cursors),
     ("context_caches", _invalidate_context_caches),
 )
 
 
-def _full_rescan(root: Path) -> dict[str, Any]:
-    """The production full rescan manifest the rebuild receipt is bound to."""
+def _production_rebuild(
+    runtime: InstanceRegistryRuntime,
+    *,
+    binding_id: str,
+    root: Path,
+    content_epoch: int,
+    reactivation_id: str,
+) -> dict[str, Any]:
+    """The production full rescan and durable rebuild behind the rebuild receipt.
 
+    Every admitted note (the watcher's own scanner and payload contract) is re-emitted as
+    a binding-stamped ``ingest.vault.changed`` row keyed to this reactivation, the rows are
+    settled through real worker dispatch inside this context's reconciler admission, and
+    the binding-scoped vault projections are replaced. Any failure raises and leaves the
+    binding sealed; ordinary holders stay refused until the receipt is durable.
+    """
+
+    from app.events.models import new_event
+    from app.events.types import INGEST_VAULT_CHANGED
+    from app.instance.binding_effect_lease import (
+        BindingEffectLeaseManager,
+        lifecycle_reconciler_admission,
+    )
+    from app.instance.scalar_binding_runtime import (
+        ScalarBindingRuntime,
+        _authorize_binding,
+        _binding_revision,
+        frozen_binding_effect,
+    )
+    from app.services.outbox import (
+        _self_owned_database_is_named,
+        derive_idempotency_key,
+        write_outbox_event,
+    )
+    from app.watcher.registry import ingest_vault_changed_payload
+    from app.watcher.vault_watcher import _scan_md_files
+    from app.workers.outbox_worker import drain_binding_outbox
+
+    snapshot = runtime.registry.load()
+    verdict = _authorize_binding(snapshot, binding_id, runtime.registry.path)
+    frozen = ScalarBindingRuntime(
+        vault_binding_id=binding_id,
+        binding_revision=_binding_revision(snapshot, binding_id),
+        authority=verdict.status,
+        authorization_epoch=verdict.epoch,
+        channel_id=runtime.layout.channel_id,
+        root=root.expanduser().resolve(strict=True),
+        registry_store=runtime.registry,
+        ownership_ledger=runtime.ledger,
+        effect_leases=BindingEffectLeaseManager.for_runtime(
+            registry_store=runtime.registry,
+            ownership_root=runtime.ledger.root,
+            state_root=runtime.layout.root / "binding-effect-leases",
+        ),
+    )
+    durable_queue = _self_owned_database_is_named()
     digest = hashlib.sha256()
-    files = 0
-    for path in sorted(root.rglob("*.md")):
-        relative = path.relative_to(root)
-        if any(part.startswith(".") for part in relative.parts):
-            continue
-        digest.update(str(relative).encode())
-        digest.update(b"\x00")
-        digest.update(hashlib.sha256(path.read_bytes()).digest())
-        files += 1
-    return {"files": files, "manifest_sha256": digest.hexdigest()}
+    observed = _scan_md_files(frozen.root)
+    with lifecycle_reconciler_admission(binding_id), frozen_binding_effect(frozen):
+        for relative in sorted(observed):
+            data = (frozen.root / relative).read_bytes()
+            content_hash = hashlib.sha256(data).hexdigest()
+            digest.update(relative.encode() + b"\x00" + bytes.fromhex(content_hash))
+            payload = ingest_vault_changed_payload(
+                vault_root=frozen.root,
+                relative_path=Path(relative),
+                mtime=observed[relative],
+                content_hash=content_hash,
+                watcher="binding_reactivation",
+            )
+            write_outbox_event(
+                new_event(
+                    event_type=INGEST_VAULT_CHANGED,
+                    payload=payload,
+                    source="instance.binding_reactivation",
+                ),
+                idempotency_key=derive_idempotency_key(
+                    INGEST_VAULT_CHANGED,
+                    binding_id,
+                    f"{reactivation_id}:{content_epoch}:{relative}:{content_hash}",
+                ),
+                vault_binding_id=binding_id,
+                required_db=durable_queue,
+                producer="shared.instance.binding_reactivation",
+            )
+        drain = drain_binding_outbox(vault_root=frozen.root, binding_id=binding_id)
+        projections = _rebuild_vault_projections(frozen.root, binding_id)
+    return {
+        "files": len(observed),
+        "manifest_sha256": digest.hexdigest(),
+        "queue": "database" if durable_queue else "none",
+        "settled_rows": len(drain.get("terminal_row_ids", ())),
+        "projections": projections,
+    }
+
+
+def _rebuild_vault_projections(root: Path, binding_id: str) -> list[str]:
+    """Replace the binding-scoped projections whose source of truth is the vault itself."""
+
+    from app.stores.pg import pg_available
+
+    if not pg_available():
+        return []
+    from app.jobs.episodes_projection import rebuild_episodes_projection
+    from app.standing_questions.projection import rebuild_standing_questions_projection
+
+    rebuild_episodes_projection(root, vault_binding_id=binding_id)
+    rebuild_standing_questions_projection(root, vault_binding_id=binding_id)
+    return ["episodes", "standing_questions"]
 
 
 class BindingReactivationCoordinator:
@@ -761,7 +853,13 @@ class BindingReactivationCoordinator:
             intent["invalidated"] = receipts
             self.journal.save(intent, "derived_invalidated")
         if before(intent, "rescanned"):
-            intent["rescan"] = _full_rescan(root)
+            intent["rescan"] = _production_rebuild(
+                runtime,
+                binding_id=binding_id,
+                root=root,
+                content_epoch=intent["content_epoch"],
+                reactivation_id=intent["reactivation_id"],
+            )
             self.journal.save(intent, "rescanned")
         if before(intent, "rebuild_receipted"):
             intent["rebuild_receipt"] = self._write_rebuild_receipt(intent)

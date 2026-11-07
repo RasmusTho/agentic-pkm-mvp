@@ -297,6 +297,16 @@ class SettingsRebindStore:
 
         snapshot = self._registry.load()
         current = self.read()
+        candidate = (
+            None
+            if candidate_binding_id is None
+            else snapshot.registrations.get(candidate_binding_id)
+        )
+        if candidate is not None and candidate.extensions.get("lifecycleState") is not None:
+            # MVR-06B: a draining-removal or reactivating binding admits no new holder.
+            raise SettingsRebindCandidatePolicyError(
+                "settings rebind candidate is sealed by its registration lifecycle"
+            )
         if current.phase == "prepared":
             if current.candidate_binding_id == candidate_binding_id:
                 return current
@@ -434,8 +444,14 @@ class SettingsRebindStore:
         raise RegistryError("absent watcher cannot reconcile this settings rebind revision")
 
     def compatibility_binding_id(self) -> str:
-        """Return the durable binding allowed to admit compatibility effects."""
+        """Return the durable binding allowed to admit compatibility effects.
 
+        Once MVR-06B intent is ``explicit`` the journal candidate is the *background*
+        binding; carrier-free foreground effects keep following foreground selection.
+        """
+
+        if _background_intent_mode(self._registry) == "explicit":
+            return _foreground_compatibility_binding(self._registry)
         current = self.read()
         if current.phase == "prepared":
             raise RegistryError("compatibility handoff is awaiting commit")
@@ -857,6 +873,14 @@ class SettingsRebindActivation:
         # A commit fault is post-commit: recovery must observe the durable B
         # binding and roll forward, matching the watcher transaction seam.
         _activation_fault_point("commit")
+        if background_intent is None and _background_intent_mode(self.store._registry):
+            # MVR-06B: the idempotent wake-up for this compatibility revision. Losing it
+            # (crash here) is closed by the supervisor's durable revision cursor.
+            from app.instance import background_supervisor
+
+            background_supervisor.emit_background_intent_event(
+                self.store._registry.load(), reason="compatibility_rebind"
+            )
 
         self._wait_for_completed_if_enabled(committed)
         committed = self._reload_if_needed(committed, candidate_root)
@@ -1051,6 +1075,21 @@ def _background_intent_mode(registry: VaultRegistryStore) -> str | None:
         return None
     intent = BackgroundBindingIntent.from_payload(raw)
     return intent.mode if intent.handoff_complete else None
+
+
+def _foreground_compatibility_binding(registry: VaultRegistryStore) -> str:
+    """Explicit-mode foreground binding: last selection > default > legacy bootstrap."""
+
+    snapshot = registry.load()
+    for registration in snapshot.registrations.values():
+        if registration.ref == snapshot.last_active_vault_ref:
+            return registration.vault_binding_id
+    if snapshot.default_vault_binding_id in snapshot.registrations:
+        return str(snapshot.default_vault_binding_id)
+    bootstrap = _registered_legacy_bootstrap(snapshot)
+    if bootstrap is None:
+        raise RegistryError("compatibility binding is not selected")
+    return bootstrap
 
 
 def _registered_legacy_bootstrap(snapshot: object) -> str | None:

@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping, TypedDict, cast
@@ -156,6 +157,24 @@ class BindingLifecycleSealed(BindingEffectLeaseError):
 
 #: Registration lifecycle reservations that seal ordinary (shared) effect acquisition.
 _SEALED_LIFECYCLE_STATES = frozenset({"draining_removal", "reactivating"})
+_RECONCILER_ADMISSION: ContextVar[str | None] = ContextVar(
+    "mvr06b_lifecycle_reconciler_admission", default=None
+)
+
+
+@contextmanager
+def lifecycle_reconciler_admission(vault_binding_id: str) -> Iterator[None]:
+    """Admit only this context's rebuild effects past the binding's lifecycle seal.
+
+    Held solely by the reactivation coordinator around its own production rebuild: every
+    other holder stays refused until the durable rebuild receipt clears the reservation.
+    """
+
+    token = _RECONCILER_ADMISSION.set(vault_binding_id)
+    try:
+        yield
+    finally:
+        _RECONCILER_ADMISSION.reset(token)
 
 
 class BindingEffectLeaseTimeout(BindingEffectLeaseError):
@@ -743,6 +762,8 @@ class BindingEffectLeaseManager:
             self._fsync_directory(self.state_root)
 
     def _assert_lifecycle_admits_shared(self, vault_binding_id: str) -> None:
+        if _RECONCILER_ADMISSION.get() == vault_binding_id:
+            return
         registration = self.registry_store.load().registrations.get(vault_binding_id)
         state = None if registration is None else registration.extensions.get("lifecycleState")
         if state in _SEALED_LIFECYCLE_STATES:

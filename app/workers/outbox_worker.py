@@ -371,7 +371,13 @@ def run_once(
     from app.instance.background_supervisor import BackgroundBindingIdle
 
     try:
-        binding_runtime = resolve_background_worker_runtime(vault_root=resolved_root)
+        # A transfer drain settles its named source binding, which may already have left
+        # durable intent; every ordinary tick resolves the versioned background binding.
+        binding_runtime = (
+            resolve_scalar_binding_runtime(vault_root=resolved_root)
+            if _eligible_binding_ids is not None
+            else resolve_background_worker_runtime(vault_root=resolved_root)
+        )
     except BackgroundBindingIdle:
         # MVR-06B: explicit-empty or compatibility no-vault intent is durable idle.
         logger.debug("outbox worker tick idled: durable background intent runs no binding")
@@ -953,6 +959,14 @@ def _resolve_optional_vault_root(vault_root: Path | None = None) -> Path | None:
     """
     if vault_root is not None:
         return vault_root.expanduser().resolve()
+    # MVR-06B: after the bridge handoff durable versioned intent owns the worker's
+    # binding; the env root is a pre-handoff bootstrap adapter only, so a rebind needs no
+    # restart and empty intent idles even with an env root configured.
+    from app.instance.background_supervisor import durable_background_root
+
+    durable, durable_root = durable_background_root()
+    if durable:
+        return None if durable_root is None else durable_root.resolve()
     watcher_root = os.getenv("WATCHER_VAULT_PATH")
     if watcher_root:
         watcher_path = Path(watcher_root).expanduser()
@@ -2246,9 +2260,15 @@ def run(
     # this the worker's LLM routing / embeddings run on pydantic code defaults.
     # Invalid sources degrade loudly on health rather than crashing the worker.
     try:
+        from app.instance.background_supervisor import durable_background_root
         from app.settings.ingestion import ingest_settings
 
-        ingest_settings(reason="worker_startup")
+        durable, durable_root = durable_background_root()
+        if not durable:
+            ingest_settings(reason="worker_startup")
+        elif durable_root is not None:
+            # MVR-06B: settings follow the durable binding, never the boot env root.
+            ingest_settings(reason="worker_startup", vault_root=durable_root)
     except Exception as exc:  # pragma: no cover - defensive; ingest already degrades
         logger.warning("Settings ingestion at worker startup failed: %s", exc)
 

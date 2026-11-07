@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -74,6 +76,9 @@ SEALED_LIFECYCLE_STATES = frozenset({LIFECYCLE_DRAINING_REMOVAL, LIFECYCLE_REACT
 
 BACKGROUND_CAPABILITY_DOMAIN = b"agentic-pkm.background-capability.v1"
 BACKGROUND_CONTEXT_SCOPE = "background"
+#: The handoff holds the ingress fence exclusively while it drains; a holder that never
+#: exits must fail the cutover (bridge stays authoritative), not wedge it.
+HANDOFF_DRAIN_TIMEOUT_SECONDS = 60.0
 
 LifecycleStatus = Literal["running", "idle", "failed"]
 
@@ -317,7 +322,10 @@ def run_compatibility_bridge_handoff(
             )
             _handoff_fault_point("drain")
             with leases.exclusive_change(
-                binding, channel_id=channel_id, root=Path(registration.path)
+                binding,
+                channel_id=channel_id,
+                root=Path(registration.path),
+                timeout=HANDOFF_DRAIN_TIMEOUT_SECONDS,
             ):
                 committed = commit()
         else:
@@ -829,33 +837,57 @@ class BackgroundLifecycleSupervisor:
         if binding is None:
             return bool(state.binding_ids)
         registration = snapshot.registrations.get(binding)
-        if registration is None or state.binding_ids != (binding,):
+        if state.binding_ids != (binding,):
             return True
+        if registration is None:
+            return current.status != "failed"
         if registration.extensions.get(LIFECYCLE_STATE_KEY) in SEALED_LIFECYCLE_STATES:
-            return True
+            return current.status != "failed"
         return _binding_revision(snapshot, binding) != current.binding_revision
 
     def reconcile(self) -> BackgroundLifecycle:
-        """Converge from durable registry revision + auth epoch (hints only accelerate)."""
+        """Converge from durable registry revision + auth epoch (hints only accelerate).
+
+        A failed lifecycle is retried on every call: ownership or authority repair has
+        no registry revision of its own, so only a fresh resolution can observe it.
+        """
 
         current = self._lifecycle
         if current is None:
             return self.start()
         if current.status != "failed" and not self._cursor_changed(current):
             return current
-        if current.status == "failed" and not self._cursor_changed(current):
-            return current
-        self._drain(current)
-        self._lifecycle = self._resolve(current.generation + 1)
+        if not self._drain(current):
+            self._lifecycle = replace(
+                current,
+                status="failed",
+                failure="the prior generation's in-flight effects have not drained",
+            )
+            return self._lifecycle
+        resolved = self._resolve(current.generation + 1)
+        if (
+            current.status == "failed"
+            and resolved.status == "failed"
+            and (resolved.binding_id, resolved.failure) == (current.binding_id, current.failure)
+            and resolved.intent_revision == current.intent_revision
+        ):
+            # An unchanged failure is the same generation, not a rotation.
+            resolved = replace(resolved, generation=current.generation)
+        self._lifecycle = resolved
         return self._lifecycle
 
-    def _drain(self, lifecycle: BackgroundLifecycle) -> None:
+    def _drain(self, lifecycle: BackgroundLifecycle) -> bool:
         """Wait out in-flight shared effects of the old generation before rotating."""
 
+        from app.instance.binding_effect_lease import (
+            BindingEffectLeaseTimeout,
+            OwnershipFenceUnavailable,
+        )
+
         if lifecycle.binding_id is None or lifecycle.root is None:
-            return
+            return True
         if self.ownership_ledger.active_owner(lifecycle.binding_id) is None:
-            return  # removal/transfer already drained and retired the lease
+            return True  # removal/transfer already drained and retired the lease
         try:
             with self.effect_leases.exclusive_change(
                 lifecycle.binding_id,
@@ -863,9 +895,31 @@ class BackgroundLifecycleSupervisor:
                 root=lifecycle.root,
                 timeout=self.drain_timeout,
             ):
-                pass
-        except Exception as exc:
-            _hint(f"drain of {lifecycle.binding_id} not proven: {exc}")
+                return True
+        except OwnershipFenceUnavailable:
+            # The fence refuses every new holder; resolution below fails closed.
+            return True
+        except BindingEffectLeaseTimeout:
+            logger.error(
+                "background lifecycle drain timed out consumer=%s binding=%s",
+                self.consumer,
+                lifecycle.binding_id,
+            )
+            return False
+
+    def require_current(self, lifecycle: BackgroundLifecycle) -> None:
+        """Final validation inside the shared lease: durable truth and GOV are unchanged."""
+
+        if self._cursor_changed(lifecycle) or lifecycle.binding_id is None:
+            raise BackgroundLifecycleStale(
+                "durable binding/auth truth changed before the effect; reconcile first"
+            )
+        from app.instance.scalar_binding_runtime import _authorize_binding
+
+        verdict = _authorize_binding(self.registry.load(), lifecycle.binding_id, self.registry.path)
+        role = self._role()
+        if f"{verdict.epoch}|auth-epoch-{role.auth_epoch}" != lifecycle.authorization_epoch:
+            raise BackgroundLifecycleStale("GOV authorization changed before the effect")
 
     @contextmanager
     def effect(self) -> Iterator[BackgroundLifecycle]:
@@ -881,17 +935,7 @@ class BackgroundLifecycleSupervisor:
         with self.effect_leases.shared_effect(
             lifecycle.binding_id, channel_id=self.channel_id, root=lifecycle.root
         ):
-            if self._cursor_changed(lifecycle):
-                raise BackgroundLifecycleStale(
-                    "durable binding/auth truth changed before the effect; reconcile first"
-                )
-            snapshot = self.registry.load()
-            from app.instance.scalar_binding_runtime import _authorize_binding
-
-            verdict = _authorize_binding(snapshot, lifecycle.binding_id, self.registry.path)
-            role = self._role()
-            if f"{verdict.epoch}|auth-epoch-{role.auth_epoch}" != lifecycle.authorization_epoch:
-                raise BackgroundLifecycleStale("GOV authorization changed before the effect")
+            self.require_current(lifecycle)
             yield lifecycle
 
     def health(self) -> dict[str, Any]:
@@ -901,6 +945,69 @@ class BackgroundLifecycleSupervisor:
             "supervisor": "mvr06b-singleton",
             "lifecycles": [] if lifecycle is None else [lifecycle.health()],
         }
+
+
+_PROCESS_SUPERVISORS: dict[tuple[str, str, str, str], BackgroundLifecycleSupervisor] = {}
+_PROCESS_SUPERVISORS_LOCK = threading.Lock()
+
+
+def process_background_supervisor(consumer: str) -> BackgroundLifecycleSupervisor | None:
+    """The one supervisor of this watcher/worker process, or ``None`` before the handoff.
+
+    Generations are per-process and in-memory: a restart reconstructs them from durable
+    intent. The registry and ownership mounts come from the same env as every consumer.
+    """
+
+    registry_raw = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+    if not registry_raw:
+        return None
+    registry_path = Path(registry_raw).expanduser().resolve(strict=False)
+    if not registry_path.exists() or durable_background_state(
+        VaultRegistryStore(registry_path).load()
+    ) is None:
+        return None
+    ownership_raw = os.getenv("INSTANCE_OWNERSHIP_ROOT", "").strip()
+    if not ownership_raw:
+        raise BackgroundLifecycleError("background supervision requires the ownership root")
+    channel = os.getenv("PKM_ENVIRONMENT", "dev").strip() or "dev"
+    key = (str(registry_path), ownership_raw, channel, consumer)
+    with _PROCESS_SUPERVISORS_LOCK:
+        supervisor = _PROCESS_SUPERVISORS.get(key)
+        if supervisor is None:
+            supervisor = BackgroundLifecycleSupervisor.for_runtime(
+                registry_path=registry_path,
+                ownership_root=Path(ownership_raw).expanduser(),
+                channel_id=channel,
+                consumer=consumer,
+            )
+            _PROCESS_SUPERVISORS[key] = supervisor
+    return supervisor
+
+
+def durable_background_root() -> tuple[bool, Path | None]:
+    """``(True, root-or-None)`` once durable intent owns the binding, else ``(False, None)``.
+
+    An unreadable registry reports ``False``: the caller's resolver then fails closed on
+    its own read, so this probe never turns a corrupt registry into a silent idle.
+    """
+
+    registry_raw = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+    if not registry_raw:
+        return False, None
+    try:
+        registry_path = Path(registry_raw).expanduser().resolve(strict=False)
+        if not registry_path.exists():
+            return False, None
+        snapshot = VaultRegistryStore(registry_path).load()
+        state = durable_background_state(snapshot)
+    except Exception:
+        return False, None
+    if state is None:
+        return False, None
+    running = _running(snapshot, state.binding_ids)
+    if not running:
+        return True, None
+    return True, Path(snapshot.registrations[running[0]].path).expanduser()
 
 
 def revoke_background_role_fenced(
@@ -961,7 +1068,9 @@ __all__ = [
     "background_capability_digest",
     "durable_background_state",
     "emit_background_intent_event",
+    "durable_background_root",
     "handoff_complete",
+    "process_background_supervisor",
     "repair_background_intent_for_transfer",
     "revoke_background_role_fenced",
     "run_compatibility_bridge_handoff",

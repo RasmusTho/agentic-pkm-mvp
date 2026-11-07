@@ -136,6 +136,19 @@ def test_env_only_single_vault_upgrade_preserves_compatibility_watcher(
     assert lifecycle.status == "running"
     assert lifecycle.binding_id == first.vault_binding_id
 
+    # The real production watcher keeps watching that binding after restart.
+    from app.watcher import registry as watcher_registry
+    from tests._mvr06b_handoff_harness import configure_watcher, outbox_paths
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    initialize_test_vault(Path(first.path))
+    bind_runtime_env(monkeypatch, restarted, watcher=True)
+    config = configure_watcher(monkeypatch, tmp_path, restarted, Path(first.path))
+    note = Path(first.path) / "still-watched-after-upgrade.md"
+    note.write_text("env-only install\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config)
+    assert str(note) in outbox_paths(tmp_path)
+
 
 def test_remove_last_then_restart_preserves_explicit_empty_intent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -286,14 +299,33 @@ def test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated(
         instance_identity=runtime.registry.load().app_install_id,
         intent_revision=state.intent_revision,
         binding_id=first.vault_binding_id,
-        generation=1,
+        generation=versioned.background_lifecycle.generation,
     )
+    assert versioned.background_lifecycle.context.workspace.state == "no_workspace"
     # Never a worker on another binding: the env/selected root must be durable intent.
     with pytest.raises(Exception, match="not the durable background binding"):
         resolve_background_worker_runtime(vault_root=Path(second.path))
-    # A later intent revision invalidates the held worker before its next dispatch.
-    admin(runtime).remove(first.vault_binding_id)
-    with pytest.raises(Exception, match="revision changed before dispatch|background worker binding"):
+    # Production tick: the env root (still the old one) does not choose the binding. A
+    # compatibility rebind moves the worker without a restart.
+    from app.workers.outbox_worker import _resolve_optional_vault_root
+
+    assert _resolve_optional_vault_root(None) == Path(first.path).resolve()
+    pick(runtime, second.vault_binding_id)
+    assert _resolve_optional_vault_root(None) == Path(second.path).resolve()
+    rebound = resolve_background_worker_runtime()
+    assert rebound is not None and rebound.vault_binding_id == second.vault_binding_id
+    with pytest.raises(Exception, match="revision changed before dispatch|truth changed before the effect"):
+        validate_frozen_binding_runtime(versioned)
+    versioned = rebound
+
+    # A later intent revision invalidates the held worker before its next dispatch, and
+    # empty durable intent idles the tick even with an env root configured.
+    admin(runtime).remove(second.vault_binding_id)
+    assert _resolve_optional_vault_root(None) is None
+    from app.workers.outbox_worker import run_once
+
+    assert run_once().state == "no_vault"
+    with pytest.raises(Exception, match="revision changed before dispatch|truth changed before the effect"):
         validate_frozen_binding_runtime(versioned)
 
 
@@ -360,3 +392,26 @@ def test_background_consumer_preflight_starts_supervisor_from_durable_intent(
             == 0
         )
     assert background_ids(runtime) == (first.vault_binding_id,)
+
+
+def test_explicit_mode_keeps_foreground_compatibility_binding_on_foreground_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Carrier-free foreground effects follow foreground truth, not the background set."""
+    from app.instance.compatibility_binding import live_compatibility_binding_id
+    from app.instance.settings_rebind import SettingsRebindStore
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    # Explicit-empty background intent: the journal candidate is cleared ...
+    admin(runtime).remove(first.vault_binding_id)
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id is None
+    # ... but carrier-free foreground work still resolves the instance default.
+    assert SettingsRebindStore(runtime.registry).compatibility_binding_id() == first.vault_binding_id
+    assert live_compatibility_binding_id() == first.vault_binding_id
+    # An ordinary foreground selection moves it; background intent stays empty.
+    from app.instance.runtime import open_default_vault_service
+
+    open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
+    assert live_compatibility_binding_id() == second.vault_binding_id
+    assert background_ids(runtime) == ()

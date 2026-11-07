@@ -531,3 +531,49 @@ def test_post_handoff_transfer_repairs_mvr06_intent_before_restart(tmp_path, mon
     assert supervisor(restarted).start().status == "idle"
     assert target not in (durable_background_state(restarted.registry.load()).binding_ids)
     assert "backgroundIntent" not in destination.registry.load().extensions
+
+
+def test_removed_binding_cross_channel_rehome_records_predecessor_lineage(tmp_path, monkeypatch):
+    """MVR-06B (#3864): rehome mints a destination binding only through governed transfer."""
+    from app.instance.binding_removal import binding_epoch_lineage
+    from app.instance.settings_rebind import _install_dormant_settings_rebind
+    from tests._mvr06_background_harness import (
+        record_mvr05_floor,
+        run_background_cutover_through_cli,
+    )
+    from tests._mvr06b_handoff_harness import handoff_through_cli
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    source, destination, original, lifecycle = transfer_pair(tmp_path, monkeypatch)
+    # The original is the rollback target; rehome a second, removable registration.
+    extra_root = tmp_path / "source" / "extra"
+    extra_root.mkdir()
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    initialize_test_vault(extra_root)
+    extra = source.production_register(extra_root, producer="api")
+    record_mvr05_floor(source)
+    _install_dormant_settings_rebind(
+        source.registry, binding_id=original.vault_binding_id,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    peers = (destination,)
+    assert run_background_cutover_through_cli(source, other_runtimes=peers)["_exit_code"] == 0
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    assert handoff_through_cli(source, other_runtimes=peers)["_exit_code"] == 0
+
+    source.remove(extra.vault_binding_id)
+    target = source.rehome_removed(destination, extra_root, stop_and_prove=lifecycle)
+    snapshot = source.registry.load()
+    # Historical rows stamped under the source id stay attributable: its retired epochs
+    # and its predecessor -> successor transfer record are both durable.
+    assert [item["event"] for item in binding_epoch_lineage(snapshot, extra.vault_binding_id)] == [
+        "removed",
+        "reactivated",
+    ]
+    lineage = destination.registry.load().transfer_lineage[-1]
+    assert lineage.source_binding_id == extra.vault_binding_id
+    assert lineage.destination_binding_id == target
+    assert snapshot.transfer_lineage[-1] == lineage
+    assert source.ledger.active_owner(target).channel_id == destination.layout.channel_id
+    assert source.ledger.active_owner(extra.vault_binding_id) is None

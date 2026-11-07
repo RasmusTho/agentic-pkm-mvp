@@ -595,11 +595,7 @@ def test_registry_revision_rebinds_and_closes_event_crash_window(tmp_path, monke
     pick(runtime, second.vault_binding_id)
     # The held generation cannot accept later work against the stale binding.
     with pytest.raises(BackgroundLifecycleStale):
-        with sup.effect_leases.shared_effect(
-            gen1.binding_id, channel_id=sup.channel_id, root=gen1.root
-        ):
-            if sup._cursor_changed(gen1):
-                raise BackgroundLifecycleStale("stale")
+        sup.require_current(gen1)
     gen2 = sup.reconcile()  # converges from the durable revision cursor alone
     assert gen2.binding_id == second.vault_binding_id and gen2.generation == 2
     monkeypatch.setattr(outbox_module, "write_outbox_event", lambda *a, **k: "hint")
@@ -885,9 +881,46 @@ def test_tombstone_reactivation_rebuilds_all_derived_state_before_healthy(
     runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
     stub_settings_reload(monkeypatch)
     binding, root = second.vault_binding_id, Path(second.path)
+    (root / "note-to-rebuild.md").write_text("derived state source\n", encoding="utf-8")
     runtime.remove(binding)
     retired = runtime.registry.load().removal_tombstones[binding]
     assert retired.content_epoch == 1
+
+    # The rebuild is real production work: every admitted note is re-emitted as a
+    # binding-stamped, reactivation-keyed ingest row, settled by worker dispatch while
+    # ordinary holders stay sealed.
+    from app.services import outbox as outbox_module
+
+    rebuilt: list[tuple[str, str, str]] = []
+    sealed_during_rebuild: list[bool] = []
+    real_drain = None
+    from app.workers import outbox_worker
+
+    real_drain = outbox_worker.drain_binding_outbox
+
+    def capture(event, conn=None, *, idempotency_key, vault_binding_id=None, required_db=False, producer=None):
+        rebuilt.append((vault_binding_id, event.payload["relative_path"], producer))
+        return idempotency_key
+
+    def drain(*, vault_root, binding_id, include_compatibility=False):
+        import threading as _threading
+
+        # A different context (no admission) is still refused while this one rebuilds.
+        outcome: list[bool] = []
+        probe = _threading.Thread(
+            target=lambda: outcome.append(_shared_refused(runtime, binding, root))
+        )
+        probe.start()
+        probe.join(10)
+        sealed_during_rebuild.extend(outcome)
+        return real_drain(
+            vault_root=vault_root,
+            binding_id=binding_id,
+            include_compatibility=include_compatibility,
+        )
+
+    monkeypatch.setattr(outbox_module, "write_outbox_event", capture)
+    monkeypatch.setattr(outbox_worker, "drain_binding_outbox", drain)
 
     calls: list[str] = []
     families = list(binding_removal.DERIVED_PROJECTION_FAMILIES)
@@ -899,7 +932,7 @@ def test_tombstone_reactivation_rebuilds_all_derived_state_before_healthy(
     monkeypatch.setattr(
         binding_removal,
         "DERIVED_PROJECTION_FAMILIES",
-        tuple(families[:1] + [("watcher_cursors", failing)] + families[2:]),
+        tuple(families[:1] + [("context_caches", failing)]),
     )
     with pytest.raises(RuntimeError, match="invalidation failed"):
         runtime.reactivate_removed(root)
@@ -919,6 +952,8 @@ def test_tombstone_reactivation_rebuilds_all_derived_state_before_healthy(
     assert receipt["retired_epoch"] == 1 and receipt["content_epoch"] == 2
     assert receipt["invalidated_families"] == sorted(name for name, _ in families)
     assert receipt["rescan"]["files"] >= 1
+    assert (binding, "note-to-rebuild.md", "shared.instance.binding_reactivation") in rebuilt
+    assert sealed_during_rebuild == [True]
     assert healthy.extensions["rebuildReceiptSha256"]
     assert not _shared_refused(runtime, binding, root)
     admin(runtime).add(binding)
@@ -1089,3 +1124,109 @@ def test_direct_filesystem_write_during_removal_is_receipted_before_tombstone(
     )
     assert str(direct) in outbox_paths(tmp_path)
     assert runtime.ledger.active_owner(second.vault_binding_id) is None
+
+
+def test_removal_commit_refusal_without_watcher_restores_the_source(tmp_path, monkeypatch) -> None:
+    from app.instance.runtime import open_default_vault_service
+    from app.instance.vault_registry import RegistryRevisionConflict
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
+    before = runtime.registry.load()
+
+    def race(self, **kwargs):
+        raise RegistryRevisionConflict("injected revision race at the removal commit")
+
+    monkeypatch.setattr(type(runtime.registry), "commit_background_transition", race)
+    with pytest.raises(RegistryRevisionConflict):
+        runtime.remove(second.vault_binding_id)
+    monkeypatch.undo()
+    bind_runtime_env(monkeypatch, runtime)
+    stub_settings_reload(monkeypatch)
+    after = runtime.registry.load()
+    assert after.registrations[second.vault_binding_id] == before.registrations[second.vault_binding_id]
+    assert after.default_vault_binding_id == second.vault_binding_id
+    assert background_ids(runtime) == (second.vault_binding_id,)
+    record = runtime.open_settings_rebind_store().read()
+    assert record.candidate_binding_id == second.vault_binding_id
+    assert runtime.ledger.active_owner(second.vault_binding_id) is not None
+    assert not _shared_refused(runtime, second.vault_binding_id, Path(second.path))
+    # A retry from that restored state completes.
+    runtime.remove(second.vault_binding_id)
+    assert second.vault_binding_id in runtime.registry.load().removal_tombstones
+
+
+def test_sealed_binding_cannot_become_a_rebind_candidate(tmp_path, monkeypatch) -> None:
+    from app.instance.settings_rebind import SettingsRebindCandidatePolicyError
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    runtime.remove(second.vault_binding_id)
+
+    class Crash(BaseException):
+        pass
+
+    def crash(name: str) -> None:
+        if name == "binding-reactivation:registered_reactivating":
+            raise Crash(name)
+
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", crash)
+    with pytest.raises(Crash):
+        runtime.reactivate_removed(Path(second.path))
+    with pytest.raises(SettingsRebindCandidatePolicyError):
+        pick(runtime, second.vault_binding_id)
+    assert background_ids(runtime) == (first.vault_binding_id,)
+
+
+def test_production_worker_and_watcher_are_blocked_by_gov_revocation(tmp_path, monkeypatch) -> None:
+    """The fence is the production path: worker dispatch and the watcher cycle both honor it."""
+    from app.instance.runtime import open_background_role_store
+    from app.instance.scalar_binding_runtime import (
+        resolve_background_worker_runtime,
+        validate_frozen_binding_runtime,
+    )
+    from app.watcher import registry as watcher_registry
+
+    runtime, first, second, config = _watched_instance(tmp_path, monkeypatch)
+    watcher_registry.run_registry_once(config)
+    worker = resolve_background_worker_runtime()
+    assert worker is not None and worker.background_worker
+    validate_frozen_binding_runtime(worker)
+    before_note = Path(first.path) / "before-revocation.md"
+    before_note.write_text("before\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config)
+    assert str(before_note) in outbox_paths(tmp_path)
+
+    open_background_role_store(runtime.layout.registry_path).revoke(
+        _capability=STORAGE_MUTATION_CAPABILITY
+    )
+    with pytest.raises(Exception):
+        validate_frozen_binding_runtime(worker)
+    with pytest.raises(Exception, match="background lifecycle is failed"):
+        resolve_background_worker_runtime()
+    after_note = Path(first.path) / "after-revocation.md"
+    after_note.write_text("after\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config)
+    assert str(after_note) not in outbox_paths(tmp_path)  # no vault effect this cycle
+
+
+def test_binding_lifecycle_cli_removes_recovers_and_reactivates(tmp_path, monkeypatch) -> None:
+    from tests._mvr06_background_harness import cli
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    common = (
+        "--registry-path", str(runtime.layout.registry_path),
+        "--channel", runtime.layout.channel_id,
+        "--host-global-root", str(runtime.ledger.root),
+        "--consumer", "cli",
+    )
+    removed = cli("binding-remove", *common, "--vault-binding-id", second.vault_binding_id)
+    assert removed["_exit_code"] == 0, removed
+    assert removed["state"] == "removed" and second.path not in str(removed)
+    recovered = cli("binding-lifecycle-recover", *common)
+    assert recovered["_exit_code"] == 0 and recovered["recovered_removal"] is None
+    reactivated = cli("binding-reactivate", *common, "--root", second.path)
+    assert reactivated["_exit_code"] == 0, reactivated
+    assert reactivated["content_epoch"] == 2 and second.path not in str(reactivated)
