@@ -48,8 +48,58 @@ workflow and active `.codex/agents/**` role adapter.
 
 `CLAUDE.md` and retained Claude execution-role references are non-operational compatibility and
 provenance material only. They do not authorize launching Claude, reading Anthropic credentials,
-or selecting a provider/model target. Any future non-Codex carrier requires a separately governed
-contract and current authority readback before becoming operational.
+or selecting a provider/model target. The owner has directed the Builder System toward two real
+agent families; that direction and isolated CLI/session experiments do not qualify a carrier or
+change the current operating path.
+
+**Prospective shared carrier contract.** Codex and a separately qualified second family, such as
+Claude, must be replaceable execution carriers behind the same governed operation, not separate
+workflow or effect authorities. This target revises #5205's blanket future-carrier restriction only
+to permit a separately qualified transition; Codex remains the only active carrier. The existing
+inactive `ClaudeCarrierAdapter` is compatibility metadata, not a launcher or an admission grant.
+A future implementation must satisfy all of these boundaries before operation:
+
+- **Admission and identity.** The existing authenticated owner-admission and immutable approval
+  manifest must bind the selected carrier family, executable identity (including verified content
+  or digest), resolved target and execution/isolation profile to one operation key and run. The
+  approval also binds the repository, Issue and its contract, source and base, exact checkout,
+  worktree and branch, frozen one-Issue plan/hash, workflow version, verification profile and
+  permitted effects. Approval, source and live bindings are read back at their owning gates. A
+  changed carrier, executable, target, profile, plan or other bound fact invalidates fresh execution
+  and requires the applicable new preview and approval; it cannot be substituted by a prompt,
+  model response, UI projection or automatic fallback. Existing stored manifest versions remain
+  immutable; a future binding extension requires an explicitly versioned approval contract.
+- **Execution and effects.** `IssueDeliveryOperationAdapter` retains destination reservation,
+  attempt and entry fences. The existing #5558 protected host executor, least-privilege OS
+  isolation, content-only worker, scoped effect gates and authenticated source readback remain
+  mandatory for either carrier. The worker/session receives neither GitHub effect credentials nor
+  lifecycle authority and cannot write Git control metadata; its output can propose only effects
+  admitted by the host. Claim, publication, review/merge and closure stay with their existing
+  owners and permissions. A prompt or carrier sandbox alone is not the security boundary. The
+  carrier must not introduce another dispatcher, queue, journal or effect authority.
+- **Evidence and recovery.** Persist the existing immutable approval and reservation, then the
+  unique attempt before entry. Observe actual session entry with its attempt/operation identity;
+  retain bounded, sanitized output and provenance as observations, not proof of an effect. Record a
+  typed terminal outcome or explicit unknown, then use independent authenticated source readback
+  for Issue, PR, head, checks, review, merge and closure as applicable. An ambiguous start or result
+  must be reconciled against the owning authoritative records and sources before any retry. An
+  unavailable, contradictory or negative readback that cannot rule out an in-flight effect remains
+  unknown; it cannot authorize a second attempt or a different carrier. Recovery continues only
+  separately authorized missing effects and never infers success from worker text.
+- **Controls.** Report stop or pause as unsupported unless the selected carrier and host prove a
+  bound control, acknowledgment and resulting state. Withdrawing permission for future effects is
+  distinct from stopping an in-flight process; neither a disconnect nor a request proves termination,
+  pause, rollback or absence of effects. Unknown stays visible until authoritative reconciliation.
+
+**Qualification and delivery split.** A bounded dormant adapter may first define and test the
+shared invocation, output and receipt contract without credentials, host activation or live launch.
+Separate follow-on work must prove Linux isolation and protected effect boundaries for that carrier;
+then qualify the actual host, executable, profile and live operation under the applicable operator
+and source gates. Real owner controls require their own proved semantics and acceptance, and a real
+owner trial and outcome remain separate from repository tests or an isolated pilot. No stage alone
+implicitly authorizes the next. Full DDO completion is not a prerequisite for an independently
+admitted safe owner workflow: #4168 and #3604 retain their own effects and reconciliation scope.
+Normal user-facing operation and host activation retain their separate design and acceptance gates.
 
 ### L0 root — Governed Builder System Delivery & Operations System
 
@@ -656,6 +706,30 @@ The supporting implementation inventory spans these non-hierarchical concerns:
    [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220].
 9. Exception layer: `agent:needs-human`, blocker receipts, release operator acknowledgements, and Human Exception packets stop autonomous continuation when authority is missing; CI/review/merge gates remain non-waivable [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md §12].
 
+### devUI projection of the nine process layers
+
+devUI reduces reconstruction cost by projecting these layers through Overview, one stable-subject
+Focus, its contextual Command/Receipt region, and the separate Builder System Control sibling lens.
+The projection does not copy process state or authority into devUI; every fact retains its source
+owner, freshness, limitation, and next legal workflow step.
+
+| Process layer | Overview / Focus representation | Command/Receipt representation | Builder System Control representation | Existing authority and next legal step |
+| --- | --- | --- | --- | --- |
+| **Intent** | Why-now orientation plus exact need/outcome/constraints for the stable subject; absent and superseded intent stays explicit. | Current source-bound disposition or preview; source change invalidates the preview and affected proof. | Coverage of source-owned intent and missing/superseded links. | Owner docs, ADRs, decisions, and Issue context; discovery/docs/Issue route. |
+| **Docs/spec authority** | Governing source, role, owner, lifecycle, freshness, and subordinate references. | Existing docs/design promotion and PR route only. | Governance-document map and authority gaps. | Repo owner docs/ADRs; docs governance/authoring or a source-anchored Issue. |
+| **Contract/backlog** | Bounded Issue scope, dependencies, readiness, exclusions, and `Verify:` ledger. | Existing claim/delivery workflow and receipt only. | Contract coverage and malformed/missing contracts, never a parallel backlog. | GitHub Issue plus contract validator; readiness repair, claim, or deferral. |
+| **Routing/claim** | Owner-language continuation, lease, collision, or system block; technical detail stays deeper. | Only lifecycle transitions admitted by the owning workflow. | Versioned adapters, bounded capabilities, route coverage, and deviations. | Dispatcher lease plus GitHub labels/receipts; `issue-to-code` or the named route. |
+| **Execution** | Explicitly correlated work/run observations subordinate to the selected subject. | Authenticated legal control and existing effect/receipt contract. | Capability and observed-route orientation; sessions remain provenance. | Git/worktree, DDO, BuilderOps, and workflow receipts; existing reducer/workflow step. |
+| **Verification/evidence** | Exact AC/`Verify:` proof, SHA, CI/review, freshness, refusals, and limitations. | Terminal proof or repair/re-review/merge outcome, never inferred completion. | Assurance coverage and source-correlated deviations without invented severity. | Tests, CI, review, Git/GitHub, receipts; repair, re-review, merge, or block. |
+| **Closure/spec feedback** | Separate merged, delivered, available, **Ready to try**, tried, accepted, owner-doc, and parent-validation facts. | Closure/writeback receipt returned to the same subject. | Delivery-route closure and transition-debt coverage. | GitHub/dispatcher/parent/post-merge owners; close or return feedback to its source. |
+| **Learning/improvement** | Source-linked divergence or improvement affecting the subject, not a generic score. | Existing LearningSignal, retrospective, promotion, Issue, or discard route. | Learning/TCD coverage and undispositioned signals. | BuilderOps learning and governed repo writeback; capture and disposition. |
+| **Human Exception** | **Needs you** only with a named authority category; technical uncertainty stays a system block. | One exact decision brief/choice and the owning workflow's receipt. | Exception coverage and unresolved authority gaps, not an owner inbox. | Owner-decision or operator-gate contract; answer, remain safely blocked, or resume. |
+
+Cross-root links are typed navigation only. Focus keeps one Issue/capability identity through its
+read-only evidence and contextual receipt; Builder System Control replaces it with the explicit
+`builder_system` identity. Returning restores the prior subject without importing a control-lens
+classification, correlation, command, or source state.
+
 ### Authority-crossing rule for research and design
 
 Research findings and external design handoffs are supporting inputs until they receive an explicit
@@ -722,8 +796,9 @@ provider, and generation identity is resolved by the declared capability census 
 configuration at invocation time; an explicit selectable model remains behind that same
 provider-neutral resolver seam and is validated against the capability profile. TCD chooses the
 lowest adequate capability first and may select deeper reasoning when expected avoided cost warrants
-it. It is not selected by skills, scripts, prompts, or worker-role prose. Claude/Anthropic references in this process map and its evidence remain historical,
-compatibility-only, or design provenance unless a separately governed current contract activates them.
+it. It is not selected by skills, scripts, prompts, or worker-role prose. Claude/Anthropic references
+remain historical, compatibility-only, or prospective design provenance. The prospective shared
+carrier contract above supplies qualification requirements; it does not activate a second carrier.
 
 ### Execution-control composition
 
@@ -1816,6 +1891,7 @@ Where to store/post:
 | hook layer | Local safety/token reduction | `.claude` search | no hooks | branch/root/prod mistakes | SessionStart/PreToolUse hooks that call existing scripts |
 | incomplete required-check coverage on `main` | Platform guardrails do not yet enforce every Builder System gate | `gh api main protection`, governance setup, verification skill | `Unit tests (not pg)` is protected; other applicable gates remain skill-enforced | unsafe automation if skill gates are bypassed | reconcile required checks with the proportional delivery contract before widening merge automation |
 | auto-merge policy | Closure automation | repo settings | disabled | unclear authority | document eligibility after branch protection |
+| unified Builder owner journey and governed visual evidence | Reduce reconstruction across all nine process layers without merging authority | `docs/DEVUI.md`, BSC/FCP/Stage-A specs, live #4693/#4695/#4697/#4741/#4746/#4980 | Delivered read-only Overview/Focus shell and nonvisual providers/composers; #4982 adds illustrative design evidence, not a unified shipped journey | Subsystem switching, unstable context, misleading command/read separation, or fabricated visual acceptance | Preserve #4693/#4695 Focus design and #4741 pilot, closed #4746 connected-shell design evidence, #4697 nonvisual first-command boundary, and the separate #4980 health model; validate BSC fixtures and use bounded follow-ups for remaining route/interaction gaps |
 
 ## 16. Mermaid Diagrams Required
 
