@@ -606,6 +606,7 @@ class _ProductionWorkerTransport:
         self.revoke_before_effect = revoke_before_effect
         self.lose_response_after_entry = lose_response_after_entry
         self.lose_response_before_entry = False
+        self.buffer_unicode_event = False
         self.calls = 0
         self.commands: list[list[str]] = []
         self.entry_observed_during_call = False
@@ -689,7 +690,8 @@ class _ProductionWorkerTransport:
             {"type": "system", "subtype": "init", "session_id": session_id} if claude else {"type": "thread.started", "thread_id": session_id},
             sort_keys=True,
         )
-        callback(started + "\n")
+        if not self.buffer_unicode_event:
+            callback(started + "\n")
         if self.lose_response_after_entry:
             error = RuntimeError("simulated runner response loss after entry")
             error.session_id = session_id  # type: ignore[attr-defined]
@@ -727,12 +729,14 @@ class _ProductionWorkerTransport:
         )
         if claude:
             completed = json.dumps({"type": "result", "subtype": "success", "session_id": session_id, "is_error": False, "result": json.dumps(receipt)})
-        callback(completed + "\n")
+        assistant = json.dumps({"type": "assistant", "session_id": session_id, "message": {"content": "before\u2028after"}}, ensure_ascii=False) if self.buffer_unicode_event else None
+        if not self.buffer_unicode_event:
+            callback(completed + "\n")
         self.completed = True
         return subprocess.CompletedProcess(
             args=[],
             returncode=0,
-            stdout=f"{started}\n{completed}\n",
+            stdout=f"{started}\n{assistant + chr(10) if assistant else ''}{completed}\n",
             stderr="",
         )
 
@@ -1096,6 +1100,7 @@ def issue_delivery_production_harness(
         documentation_owner: bool = False,
         host_candidate: bool = False,
         claude: bool = False,
+        generated_plan_observer: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> _ProductionHarness:
         nonlocal counter
         # Candidate-v3 is the explicitly bounded second-consumer composition.
@@ -1322,15 +1327,29 @@ def issue_delivery_production_harness(
             worktree.parent.mkdir(parents=True)
             subprocess.run(["git", "-C", str(checkout), "worktree", "add", "-b", str(manifest["destination"]["branch"]), str(worktree), base_sha], check=True, capture_output=True)
             manifest["workflow"]["launcher"] = "app/builderops/issue_delivery_effect_executor.py::ClaudeContentOnlyIssueDeliverySessionLauncher.launch"
-            plan = manifest["context"]["dispatch_plan"]
-            plan["runtime_targets"] = ["claude"]
-            for hint in (plan["decisions"][0]["runtime_model_hint"], plan["context_packs"][0]["runtime"], plan["epic_run_state_update"]["dispatch_decisions"][0]["runtime_model_hint"]):
-                hint.update(runtime="claude", carrier="claude", model="claude-test", reasoning_effort="high")
+            if generated_plan_observer is not None:
+                from app.builderops.epic_dispatch import build_dispatch_plan
+                from tests.builderops.test_epic_dispatch import _candidate
+                issue = manifest["issue"]
+                candidate = _candidate(issue["number"], risk="high", expected_value="high", worktree=str(worktree))
+                candidate.update(repository=issue["repository"], title=issue["title"], url=issue["url"], scope=issue["scope"],
+                                 branch=manifest["destination"]["branch"], delivery_sources=delivery_source_pair(manifest))
+                plan = build_dispatch_plan(independent_issue_numbers=[issue["number"]], run_id=manifest["destination"]["run_id"],
+                    candidates=[candidate], runtime_targets=["claude"], carrier_target={"capability": "luna", "model": "claude-test", "reasoning_effort": "high"})
+                manifest["context"]["dispatch_plan"] = plan
+                manifest["context"]["pack_id"] = plan["context_packs"][0]["context_pack_id"]
+                generated_plan_observer(deepcopy(plan))
+            else:
+                plan = manifest["context"]["dispatch_plan"]
+                plan["runtime_targets"] = ["claude"]
+                for hint in (plan["decisions"][0]["runtime_model_hint"], plan["context_packs"][0]["runtime"], plan["epic_run_state_update"]["dispatch_decisions"][0]["runtime_model_hint"]):
+                    hint.update(runtime="claude", carrier="claude", model="claude-test", reasoning_effort="high")
             profile = manifest["profile"]
             profile["resolved"].update(carrier="claude", model="claude-test", reasoning_effort="high")
             profile["content_hash"] = canonical_hash({k: v for k, v in profile.items() if k != "content_hash"})
             manifest["carrier_binding"] = {"carrier": "claude", "model": "claude-test", "reasoning_effort": "high", "executable_sha256": "5" * 64, "isolation_profile_sha256": "0" * 64, "session_id": str(uuid4())}
-            plan["context_packs"][0]["delivery_sources"] = delivery_source_pair(manifest)
+            if generated_plan_observer is None:
+                plan["context_packs"][0]["delivery_sources"] = delivery_source_pair(manifest)
             launcher, worker_transport = _production_worker_components(case=case, checkout=checkout, worktree=worktree, base_sha=base_sha, approval=manifest, effect_kind=effect_kind, registry=registry, revoke_before_effect=revoke_before_effect, lose_response_after_entry=lose_response_after_entry, claude=True)
             manifest["context"]["content_hash"] = canonical_hash(plan["context_packs"][0])
             manifest["context"]["expected_plan_hash"] = canonical_hash(plan)

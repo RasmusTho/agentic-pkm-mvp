@@ -40,7 +40,7 @@ class ClaudeStreamObservation:
         if not isinstance(event, Mapping):
             self.invalid = True
             return
-        if "session_id" in event and event["session_id"] != self.expected_session_id:
+        if event.get("session_id") != self.expected_session_id:
             self.invalid = True
             return
         kind = event.get("type")

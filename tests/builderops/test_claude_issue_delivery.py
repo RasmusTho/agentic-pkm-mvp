@@ -66,8 +66,13 @@ def test_real_admission_and_plan_producers_preserve_versioned_binding(tmp_path, 
                                       "--candidates-file", str(path), "--runtime", "claude", "--json"])
     assert result.exit_code == 0, (result.output, result.exception)
     assert json.loads(result.output) == plan
-    harness = issue_delivery_production_harness(claude=True)
+    generated, previews = [], []
+    harness = issue_delivery_production_harness(claude=True, generated_plan_observer=generated.append, preview_observer=previews.append)
     approval = harness.approval
+    assert len(generated) == len(previews) == 1
+    assert generated[0]["decisions"][0]["runtime_model_hint"]["selection_intent"] == "general_delivery"
+    assert previews[0]["manifest"]["context"]["dispatch_plan"] == generated[0]
+    assert approval["context"]["dispatch_plan"] == generated[0]
     assert approval["contract_version"] == "fca-issue-delivery.v4"
     assert approval["carrier_binding"]["carrier"] == "claude"
     assert approval["carrier_binding"]["isolation_profile_sha256"] == harness.prepared_worker.launcher.expected_profile_sha256
@@ -275,3 +280,47 @@ def test_claude_cli_dispatch_reaches_protected_candidate(issue_delivery_producti
     assert len(created) == 1 and created[0] is not launcher
     assert type(created[0]) is executor.ClaudeContentOnlyIssueDeliverySessionLauncher
     assert harness.worker_transport.calls == 1
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("fence,refuse_at,claims", [("pre_process", 2, 0), ("pre_spawn", 3, 1)])
+def test_claude_revoked_at_each_pre_entry_fence(issue_delivery_production_harness, monkeypatch, fence, refuse_at, claims):
+    from dataclasses import replace
+    from app.builderops.epic_dispatch import dispatch_issue_sessions
+    from tests.builderops.test_issue_delivery_operation import _production_adapter
+
+    harness = issue_delivery_production_harness(claude=True)
+    runtime = executor._HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME
+    original = runtime.carrier_qualification_verifier
+    observations = []
+    def qualification(request):
+        observation = original(request)
+        observations.append(deepcopy(request))
+        if len(observations) >= refuse_at:
+            observation["revocation"] = "revoked"
+        return observation
+    monkeypatch.setattr(executor, "_HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME", replace(runtime, carrier_qualification_verifier=qualification))
+    approval = harness.approval
+    result = dispatch_issue_sessions(approval["context"]["dispatch_plan"], _production_adapter(harness),
+                                     expected_plan_hash=approval["context"]["expected_plan_hash"])
+    assert result["stopped_reason"] == "session-launch-failed", fence
+    assert len(observations) == refuse_at
+    assert harness.worker_transport.calls == 0
+    assert harness.transport.apply_calls == claims
+    assert [request.effect_kind for request in harness.transport.applied_requests] == ["claim"] * claims
+    assert all(obs["carrier_binding"] == approval["carrier_binding"] for obs in observations)
+
+
+@pytest.mark.pg
+def test_claude_buffered_stream_keeps_unicode_line_separator(issue_delivery_production_harness):
+    from app.builderops.epic_dispatch import dispatch_issue_sessions
+    from tests.builderops.test_issue_delivery_operation import _production_adapter
+
+    harness = issue_delivery_production_harness(claude=True)
+    harness.worker_transport.buffer_unicode_event = True
+    approval = harness.approval
+    result = dispatch_issue_sessions(approval["context"]["dispatch_plan"], _production_adapter(harness),
+                                     expected_plan_hash=approval["context"]["expected_plan_hash"])
+    assert "candidate_ready" in json.dumps(result)
+    assert harness.worker_transport.calls == 1
+    assert result["sessions"][0]["session_id"] == approval["carrier_binding"]["session_id"]

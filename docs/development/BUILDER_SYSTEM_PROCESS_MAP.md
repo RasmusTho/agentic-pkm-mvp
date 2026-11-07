@@ -51,7 +51,9 @@ one-Issue path. A versioned approval binds its target, executable and isolation 
 existing host-owned verifier port has no default implementation. Without a separately installed
 verifier backed by current qualification and revocation evidence, the path refuses before
 destination preparation and process entry. Injected tests do not establish Linux-host
-qualification, activation, a live owner trial, or owner acceptance. Stop remains unsupported.
+qualification, activation, a live owner trial, or owner acceptance. Every received stream event
+must identify the approved session; a native event without that identity remains unknown, even if
+a provider version permits it. Stop remains unsupported.
 
 `CLAUDE.md` and retained Claude execution-role references are non-operational compatibility and
 provenance material only. They do not authorize launching Claude, reading Anthropic credentials,

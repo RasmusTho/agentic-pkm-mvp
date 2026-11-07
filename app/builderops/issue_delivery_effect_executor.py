@@ -2723,7 +2723,10 @@ class ClaudeContentOnlyIssueDeliverySessionLauncher(ContentOnlyIssueDeliverySess
         finally:
             self._isolation_runner.set_pre_process_entry(None)
             self._isolation_runner.set_pre_spawn_entry(None)
-        for line in result.stdout.splitlines()[count:]:
+        lines = result.stdout.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        for line in lines[count:]:
             observation.observe(line)
         terminal = observation.terminal(result.returncode)
         terminal["isolation_receipt"] = self.completed_isolation_receipt()

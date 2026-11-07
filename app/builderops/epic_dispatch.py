@@ -1742,7 +1742,12 @@ def _build_tcd_decision(
     elif selected_path == "script":
         skip_reason = skip_reason or "script-deterministic"
 
-    selection_intent = candidate["selection_intent"] or _selection_intent_for_risk(risk)
+    if runtime_target == "claude":
+        selection_intent = candidate["selection_intent"] or "general_delivery"
+        if selection_intent != "general_delivery":
+            raise EpicDispatchError("Claude Issue delivery requires general_delivery selection intent")
+    else:
+        selection_intent = candidate["selection_intent"] or _selection_intent_for_risk(risk)
     runtime_model_hint = {
         "runtime": runtime_target,
         "carrier": runtime_target,
@@ -1843,6 +1848,8 @@ def _build_context_pack(
         },
         "return_schema": HANDOFF_RECEIPT_SCHEMA,
     }
+    if candidate.get("delivery_sources") is not None:
+        pack["delivery_sources"] = dict(candidate["delivery_sources"])
     pack["context_cost_baseline"] = {
         "measurement": "actual",
         "context_pack_bytes_excluding_baseline": len(
@@ -2003,9 +2010,18 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             _SELECTION_INTENTS,
         )
     repository = _normalize_optional_string(candidate.get("repository"))
+    sources = candidate.get("delivery_sources")
+    if sources is not None:
+        source_fields = {"contract_version", "repository", "source_revision", "issue_repository", "workflow_repository", "workflow_source_revision"}
+        if (not isinstance(sources, Mapping) or set(sources) != source_fields
+            or sources.get("contract_version") != "fca-issue-delivery.v4"
+            or any(not isinstance(value, str) or not value.strip() for value in sources.values())):
+            raise EpicDispatchError("candidate delivery sources are incomplete")
+        sources = dict(sources)
     return {
         "issue_number": issue_number,
         "repository": repository,
+        "delivery_sources": sources,
         "title": _normalize_string(candidate.get("title"), "title"),
         "url": _normalize_optional_string(candidate.get("url")),
         "state": _normalize_string(candidate.get("state", "OPEN"), "state").upper(),

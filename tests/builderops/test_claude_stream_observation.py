@@ -88,3 +88,13 @@ def test_host_qualification_cannot_reuse_old_authority_epoch(monkeypatch):
                         SimpleNamespace(isolation_profile_sha256="b" * 64, carrier_qualification_verifier=stale_epoch))
     with pytest.raises(ValueError):
         executor.verify_installed_carrier_qualification(approval, authority_epoch=2)
+
+
+@pytest.mark.parametrize("event_type", ["assistant", "user", "system", "unknown"])
+def test_missing_identity_on_nonterminal_event_keeps_outcome_unknown(event_type):
+    observed = ClaudeStreamObservation(SESSION)
+    observed.observe(event(type="system", subtype="init", session_id=SESSION))
+    observed.observe(event(type=event_type, subtype="other"))
+    observed.observe(event(type="result", subtype="success", session_id=SESSION, is_error=False, result="{}"))
+    with pytest.raises(IssueSessionLaunchError):
+        observed.terminal(0)
