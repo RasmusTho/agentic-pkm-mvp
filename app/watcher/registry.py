@@ -2348,13 +2348,37 @@ def _enter_background_lifecycle_fence(
     )
     from app.instance.binding_effect_lease import BindingEffectLeaseError
 
-    if getattr(rebind_cycle, "mode", None) in {"prepared", "committed", "recovery"}:
+    from app.instance.scalar_binding_runtime import (
+        background_effect_runtime,
+        frozen_binding_effect,
+        reconciler_old_root_runtime,
+    )
+
+    mode = getattr(rebind_cycle, "mode", None)
+    if mode in {"prepared", "committed", "recovery"}:
+        record = getattr(rebind_cycle, "record", None)
+        prior = None if record is None else record.prior_binding_id
+        supervisor = process_background_supervisor("watcher") if prior is not None else None
+        if supervisor is not None and prior is not None:
+            # Stamp the bracketing scan under the binding it brackets: the boot env root
+            # may be another binding, and a removal's prior is no longer registered.
+            cycle_fence.enter_context(
+                frozen_binding_effect(
+                    reconciler_old_root_runtime(
+                        supervisor, binding_id=prior, root=Path(cfg.vault_path)
+                    )
+                )
+            )
         return
     try:
         supervisor = process_background_supervisor("watcher")
         if supervisor is None:
             return
         lifecycle = cycle_fence.enter_context(supervisor.effect())
+        # Every emission of this cycle resolves this generation, never the boot env root.
+        cycle_fence.enter_context(
+            frozen_binding_effect(background_effect_runtime(supervisor, lifecycle))
+        )
     except (BackgroundLifecycleError, BackgroundBindingIdle, BindingEffectLeaseError, RegistryError) as exc:
         if cfg.enable:
             logger.warning("watcher cycle holds no vault effect: %s", exc)

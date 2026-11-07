@@ -58,7 +58,9 @@ from app.services.outbox_envelope_preflight import (
     OutboxEnvelopeUpgradeBlocked,
     require_upgrade_drained,
 )
+from app.instance.background_supervisor import BackgroundLifecycleStale
 from app.workers.outbox_binding_gate import (
+    OutboxBindingDeferred,
     eligible_worker_bindings,
     required_worker_binding_stamp,
     worker_effect_window,
@@ -357,7 +359,33 @@ def _resolve_worker_binding_runtime(vault_root: Path | None) -> Any:
 
     if process_background_supervisor("worker") is None:
         return resolve_scalar_binding_runtime(vault_root=vault_root)
-    return resolve_background_worker_runtime(vault_root=vault_root)
+    runtime = resolve_background_worker_runtime(vault_root=vault_root)
+    _follow_background_settings(runtime)
+    return runtime
+
+
+_SETTINGS_BINDING: dict[str, str] = {}
+
+
+def _follow_background_settings(runtime: Any) -> None:
+    """Recompile vault-authored settings when this worker's durable binding moves.
+
+    The worker rebinds without a restart and settings are process-local, so nothing else
+    would stop it dispatching the new vault's notes with the prior vault's routing. An
+    ingestion failure degrades loudly on health, exactly like startup ingestion.
+    """
+
+    if runtime is None or not getattr(runtime, "background_worker", False):
+        return
+    if _SETTINGS_BINDING.get("binding") == runtime.vault_binding_id:
+        return
+    from app.settings.ingestion import ingest_settings
+
+    try:
+        ingest_settings(reason="worker_binding_rebind", vault_root=runtime.root)
+    except Exception as exc:  # pragma: no cover - defensive; ingest already degrades
+        logger.warning("Settings ingestion after worker rebind failed: %s", exc)
+    _SETTINGS_BINDING["binding"] = runtime.vault_binding_id
 
 
 def run_once(
@@ -378,7 +406,10 @@ def run_once(
         return WorkerTickResult(state="no_vault", processed=0)
 
     resolved_root = _resolve_optional_vault_root(vault_root)
-    from app.instance.background_supervisor import BackgroundBindingIdle
+    from app.instance.background_supervisor import (
+        BackgroundBindingIdle,
+        BackgroundLifecycleBlocked,
+    )
 
     try:
         # A transfer drain settles its named source binding, which may already have left
@@ -388,6 +419,10 @@ def run_once(
             if _eligible_binding_ids is not None
             else _resolve_worker_binding_runtime(resolved_root)
         )
+    except BackgroundLifecycleBlocked as exc:
+        # MVR-06B: a failed lifecycle performs no effect and reconciles on the next tick.
+        logger.error("outbox worker tick blocked: %s", exc)
+        return WorkerTickResult(state="background_lifecycle_failed", processed=0)
     except BackgroundBindingIdle:
         # MVR-06B: explicit-empty or compatibility no-vault intent is durable idle.
         logger.debug("outbox worker tick idled: durable background intent runs no binding")
@@ -2314,6 +2349,7 @@ def run(
     errors_total = 0
     last_heartbeat = 0.0
     binding_blocked_pending = 0
+    lifecycle_blocked = False
 
     # The loop polls/dispatches only while a vault is selected. When no vault is
     # bound, ``no_vault_idle`` short-circuits the poll/dispatch body for that tick
@@ -2331,18 +2367,26 @@ def run(
             # row instead of leaving it queued until a vault is selected.
             logger.debug("worker tick idled: no vault selected")
         try:
-            from app.instance.background_supervisor import BackgroundBindingIdle
+            from app.instance.background_supervisor import (
+                BackgroundBindingIdle,
+                BackgroundLifecycleBlocked,
+            )
 
+            lifecycle_blocked = False
             try:
                 binding_runtime = (
                     None
                     if tick_vault_root is None
                     else _resolve_worker_binding_runtime(tick_vault_root)
                 )
-            except BackgroundBindingIdle:
-                # MVR-06B: explicit-empty / no-vault durable intent is honest idle.
+            except BackgroundBindingIdle as exc:
+                # MVR-06B: explicit-empty / no-vault durable intent is honest idle, and a
+                # failed lifecycle is loud but no effect: it reconciles on the next tick.
                 binding_runtime = None
                 no_vault_idle = True
+                lifecycle_blocked = isinstance(exc, BackgroundLifecycleBlocked)
+                if lifecycle_blocked:
+                    logger.error("worker tick blocked: %s", exc)
             eligible = eligible_worker_bindings(binding_runtime)
             binding_stamp = required_worker_binding_stamp(binding_runtime)
             message = (
@@ -2502,6 +2546,11 @@ def run(
                         raise
 
                     ack_outbox(message["id"])
+        except (OutboxBindingDeferred, BackgroundLifecycleStale) as exc:
+            # MVR-06B: the binding was sealed or moved between resolution and the shared
+            # lease. Nothing was effected and the row stays queued; re-resolve next tick.
+            logger.warning("worker dispatch deferred: %s", exc)
+
         except Exception:
             errors_total += 1
             logger.exception("worker loop failed")
@@ -2518,7 +2567,9 @@ def run(
                 last_processed=last_processed,
                 outbox_path=outbox_path,
                 status=(
-                    "blocked_pending_mvr06"
+                    "background_lifecycle_failed"
+                    if lifecycle_blocked
+                    else "blocked_pending_mvr06"
                     if binding_blocked_pending
                     else "running"
                 ),

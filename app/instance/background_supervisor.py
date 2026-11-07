@@ -99,6 +99,10 @@ class BackgroundBindingIdle(CapabilityNotReadyError):
     """Durable intent runs no binding (explicit-empty or compatibility no-vault)."""
 
 
+class BackgroundLifecycleBlocked(BackgroundBindingIdle):
+    """A failed lifecycle performs no effect this tick and reconciles on the next one."""
+
+
 def _hint(message: str) -> None:
     logger.info("background supervisor: %s", message)
 
@@ -1096,6 +1100,7 @@ def revoke_background_role_fenced(
 
 __all__ = [
     "BackgroundBindingIdle",
+    "BackgroundLifecycleBlocked",
     "BackgroundBindingState",
     "BackgroundLifecycle",
     "BackgroundLifecycleError",

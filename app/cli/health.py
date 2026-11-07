@@ -1160,6 +1160,15 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
                 "command": "docker compose restart worker",
             }
         )
+    elif worker_status == "background_lifecycle_failed":
+        actions.append(
+            {
+                "id": "worker_background_lifecycle_failed",
+                "severity": "required",
+                "message": "The worker's durable background binding cannot run; it performs no effect",
+                "command_hint": "Inspect background-binding-list and run binding-lifecycle-recover if a removal or reactivation was interrupted",
+            }
+        )
     elif worker_status == "blocked_pending_mvr06":
         actions.append(
             {

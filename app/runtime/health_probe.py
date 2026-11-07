@@ -84,7 +84,12 @@ def _heartbeat_status(
         and reported_status == "blocked_pending_mvr06"
         and ok
     )
-    if binding_blocked:
+    lifecycle_failed = (
+        name == "worker"
+        and reported_status == "background_lifecycle_failed"
+        and ok
+    )
+    if binding_blocked or lifecycle_failed:
         ok = False
     paused_value = bool(raw.get("paused", False))
     watcher_degraded = name == "watcher" and (
@@ -114,6 +119,8 @@ def _heartbeat_status(
         "status": (
             "blocked_pending_mvr06"
             if binding_blocked
+            else "background_lifecycle_failed"
+            if lifecycle_failed
             else "degraded"
             if watcher_degraded
             else observation_status

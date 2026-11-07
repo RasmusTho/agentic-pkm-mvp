@@ -1125,11 +1125,27 @@ def test_direct_filesystem_write_during_removal_is_receipted_before_tombstone(
             assert direct.name in {item.relative_path for item in receipt.buffer}
             assert runtime.ledger.active_owner(second.vault_binding_id) is not None
 
+    from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
+
+    stamped: dict[str, str] = {}
+    real_emit = watcher_registry._emit_watch_event
+
+    def emit(*args, **kwargs):
+        stamped[str(args[2] if len(args) > 2 else kwargs.get("rel_path"))] = (
+            resolve_scalar_binding_runtime().vault_binding_id
+        )
+        return real_emit(*args, **kwargs)
+
+    monkeypatch.setattr(watcher_registry, "_emit_watch_event", emit)
     monkeypatch.setattr("app.instance.binding_removal._fault_point", phase)
     runtime.remove(second.vault_binding_id, replacement_default_binding_id=first.vault_binding_id)
     assert order.index("binding-removal:buffer_drained") < order.index(
         "binding-removal:ownership_released"
     )
+    # The racing write landed after the tombstone commit's final scan window and is still
+    # stamped under the removed binding, although its registration is gone by then.
+    assert stamped, "the post-commit drain emitted nothing"
+    assert set(stamped.values()) == {second.vault_binding_id}
     assert str(direct) in outbox_paths(tmp_path)
     assert runtime.ledger.active_owner(second.vault_binding_id) is None
 
@@ -1521,3 +1537,138 @@ def test_revocation_waits_for_an_effect_on_a_draining_binding(tmp_path, monkeypa
     in_flight.join(10)
     revoker.join(10)
     assert done["record"].status == "revoked"
+
+
+def test_watcher_rows_are_stamped_with_the_durable_binding_after_rebind_without_restart(
+    tmp_path, monkeypatch
+) -> None:
+    from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
+    from app.watcher import registry as watcher_registry
+
+    runtime, first, second, config = _watched_instance(tmp_path, monkeypatch)
+    drive_watcher_during_waits(monkeypatch, config)
+    pick(runtime, second.vault_binding_id)  # the boot env root stays the first binding
+    assert Path(__import__("os").environ["WATCHER_VAULT_PATH"]) == Path(first.path)
+    stamped: list[tuple[str, str]] = []
+    real_emit = watcher_registry._emit_watch_event
+
+    def emit(*args, **kwargs):
+        current = resolve_scalar_binding_runtime()
+        stamped.append((current.vault_binding_id, str(current.root)))
+        return real_emit(*args, **kwargs)
+
+    monkeypatch.setattr(watcher_registry, "_emit_watch_event", emit)
+    note = Path(second.path) / "stamped-under-b.md"
+    note.write_text("after rebind\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config)
+    assert str(note) in outbox_paths(tmp_path)
+    assert stamped and {item[0] for item in stamped} == {second.vault_binding_id}
+    assert {item[1] for item in stamped} == {str(Path(second.path).resolve())}
+
+
+def test_failed_lifecycle_idles_the_worker_and_reconciles_without_a_crash(
+    tmp_path, monkeypatch
+) -> None:
+    from app.instance.runtime import (
+        open_background_role_store,
+        open_local_operator_principal_store,
+    )
+    from app.workers import outbox_worker
+
+    runtime, first, _extra = mvr06b_instance(tmp_path, monkeypatch)
+    role_store = open_background_role_store(runtime.layout.registry_path)
+    role_store.revoke(_capability=STORAGE_MUTATION_CAPABILITY)
+    assert outbox_worker.run_once().state == "background_lifecycle_failed"
+    assert outbox_worker.run_once().state == "background_lifecycle_failed"
+    role_store.redelegate(
+        delegator=open_local_operator_principal_store(runtime.layout.registry_path).require(),
+        floor_guard=lambda: True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    monkeypatch.setattr(outbox_worker, "poll_outbox_one", lambda **_k: None)
+    monkeypatch.setattr(outbox_worker, "count_deferred_outbox_rows", lambda **_k: 0)
+    assert outbox_worker.run_once().state == "idle"  # reconciled: the tick polls again
+
+
+def test_worker_recompiles_settings_when_its_durable_binding_moves(tmp_path, monkeypatch) -> None:
+    from app.workers import outbox_worker
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    reloads = stub_settings_reload(monkeypatch)
+    outbox_worker._SETTINGS_BINDING.clear()
+    outbox_worker._resolve_worker_binding_runtime(None)
+    assert reloads == [Path(first.path).resolve()]
+    outbox_worker._resolve_worker_binding_runtime(None)
+    assert len(reloads) == 1  # an unchanged binding recompiles nothing
+    pick(runtime, second.vault_binding_id)
+    del reloads[:]
+    outbox_worker._resolve_worker_binding_runtime(None)
+    assert reloads == [Path(second.path).resolve()]
+
+
+def test_sealed_or_stale_dispatch_defers_the_row_instead_of_stopping_the_worker(
+    tmp_path, monkeypatch
+) -> None:
+    from app.instance.scalar_binding_runtime import resolve_background_worker_runtime
+    from app.workers.outbox_binding_gate import OutboxBindingDeferred, worker_effect_window
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    worker = resolve_background_worker_runtime()
+    message = {"vault_binding_id": first.vault_binding_id, "topic": "x", "payload": {}}
+
+    def crash(name: str) -> None:
+        if name == "binding-removal:reserved":
+            raise _ProcessCrash(name)
+
+    # The first binding is the rollback target; seal the second through its own runtime.
+    from app.instance.runtime import open_default_vault_service
+
+    open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
+    worker = resolve_background_worker_runtime()
+    message["vault_binding_id"] = second.vault_binding_id
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", crash)
+    with pytest.raises(_ProcessCrash):
+        runtime.remove(second.vault_binding_id)
+    with pytest.raises(OutboxBindingDeferred, match="sealed"):
+        with worker_effect_window(message, runtime=worker):
+            raise AssertionError("a sealed binding admitted a dispatch")
+    # The worker loop's deferral clause names exactly these classes.
+    source = Path(outbox_worker_source()).read_text(encoding="utf-8")
+    assert "except (OutboxBindingDeferred, BackgroundLifecycleStale)" in source
+
+
+def outbox_worker_source() -> str:
+    from app.workers import outbox_worker
+
+    return outbox_worker.__file__
+
+
+def test_journal_disagreement_is_loud_but_does_not_wedge_consumer_startup(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    from app.instance.runtime import _preflight_runtime
+    from app.instance.vault_registry import RegistryRevisionConflict
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    registry_cls = type(runtime.registry)
+    original = registry_cls.commit_settings_rebind_selection
+
+    def refuse(self, **kwargs):
+        raise RegistryRevisionConflict("injected commit race")
+
+    # An acknowledged revision whose commit never ran: journal second, intent first.
+    monkeypatch.setattr(registry_cls, "commit_settings_rebind_selection", refuse)
+    with pytest.raises(RegistryRevisionConflict):
+        pick(runtime, second.vault_binding_id)
+    monkeypatch.setattr(registry_cls, "commit_settings_rebind_selection", original)
+    assert runtime.open_settings_rebind_store().read().candidate_binding_id == second.vault_binding_id
+    assert background_ids(runtime) == (first.vault_binding_id,)
+    assert _preflight_runtime(
+        channel=runtime.layout.channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        consumer="worker",
+    ) == 0
+    assert "disagrees with durable background intent" in caplog.text

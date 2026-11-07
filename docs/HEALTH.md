@@ -252,8 +252,9 @@ receipt clears the reservation. In a `failed` or `idle` cycle the watcher perfor
 and the worker dispatches no vault-bound row.
 
 Where it is visible today: watcher and worker log the projection when their startup preflight
-starts the supervisor (`error` for `failed`), and `background-binding-list|inspect` report durable
-intent. No `/api/health` field carries it yet; MVR-06B does not report or start more than one
+starts the supervisor (`error` for `failed`), the worker heartbeat reports
+`status=background_lifecycle_failed` while blocked, and `background-binding-list|inspect` report
+durable intent. No `/api/health` field carries it yet; MVR-06B does not report or start more than one
 binding, and the zero/one/many health surface is MVR-06C/06D.
 
 <!-- SECTION:HEALTH:END -->

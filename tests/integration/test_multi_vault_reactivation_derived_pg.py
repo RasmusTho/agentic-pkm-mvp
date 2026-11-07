@@ -119,3 +119,67 @@ def test_reactivation_rebuilds_derived_rows_through_real_dispatch_before_healthy
     assert undelivered == 0
     assert delivered >= 1
     assert "stale" not in sources  # the retired epoch's row was invalidated
+
+
+@pytest.mark.usefixtures("product_model_access_gateway")
+def test_watcher_db_rows_carry_the_durable_binding_after_rebind_and_after_removal(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.stores import _pg_instances
+    from app.watcher import registry as watcher_registry
+    from tests._mvr06b_handoff_harness import (
+        bind_runtime_env,
+        configure_watcher,
+        drive_watcher_during_waits,
+        handoff_through_cli,
+        mvr06a_instance,
+        pick,
+        stub_settings_reload,
+    )
+
+    dsn = request.getfixturevalue("scratch_db_factory")()
+    _upgrade(dsn, monkeypatch, "head")
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    _pg_instances.cache_clear()
+    runtime, first, (second,) = mvr06a_instance(tmp_path)
+    bind_runtime_env(monkeypatch, runtime, watcher=True)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    config = configure_watcher(monkeypatch, tmp_path, runtime, Path(first.path))
+    stub_settings_reload(monkeypatch)
+    watcher_registry.run_registry_once(config)
+    assert handoff_through_cli(runtime)["_exit_code"] == 0
+    drive_watcher_during_waits(monkeypatch, config)
+    pick(runtime, second.vault_binding_id)  # the boot env root stays the first binding
+    note = Path(second.path) / "row-under-second.md"
+    note.write_text("after rebind\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config)
+
+    def row_binding(name: str) -> set[str]:
+        with psycopg.connect(dsn) as conn:
+            return {
+                row[0]
+                for row in conn.execute(
+                    "select vault_binding_id from outbox where topic = 'ingest.vault.changed' "
+                    "and payload::text like %s",
+                    (f"%{name}%",),
+                )
+            }
+
+    assert row_binding(note.name) == {second.vault_binding_id}
+
+    # A write racing the removal's post-commit drain is stamped under the removed binding.
+    from app.instance.runtime import open_default_vault_service
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    open_default_vault_service(runtime.layout.registry_path).set(second.vault_binding_id)
+    direct = Path(second.path) / "racing-the-removal.md"
+    original = SettingsRebindActivation._wait_for_stage
+
+    def wait(activation, record, *, required_stage):
+        original(activation, record, required_stage=required_stage)
+        if required_stage == "acknowledged":
+            direct.write_text("racing\n", encoding="utf-8")
+
+    monkeypatch.setattr(SettingsRebindActivation, "_wait_for_stage", wait)
+    runtime.remove(second.vault_binding_id, replacement_default_binding_id=first.vault_binding_id)
+    assert row_binding(direct.name) == {second.vault_binding_id}

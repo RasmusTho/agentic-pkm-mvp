@@ -271,46 +271,50 @@ def resolve_background_worker_runtime(
 
     from app.instance.background_supervisor import (
         BackgroundBindingIdle,
+        BackgroundLifecycleBlocked,
         process_background_supervisor,
     )
 
     supervisor = process_background_supervisor("worker")
     if supervisor is None:
         return resolve_scalar_binding_runtime(vault_root=vault_root)
-    registry = supervisor.registry
-    if registry.load().authority != REGISTRY_AUTHORITY_ACTIVE:
+    if supervisor.registry.load().authority != REGISTRY_AUTHORITY_ACTIVE:
         raise RegistryError("background worker requires active registry authority")
     lifecycle = supervisor.reconcile()
     if lifecycle.status == "idle":
         raise BackgroundBindingIdle("durable background intent runs no binding")
     if lifecycle.status != "running":
-        raise RegistryError(f"background lifecycle is failed: {lifecycle.failure}")
+        raise BackgroundLifecycleBlocked(f"background lifecycle is failed: {lifecycle.failure}")
+    runtime = background_effect_runtime(supervisor, lifecycle)
+    if vault_root is not None and not same_filesystem_root(
+        resolve_filesystem_root_identity(vault_root),
+        resolve_filesystem_root_identity(runtime.root),
+    ):
+        raise RegistryError("the worker root is not the durable background binding")
+    return runtime
+
+
+def background_effect_runtime(supervisor: Any, lifecycle: Any) -> ScalarBindingRuntime:
+    """The binding runtime of one running supervisor generation (worker or watcher)."""
+
     binding_id, lifecycle_root = lifecycle.binding_id, lifecycle.root
     if binding_id is None or lifecycle_root is None:
         raise RegistryError("a running background lifecycle must name its binding and root")
-    root = lifecycle_root.expanduser().resolve(strict=True)
-    if vault_root is not None and not same_filesystem_root(
-        resolve_filesystem_root_identity(vault_root),
-        resolve_filesystem_root_identity(root),
-    ):
-        raise RegistryError("the worker root is not the durable background binding")
     from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
-    ledger = supervisor.ownership_ledger
-    verdict_epoch = lifecycle.authorization_epoch.split("|", 1)[0]
     return ScalarBindingRuntime(
         vault_binding_id=binding_id,
         binding_revision=lifecycle.binding_revision,
         authority="allow",
-        authorization_epoch=verdict_epoch,
+        authorization_epoch=lifecycle.authorization_epoch.split("|", 1)[0],
         channel_id=supervisor.channel_id,
-        root=root,
-        registry_store=registry,
-        ownership_ledger=ledger,
+        root=lifecycle_root.expanduser().resolve(strict=True),
+        registry_store=supervisor.registry,
+        ownership_ledger=supervisor.ownership_ledger,
         effect_leases=BindingEffectLeaseManager(
-            registry_store=registry,
-            ownership_ledger=ledger,
-            state_root=registry.path.parent / "binding-effect-leases",
+            registry_store=supervisor.registry,
+            ownership_ledger=supervisor.ownership_ledger,
+            state_root=supervisor.registry.path.parent / "binding-effect-leases",
             capability=_STORAGE_MUTATION_CAPABILITY,
         ),
         intent_revision=lifecycle.intent_revision,
@@ -319,8 +323,48 @@ def resolve_background_worker_runtime(
     )
 
 
+def reconciler_old_root_runtime(
+    supervisor: Any, *, binding_id: str, root: Path
+) -> ScalarBindingRuntime:
+    """Attribute a journal-bound old-root scan to the binding it brackets.
+
+    The reconciler keeps old-root authority through the post-commit drain, including after
+    a removal committed the tombstone: ownership is released only after this scan's receipt.
+    A still-registered binding carries its real GOV verdict; a tombstoned one has no live
+    verdict and is stamped as the removal reconciler it is.
+    """
+
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    snapshot = supervisor.registry.load()
+    revision = _binding_revision(snapshot, binding_id)
+    if binding_id in snapshot.registrations:
+        verdict = _authorize_binding(snapshot, binding_id, supervisor.registry.path)
+        authority, epoch = verdict.status, verdict.epoch
+    else:
+        authority, epoch = "removal_reconciler", "removal-reconciler"
+    return ScalarBindingRuntime(
+        vault_binding_id=binding_id,
+        binding_revision=revision,
+        authority=authority,
+        authorization_epoch=epoch,
+        channel_id=supervisor.channel_id,
+        root=root.expanduser().resolve(strict=True),
+        registry_store=supervisor.registry,
+        ownership_ledger=supervisor.ownership_ledger,
+        effect_leases=BindingEffectLeaseManager(
+            registry_store=supervisor.registry,
+            ownership_ledger=supervisor.ownership_ledger,
+            state_root=supervisor.registry.path.parent / "binding-effect-leases",
+            capability=_STORAGE_MUTATION_CAPABILITY,
+        ),
+    )
+
+
 __all__ = [
     "ScalarBindingRuntime",
+    "background_effect_runtime",
+    "reconciler_old_root_runtime",
     "resolve_background_worker_runtime",
     "frozen_binding_effect",
     "resolve_scalar_binding_runtime",

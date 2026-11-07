@@ -5227,9 +5227,8 @@ def open_background_intent_admin_service(
 def _start_background_supervisor(runtime: InstanceRegistryRuntime, consumer: str) -> None:
     """MVR-06B: after the bridge handoff, start the supervisor from durable intent.
 
-    The shared phase journal must agree with durable intent (a stable journal whose
-    candidate differs would be a second binding authority). A failed lifecycle is
-    reported loudly in the startup log and health; it never redirects to another binding.
+    Durable intent is the only binding authority; a phase journal that disagrees is reported
+    loudly. A failed lifecycle is reported the same way; it never redirects to another binding.
     """
 
     import logging
@@ -5258,8 +5257,11 @@ def _start_background_supervisor(runtime: InstanceRegistryRuntime, consumer: str
         # be able to start and acknowledge; it reconciles from its own journal.
         sealed = candidate is not None and candidate.extensions.get("lifecycleState") is not None
         if record.phase != "prepared" and not sealed and journal != running:
-            raise RegistryError(
-                "the settings rebind phase journal disagrees with durable background intent"
+            # Durable intent is the authority and each mismatch has its own convergence
+            # (retry or lifecycle recovery), some of which need these very consumers up.
+            logging.getLogger(__name__).error(
+                "the settings rebind phase journal disagrees with durable background intent; "
+                "retry the interrupted command or run binding-lifecycle-recover"
             )
     lifecycle = BackgroundLifecycleSupervisor.for_runtime(
         registry_path=runtime.layout.registry_path,
