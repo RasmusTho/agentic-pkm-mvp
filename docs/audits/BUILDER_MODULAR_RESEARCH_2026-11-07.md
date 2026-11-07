@@ -34,7 +34,7 @@ live observation is from 2026-11-07; repository claims are bound to the snapshot
 | Continuous owner control | **Missing from the observed read-only surface:** live start, pause, resume, cancel and prioritization were not available or proved there. | Define supported semantics at the existing protected operation boundary and verify through the real owner surface. |
 | Delivery and exact closure | **Worked previously:** #4893 / PR #6129 used a dispatcher claim, explicit review, validation and manual full-path coordination on 2026-10-17. | Trace an authorized current task through actual launch, delivery, review, closure and readback. |
 | Failure recovery | **Pilot only:** one lost-response retry and one controller-kill point succeeded; the pre-launch ambiguity and durable real effects remain unknown. | Exercise before-start, lost-start, running reattachment and terminal-result loss against real authority without duplicating effects. |
-| Owner acceptance | **Unknown / not performed:** no owner iPad trial or acceptance was observed. | Rasmus tests the exact deployed candidate and records acceptance or rejection separately. |
+| Owner acceptance | **Unknown / not performed:** no owner iPad trial or acceptance was observed. | The owner tests the exact deployed candidate and records acceptance or rejection separately. |
 
 ## Candidate comparison and research answers
 
