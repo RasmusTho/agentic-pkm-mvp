@@ -643,3 +643,71 @@ def test_crashed_governed_mutation_converges_on_retry(
         )
         == 0
     )
+
+
+@pytest.mark.parametrize("stage", ["commit", "resume"])
+def test_crash_after_governed_commit_finishes_reload_and_admits_the_next_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    """Enabled watcher: a post-commit crash can never block later governed transitions."""
+    from app.instance import settings_rebind
+    from tests._mvr06b_handoff_harness import configure_watcher, drive_watcher_during_waits
+
+    class Crash(BaseException):
+        pass
+
+    runtime, first, (second,) = mvr06a_instance(tmp_path)
+    bind_runtime_env(monkeypatch, runtime, watcher=True)
+    config = configure_watcher(monkeypatch, tmp_path, runtime, Path(first.path))
+    reloads = stub_settings_reload(monkeypatch)
+    assert handoff_through_cli(runtime)["_exit_code"] == 0
+    drive_watcher_during_waits(monkeypatch, config)
+
+    def crash(point: str) -> None:
+        if point == stage:
+            raise Crash(point)
+
+    monkeypatch.setattr(settings_rebind, "_activation_fault_point", crash)
+    with pytest.raises(Crash):
+        admin(runtime).remove(first.vault_binding_id)
+    monkeypatch.setattr(settings_rebind, "_activation_fault_point", lambda point: None)
+    assert background_ids(runtime) == ()
+    assert runtime.open_settings_rebind_store().read().reload_revision != (
+        runtime.open_settings_rebind_store().read().desired_revision
+    )
+
+    # The retried remove is an intent no-op, yet it finishes the pending reload.
+    assert admin(runtime).remove(first.vault_binding_id)["changed"] is False
+    record = runtime.open_settings_rebind_store().read()
+    assert record.reload_revision == record.desired_revision
+
+    admin(runtime).add(second.vault_binding_id)
+    assert background_ids(runtime) == (second.vault_binding_id,)
+    assert reloads[-1] == Path(second.path)
+
+
+def test_crash_before_a_governed_add_reload_is_finished_by_the_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.instance import settings_rebind
+
+    class Crash(BaseException):
+        pass
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    reloads = stub_settings_reload(monkeypatch)
+    admin(runtime).remove(first.vault_binding_id)
+
+    def crash(point: str) -> None:
+        if point == "reload":
+            raise Crash(point)
+
+    monkeypatch.setattr(settings_rebind, "_activation_fault_point", crash)
+    with pytest.raises(Crash):
+        admin(runtime).add(second.vault_binding_id)
+    monkeypatch.setattr(settings_rebind, "_activation_fault_point", lambda point: None)
+    assert background_ids(runtime) == (second.vault_binding_id,)
+    assert admin(runtime).add(second.vault_binding_id)["changed"] is False
+    record = runtime.open_settings_rebind_store().read()
+    assert record.reload_revision == record.desired_revision
+    assert reloads[-1] == Path(second.path)

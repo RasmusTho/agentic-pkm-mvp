@@ -854,6 +854,10 @@ class SettingsRebindActivation:
             # watcher remains deployed. Quiesce that prior transition before
             # allowing a new candidate to replace it.
             self._wait_for_completed_if_enabled(current)
+            if _background_intent_mode(self.store._registry) is not None:
+                # MVR-06B: a crash may have left that prior revision's reload unfinished,
+                # and in explicit mode no picker retry exists to finish it.
+                current = self.finish_pending_reload()
 
         _activation_fault_point("prepare")
         try:
@@ -932,6 +936,25 @@ class SettingsRebindActivation:
         self._wait_for_completed_if_enabled(committed)
         committed = self._reload_if_needed(committed, candidate_root)
         return committed
+
+    def finish_pending_reload(self) -> SettingsRebindRecord:
+        """Complete a committed revision a crash left before its SETTINGS-01 reload."""
+
+        record = self.store.read()
+        if (
+            record.phase not in {"committed", "no_lifecycle"}
+            or record.reload_revision in {None, record.desired_revision}
+        ):
+            return record
+        self._wait_for_completed_if_enabled(record)
+        registration = (
+            self.store._registry.load().registrations.get(record.candidate_binding_id)
+            if record.candidate_binding_id is not None
+            else None
+        )
+        return self._reload_if_needed(
+            record, Path(registration.path) if registration is not None else None
+        )
 
     def _commit_uncommitted_selection(
         self,

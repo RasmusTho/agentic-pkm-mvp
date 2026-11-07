@@ -485,7 +485,10 @@ def apply_governed_intent_mutation(
     if intent.mode == INTENT_MODE_EXPLICIT and next_intent.background_vault_binding_ids == (
         intent.background_vault_binding_ids
     ):
-        return snapshot  # idempotent: no new revision, no new hint
+        # Idempotent: no new revision, no new hint. A retry after a crash still finishes the
+        # reload its commit left pending, which nothing else would do in explicit mode.
+        SettingsRebindActivation.from_environment(registry).finish_pending_reload()
+        return registry.load()
     running_before = _running(snapshot, base)
     running_after = _running(snapshot, next_intent.background_vault_binding_ids)
     if running_before == running_after:
