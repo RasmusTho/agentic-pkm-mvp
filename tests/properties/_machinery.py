@@ -515,7 +515,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
 # closed so moving a write from ``write_frontmatter`` cannot make it disappear
 # from the WriteGuard inventory.
 WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/vault/manager.py", 781): (
+    ("app/vault/manager.py", 787): (
         "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
         "pre-selection initialization transition; O_EXCL preserves existing owner files. "
         "Line drifted 496 -> 621 -> 623 -> 704 -> 714 -> 720 (site unchanged) when #3164 added the "
