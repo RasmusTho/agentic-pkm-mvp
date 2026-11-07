@@ -119,6 +119,7 @@ REACTIVATION_PHASES = (
 REBUILD_RECEIPT_SCHEMA = "agentic-pkm.binding-rebuild-receipt.v1"
 BINDING_LINEAGE_KEY = "bindingLineage"
 _FLOOR_REFUSAL = "MVR-06B consumer drain floor is required"
+_REMOVAL_DRAIN_TIMEOUT_SECONDS = 30.0
 
 
 def _fault_point(phase: str) -> None:
@@ -418,7 +419,7 @@ class BindingRemovalCoordinator:
             source.vault_binding_id,
             channel_id=runtime.layout.channel_id,
             root=Path(source.path),
-            timeout=float(os.getenv("BINDING_REMOVAL_DRAIN_TIMEOUT_SECONDS", "30")),
+            timeout=_REMOVAL_DRAIN_TIMEOUT_SECONDS,
         ):
             pass
 
@@ -632,9 +633,10 @@ def _invalidate_pg_tables(binding_id: str, root: Path) -> dict[str, Any]:
     with _connect() as conn:
         with conn.cursor() as cur:
             for table in PG_BINDING_KEYED_DERIVED_TABLES:
-                cur.execute("SELECT to_regclass(%s)", (f"public.{table}",))
+                cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (f"public.{table}",))
                 row = cur.fetchone()
-                if not row or row[0] is None:
+                present = row["present"] if isinstance(row, dict) else (row and row[0])
+                if not present:
                     continue
                 cur.execute(
                     f"DELETE FROM public.{table} WHERE vault_binding_id = %s",  # noqa: S608
@@ -764,10 +766,17 @@ def _rebuild_vault_projections(root: Path, binding_id: str) -> list[str]:
     if not pg_available():
         return []
     from app.jobs.episodes_projection import rebuild_episodes_projection
-    from app.standing_questions.projection import rebuild_standing_questions_projection
+    from app.standing_questions.projection import (
+        QuestionsDirectoryMissingError,
+        rebuild_standing_questions_projection,
+    )
 
     rebuild_episodes_projection(root, vault_binding_id=binding_id)
-    rebuild_standing_questions_projection(root, vault_binding_id=binding_id)
+    try:
+        rebuild_standing_questions_projection(root, vault_binding_id=binding_id)
+    except QuestionsDirectoryMissingError:
+        # A vault without questions/ has no source rows; invalidation already emptied them.
+        return ["episodes"]
     return ["episodes", "standing_questions"]
 
 

@@ -266,7 +266,9 @@ background intent (`backgroundIntent`, `app/instance/background_intent.py`), own
   or auth-epoch change.
 
 The `settings_rebind.v1` record stays the shared two-phase phase journal; after the handoff its
-candidate is a projection of durable intent, not the binding authority.
+candidate is a projection of durable intent, not the binding authority. In explicit mode the
+carrier-free foreground compatibility binding therefore no longer reads that candidate: it follows
+the last foreground selection, then the instance default, then the registered legacy bootstrap.
 
 Suggested event payload:
 

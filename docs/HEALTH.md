@@ -246,9 +246,15 @@ watcher/worker/settings process. It reports one entry per supervised lifecycle w
 | `failed` | Loud failure with a bounded reason: binding unregistered, `draining_removal` or `reactivating` (sealed until its rebuild receipt), ownership lease missing/pending/foreign/changed, or authorization revoked/stale. A failed binding never masquerades as healthy and never redirects to another binding. |
 
 A new durable intent revision, binding revision, or auth epoch rotates the lifecycle into the
-next `generation` after draining in-flight shared effects; a reactivated binding stays `failed`
-(degraded) until its rebuild receipt clears the reservation. MVR-06B does not report or start
-more than one binding; zero/one/many health is MVR-06C/06D.
+next `generation` after draining in-flight shared effects; a drain that does not finish keeps the
+lifecycle `failed` and is retried. A reactivated binding stays `failed` (degraded) until its rebuild
+receipt clears the reservation. In a `failed` or `idle` cycle the watcher performs no vault effect
+and the worker dispatches no vault-bound row.
+
+Where it is visible today: watcher and worker log the projection when their startup preflight
+starts the supervisor (`error` for `failed`), and `background-binding-list|inspect` report durable
+intent. No `/api/health` field carries it yet; MVR-06B does not report or start more than one
+binding, and the zero/one/many health surface is MVR-06C/06D.
 
 <!-- SECTION:HEALTH:END -->
 
