@@ -338,6 +338,7 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
     }
     assert _module_list(section["allowed_importers"]) == {
         "app.instance.binding_effect_lease",
+        "app.instance.binding_removal",
         "app.instance.instance_state",
         "app.instance.legacy_owner_recovery",
         "app.instance.runtime",

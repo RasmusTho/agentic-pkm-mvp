@@ -350,6 +350,16 @@ class WorkerTickResult:
     processed: int = 0
 
 
+def _resolve_worker_binding_runtime(vault_root: Path | None) -> Any:
+    """Scalar env-root binding before the MVR-06B handoff; durable versioned intent after."""
+
+    from app.instance.background_supervisor import process_background_supervisor
+
+    if process_background_supervisor("worker") is None:
+        return resolve_scalar_binding_runtime(vault_root=vault_root)
+    return resolve_background_worker_runtime(vault_root=vault_root)
+
+
 def run_once(
     *,
     vault_root: Path | None = None,
@@ -376,7 +386,7 @@ def run_once(
         binding_runtime = (
             resolve_scalar_binding_runtime(vault_root=resolved_root)
             if _eligible_binding_ids is not None
-            else resolve_background_worker_runtime(vault_root=resolved_root)
+            else _resolve_worker_binding_runtime(resolved_root)
         )
     except BackgroundBindingIdle:
         # MVR-06B: explicit-empty or compatibility no-vault intent is durable idle.
@@ -2248,7 +2258,7 @@ def run(
     if startup_root is not None:
         try:
             startup_stamp = required_worker_binding_stamp(
-                resolve_background_worker_runtime(vault_root=startup_root)
+                _resolve_worker_binding_runtime(startup_root)
             )
             require_upgrade_drained(startup_stamp)
         except OutboxEnvelopeUpgradeBlocked:
@@ -2327,7 +2337,7 @@ def run(
                 binding_runtime = (
                     None
                     if tick_vault_root is None
-                    else resolve_background_worker_runtime(vault_root=tick_vault_root)
+                    else _resolve_worker_binding_runtime(tick_vault_root)
                 )
             except BackgroundBindingIdle:
                 # MVR-06B: explicit-empty / no-vault durable intent is honest idle.
