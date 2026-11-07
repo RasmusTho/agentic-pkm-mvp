@@ -2784,9 +2784,12 @@ class PreparedIssueDeliveryWorker:
                 raise ValueError("carrier launcher differs from approved preflight")
             if carrier_launcher.effect_gate_checkout_root != Path(str(approval["destination"]["checkout"])).resolve():
                 raise ValueError("carrier launcher checkout differs from approval")
+            approval_file = carrier_launcher.effect_gate_approval_file
+            if approval_file is None:
+                raise ValueError("carrier launcher approval file is unavailable")
             try:
-                document = json.loads(carrier_launcher.effect_gate_approval_file.read_text(encoding="utf-8"))
-            except (AttributeError, OSError, ValueError) as exc:
+                document = json.loads(approval_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
                 raise ValueError("carrier launcher approval file is unavailable") from exc
             bound = document.get("approval", document) if isinstance(document, Mapping) else None
             if bound != dict(approval):

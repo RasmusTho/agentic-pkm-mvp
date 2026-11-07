@@ -1759,7 +1759,7 @@ def _build_tcd_decision(
         "model_class": _model_class_for(risk),
         "selection_intent": selection_intent,
         "capability": _capability_for_selection_intent(
-            selection_intent,
+            cast(SelectionIntent, selection_intent),
             provider_census=provider_census,
         ),
         "runtime_difference": "invocation-hint-only",
