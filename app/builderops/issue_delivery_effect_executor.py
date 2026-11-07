@@ -2772,6 +2772,10 @@ class PreparedIssueDeliveryWorker:
             profile = _load_profile(carrier_profile_file, binding["isolation_profile_sha256"])
             if profile.carrier != "claude" or profile.codex_executable.sha256 != binding["executable_sha256"]:
                 raise ValueError("approved carrier executable or profile changed")
+            destination_binding = approval["destination"]
+            if (profile.worktree.path != Path(str(destination_binding["worktree"])).resolve()
+                or profile.worktree_head != destination_binding["base_sha"]):
+                raise ValueError("carrier isolation worktree or head differs from approval")
             if (type(carrier_launcher) is not ClaudeContentOnlyIssueDeliverySessionLauncher
                 or carrier_launcher._carrier_binding != dict(binding)
                 or carrier_launcher._isolation_runner._profile_file != carrier_profile_file
@@ -2796,6 +2800,9 @@ class PreparedIssueDeliveryWorker:
             direct_command = [profile.codex_executable.path, *command[1:]]
             if canonical_command_sha256(direct_command) != profile.command_sha256:
                 raise ValueError("approved carrier command differs from isolation profile")
+            if carrier_launcher._isolation_runner._platform_name != "linux":
+                raise ValueError("carrier isolation host is unsupported")
+            carrier_launcher._isolation_runner._validate_live(profile)
         frozen = destination.prepare(approval)
         launcher = carrier_launcher if approval.get("contract_version") == "fca-issue-delivery.v4" else launcher_factory(frozen)
         if not isinstance(launcher, ContentOnlyIssueDeliverySessionLauncher):

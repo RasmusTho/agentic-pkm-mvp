@@ -388,3 +388,46 @@ def test_wrong_approved_command_hash_refused_before_preparation(issue_delivery_p
     for kind in ("reservation", "attempt"):
         with pytest.raises(ControlPlaneNotFoundError):
             observed["owner"].issue_delivery_operation_record_read(repository=approval["repository"], record_id=f"issue-delivery-{kind}:{approval['operation_key']}")
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("drift", ["path", "head", "executable"])
+def test_approved_profile_live_drift_refuses_before_destination(issue_delivery_production_harness, monkeypatch, drift):
+    from dataclasses import replace
+    from app.builderops.control_plane.client import ControlPlaneNotFoundError
+
+    observed = {}
+    def spy(destination, owner, approval, transport):
+        observed.update(owner=owner, approval=approval, transport=transport, prepare_calls=[])
+        monkeypatch.setattr(destination, "prepare", lambda *_: observed["prepare_calls"].append(True))
+    def inspect_and_drift(launcher):
+        from app.builderops.issue_delivery_worker_isolation import canonical_command_sha256, file_sha256
+        runner = launcher._isolation_runner
+        document = json.loads(runner._profile_file.read_text())
+        command = launcher.command(observed["approval"]["context"]["dispatch_plan"]["context_packs"][0])
+        command[0] = document["carrier_executable"]["path"]
+        assert document["command_sha256"] == canonical_command_sha256(command)
+        assert file_sha256(runner._profile_file) == observed["approval"]["carrier_binding"]["isolation_profile_sha256"]
+        if drift == "path":
+            assert document["worktree"]["path"] != observed["approval"]["destination"]["worktree"]
+        if drift == "head":
+            assert document["worktree"]["git_head"] != observed["approval"]["destination"]["base_sha"]
+        if drift == "executable":
+            resolve = runner._executable_resolver
+            def changed(path):
+                actual = resolve(path)
+                if path == "/opt/claude/bin/claude":
+                    return replace(actual, sha256="f" * 64)
+                return actual
+            monkeypatch.setattr(runner, "_executable_resolver", changed)
+    expected = "worktree or head differs" if drift != "executable" else "executable identity changed"
+    with pytest.raises(ValueError, match=expected):
+        issue_delivery_production_harness(claude=True, before_prepare=spy,
+            tamper_worktree_profile=drift if drift != "executable" else None,
+            before_prepare_launcher=inspect_and_drift)
+    assert observed and observed["prepare_calls"] == []
+    assert observed["transport"].calls == 0
+    approval = observed["approval"]
+    for kind in ("reservation", "attempt"):
+        with pytest.raises(ControlPlaneNotFoundError):
+            observed["owner"].issue_delivery_operation_record_read(repository=approval["repository"], record_id=f"issue-delivery-{kind}:{approval['operation_key']}")

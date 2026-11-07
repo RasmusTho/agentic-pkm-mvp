@@ -1109,6 +1109,8 @@ def issue_delivery_production_harness(
         claude: bool = False,
         generated_plan_observer: Callable[[Mapping[str, Any]], None] | None = None,
         tamper_command_hash: bool = False,
+        tamper_worktree_profile: str | None = None,
+        before_prepare_launcher: Callable[..., None] | None = None,
         before_prepare: Callable[..., None] | None = None,
     ) -> _ProductionHarness:
         nonlocal counter
@@ -1360,13 +1362,18 @@ def issue_delivery_production_harness(
             if generated_plan_observer is None:
                 plan["context_packs"][0]["delivery_sources"] = delivery_source_pair(manifest)
             launcher, worker_transport = _production_worker_components(case=case, checkout=checkout, worktree=worktree, base_sha=base_sha, approval=manifest, effect_kind=effect_kind, registry=registry, revoke_before_effect=revoke_before_effect, lose_response_after_entry=lose_response_after_entry, claude=True)
-            if tamper_command_hash:
+            if tamper_command_hash or tamper_worktree_profile:
                 profile_file = launcher._isolation_runner._profile_file
                 profile_document = json.loads(profile_file.read_text())
-                command = launcher.command(plan["context_packs"][0])
-                command[0] = profile_document["carrier_executable"]["path"]
-                command[command.index("--session-id") + 1] = str(uuid4())
-                profile_document["command_sha256"] = canonical_command_sha256(command)
+                if tamper_command_hash:
+                    command = launcher.command(plan["context_packs"][0])
+                    command[0] = profile_document["carrier_executable"]["path"]
+                    command[command.index("--session-id") + 1] = str(uuid4())
+                    profile_document["command_sha256"] = canonical_command_sha256(command)
+                if tamper_worktree_profile == "path":
+                    profile_document["worktree"]["path"] = str(worktree.parent / "other-worktree")
+                elif tamper_worktree_profile == "head":
+                    profile_document["worktree"]["git_head"] = "f" * 40
                 profile_file.write_text(json.dumps(profile_document, sort_keys=True, separators=(",", ":")))
                 profile_sha = file_sha256(profile_file)
                 manifest["carrier_binding"]["isolation_profile_sha256"] = profile_sha
@@ -1435,6 +1442,8 @@ def issue_delivery_production_harness(
 
         if before_prepare is not None:
             before_prepare(destination, owner, approval, worker_transport)
+        if before_prepare_launcher is not None:
+            before_prepare_launcher(launcher)
         prepared_worker = PreparedIssueDeliveryWorker.create(
             approval=approval,
             destination=destination,
