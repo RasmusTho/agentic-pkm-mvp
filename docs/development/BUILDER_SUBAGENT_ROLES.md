@@ -219,5 +219,10 @@ subagent_handoff_receipt:
 
 The former Claude role route is preserved only so historical handoffs, audits, and compatibility
 documents remain interpretable. It is not an active Builder carrier. Do not launch Claude, read
-Anthropic credentials, or add `.claude/agents/**` adapters from this role map; any future carrier
-requires a separately governed contract and current authority readback.
+Anthropic credentials, or add `.claude/agents/**` adapters from this role map. The prospective
+shared carrier contract in `BUILDER_SYSTEM_PROCESS_MAP.md :: Current active Builder carrier`
+allows future dormant adapter work and a separately qualified transition, but compatibility
+artifacts, user direction and isolated pilots do not authorize a live launch. A second carrier must
+pass the existing owner-admission, protected execution, isolation, effect and readback gates, plus
+its own host qualification and applicable owner acceptance. Roles remain execution adapters and
+never become approval, lifecycle or effect authorities.
