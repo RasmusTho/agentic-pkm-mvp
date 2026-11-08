@@ -5324,6 +5324,10 @@ BACKGROUND_COMMANDS = (
     "background-binding-inspect",
     "background-binding-add",
     "background-binding-remove",
+    "background-many-binding-activate",
+    "background-queue-list",
+    "background-queue-reissue",
+    "background-queue-drop",
 )
 
 
@@ -5466,6 +5470,47 @@ def _background_command(args: argparse.Namespace) -> int:
                         _capability=local_operator_storage_capability(),
                     )
             payload = handoff.as_dict()
+        elif args.command == "background-many-binding-activate":
+            from app.instance.many_binding_activation import (
+                activate_many_binding_dispatch,
+            )
+
+            layout = InstanceStateLayout(
+                root=registry_path.parent,
+                channel_id=args.channel,
+                registry_path=registry_path,
+            )
+            layout.require_existing()
+            with _deployment_admission_locked(args.host_global_root):
+                with _producer_transition_locked(layout):
+                    proof = json.loads(
+                        args.quiescence_proof_path.read_text(encoding="utf-8")
+                    )
+                    # The all-process fence: every API/watcher/worker is stopped, so the
+                    # MVR-06D floor commits before the first queue-state write.
+                    _require_proved_deployment_lease(
+                        host_global_root=args.host_global_root,
+                        channel=args.channel,
+                        nonce=proof.get("nonce"),
+                    )
+                    payload = activate_many_binding_dispatch(
+                        registry, _capability=local_operator_storage_capability()
+                    )
+        elif args.command in {
+            "background-queue-list",
+            "background-queue-reissue",
+            "background-queue-drop",
+        }:
+            from app.workers import many_binding_dispatch as queue_admin
+
+            if args.command == "background-queue-list":
+                payload = {"quarantined": queue_admin.list_quarantined()}
+            elif args.command == "background-queue-reissue":
+                payload = queue_admin.reissue_quarantined_row(
+                    args.row_id, vault_binding_id=args.vault_binding_id
+                )
+            else:
+                payload = queue_admin.drop_quarantined_row(args.row_id, reason=args.reason)
         elif args.command in _BINDING_LIFECYCLE_COMMANDS:
             payload = _binding_lifecycle_command(args, registry_path)
         elif args.command == "background-authority-show":
@@ -6495,6 +6540,16 @@ def _main(argv: list[str] | None = None) -> int:
         if name == "binding-relocate":
             command.add_argument("--vault-binding-id", required=True)
             command.add_argument("--destination", required=True)
+        if name == "background-many-binding-activate":
+            command.add_argument("--channel", required=True)
+            command.add_argument("--host-global-root", type=Path, required=True)
+            command.add_argument("--quiescence-proof-path", type=Path, required=True)
+        if name == "background-queue-reissue":
+            command.add_argument("--row-id", required=True)
+            command.add_argument("--vault-binding-id", required=True)
+        if name == "background-queue-drop":
+            command.add_argument("--row-id", required=True)
+            command.add_argument("--reason", required=True)
         if name == "background-role-revoke":
             command.add_argument("--channel", default=None)
             command.add_argument("--host-global-root", type=Path, default=None)

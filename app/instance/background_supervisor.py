@@ -1502,6 +1502,77 @@ def process_background_supervisor(consumer: str) -> BackgroundLifecycleSuperviso
     return supervisor
 
 
+def aggregate_background_health() -> dict[str, Any] | None:
+    """MVR-06D ``/api/health`` projection: zero/one/many lifecycles plus queue readiness.
+
+    Read-only: a fresh supervisor re-resolves every binding from durable truth (no drain,
+    no lease, no effect), so its generations are a projection; each worker/watcher keeps
+    its own generations in its heartbeat. ``None`` before the MVR-06B handoff. Redacted:
+    opaque binding ids, revisions, statuses, and counts only -- never a path or payload.
+    """
+
+    registry_raw = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+    ownership_raw = os.getenv("INSTANCE_OWNERSHIP_ROOT", "").strip()
+    if not registry_raw or not ownership_raw:
+        return None
+    registry_path = Path(registry_raw).expanduser().resolve(strict=False)
+    if not registry_path.exists():
+        return None
+    if durable_background_state(VaultRegistryStore(registry_path).read_existing()) is None:
+        return None
+    supervisor = BackgroundLifecycleSupervisor.for_runtime(
+        registry_path=registry_path,
+        ownership_root=Path(ownership_raw).expanduser(),
+        channel_id=os.getenv("PKM_ENVIRONMENT", "dev").strip() or "dev",
+        consumer="api-health",
+    )
+    supervisor.start_all()
+    health = supervisor.health()
+    from app.workers.many_binding_dispatch import queue_configured, unadmitted_topics
+
+    queue: dict[str, Any] = {"backend": "absent"}
+    blocked = degraded = False
+    if queue_configured():
+        try:
+            from app.services.outbox import _open_conn
+            from app.services.outbox_claims import (
+                disposition_counts,
+                pending_topic_count,
+                require_claim_schema,
+            )
+
+            conn = _open_conn()
+            try:
+                if supervisor.production_many_binding:
+                    require_claim_schema(conn)
+                    scopes = disposition_counts(conn)
+                    unadmitted = pending_topic_count(conn, unadmitted_topics())
+                else:
+                    scopes, unadmitted = {}, 0
+            finally:
+                conn.close()
+            queue = {"backend": "postgres", "scopes": scopes, "unadmitted_pending": unadmitted}
+            blocked = any(item["reconciliation_required"] for item in scopes.values())
+            degraded = unadmitted > 0 or any(item["quarantined"] for item in scopes.values())
+        except Exception:
+            queue = {"backend": "postgres", "status": "unavailable"}
+            degraded = True
+    if blocked:
+        readiness = "blocked"
+    elif degraded or health["status"] == "degraded":
+        readiness = "degraded"
+    else:
+        readiness = health["status"]
+    return {
+        **health,
+        "dispatch_contract": (
+            "mvr06d-claims" if supervisor.production_many_binding else "singleton"
+        ),
+        "readiness": readiness,
+        "queue": queue,
+    }
+
+
 def durable_background_root() -> tuple[bool, Path | None]:
     """``(True, root-or-None)`` once durable intent owns the binding, else ``(False, None)``.
 
@@ -1580,6 +1651,7 @@ def revoke_background_role_fenced(
 
 __all__ = [
     "AcceptedContextHandoff",
+    "aggregate_background_health",
     "BACKGROUND_CONTEXT_HANDOFF_SCHEMA",
     "BackgroundBindingIdle",
     "BackgroundContextHandoff",

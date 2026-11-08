@@ -521,6 +521,21 @@ def disposition_counts(conn: Any) -> dict[str, dict[str, int]]:
     }
 
 
+def pending_topic_count(conn: Any, topics: tuple[str, ...]) -> int:
+    """Undelivered, unquarantined rows whose topic is in ``topics`` (e.g. unadmitted)."""
+
+    if not topics:
+        return 0
+    cur = _exec(
+        conn,
+        "select count(*) from outbox where delivered_at is null and quarantined_at is null "
+        "and topic in (" + ", ".join("%s" for _ in topics) + ")",
+        tuple(topics),
+    )
+    row = cur.fetchone()
+    return int(_row_value(row, 0, "count") or 0) if row else 0
+
+
 def classify_for_activation(conn: Any) -> dict[str, Any]:
     """Read-only MVR-05 classification census of undelivered rows for the 06D gate."""
 
@@ -579,6 +594,7 @@ __all__ = [
     "fenced_effect",
     "mark_effect_pending",
     "mark_reconciliation_required",
+    "pending_topic_count",
     "quarantine_claim",
     "quarantine_unclaimed_rows",
     "quarantined_rows",

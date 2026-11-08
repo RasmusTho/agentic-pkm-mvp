@@ -575,6 +575,97 @@ class ManyBindingDispatcher:
         return result
 
 
+# -- governed quarantine administration -------------------------------------------------
+
+
+class QueuedWorkAdminError(ValueError):
+    """A governed quarantine command was refused (typed, redacted)."""
+
+
+def _admin_supervisor(supervisor: Any | None) -> Any:
+    if supervisor is not None:
+        return supervisor
+    from app.instance.background_supervisor import process_background_supervisor
+
+    resolved = process_background_supervisor("queue-admin")
+    if resolved is None:
+        raise QueuedWorkAdminError("queued-work administration requires the completed MVR-06B handoff")
+    return resolved
+
+
+def list_quarantined(*, vault_binding_id: str | None = None) -> list[dict[str, Any]]:
+    """Redacted quarantine inspection (ids, topic, binding, reason; never the payload)."""
+
+    from app.services.outbox import _open_conn
+    from app.services.outbox_claims import quarantined_rows, require_claim_schema
+
+    conn = _open_conn()
+    try:
+        require_claim_schema(conn)
+        return quarantined_rows(conn, vault_binding_id)
+    finally:
+        conn.close()
+
+
+def reissue_quarantined_row(
+    row_id: str, *, vault_binding_id: str, supervisor: Any | None = None
+) -> dict[str, Any]:
+    """Reissue a quarantined row only to its *same* stable binding, freshly re-authorized.
+
+    The binding must have a running lifecycle (registered, enrolled, owned, GOV-allowed)
+    under a fresh context; the row keeps its id, legacy key, and binding. A request
+    naming any other binding is refused: quarantine can never retarget work.
+    """
+
+    from app.services.outbox import _open_conn
+    from app.services.outbox_claims import reissue_quarantined, require_claim_schema
+
+    resolved = _admin_supervisor(supervisor)
+    lifecycles = {item.binding_id: item for item in resolved.reconcile_all()}
+    lifecycle = lifecycles.get(vault_binding_id)
+    if lifecycle is None or lifecycle.status != "running" or lifecycle.context is None:
+        raise QueuedWorkAdminError(
+            f"binding {vault_binding_id} is not running under current authority; "
+            "re-authorize it before reissuing its work"
+        )
+    conn = _open_conn()
+    try:
+        require_claim_schema(conn)
+        reissued = reissue_quarantined(
+            conn,
+            row_id,
+            vault_binding_id=vault_binding_id,
+            consumer_context={
+                "context_id": lifecycle.context.context_id,
+                "generation": lifecycle.generation,
+                "binding_revision": lifecycle.binding_revision,
+            },
+        )
+    finally:
+        conn.close()
+    if not reissued:
+        raise QueuedWorkAdminError(
+            "no quarantined row with that id belongs to that binding; quarantined work is "
+            "reissued only to its original binding"
+        )
+    return {"row_id": row_id, "vault_binding_id": vault_binding_id, "state": "reissued"}
+
+
+def drop_quarantined_row(row_id: str, *, reason: str) -> dict[str, Any]:
+    from app.services.outbox import _open_conn
+    from app.services.outbox_claims import drop_quarantined, require_claim_schema
+
+    conn = _open_conn()
+    try:
+        require_claim_schema(conn)
+        dropped = drop_quarantined(conn, row_id, reason=reason)
+    finally:
+        conn.close()
+    if not dropped:
+        raise QueuedWorkAdminError("no undelivered quarantined row has that id")
+    return {"row_id": row_id, "state": "dropped"}
+
+
 _PROCESS_DISPATCHERS: dict[int, ManyBindingDispatcher] = {}
 
 
@@ -594,11 +685,15 @@ __all__ = [
     "EffectContract",
     "ManyBindingDispatcher",
     "ManyBindingTick",
+    "QueuedWorkAdminError",
     "ScopeOutcome",
     "consumer_context_for",
+    "drop_quarantined_row",
     "effect_contract",
+    "list_quarantined",
     "process_many_binding_dispatcher",
     "queue_configured",
+    "reissue_quarantined_row",
     "revalidate_vault_bound_claim",
     "unadmitted_topics",
 ]

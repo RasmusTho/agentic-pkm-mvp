@@ -59,6 +59,7 @@ from app.instance.vault_registry import (
     MINIMUM_RUNTIME_SCHEMA_KEY,
     MVR05_MINIMUM_RUNTIME_SCHEMA,
     MVR06_FAMILY_RUNTIME_SCHEMAS,
+    many_binding_dispatch_enabled,
     RegistrySnapshot,
     VaultRegistryStore,
 )
@@ -715,9 +716,11 @@ class BackgroundIntentAdminService:
             "registry_revision": snapshot.revision,
             "legacy_bridge": _bridge_view(snapshot),
             "intent_mutations": (
-                "singleton_or_empty"
-                if intent is not None and intent.handoff_complete
-                else BackgroundIntentNotReadyError.error_code
+                BackgroundIntentNotReadyError.error_code
+                if intent is None or not intent.handoff_complete
+                else "many"
+                if many_binding_dispatch_enabled(snapshot)
+                else "singleton_or_empty"
             ),
         }
 

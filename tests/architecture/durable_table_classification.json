@@ -940,11 +940,12 @@
     },
     "outbox": {
       "classification": "binding-scoped",
-      "reason": "MVR-05A7 revision f6a05a7b0001 adds `outbox.vault_binding_id` and preserves pre-cutover idempotency lineage in `legacy_key`. `app/services/outbox.py` resolves the scalar binding before insert, and both producer and worker reject the stale global shape, so durable effects cannot be dispatched across vault bindings.",
+      "reason": "MVR-05A7 revision f6a05a7b0001 adds `outbox.vault_binding_id` and preserves pre-cutover idempotency lineage in `legacy_key`. `app/services/outbox.py` resolves the scalar binding before insert, and both producer and worker reject the stale global shape, so durable effects cannot be dispatched across vault bindings. MVR-06D revision fa06d0c00001 adds the recoverable claim/lease, effect-outcome, consumer-context, and quarantine columns written only by `app/services/outbox_claims.py`, which claims, fences, acknowledges, and quarantines rows strictly within one `vault_binding_id` scope (or the singleton global scope) and never retargets a row to another binding.",
       "owning_revision": "f3a1c9d2e4b7",
       "declaring_revisions": [
         "f3a1c9d2e4b7",
-        "f6a05a7b0001"
+        "f6a05a7b0001",
+        "fa06d0c00001"
       ],
       "binding_key": "keyed",
       "binding_column": "vault_binding_id",
@@ -953,6 +954,12 @@
           "module": "app/services/outbox.py",
           "operations": [
             "insert",
+            "update"
+          ]
+        },
+        {
+          "module": "app/services/outbox_claims.py",
+          "operations": [
             "update"
           ]
         }

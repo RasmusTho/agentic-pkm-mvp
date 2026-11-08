@@ -348,6 +348,41 @@ class WorkerTickResult:
 
     state: str
     processed: int = 0
+    #: MVR-06D: the redacted per-scope outcome of a many-binding tick.
+    many_binding: dict[str, Any] | None = None
+
+
+def _many_binding_supervisor() -> Any:
+    """The process supervisor once MVR-06D activated many-binding dispatch, else ``None``.
+
+    Read fresh every tick: the floor commits inside a stopped window, but a running
+    pre-activation process must never keep dispatching through the singleton poll.
+    """
+
+    from app.instance.background_supervisor import process_background_supervisor
+    from app.instance.vault_registry import many_binding_dispatch_enabled
+
+    try:
+        supervisor = process_background_supervisor("worker")
+    except Exception:
+        return None  # the singleton resolver fails closed on the same registry read
+    if supervisor is None or not many_binding_dispatch_enabled(supervisor.registry.load()):
+        return None
+    return supervisor
+
+
+def _run_many_binding_tick(supervisor: Any) -> WorkerTickResult:
+    from app.workers.many_binding_dispatch import process_many_binding_dispatcher
+
+    tick = process_many_binding_dispatcher(supervisor).tick()
+    for outcome in tick.outcomes:
+        if outcome.lifecycle_status == "failed":
+            logger.error(
+                "worker binding %s blocked: %s", outcome.scope, outcome.detail or "failed"
+            )
+    return WorkerTickResult(
+        state=tick.state, processed=tick.processed, many_binding=tick.as_dict()
+    )
 
 
 def _resolve_worker_binding_runtime(vault_root: Path | None) -> Any:
@@ -419,6 +454,11 @@ def run_once(
     A set-but-missing ``VAULT_ROOT`` still raises through the strict resolver,
     preserving the loud misconfiguration contract.
     """
+    if _eligible_binding_ids is None and vault_root is None:
+        many = _many_binding_supervisor()
+        if many is not None:
+            # MVR-06D: every binding (and the global scope) dispatches through claims.
+            return _run_many_binding_tick(many)
     if _resolve_optional_vault_root(vault_root) is None:
         if _background_lifecycle_failed():
             return WorkerTickResult(state="background_lifecycle_failed", processed=0)
@@ -2447,6 +2487,38 @@ def run(
     while True:
         ticks_total += 1
         WORKER_LAST_TICK_TIMESTAMP.set(time.time())
+        many_supervisor = _many_binding_supervisor()
+        if many_supervisor is not None:
+            try:
+                many_tick = _run_many_binding_tick(many_supervisor)
+            except Exception:
+                errors_total += 1
+                logger.exception("worker many-binding tick failed")
+                raise
+            processed_total += many_tick.processed
+            now = time.time()
+            if now - last_heartbeat >= heartbeat_interval:
+                write_worker_heartbeat(
+                    path=heartbeat_path,
+                    ticks_total=ticks_total,
+                    errors_total=errors_total,
+                    processed_total=processed_total,
+                    processed_by_event=processed_by_event,
+                    last_processed=last_processed,
+                    outbox_path=outbox_path,
+                    status=(
+                        "background_lifecycle_failed"
+                        if many_tick.state == "background_lifecycle_failed"
+                        else "running"
+                    ),
+                    binding_blocked_pending=0,
+                    now=now,
+                )
+                last_heartbeat = now
+            if stop_after_ticks is not None and ticks_total >= stop_after_ticks:
+                break
+            time.sleep(interval)
+            continue
         tick_vault_root = _resolve_optional_vault_root(None)
         no_vault_idle = tick_vault_root is None
         lifecycle_blocked = no_vault_idle and _background_lifecycle_failed()

@@ -139,6 +139,20 @@ def _sanitize_health_value(value: Any, *, parent_key: str | None = None) -> Any:
     return value
 
 
+def _background_lifecycle_health() -> dict[str, Any] | None:
+    """MVR-06D zero/one/many background lifecycle health; informational, never required.
+
+    A failure to project is reported as such rather than failing the whole health call.
+    """
+
+    try:
+        from app.instance.background_supervisor import aggregate_background_health
+
+        return aggregate_background_health()
+    except Exception:
+        return {"readiness": "unavailable"}
+
+
 @router.get("/health")
 async def health(
     model_access_sampling: Literal["background", "cache"] = "background",
@@ -153,6 +167,9 @@ async def health(
     )
     if isinstance(payload, dict):
         payload = _neutralize_llm_diagnostics(payload)
+        background = await run_in_threadpool(_background_lifecycle_health)
+        if background is not None:
+            payload["background_lifecycles"] = background
         if scope == 'text-capture':
             payload.update(activation_scope=scope, full_channel_qualified=False)
     return _sanitize_health_value(payload)
