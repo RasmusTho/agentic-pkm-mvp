@@ -235,10 +235,10 @@ class ManyBindingTick:
         }
 
 
-def _claim_fault_point(stage: str) -> None:
+def _claim_fault_point(stage: str, claim: Any = None) -> None:
     """Process-failure injection seam for the claim protocol; production is a no-op."""
 
-    del stage
+    del stage, claim
 
 
 def _lease_seconds() -> float:
@@ -394,7 +394,7 @@ class ManyBindingDispatcher:
         claim = claims.mark_effect_pending(
             conn, claim, contract.descriptor(claim, consumer_context=context)
         )
-        _claim_fault_point("effect_pending")
+        _claim_fault_point("effect_pending", claim)
         txn = self._txn_conn()
         try:
             with claims.fenced_effect(
@@ -416,7 +416,7 @@ class ManyBindingDispatcher:
                         source_vault_binding_id=claim.vault_binding_id,
                         message=message,
                     )
-                _claim_fault_point("effect_running")
+                _claim_fault_point("effect_running", claim)
         except (claims.StaleClaimToken, claims.EffectAlreadyRecorded):
             logger.warning(
                 "many-binding effect rejected: claim %s for row %s is no longer current",
@@ -445,7 +445,7 @@ class ManyBindingDispatcher:
                 txn.close()
             except Exception:  # pragma: no cover - defensive close
                 pass
-        _claim_fault_point("effect_committed")
+        _claim_fault_point("effect_committed", claim)
         claims.ack_claim(conn, claim, consumer_context=context)
         return "processed"
 
