@@ -17,6 +17,60 @@ import pytest
 from scripts import openhands_canvas as canvas
 
 
+def test_port_probe_allows_reuse_and_refuses_a_listener(monkeypatch):
+    class Probe:
+        reuse = False
+        occupied = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def setsockopt(self, level, option, value):
+            assert (level, option, value) == (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.reuse = True
+
+        def bind(self, address):
+            assert address == ("127.0.0.1", 3001)
+            if not self.reuse:  # Simulate a recently closed connection.
+                raise OSError("address in use")
+
+        def listen(self, backlog):
+            if self.occupied:  # Some platforms defer a listener conflict until listen().
+                raise OSError("address in use")
+
+    monkeypatch.setattr(canvas.socket, "socket", lambda *args: Probe())
+    canvas.ensure_port_free(3001)
+    Probe.occupied = True
+    with pytest.raises(canvas.CanvasError, match="port is unavailable"):
+        canvas.ensure_port_free(3001)
+
+
+def test_port_probe_with_recent_connection_and_active_listener():
+    listener = None
+    try:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+    except PermissionError:
+        if listener is not None:
+            listener.close()
+        pytest.skip("loopback sockets are unavailable")
+    with listener:
+        port = listener.getsockname()[1]
+        listener.listen(1)
+        with pytest.raises(canvas.CanvasError, match="port is unavailable"):
+            canvas.ensure_port_free(port)
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
+            accepted, _ = listener.accept()
+            with accepted:
+                accepted.shutdown(socket.SHUT_WR)
+                assert client.recv(1) == b""
+    canvas.ensure_port_free(port)
+
+
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     package = tmp_path / "package"

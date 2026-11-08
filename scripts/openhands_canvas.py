@@ -214,7 +214,9 @@ def wait_ready(process: subprocess.Popen, port: int) -> None:
 def ensure_port_free(port: int) -> None:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
+            probe.listen(1)
     except OSError as exc:
         raise CanvasError("Canvas loopback port is unavailable") from exc
 
