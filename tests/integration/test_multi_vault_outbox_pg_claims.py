@@ -15,7 +15,6 @@ import multiprocessing
 import os
 import threading
 import time
-from pathlib import Path
 
 import psycopg
 import pytest

@@ -23,12 +23,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from app.instance._storage_boundary import (
+from app.instance.vault_registry import (
     CapabilityNotReadyError,
     RegistryError,
-    _require_storage_mutation_capability,
-)
-from app.instance.vault_registry import (
     RegistrySnapshot,
     VaultRegistryStore,
     many_binding_dispatch_enabled,
@@ -109,9 +106,11 @@ def activate_many_binding_dispatch(
     conn_factory: Callable[[], Any] | None = None,
     _capability: Any = None,
 ) -> dict[str, object]:
-    """Validate, then commit the MVR-06D floor in one generation. Idempotent."""
+    """Validate, then commit the MVR-06D floor in one generation. Idempotent.
 
-    _require_storage_mutation_capability(_capability)
+    The registry's floor producer enforces the storage-mutation capability itself.
+    """
+
     snapshot = registry.load()
     if many_binding_dispatch_enabled(snapshot):
         floors = snapshot.extensions.get("runtimeFloors") or {}
