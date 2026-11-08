@@ -1740,3 +1740,383 @@ def test_reactivation_refuses_another_roots_incomplete_journal(tmp_path, monkeyp
     # The same root resumes, and only then can the other root proceed.
     assert runtime.reactivate_removed(Path(second.path)).vault_binding_id == second.vault_binding_id
     assert runtime.reactivate_removed(Path(third.path)).vault_binding_id == third.vault_binding_id
+
+
+# -- MVR-06C production relocation and the dormant multi-binding supervisor ---------------
+
+
+def _relocation_instance(tmp_path, monkeypatch):
+    """06B instance + an owner-native initialized binding enrolled as background intent."""
+
+    from tests._mvr06c_relocation_harness import enroll_only, initialized_registration
+
+    runtime, first, (second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    third = initialized_registration(runtime, tmp_path / "three")
+    enroll_only(runtime, third.vault_binding_id)
+    assert background_ids(runtime) == (third.vault_binding_id,)
+    return runtime, first, second, third
+
+
+def test_relocation_activates_only_after_all_consumer_effect_leases(tmp_path, monkeypatch) -> None:
+    import shutil
+    import threading
+
+    from app.instance.binding_removal import binding_epoch_lineage
+    from tests._mvr06c_relocation_harness import copy_vault, leases, shared_refused
+
+    # Before the MVR-06B background floor the production relocation stays sealed.
+    staged, staged_first, _ = mvr06a_instance(tmp_path / "staged")
+    before = staged.registry.load()
+    with pytest.raises(CapabilityNotReadyError, match="MVR-06C consumer effect-lease floor"):
+        staged.relocate(staged_first.vault_binding_id, tmp_path / "staged-target")
+    assert staged.registry.load() == before
+    assert not (staged.layout.root / "binding-relocation.json").exists()
+
+    runtime, _first, _second, third = _relocation_instance(tmp_path / "live", monkeypatch)
+    binding, old_root = third.vault_binding_id, Path(third.path)
+    sup = supervisor(runtime, "worker")
+    assert sup.start().root == old_root
+    target = copy_vault(old_root, tmp_path / "live" / "relocated")
+    holding, release = threading.Event(), threading.Event()
+
+    def authorized_foreground_effect() -> None:
+        with leases(runtime).shared_effect(
+            binding, channel_id=runtime.layout.channel_id, root=old_root
+        ):
+            holding.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=authorized_foreground_effect)
+    holder.start()
+    assert holding.wait(5)
+    result: dict = {}
+    relocator = threading.Thread(
+        target=lambda: result.update(registration=runtime.relocate(binding, target))
+    )
+    relocator.start()
+    relocator.join(1.0)
+    # The exclusive relocation waits for the authorized effect under its reservation,
+    # which already refuses every new holder on either root.
+    assert relocator.is_alive()
+    reserved = runtime.registry.load().registrations[binding]
+    assert reserved.extensions["lifecycleState"] == "relocating"
+    assert reserved.path == str(old_root.resolve())
+    assert shared_refused(runtime, binding, old_root)
+    assert shared_refused(runtime, binding, target)
+    release.set()
+    holder.join(10)
+    relocator.join(30)
+    relocated = result["registration"]
+    assert relocated.path == str(target.resolve())
+    assert "lifecycleState" not in relocated.extensions
+    assert (relocated.vault_id, relocated.local_instance_id) == (third.vault_id, third.local_instance_id)
+    assert runtime.ledger.lease_locator_names(
+        binding, channel_id=runtime.layout.channel_id, root=target
+    )
+    # No later effect can touch the old root; the new root is admitted.
+    assert shared_refused(runtime, binding, old_root)
+    assert not shared_refused(runtime, binding, target)
+    with sup.effect() as lifecycle:
+        assert lifecycle.root == target.resolve()
+        assert lifecycle.generation == 2
+        assert lifecycle.binding_revision == relocated.extensions["bindingRevision"]
+    events = binding_epoch_lineage(runtime.registry.load(), binding)
+    assert [item["event"] for item in events] == ["relocated"]
+    assert str(target) not in json.dumps(events) and str(old_root) not in json.dumps(events)
+
+    # A renamed (moved) directory relocates too: the lease's physical identity follows it.
+    renamed = tmp_path / "live" / "renamed"
+    shutil.move(str(target), renamed)
+    receipt = cli(
+        "binding-relocate",
+        "--registry-path", str(runtime.layout.registry_path),
+        "--channel", runtime.layout.channel_id,
+        "--host-global-root", str(runtime.ledger.root),
+        "--consumer", "cli",
+        "--watcher-posture", "absent",
+        "--vault-binding-id", binding,
+        "--destination", str(renamed),
+    )
+    assert receipt["_exit_code"] == 0, receipt
+    assert receipt["state"] == "relocated" and str(renamed) not in json.dumps(receipt)
+    assert runtime.registry.load().registrations[binding].path == str(renamed.resolve())
+    assert not shared_refused(runtime, binding, renamed)
+    assert sup.reconcile().root == renamed.resolve()
+
+
+def test_relocation_rejects_different_initialized_vault_identity_before_commit(
+    tmp_path, monkeypatch
+) -> None:
+    from app.instance.binding_relocation import (
+        BindingRelocationRefused,
+        RelocationIdentityError,
+    )
+    from tests._mvr06c_relocation_harness import copy_vault, shared_refused
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    runtime, first, second, third = _relocation_instance(tmp_path, monkeypatch)
+    binding, old_root = third.vault_binding_id, Path(third.path)
+    impostor = initialize_test_vault(tmp_path / "impostor")
+    unmarked = tmp_path / "unmarked"
+    unmarked.mkdir()
+    other_clone = copy_vault(old_root, tmp_path / "other-clone")
+    local_marker = other_clone / "settings" / "local.md"
+    local_marker.write_text(
+        local_marker.read_text(encoding="utf-8").replace(
+            third.local_instance_id, "local-someone-else"
+        ),
+        encoding="utf-8",
+    )
+    ambiguous = copy_vault(old_root, tmp_path / "ambiguous")
+    (ambiguous / "settings" / "vault.md").write_text("---\nvaultId: [\n---\n", encoding="utf-8")
+    nested = copy_vault(old_root, Path(second.path) / "nested")
+
+    cases = [
+        (binding, impostor, RelocationIdentityError, "different initialized vault"),
+        (binding, unmarked, RelocationIdentityError, "no durable vault marker"),
+        (binding, other_clone, RelocationIdentityError, "different local clone"),
+        (binding, ambiguous, RelocationIdentityError, "ambiguous"),
+        (binding, tmp_path / "missing", BindingRelocationRefused, "does not exist"),
+        (binding, nested, BindingRelocationRefused, "overlaps another registered"),
+        (binding, old_root, BindingRelocationRefused, "current root"),
+        # An uninitialized binding has no logical identity to prove.
+        (second.vault_binding_id, impostor, RelocationIdentityError, "initialized binding"),
+    ]
+    for target_binding, target, error, match in cases:
+        registry_before, ledger_before = runtime.registry.load(), runtime.ledger.load()
+        with pytest.raises(error, match=match):
+            runtime.relocate(target_binding, target)
+        assert runtime.registry.load() == registry_before
+        assert runtime.ledger.load() == ledger_before
+        assert not (runtime.layout.root / "binding-relocation.json").exists()
+    assert not shared_refused(runtime, binding, old_root)
+
+    # The MVR-01C scalar rollback target is refused before any reservation.
+    from app.instance.vault_registry import RegistryDefaultConflict
+
+    with pytest.raises(RegistryDefaultConflict, match="scalar rollback target"):
+        runtime.relocate(first.vault_binding_id, impostor)
+
+    # The target is proven again after the drain: a different vault swapped in while
+    # holders drained fails before the ownership move and compensates to the source.
+    from app.instance import binding_relocation
+
+    target = copy_vault(old_root, tmp_path / "swapped")
+    original_drain = binding_relocation.BindingRelocationCoordinator._drain
+
+    def drain_then_swap(coordinator, intent):
+        label = original_drain(coordinator, intent)
+        import shutil
+
+        shutil.rmtree(target)
+        shutil.copytree(impostor, target)
+        return label
+
+    monkeypatch.setattr(binding_relocation.BindingRelocationCoordinator, "_drain", drain_then_swap)
+    ledger_before = runtime.ledger.load()
+    with pytest.raises(RelocationIdentityError, match="different initialized vault"):
+        runtime.relocate(binding, target)
+    after = runtime.registry.load().registrations[binding]
+    assert after.path == str(old_root.resolve()) and "lifecycleState" not in after.extensions
+    assert runtime.ledger.load() == ledger_before
+    assert not (runtime.layout.root / "binding-relocation.json").exists()
+    assert not shared_refused(runtime, binding, old_root)
+
+
+@pytest.mark.parametrize(
+    "phase",
+    (
+        "intent",
+        "identity_validated",
+        "reserved",
+        "drained",
+        "ownership_relocated",
+        "committed",
+        "consumers_reconciled",
+    ),
+)
+def test_production_relocation_recovers_after_every_durable_phase(
+    tmp_path, monkeypatch, phase
+) -> None:
+    from app.instance.binding_removal import binding_epoch_lineage
+    from app.instance.context_bound_read import resolve_context_read_roots
+    from tests._mvr06c_relocation_harness import copy_vault, shared_refused
+    from tests._mvr_default_vault_harness import reopen_runtime
+
+    runtime, _first, _second, third = _relocation_instance(tmp_path, monkeypatch)
+    binding, old_root = third.vault_binding_id, Path(third.path)
+    target = copy_vault(old_root, tmp_path / "relocated")
+    point = f"binding-relocation:{phase}"
+
+    def crash(name: str) -> None:
+        if name == point:
+            raise _ProcessCrash(name)
+
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", crash)
+    with pytest.raises(_ProcessCrash):
+        runtime.relocate(binding, target)
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", lambda name: None)
+
+    # No mixed authority at any crash point: the registry names exactly one root, and
+    # whenever registry and ledger could disagree the binding is sealed on both roots.
+    registration = runtime.registry.load().registrations[binding]
+    ledger_names_target = runtime.ledger.lease_locator_names(
+        binding, channel_id=runtime.layout.channel_id, root=target
+    )
+    registry_names_target = registration.path == str(target.resolve())
+    if registration.extensions.get("lifecycleState") is not None:
+        assert shared_refused(runtime, binding, old_root)
+        assert shared_refused(runtime, binding, target)
+    else:
+        assert registry_names_target == ledger_names_target
+    if registry_names_target:
+        assert ledger_names_target
+        assert shared_refused(runtime, binding, old_root)
+
+    restarted = reopen_runtime(runtime, tmp_path)
+    recovered = restarted.recover_relocation()
+    assert recovered is not None and recovered.vault_binding_id == binding
+    assert restarted.recover_relocation() is None  # idempotent once complete
+    final = restarted.registry.load()
+    converged = final.registrations[binding]
+    assert converged.path == str(target.resolve())
+    assert "lifecycleState" not in converged.extensions
+    assert restarted.ledger.lease_locator_names(
+        binding, channel_id=restarted.layout.channel_id, root=target
+    )
+    assert [item["event"] for item in binding_epoch_lineage(final, binding)] == ["relocated"]
+    # Foreground and background consumers converge on the one authorized root/revision.
+    assert shared_refused(restarted, binding, old_root)
+    assert not shared_refused(restarted, binding, target)
+    lifecycle = supervisor(restarted, "worker").start()
+    assert lifecycle.status == "running" and lifecycle.root == target.resolve()
+    assert lifecycle.binding_revision == converged.extensions["bindingRevision"]
+    assert [root.root for root in resolve_context_read_roots(lifecycle.context, registry_store=restarted.registry)] == [target.resolve()]
+
+
+def test_mvr06c_dormant_supervisor_isolates_two_internal_bindings(tmp_path, monkeypatch) -> None:
+    import shutil
+
+    from app.instance.background_supervisor import (
+        BackgroundLifecycleError,
+        BackgroundLifecycleStale,
+        BackgroundLifecycleSupervisor,
+        stored_intent,
+    )
+    from tests._mvr06c_relocation_harness import (
+        copy_vault,
+        harness_supervisor,
+        initialized_registration,
+        leases,
+    )
+
+    runtime, _first, (_second,) = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    a = initialized_registration(runtime, tmp_path / "alpha")
+    b = initialized_registration(runtime, tmp_path / "beta")
+    pair = (a.vault_binding_id, b.vault_binding_id)
+    intent_before = stored_intent(runtime.registry.load())
+
+    # Production cannot construct it: the harness capability is private.
+    with pytest.raises(CapabilityNotReadyError, match="dormant until MVR-06D"):
+        BackgroundLifecycleSupervisor.for_runtime(
+            registry_path=runtime.layout.registry_path,
+            ownership_root=runtime.ledger.root,
+            channel_id=runtime.layout.channel_id,
+            consumer="watcher",
+            internal_binding_ids=pair,
+        )
+
+    watcher = harness_supervisor(runtime, pair, "watcher")
+    worker = harness_supervisor(runtime, pair, "worker")
+    started = {item.binding_id: item for item in watcher.start_all()}
+    assert set(started) == set(pair) and all(item.status == "running" for item in started.values())
+    contexts = [started[item].context for item in pair]
+    assert len({context.context_id for context in contexts}) == 2
+    assert len({context.selection_capability_digest for context in contexts}) == 2
+    assert [context.binding_ids for context in contexts] == [(pair[0],), (pair[1],)]
+    health = watcher.health()
+    assert health["many_binding"] == "internal_harness" and health["binding_capacity"] == 2
+    assert [item["status"] for item in health["lifecycles"]] == ["running", "running"]
+    assert a.path not in json.dumps(health) and b.path not in json.dumps(health)
+
+    # Effects are isolated per binding: A's shared lease never blocks B's exclusive change.
+    with watcher.effect(a.vault_binding_id) as held:
+        assert held.root == Path(a.path)
+        with leases(runtime).exclusive_change(
+            b.vault_binding_id, channel_id=runtime.layout.channel_id, root=Path(b.path), timeout=2
+        ):
+            pass
+
+    # Cross-process context handoff: the receiver re-resolves its own generation.
+    handoff_b = watcher.lifecycle_for(b.vault_binding_id).handoff("watcher").as_payload()
+    accepted = worker.accept_handoff(json.loads(json.dumps(handoff_b)))
+    assert accepted.lifecycle.binding_id == b.vault_binding_id
+    assert accepted.producer_context_id == handoff_b["contextId"]
+    assert accepted.lifecycle.context.context_id != handoff_b["contextId"]
+
+    # Independent revision reconciliation: relocating B rotates only B.
+    a_before = watcher.lifecycle_for(a.vault_binding_id)
+    moved_b = copy_vault(Path(b.path), tmp_path / "beta-relocated")
+    runtime.relocate(b.vault_binding_id, moved_b)
+    rotated = {item.binding_id: item for item in watcher.reconcile_all()}
+    assert rotated[a.vault_binding_id] is a_before
+    assert rotated[b.vault_binding_id].generation == 2
+    assert rotated[b.vault_binding_id].root == moved_b.resolve()
+    with pytest.raises(BackgroundLifecycleStale, match="superseded"):
+        worker.accept_handoff(handoff_b)  # a pre-relocation handoff is stale
+    fresh = rotated[b.vault_binding_id].handoff("watcher").as_payload()
+    assert worker.accept_handoff(fresh).lifecycle.root == moved_b.resolve()
+
+    # Independent auth reconciliation and failure containment: denying B fails only B.
+    from app.governance.binding_authority import RegistryBindingAuthorizer
+    from tests.helpers.revoked_binding_authorizer import RevokedBindingAuthorizer
+
+    original = RegistryBindingAuthorizer.authorize
+
+    def authorize(self, request):
+        if request.vault_binding_id != b.vault_binding_id:
+            return original(self, request)
+        revoked = RevokedBindingAuthorizer(self)
+        revoked.revoke_for_test(b.vault_binding_id)
+        return revoked.authorize(request)
+
+    monkeypatch.setattr(RegistryBindingAuthorizer, "authorize", authorize)
+    denied = {item.binding_id: item for item in watcher.reconcile_all()}
+    assert denied[b.vault_binding_id].status == "failed"
+    assert denied[a.vault_binding_id] is a_before
+    with watcher.effect(a.vault_binding_id) as still_running:
+        assert still_running.generation == a_before.generation
+    with pytest.raises(BackgroundLifecycleError):
+        with watcher.effect(b.vault_binding_id):
+            raise AssertionError("a denied binding performed an effect")
+    monkeypatch.setattr(RegistryBindingAuthorizer, "authorize", original)
+    assert watcher.lifecycle_for(b.vault_binding_id).status == "failed"
+    assert {item.binding_id: item.status for item in watcher.reconcile_all()} == {
+        a.vault_binding_id: "running",
+        b.vault_binding_id: "running",
+    }
+
+    # A broken ownership root fails only A, never redirecting it to B.
+    root_a = Path(a.path)
+    parked = tmp_path / "alpha-parked"
+    shutil.move(str(root_a), parked)
+    root_a.mkdir()
+    broken = {item.binding_id: item for item in watcher.reconcile_all()}
+    assert broken[a.vault_binding_id].status == "failed"
+    assert "ownership lease" in broken[a.vault_binding_id].failure
+    assert broken[b.vault_binding_id].status == "running"
+    with watcher.effect(b.vault_binding_id) as unaffected:
+        assert unaffected.root == moved_b.resolve()
+    shutil.rmtree(root_a)
+    shutil.move(str(parked), root_a)
+    assert all(item.status == "running" for item in watcher.reconcile_all())
+
+    # Production stayed sealed throughout: durable intent never changed, and the process
+    # supervisor is still the dormant singleton.
+    assert stored_intent(runtime.registry.load()) == intent_before
+    production = supervisor(runtime, "worker")
+    production.start()
+    assert production.health()["many_binding"] == "dormant"
+    assert production.health()["binding_capacity"] == 1

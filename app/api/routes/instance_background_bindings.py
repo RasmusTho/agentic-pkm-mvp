@@ -8,7 +8,8 @@ Posture: list/inspect are read-only. Before the MVR-06B supervisor handoff every
 intent-changing command answers ``409 capability_not_ready`` without touching durable
 state. After it, add/remove are the governed singleton/explicit-empty producers: an
 unknown binding is ``404``, an unauthorized one ``403``, and a second enrollment stays
-``409 capability_not_ready`` until MVR-06C/06D. Responses carry binding ids, modes, and
+``409 capability_not_ready`` until MVR-06D atomically enables its matching
+queue-dispatch contract (MVR-06C generalized the supervisor but keeps it dormant). Responses carry binding ids, modes, and
 revisions only -- never a content-root path or any other raw binding payload.
 """
 

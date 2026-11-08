@@ -460,7 +460,7 @@ a bootstrap adapter only. Control surface:
 | Surface | Purpose |
 | --- | --- |
 | `python -m app.instance.runtime background-supervisor-handoff --channel <c> --registry-path <r> --host-global-root <h> --quiescence-proof-path <p> [--legacy-bootstrap-root <root>]` | One-time, inside the proved stopped deployment window: retire the #3163 picker bridge and seat the singleton/explicit-empty supervisor atomically. Idempotent after success. KD-A42F26A9AD87 applies: drain the outbox or stop writers before the MVR-06 opt-in on DEV/TEST. |
-| `GET/POST/DELETE /api/instance/background-bindings`, `background-binding-list|inspect|add|remove` | Governed singleton/explicit-empty intent (a second binding is `capability_not_ready` until MVR-06C/06D). |
+| `GET/POST/DELETE /api/instance/background-bindings`, `background-binding-list|inspect|add|remove` | Governed singleton/explicit-empty intent (a second binding is `capability_not_ready` until MVR-06D atomically enables its matching queue-dispatch contract). |
 | `background-role-revoke --channel <c> --host-global-root <h>` | After the handoff a GOV revocation must drain affected lifecycles through the ownership fence → exclusive binding-lease order; the unfenced form is refused. |
 | `binding-remove --vault-binding-id <id> [--replacement-default-binding-id <id>]`, `binding-reactivate --root <root>`, `binding-lifecycle-recover` (each with `--channel`, `--registry-path`, `--host-global-root`, `--watcher-posture running|absent`, and `--watcher-state-dir` when running) | Production registration removal (draining reservation → drain → final scan → tombstone commit → post-commit drain → ownership release) and same-channel tombstone reactivation (content epoch advance, derived-state invalidation, full rescan re-emitted and settled through worker dispatch, rebuild receipt), each crash-recoverable from its journal. The MVR-01C scalar rollback target is refused before any reservation. Cross-channel rehome (`InstanceRegistryRuntime.rehome_removed`) is reactivation followed by the governed transfer. |
 
@@ -473,9 +473,40 @@ background-role auth epoch at start and on every effect; wake-up hints
 shared per-binding effect lease from final validation through I/O and receipt: the outbox worker
 resolves the durable binding through its process supervisor and revalidates inside the lease, and
 an ordinary watcher cycle runs inside `supervisor.effect()` on the durable root, while its
-bracketing rebind scans stay the journal-bound reconciler. Relocation is still sealed (MVR-06C) and
-many-binding supervision is sealed until MVR-06D. Pending queue rows of a removed binding stay
-undispatched and attributable; their quarantine disposition is MVR-06D.
+bracketing rebind scans stay the journal-bound reconciler. Pending queue rows of a removed or
+relocated binding stay undispatched and attributable; their quarantine/revalidation disposition is
+MVR-06D.
+
+### Per-binding supervision and binding relocation (shipped dormant/activated, MVR-06C / #3865)
+
+MVR-06C generalizes the supervisor into a zero/one/many-capable per-binding supervisor and
+activates production relocation. **Many-binding supervision is dormant, not active:** production
+supervises only durable intent, which every producer (API, CLI, the registry's own snapshot
+validator, and the supervisor record's binding capacity of 1) keeps at zero or one binding until
+MVR-06D atomically enables many-binding enrollment/start together with its queue-dispatch
+contract. Only an internal capability-gated test harness can construct a many-binding supervisor
+over an explicit set; it never enrolls that set in durable intent or dispatches queued work.
+
+| Surface | Purpose |
+| --- | --- |
+| `binding-relocate --vault-binding-id <id> --destination <root>` (with `--channel`, `--registry-path`, `--host-global-root`, `--watcher-posture running\|absent`), also `InstanceRegistryRuntime.relocate`; `binding-lifecycle-recover` resumes an interrupted relocation | Production relocation of one registration to a new root holding the **same** vault. Journal `binding-relocation.json`: identity validation (the target's vault marker must name the binding's `vault_id` and `local_instance_id`) → `relocating` reservation (seals new foreground/background shared effects on both roots) → ownership fence + exclusive binding lease drain (waits for every authorized effect) → identity re-proof and ledger root-locator move → one registry commit (new root, advanced `bindingRevision`, path-free `bindingLineage` `relocated` entry) → registry/ledger/background convergence proof. A different initialized vault, a missing/incomplete/ambiguous marker, another local clone, an uninitialized binding, a missing target, an overlap with another registered root, and the MVR-01C scalar rollback target are refused before any mutation; a pre-move refusal compensates to the source. A moved (renamed) directory or a copy both relocate. Governed-lineage relocation to a different clone identity is not activated. Receipts carry no host path. |
+
+Consumer behaviour after a relocation: the next request on an existing session resolves a new
+ActiveContextSet generation (the binding revision changed), its context/cache identity changes,
+and a superseded snapshot can no longer name either root. Background lifecycles reconcile from
+the durable binding revision into a new generation on the new root; the worker recompiles
+vault-authored settings when its binding *or root* changes. A stale holder that captured the old
+root is refused at the ownership fence. Each lifecycle reconciles, drains, and fails on its own
+(one binding's revision, ownership, sealed state, or GOV verdict never rotates or fails another;
+the background-role auth epoch and the intent revision are instance-wide), and a running
+lifecycle whose root lost its ownership lease is reported `failed`. Cross-process binding state is
+handed between background processes as a versioned, redacted `BackgroundContextHandoff`
+projection that the receiver re-validates against its own durable resolution; it never shares an
+in-memory generation or env snapshot. Propagating that handoff into queued rows is MVR-06D. The
+legacy carrier-free compatibility selection held by an already-running API process is not rebound
+by a relocation: its compatibility writes fail `capability_not_ready` because the selected root no
+longer matches the registered compatibility root, but its carrier-free reads keep the process
+selection until the picker reselects (a residual of the transitional adapter, D13/D14).
 
 ## Canonical Local Test Bootstrap
 

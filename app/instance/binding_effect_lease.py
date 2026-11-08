@@ -148,7 +148,7 @@ class OwnershipFenceUnavailable(BindingEffectLeaseError, LedgerError):
 
 
 class BindingLifecycleSealed(BindingEffectLeaseError):
-    """MVR-06B: a draining-removal or reactivating binding admits no new shared effect.
+    """MVR-06B/06C: a draining-removal, reactivating, or relocating binding is sealed.
 
     The removal/reactivation reconciler holds the exclusive lease; every ordinary
     foreground/background holder is refused until the lifecycle completes or recovers.
@@ -156,7 +156,7 @@ class BindingLifecycleSealed(BindingEffectLeaseError):
 
 
 #: Registration lifecycle reservations that seal ordinary (shared) effect acquisition.
-_SEALED_LIFECYCLE_STATES = frozenset({"draining_removal", "reactivating"})
+_SEALED_LIFECYCLE_STATES = frozenset({"draining_removal", "reactivating", "relocating"})
 _RECONCILER_ADMISSION: ContextVar[str | None] = ContextVar(
     "mvr06b_lifecycle_reconciler_admission", default=None
 )

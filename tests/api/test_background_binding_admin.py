@@ -388,3 +388,83 @@ def test_stale_binding_intent_can_be_removed_without_content_authority(
     assert removed["explicit_empty"] is True and removed["changed"] is True
     with pytest.raises(Exception, match="unknown vault_binding_id"):
         admin(runtime).add(binding_b)
+
+
+def test_mvr06c_rejects_many_until_mvr06d_dispatch_gate(handed_off) -> None:
+    """MVR-06C generalizes the supervisor but production many-binding stays sealed.
+
+    Enrollment through the API and the headless CLI, the registry's intent commit, the
+    supervisor record's binding capacity, and the process supervisor all keep refusing a
+    second binding until MVR-06D atomically enables its matching queue-dispatch contract;
+    only the private harness capability can construct a many-binding supervisor.
+    """
+
+    from dataclasses import replace
+
+    from app.instance.background_intent import (
+        BACKGROUND_SUPERVISOR_KEY,
+        BackgroundSupervisorRecord,
+    )
+    from app.instance.background_supervisor import (
+        BackgroundLifecycleSupervisor,
+        process_background_supervisor,
+    )
+    from app.instance.vault_registry import CapabilityNotReadyError, RegistryError
+
+    runtime, binding_a, binding_b, client = handed_off
+    registry_path = str(runtime.layout.registry_path)
+    added = client.post("/api/instance/background-bindings", json={"vault_binding_id": binding_a})
+    assert added.status_code == 200, added.text
+    enrolled = _intent(runtime)
+    assert enrolled.background_vault_binding_ids == (binding_a,)
+    files_before = _files_digest(runtime)
+
+    refused = client.post("/api/instance/background-bindings", json={"vault_binding_id": binding_b})
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert detail["error"] == "capability_not_ready"
+    assert "MVR-06D" in detail["message"] and "queue-dispatch" in detail["message"]
+    cli_refusal = cli(
+        "background-binding-add", "--registry-path", registry_path,
+        "--vault-binding-id", binding_b, "--consumer", "cli",
+    )
+    assert cli_refusal["_exit_code"] != 0 and cli_refusal["error"] == "capability_not_ready"
+    assert _files_digest(runtime) == files_before
+    assert client.get("/api/instance/background-bindings").json()["intent_mutations"] == (
+        "singleton_or_empty"
+    )
+
+    # The durable store itself refuses many-binding intent, whatever the producer: the
+    # snapshot validator every registry read and write runs rejects it.
+    from app.instance.vault_registry import _validate_background_supervisor_state
+
+    many = replace(
+        enrolled,
+        revision=enrolled.revision + 1,
+        background_vault_binding_ids=tuple(sorted((binding_a, binding_b))),
+    )
+    with pytest.raises(RegistryError, match="sealed until MVR-06D"):
+        _validate_background_supervisor_state(many, runtime.registry.load().extensions)
+    record = BackgroundSupervisorRecord.from_payload(
+        runtime.registry.load().extensions[BACKGROUND_SUPERVISOR_KEY]
+    )
+    assert record.max_bindings == 1
+    assert _files_digest(runtime) == files_before
+
+    # The generalized supervisor is dormant: production supervises the singleton only,
+    # and constructing a many-binding supervisor needs the private harness capability.
+    production = process_background_supervisor("worker")
+    assert production is not None
+    assert production.reconcile().binding_id == binding_a
+    health = production.health()
+    assert health["many_binding"] == "dormant" and health["binding_capacity"] == 1
+    for capability in (None, object()):
+        with pytest.raises(CapabilityNotReadyError, match="dormant until MVR-06D"):
+            BackgroundLifecycleSupervisor.for_runtime(
+                registry_path=runtime.layout.registry_path,
+                ownership_root=runtime.ledger.root,
+                channel_id=runtime.layout.channel_id,
+                consumer="worker",
+                internal_binding_ids=(binding_a, binding_b),
+                _harness_capability=capability,
+            )

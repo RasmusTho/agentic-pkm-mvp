@@ -855,7 +855,7 @@ Watcher auto-exec enablement rule:
 - Do not use the legacy snapshot watcher for runtime start-system flows.
 - Do not treat lab/dev-only watcher paths as production equivalents.
 
-## Background binding and registration lifecycle (MVR-06B)
+## Background binding and registration lifecycle (MVR-06B/06C)
 
 Available only after the opt-in `background-supervisor-handoff`; before it these commands answer
 `capability_not_ready`. Contract: `docs/ENVIRONMENTS.md :: Runtime Control Surface`; status meanings:
@@ -867,6 +867,7 @@ python -m app.instance.runtime background-binding-add --registry-path <registry>
 python -m app.instance.runtime background-binding-remove --registry-path <registry> --vault-binding-id <id>
 python -m app.instance.runtime binding-remove --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> [--watcher-state-dir <dir>] --vault-binding-id <id> [--replacement-default-binding-id <id>]
 python -m app.instance.runtime binding-reactivate --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> [--watcher-state-dir <dir>] --root <vault-root>
+python -m app.instance.runtime binding-relocate --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> --vault-binding-id <id> --destination <new-vault-root>
 python -m app.instance.runtime binding-lifecycle-recover --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> [--watcher-state-dir <dir>]
 ```
 
@@ -881,6 +882,13 @@ watcher's final old-root scan and drain receipts. State `absent` only when no wa
   reactivation is refused while a removal is incomplete.
 - A reactivation that cannot rebuild (unreachable database, unsettled queue rows) stays
   `reactivating` and sealed. Fix the cause and recover; it never reports healthy early.
+- `binding-relocate` (MVR-06C) moves one binding to a new root that holds the same vault: move or
+  copy the vault first, then relocate. The target's vault marker must name the binding's vault and
+  local clone; anything else is refused with no change. The binding reports `failed`
+  (`relocating`) while it drains and commits, then reconciles onto the new root. After a crash,
+  `binding-lifecycle-recover` rolls the relocation forward; a refusal before the ownership move (for
+  example a target that changed) withdraws it and keeps the old root. The MVR-01C scalar rollback
+  target cannot be relocated.
 
 ## Obsidian sync runtime
 
