@@ -2376,3 +2376,234 @@ def test_pending_rows_survive_compatible_restart_generation(_pg_many, monkeypatc
     assert survived["consumer"]["context_id"] != rotated["consumer"]["context_id"]
     for identity in producer_rows:
         assert [binding for _id, binding in ready_signals(dsn, identity)] == [a.vault_binding_id]
+
+
+def _many_watched(tmp_path, monkeypatch, *, members: int = 2):
+    """MVR-06B handoff -> MVR-06D activation -> explicit set of ``members`` vaults, watched.
+
+    Production producers only: the handoff and activation CLIs, ``production_register``,
+    and the governed admin service. ``STORE_BACKEND=memory``: no durable queue exists, so
+    the worker reports ``no_queue`` per binding instead of polling.
+    """
+
+    from tests._mvr06c_relocation_harness import initialized_registration
+    from tests._mvr06d_many_binding_harness import activate_many_binding, enroll_exactly
+
+    runtime, first, (second,) = mvr06a_instance(tmp_path)
+    bind_runtime_env(monkeypatch, runtime, watcher=True)
+    assert handoff_through_cli(runtime)["_exit_code"] == 0
+    stub_settings_reload(monkeypatch)
+    bindings = [
+        initialized_registration(runtime, tmp_path / name)
+        for name in ("alpha", "beta")[:members]
+    ]
+    config = configure_watcher(monkeypatch, tmp_path, runtime, Path(first.path))
+    monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+    activated = activate_many_binding(runtime)
+    assert activated["_exit_code"] == 0, activated
+    enroll_exactly(runtime, tuple(item.vault_binding_id for item in bindings))
+    return runtime, bindings, config
+
+
+def _record_emissions(monkeypatch) -> list[dict]:
+    from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
+    from app.watcher import registry as watcher_registry
+
+    stamped: list[dict] = []
+    real_emit = watcher_registry._emit_watch_event
+
+    def emit(**kwargs):
+        current = resolve_scalar_binding_runtime()
+        lifecycle = current.background_lifecycle
+        stamped.append(
+            {
+                "binding": current.vault_binding_id,
+                "root": str(current.root),
+                "note": str(Path(kwargs["vault_root"]) / kwargs["rel_path"]),
+                "context_id": None if lifecycle is None else lifecycle.context.context_id,
+                "generation": None if lifecycle is None else lifecycle.generation,
+            }
+        )
+        return real_emit(**kwargs)
+
+    monkeypatch.setattr(watcher_registry, "_emit_watch_event", emit)
+    return stamped
+
+
+def _reset_process_supervisors() -> None:
+    from app.instance import background_supervisor
+
+    background_supervisor._PROCESS_SUPERVISORS.clear()
+
+
+def test_two_bindings_run_isolated_lifecycles(tmp_path, monkeypatch) -> None:
+    from app.instance.background_supervisor import (
+        aggregate_background_health,
+        process_background_supervisor,
+    )
+    from app.instance.context_settings import resolve_context_settings
+    from app.watcher import registry as watcher_registry
+    from app.workers import outbox_worker
+
+    _reset_process_supervisors()
+    runtime, (a, b), config = _many_watched(tmp_path, monkeypatch)
+    stamped = _record_emissions(monkeypatch)
+    note_a = Path(a.path) / "only-in-alpha.md"
+    note_b = Path(b.path) / "only-in-beta.md"
+    note_a.write_text("alpha note\n", encoding="utf-8")
+    note_b.write_text("beta note\n", encoding="utf-8")
+
+    # -- watcher: one independent production cycle per binding ---------------------------
+    summaries = watcher_registry.run_registry_once(config)
+    assert set(summaries) == {a.vault_binding_id, b.vault_binding_id}
+    by_note = {item["note"]: item for item in stamped}
+    assert by_note[str(note_a)]["binding"] == a.vault_binding_id
+    assert by_note[str(note_b)]["binding"] == b.vault_binding_id
+    for item in stamped:  # every ingest emission stays inside its own binding's root
+        assert item["note"].startswith(item["root"])
+        expected = a if item["binding"] == a.vault_binding_id else b
+        assert item["root"] == str(Path(expected.path).resolve())
+    contexts = {item["binding"]: item["context_id"] for item in stamped}
+    assert len(set(contexts.values())) == 2 and all(contexts.values())
+    assert summaries[a.vault_binding_id]["context_id"] == contexts[a.vault_binding_id]
+    # Per-binding watcher receipts/state, never one shared checkpoint.
+    state_dirs = list((tmp_path / "watcher-state" / "bindings").iterdir())
+    assert len(state_dirs) == 2
+    heartbeat = json.loads((tmp_path / "watcher-heartbeat.json").read_text(encoding="utf-8"))
+    assert {key.split("@", 1)[1] for key in heartbeat["watchers"]} == {
+        a.vault_binding_id, b.vault_binding_id
+    }
+    assert "vault_path" not in heartbeat
+
+    # -- worker: the production tick supervises both bindings independently ------------
+    tick = outbox_worker.run_once()
+    scopes = {item["scope"]: item for item in tick.many_binding["scopes"]}
+    assert scopes[a.vault_binding_id]["lifecycle_status"] == "running"
+    assert scopes[b.vault_binding_id]["lifecycle_status"] == "running"
+    assert tick.many_binding["queue"] == "absent"
+
+    # -- settings: each lifecycle resolves its own binding-local settings --------------
+    worker = process_background_supervisor("worker")
+    lifecycles = {item.binding_id: item for item in worker.lifecycles}
+    resolutions = {
+        binding: resolve_context_settings(item.context, registry_store=runtime.registry)
+        for binding, item in lifecycles.items()
+    }
+    for binding, resolution in resolutions.items():
+        assert set(resolution.binding_bundle_digests) == {binding}
+        expected_root = str(Path(lifecycles[binding].root).resolve())
+        for value in resolution.binding_local_values.get(binding, {}).values():
+            assert value is None or value.startswith(expected_root)
+    assert lifecycles[a.vault_binding_id].context.binding_ids == (a.vault_binding_id,)
+    assert lifecycles[b.vault_binding_id].context.binding_ids == (b.vault_binding_id,)
+    assert (
+        lifecycles[a.vault_binding_id].context.selection_capability_digest
+        != lifecycles[b.vault_binding_id].context.selection_capability_digest
+    )
+
+    # -- health and receipts: one redacted entry per binding, aggregate healthy --------
+    health = aggregate_background_health()
+    assert health["many_binding"] == "active" and health["dispatch_contract"] == "mvr06d-claims"
+    assert health["status"] == "healthy" and health["readiness"] == "healthy"
+    entries = {item["binding_id"]: item for item in health["lifecycles"]}
+    assert set(entries) == {a.vault_binding_id, b.vault_binding_id}
+    assert entries[a.vault_binding_id]["context_id"] != entries[b.vault_binding_id]["context_id"]
+    serialized = json.dumps(health)
+    assert a.path not in serialized and b.path not in serialized
+    listed = admin(runtime).list()
+    assert listed["intent_mutations"] == "many"
+    assert listed["background_vault_binding_ids"] == sorted(
+        (a.vault_binding_id, b.vault_binding_id)
+    )
+
+    # -- a rebind of A rotates only A ---------------------------------------------------
+    from tests._mvr06c_relocation_harness import copy_vault
+
+    before_b = worker.lifecycle_for(b.vault_binding_id)
+    moved = copy_vault(Path(a.path), tmp_path / "alpha-moved")
+    runtime.relocate(a.vault_binding_id, moved)
+    rotated = {item.binding_id: item for item in worker.reconcile_all()}
+    assert rotated[b.vault_binding_id] is before_b
+    assert rotated[a.vault_binding_id].generation == before_b.generation + 1
+    del stamped[:]
+    (moved / "after-move.md").write_text("moved\n", encoding="utf-8")
+    watcher_registry.run_registry_once(config)
+    moved_stamps = [item for item in stamped if item["note"].endswith("after-move.md")]
+    assert moved_stamps and {item["root"] for item in moved_stamps} == {str(moved.resolve())}
+
+
+def test_zero_one_many_and_partial_failure_are_truthful(tmp_path, monkeypatch) -> None:
+    import shutil
+
+    from app.instance.background_supervisor import aggregate_background_health
+    from app.watcher import registry as watcher_registry
+    from app.workers import outbox_worker
+    from tests._mvr06d_many_binding_harness import enroll_exactly
+
+    # -- one binding before activation: the MVR-06C singleton behaviour is preserved ----
+    _reset_process_supervisors()
+    single, first, _extra = mvr06b_instance(tmp_path / "single", monkeypatch)
+    stub_settings_reload(monkeypatch)
+    monkeypatch.setattr(outbox_worker, "poll_outbox_one", lambda **_k: None)
+    monkeypatch.setattr(outbox_worker, "count_deferred_outbox_rows", lambda **_k: 0)
+    assert outbox_worker.run_once().state == "idle"  # the unchanged singleton poll path
+    dormant = aggregate_background_health()
+    assert dormant["many_binding"] == "dormant" and dormant["binding_capacity"] == 1
+    assert dormant["dispatch_contract"] == "singleton"
+    assert [item["binding_id"] for item in dormant["lifecycles"]] == [first.vault_binding_id]
+    monkeypatch.undo()
+
+    # -- many: two independent bindings -------------------------------------------------
+    _reset_process_supervisors()
+    runtime, (a, b), config = _many_watched(tmp_path / "many", monkeypatch)
+    stamped = _record_emissions(monkeypatch)
+    health = aggregate_background_health()
+    assert health["status"] == "healthy" and len(health["lifecycles"]) == 2
+
+    # -- partial failure: B's root loses its ownership lease ---------------------------
+    root_b = Path(b.path)
+    parked = tmp_path / "beta-parked"
+    shutil.move(str(root_b), parked)
+    root_b.mkdir()
+    (root_b / "impostor.md").write_text("not the vault\n", encoding="utf-8")
+    (Path(a.path) / "still-alpha.md").write_text("alpha keeps running\n", encoding="utf-8")
+    summaries = watcher_registry.run_registry_once(config)
+    assert set(summaries) == {a.vault_binding_id}  # B performs no effect ...
+    assert stamped and {item["binding"] for item in stamped} == {a.vault_binding_id}
+    assert not any("impostor" in item["note"] for item in stamped)  # ... and is not redirected
+    heartbeat = json.loads((tmp_path / "many" / "watcher-heartbeat.json").read_text())
+    assert heartbeat["status"] == "degraded"
+    tick = outbox_worker.run_once()
+    assert tick.state == "background_lifecycle_failed"
+    scopes = {item["scope"]: item for item in tick.many_binding["scopes"]}
+    assert scopes[a.vault_binding_id]["lifecycle_status"] == "running"
+    assert scopes[b.vault_binding_id]["lifecycle_status"] == "failed"
+    failed = aggregate_background_health()
+    assert failed["status"] == "degraded" and failed["readiness"] == "degraded"
+    entries = {item["binding_id"]: item for item in failed["lifecycles"]}
+    assert entries[a.vault_binding_id]["status"] == "running"
+    assert entries[b.vault_binding_id]["status"] == "failed"
+    assert entries[b.vault_binding_id]["failure_kind"] == "ownership"
+    shutil.rmtree(root_b)
+    shutil.move(str(parked), root_b)
+    assert aggregate_background_health()["status"] == "healthy"
+
+    # -- one binding after activation: still a running singleton set --------------------
+    enroll_exactly(runtime, (a.vault_binding_id,))
+    one = aggregate_background_health()
+    assert [item["binding_id"] for item in one["lifecycles"]] == [a.vault_binding_id]
+    assert one["status"] == "healthy"
+    assert outbox_worker.run_once().state == "idle"
+
+    # -- zero: explicit-empty idles truthfully and never re-enrols a default -----------
+    enroll_exactly(runtime, ())
+    zero = aggregate_background_health()
+    assert zero["status"] == "idle" and zero["readiness"] == "idle"
+    assert [item["status"] for item in zero["lifecycles"]] == ["idle"]
+    assert outbox_worker.run_once().state == "no_vault"
+    del stamped[:]
+    (Path(a.path) / "while-empty.md").write_text("idle\n", encoding="utf-8")
+    assert watcher_registry.run_registry_once(config) == {}
+    assert stamped == []
+    _reset_process_supervisors()
+    assert aggregate_background_health()["status"] == "idle"  # survives a restart
