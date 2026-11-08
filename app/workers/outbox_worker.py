@@ -697,6 +697,55 @@ def _dispatch_topic(
         logger.debug("worker skipping unsupported topic=%s trace_id=%s", topic, trace_id)
 
 
+#: Every topic :func:`_dispatch_topic` runs a handler for; any other topic is a no-effect skip.
+HANDLED_DISPATCH_TOPICS = frozenset(
+    {
+        INGEST_OBJECT_CREATED,
+        INGEST_VAULT_CHANGED,
+        INGEST_OBJECT_DELETED,
+        PANEL_SCAN_REQUESTED,
+        PROMOTE_INTENT_CREATED,
+        "debrief.trigger.created",
+        NOTE_MOVE_WORKBENCH,
+        INDEX_EMBEDDING_REQUESTED,
+        KNOWLEDGE_ACQUISITION_STAGE_COMPLETED,
+        KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED,
+    }
+)
+#: MVR-06D: handlers whose entire durable effect is a store write on a passed connection,
+#: so it commits atomically with the claim's effect outcome under the fencing token.
+STORE_ATOMIC_DISPATCH_TOPICS = frozenset(
+    {KNOWLEDGE_ACQUISITION_STAGE_COMPLETED, KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED}
+)
+
+
+def dispatch_store_atomic_effect(
+    topic: str,
+    payload: Mapping[str, Any],
+    *,
+    conn: Any,
+    trace_id: str | None,
+    source_vault_binding_id: str,
+    message: Mapping[str, Any],
+) -> None:
+    """MVR-06D: run one admitted store-atomic handler inside the fenced effect transaction."""
+
+    if topic not in STORE_ATOMIC_DISPATCH_TOPICS:
+        raise ValueError(f"topic {topic!r} has no store-atomic effect contract")
+    _validate_dispatch_payload(topic, payload, message=message)
+    handler = (
+        handle_knowledge_acquisition_stage_completed
+        if topic == KNOWLEDGE_ACQUISITION_STAGE_COMPLETED
+        else handle_knowledge_acquisition_stage_dead_lettered
+    )
+    handler(
+        payload,
+        trace_id=trace_id,
+        source_vault_binding_id=source_vault_binding_id,
+        conn=conn,
+    )
+
+
 def _indexer_payload(payload: Mapping[str, Any]) -> dict[str, object]:
     return dict(payload)
 
@@ -818,8 +867,15 @@ def _emit_ka_consumer_signal(
     payload: Mapping[str, Any],
     trace_id: str | None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    conn: Any = None,
 ) -> None:
     """Durable, item-scoped observability signal for a handled KA stage event.
+
+    MVR-06D: with ``conn`` (the many-binding worker's fenced effect transaction) the DB
+    outbox row is the whole durable effect and commits atomically with the claim's
+    effect outcome; the JSONL audit fallback sink and the in-process fast-path are
+    skipped, so a rolled-back or stale-token effect leaves no trace and a reconciled
+    redelivery never re-emits.
 
     Mirrors ``_dead_letter_outbox_message``'s dual-write shape (JSONL audit
     sink always; DB outbox additionally when enabled) rather than an
@@ -834,7 +890,7 @@ def _emit_ka_consumer_signal(
     ad-hoc scheme or a volatile cache.
     """
     key = derive_idempotency_key(event_type, content_identity, fingerprint)
-    if _KA_CONSUMER_SIGNAL_DEDUP.seen(key):
+    if conn is None and _KA_CONSUMER_SIGNAL_DEDUP.seen(key):
         logger.debug(
             "KA consumer signal skipped (duplicate delivery) event_type=%s content_identity=%s",
             event_type,
@@ -848,6 +904,16 @@ def _emit_ka_consumer_signal(
         trace_id=trace_id,
         payload=dict(payload),
     )
+    if conn is not None:
+        # Fenced store effect: a failure propagates and rolls the transaction back.
+        write_outbox_event(
+            event,
+            conn,
+            idempotency_key=key,
+            vault_binding_id=source_vault_binding_id,
+            producer="worker.ka_consumer_signal",
+        )
+        return
     try:
         append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
         if _use_db_outbox():
@@ -873,6 +939,7 @@ def handle_knowledge_acquisition_stage_completed(
     *,
     trace_id: str | None = None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    conn: Any = None,
 ) -> None:
     """Consume ``knowledge_acquisition.stage.completed`` (KA-06 → KA-07, #3107).
 
@@ -926,6 +993,7 @@ def handle_knowledge_acquisition_stage_completed(
         },
         trace_id=trace_id,
         source_vault_binding_id=source_vault_binding_id,
+        conn=conn,
     )
     logger.info(
         "knowledge_acquisition candidate ready for triage content_identity=%s trace_id=%s",
@@ -939,6 +1007,7 @@ def handle_knowledge_acquisition_stage_dead_lettered(
     *,
     trace_id: str | None = None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    conn: Any = None,
 ) -> None:
     """Consume ``knowledge_acquisition.stage.dead_lettered`` (KA-06 → KA-07, #3107).
 
@@ -984,6 +1053,7 @@ def handle_knowledge_acquisition_stage_dead_lettered(
         },
         trace_id=trace_id,
         source_vault_binding_id=source_vault_binding_id,
+        conn=conn,
     )
     logger.warning(
         "knowledge_acquisition stage dead-letter surfaced content_identity=%s stage=%s "

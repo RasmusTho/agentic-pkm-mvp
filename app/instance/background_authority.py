@@ -58,7 +58,7 @@ from app.instance.settings_rebind import SettingsRebindRecord
 from app.instance.vault_registry import (
     MINIMUM_RUNTIME_SCHEMA_KEY,
     MVR05_MINIMUM_RUNTIME_SCHEMA,
-    MVR06_MINIMUM_RUNTIME_SCHEMA,
+    MVR06_FAMILY_RUNTIME_SCHEMAS,
     RegistrySnapshot,
     VaultRegistryStore,
 )
@@ -478,7 +478,7 @@ def mvr06_floor_recorded(snapshot: RegistrySnapshot) -> bool:
     floors = snapshot.extensions.get("runtimeFloors") or {}
     return (
         isinstance(floors, dict)
-        and floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) == MVR06_MINIMUM_RUNTIME_SCHEMA
+        and floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) in MVR06_FAMILY_RUNTIME_SCHEMAS
     )
 
 
@@ -592,7 +592,7 @@ def run_background_authority_cutover(
     before = registry.load()
     floors = before.extensions.get("runtimeFloors") or {}
     minimum = floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) if isinstance(floors, dict) else None
-    if minimum not in {MVR05_MINIMUM_RUNTIME_SCHEMA, MVR06_MINIMUM_RUNTIME_SCHEMA}:
+    if minimum not in {MVR05_MINIMUM_RUNTIME_SCHEMA, *MVR06_FAMILY_RUNTIME_SCHEMAS}:
         raise BackgroundAuthorityFloorError(
             "the MVR-06 floor requires the recorded MVR-05 channel fence"
         )

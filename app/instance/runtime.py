@@ -5254,11 +5254,15 @@ def _start_background_supervisor(runtime: InstanceRegistryRuntime, consumer: str
     )
     from app.instance.settings_rebind import SettingsRebindRecord
 
+    from app.instance.vault_registry import many_binding_dispatch_enabled
+
     snapshot = runtime.registry.load()
     state = durable_background_state(snapshot)
     if state is None:
         return
-    if snapshot.settings_rebind is not None:
+    # MVR-06D: a many-binding explicit set has no single journal candidate; the journal is
+    # a compatibility-mode projection only.
+    if snapshot.settings_rebind is not None and not many_binding_dispatch_enabled(snapshot):
         record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
         running = tuple(
             item
@@ -5278,17 +5282,18 @@ def _start_background_supervisor(runtime: InstanceRegistryRuntime, consumer: str
                 "the settings rebind phase journal disagrees with durable background intent; "
                 "retry the interrupted command or run binding-lifecycle-recover"
             )
-    lifecycle = BackgroundLifecycleSupervisor.for_runtime(
+    lifecycles = BackgroundLifecycleSupervisor.for_runtime(
         registry_path=runtime.layout.registry_path,
         ownership_root=runtime.ledger.root,
         channel_id=runtime.layout.channel_id,
         consumer=consumer,
-    ).start()
+    ).start_all()
     log = logging.getLogger(__name__)
-    if lifecycle.status == "failed":
-        log.error("background lifecycle failed at startup: %s", lifecycle.health())
-    else:
-        log.info("background lifecycle started: %s", lifecycle.health())
+    for lifecycle in lifecycles:
+        if lifecycle.status == "failed":
+            log.error("background lifecycle failed at startup: %s", lifecycle.health())
+        else:
+            log.info("background lifecycle started: %s", lifecycle.health())
 
 
 def _require_background_authority(registry_path: Path) -> object:

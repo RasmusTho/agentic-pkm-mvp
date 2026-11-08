@@ -453,11 +453,13 @@ def apply_governed_intent_mutation(
     """
 
     from app.instance.settings_rebind import SettingsRebindActivation
+    from app.instance.vault_registry import many_binding_dispatch_enabled
 
     target = (vault_binding_id or "").strip()
     if not target:
         raise RegistryError("vault_binding_id is required")
     snapshot = registry.load()
+    many = many_binding_dispatch_enabled(snapshot)
     intent = stored_intent(snapshot)
     if intent is None or not intent.handoff_complete:
         raise CapabilityNotReadyError(
@@ -477,7 +479,7 @@ def apply_governed_intent_mutation(
         )
         if target in base:
             members = base
-        elif len(base) >= MVR06B_MAX_BACKGROUND_BINDINGS:
+        elif len(base) >= MVR06B_MAX_BACKGROUND_BINDINGS and not many:
             raise CapabilityNotReadyError(
                 "capability_not_ready: a second background binding is gated until "
                 "MVR-06D atomically enables its matching queue-dispatch contract; remove "
@@ -506,7 +508,13 @@ def apply_governed_intent_mutation(
         return registry.load()
     running_before = _running(snapshot, base)
     running_after = _running(snapshot, next_intent.background_vault_binding_ids)
-    if running_before == running_after:
+    if many:
+        committed = _commit_many_binding_intent(
+            registry, intent, next_intent, departing=tuple(
+                item for item in running_before if item not in running_after
+            )
+        )
+    elif running_before == running_after:
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
         from app.instance.settings_rebind import compatibility_ingress_window
 
@@ -530,6 +538,62 @@ def apply_governed_intent_mutation(
         committed = registry.load()
     emit_background_intent_event(committed, reason=f"governed_{command}")
     return committed
+
+
+def _commit_many_binding_intent(
+    registry: VaultRegistryStore,
+    intent: BackgroundBindingIntent,
+    next_intent: BackgroundBindingIntent,
+    *,
+    departing: tuple[str, ...],
+) -> RegistrySnapshot:
+    """MVR-06D: each binding is its own lifecycle, so the set changes per member.
+
+    A joining member needs no drain: its lifecycle starts at its first generation on the
+    next reconcile. Every departing running member is drained first under the ownership
+    fence then its exclusive effect lease, held through the commit, so no in-flight
+    effect straddles its removal; its later effects fail ``require_current``.
+    """
+
+    from contextlib import ExitStack
+
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+    from app.instance.settings_rebind import compatibility_ingress_window
+
+    with compatibility_ingress_window(registry, transition=True), ExitStack() as drained:
+        current = registry.load()
+        if stored_intent(current) != intent:
+            raise RegistryError("background intent changed concurrently; retry")
+        if departing:
+            from app.instance.binding_effect_lease import BindingEffectLeaseManager
+
+            ownership_raw = os.getenv("INSTANCE_OWNERSHIP_ROOT", "").strip()
+            if not ownership_raw:
+                raise BackgroundLifecycleError(
+                    "removing a running background binding requires the ownership root"
+                )
+            channel = os.getenv("PKM_ENVIRONMENT", "dev").strip() or "dev"
+            leases = BindingEffectLeaseManager.for_runtime(
+                registry_store=registry,
+                ownership_root=Path(ownership_raw).expanduser(),
+                state_root=registry.path.parent / "binding-effect-leases",
+            )
+            for binding in departing:
+                if leases.active_owner(binding) is None:
+                    continue
+                drained.enter_context(
+                    leases.exclusive_change(
+                        binding,
+                        channel_id=channel,
+                        root=Path(current.registrations[binding].path),
+                        timeout=HANDOFF_DRAIN_TIMEOUT_SECONDS,
+                    )
+                )
+        return registry.commit_background_intent(
+            next_intent,
+            expected_revision=current.revision,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
 
 
 def _running(snapshot: RegistrySnapshot, members: tuple[str, ...]) -> tuple[str, ...]:
@@ -602,6 +666,10 @@ class BackgroundLifecycle:
     auth_epoch: int
     authorization_epoch: str
     failure: str | None = None
+    #: MVR-06D: a bounded failure class (``role``, ``unregistered``, ``sealed``,
+    #: ``ownership``, ``authorization``, ``drain``). Only ``authorization`` (lost GOV
+    #: authority) quarantines the binding's pending queue rows; the rest block them.
+    failure_kind: str | None = None
 
     def health(self) -> dict[str, Any]:
         """Bounded, redacted health projection (no host path, no binding payload)."""
@@ -619,6 +687,7 @@ class BackgroundLifecycle:
                 None if self.context is None else self.context.selection_capability_digest
             ),
             "failure": self.failure,
+            "failure_kind": self.failure_kind,
         }
 
     def handoff(self, consumer: str) -> BackgroundContextHandoff:
@@ -800,6 +869,9 @@ class BackgroundLifecycleSupervisor:
             else tuple(dict.fromkeys(item.strip() for item in internal_binding_ids if item.strip()))
         )
         self._lifecycles: dict[str | None, BackgroundLifecycle] = {}
+        #: MVR-06D: whether the durable registry carries the many-binding dispatch floor
+        #: (refreshed on every durable read; ``None`` until the first one).
+        self._production_many: bool | None = None
 
     @classmethod
     def for_runtime(
@@ -838,7 +910,19 @@ class BackgroundLifecycleSupervisor:
 
     @property
     def many_binding(self) -> bool:
-        return self._internal is not None
+        """Per-binding keyed supervision: the internal harness, or production after 06D."""
+
+        if self._internal is not None:
+            return True
+        if self._production_many is None:
+            self._durable()
+        return bool(self._production_many)
+
+    @property
+    def production_many_binding(self) -> bool:
+        """MVR-06D: production many-binding enrollment/start/dispatch is active."""
+
+        return self._internal is None and self.many_binding
 
     @property
     def lifecycle(self) -> BackgroundLifecycle | None:
@@ -872,7 +956,7 @@ class BackgroundLifecycleSupervisor:
 
         if self._internal is not None:
             return self._internal
-        if len(state.binding_ids) > MVR06B_MAX_BACKGROUND_BINDINGS:
+        if not self._production_many and len(state.binding_ids) > MVR06B_MAX_BACKGROUND_BINDINGS:
             raise CapabilityNotReadyError(
                 "many-binding supervision is sealed until MVR-06D atomically enables its "
                 "matching queue-dispatch contract"
@@ -880,7 +964,10 @@ class BackgroundLifecycleSupervisor:
         return state.binding_ids
 
     def _durable(self) -> tuple[RegistrySnapshot, BackgroundBindingState]:
+        from app.instance.vault_registry import many_binding_dispatch_enabled
+
         snapshot = self.registry.load()
+        self._production_many = many_binding_dispatch_enabled(snapshot)
         state = durable_background_state(snapshot)
         if state is None:
             raise CapabilityNotReadyError(
@@ -899,7 +986,9 @@ class BackgroundLifecycleSupervisor:
         try:
             role = self._role()
         except Exception as exc:
-            return self._failed(snapshot, state, generation, binding, f"authorization: {exc}", 0)
+            return self._failed(
+                snapshot, state, generation, binding, f"authorization: {exc}", 0, kind="role"
+            )
         if binding is None:
             return BackgroundLifecycle(
                 binding_id=None,
@@ -916,21 +1005,46 @@ class BackgroundLifecycleSupervisor:
         registration = snapshot.registrations.get(binding)
         if registration is None:
             return self._failed(
-                snapshot, state, generation, binding, "binding is not registered", role.auth_epoch
+                snapshot,
+                state,
+                generation,
+                binding,
+                "binding is not registered",
+                role.auth_epoch,
+                kind="unregistered",
             )
         lifecycle_state = registration.extensions.get(LIFECYCLE_STATE_KEY)
         if lifecycle_state in SEALED_LIFECYCLE_STATES:
             return self._failed(
-                snapshot, state, generation, binding, f"binding is {lifecycle_state}", role.auth_epoch
+                snapshot,
+                state,
+                generation,
+                binding,
+                f"binding is {lifecycle_state}",
+                role.auth_epoch,
+                kind="sealed",
             )
         root = Path(registration.path)
         try:
             self._require_ownership(binding, root)
+        except Exception as exc:
+            return self._failed(
+                snapshot, state, generation, binding, str(exc), role.auth_epoch, kind="ownership"
+            )
+        try:
             from app.instance.scalar_binding_runtime import _authorize_binding
 
             verdict = _authorize_binding(snapshot, binding, self.registry.path)
         except Exception as exc:
-            return self._failed(snapshot, state, generation, binding, str(exc), role.auth_epoch)
+            return self._failed(
+                snapshot,
+                state,
+                generation,
+                binding,
+                str(exc),
+                role.auth_epoch,
+                kind="authorization",
+            )
         authorization_epoch = f"{verdict.epoch}|auth-epoch-{role.auth_epoch}"
         return BackgroundLifecycle(
             binding_id=binding,
@@ -971,6 +1085,8 @@ class BackgroundLifecycleSupervisor:
         binding: str | None,
         failure: str,
         auth_epoch: int,
+        *,
+        kind: str,
     ) -> BackgroundLifecycle:
         logger.error(
             "background lifecycle failed consumer=%s binding=%s generation=%s: %s",
@@ -991,6 +1107,7 @@ class BackgroundLifecycleSupervisor:
             auth_epoch=auth_epoch,
             authorization_epoch="",
             failure=failure,
+            failure_kind=kind,
         )
 
     def _context(
@@ -1128,12 +1245,14 @@ class BackgroundLifecycleSupervisor:
                 current,
                 status="failed",
                 failure="the prior generation's in-flight effects have not drained",
+                failure_kind="drain",
             )
         resolved = self._resolve(current.generation + 1, key)
         if (
             current.status == "failed"
             and resolved.status == "failed"
-            and (resolved.binding_id, resolved.failure) == (current.binding_id, current.failure)
+            and (resolved.binding_id, resolved.failure, resolved.failure_kind)
+            == (current.binding_id, current.failure, current.failure_kind)
             and resolved.intent_revision == current.intent_revision
         ):
             # An unchanged failure is the same generation, not a rotation.
@@ -1313,16 +1432,36 @@ class BackgroundLifecycleSupervisor:
         )
 
     def health(self) -> dict[str, Any]:
-        """Truthful gated health: one redacted entry per supervised lifecycle."""
+        """Truthful gated health: one redacted entry per supervised lifecycle.
 
+        ``status`` aggregates without masking: ``idle`` only for zero bindings, ``healthy``
+        only when every supervised binding runs, ``degraded`` when any binding failed.
+        """
+
+        lifecycles = list(self._lifecycles.values())
+        if self._internal is not None:
+            posture, capacity, supervisor = "internal_harness", len(self._internal), "mvr06c-per-binding"
+        elif self.production_many_binding:
+            posture, capacity, supervisor = "active", None, "mvr06d-per-binding"
+        else:
+            posture, capacity, supervisor = (
+                "dormant",
+                MVR06B_MAX_BACKGROUND_BINDINGS,
+                "mvr06c-per-binding",
+            )
+        if any(item.status == "failed" for item in lifecycles):
+            aggregate = "degraded"
+        elif not lifecycles or all(item.status == "idle" for item in lifecycles):
+            aggregate = "idle"
+        else:
+            aggregate = "healthy"
         return {
             "consumer": self.consumer,
-            "supervisor": "mvr06c-per-binding",
-            "binding_capacity": (
-                MVR06B_MAX_BACKGROUND_BINDINGS if self._internal is None else len(self._internal)
-            ),
-            "many_binding": "internal_harness" if self.many_binding else "dormant",
-            "lifecycles": [item.health() for item in self._lifecycles.values()],
+            "supervisor": supervisor,
+            "binding_capacity": capacity,
+            "many_binding": posture,
+            "status": aggregate,
+            "lifecycles": [item.health() for item in lifecycles],
         }
 
 
@@ -1384,7 +1523,9 @@ def durable_background_root() -> tuple[bool, Path | None]:
     if state is None:
         return False, None
     running = _running(snapshot, state.binding_ids)
-    if not running:
+    if len(running) != 1:
+        # Zero bindings idle; with several (MVR-06D) no single binding's root may become
+        # process-global -- each lifecycle resolves its own context settings.
         return True, None
     return True, Path(snapshot.registrations[running[0]].path).expanduser()
 
