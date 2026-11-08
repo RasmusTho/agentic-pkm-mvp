@@ -25,8 +25,10 @@ background-runtime role, and a read-only staged background intent whose add/remo
 MVR-06B (#3864) retires that bridge atomically into the ownership-checked,
 revision/auth-reconciling, effect-leased singleton/explicit-empty background supervisor, activates
 governed singleton/explicit-empty intent, and activates production registration removal and
-same-channel tombstone reactivation; a second binding, relocation, and many-binding supervision
-stay sealed for MVR-06C/06D.
+same-channel tombstone reactivation. MVR-06C (#3865) generalizes the supervisor per binding but
+keeps many-binding supervision dormant (a second binding stays sealed until MVR-06D enables its
+queue-dispatch contract), and activates production relocation behind the shared/exclusive
+effect-lease order.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 
@@ -91,9 +93,9 @@ owner resumes; interrupted rotation recovers one complete generation and never c
 Registration uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
 active reservation still matches its channel and root. The same physical content root cannot be
 active in two dev/test/prod/native ownership domains simultaneously, and nested roots cannot straddle
-those domains. Relocation is specified with a sealed entrypoint until MVR-06C implements its
-production engine and proves every foreground and background consumer uses the matching
-shared/exclusive effect-lease order. Explicit transfer
+those domains. Relocation is active since MVR-06C: its production engine
+(`app/instance/binding_relocation.py`) proves every foreground and background consumer uses the
+matching shared/exclusive effect-lease order and stays sealed before that floor. Explicit transfer
 remains capability-gated until MVR-05C activates foreground read/write ownership fencing. It then
 uses a production-derived source-channel inventory to close foreground ingress, drain and stop every
 vault-bound watcher, scalar worker, settings reload, outbox/ingest, Heimdal projection, API/CLI, and

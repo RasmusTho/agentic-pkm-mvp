@@ -1949,6 +1949,69 @@ class VaultRegistryStore:
             self._write_locked(updated)
             return updated
 
+    def commit_binding_relocation_state(
+        self,
+        vault_binding_id: str,
+        transform: Callable[[RegistrySnapshot, VaultRegistration], VaultRegistration | None],
+        *,
+        lineage_entry: Callable[[RegistrySnapshot], Mapping[str, Any]] | None = None,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """MVR-06C: one locked relocation-lifecycle generation for one registration.
+
+        ``transform`` computes the replacement registration from the *current* locked
+        snapshot (``None`` means the transition is already durable: nothing is written),
+        so mechanical lease bookkeeping that never advances the revision cannot race it.
+        Stable vault/local identity never changes. Every other registration that has no
+        recorded ``bindingRevision`` is pinned to its current effective value, so this
+        generation does not rotate unrelated bindings' contexts or lifecycles. A moved
+        path-form ``ref`` follows the root, and so does ``last_active_vault_ref``.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            if current.authority != REGISTRY_AUTHORITY_ACTIVE:
+                raise CapabilityNotReadyError("binding relocation requires active registry authority")
+            existing = current.registrations.get(vault_binding_id)
+            if existing is None:
+                raise RegistryError(f"unknown vault_binding_id: {vault_binding_id}")
+            replacement = transform(current, existing)
+            if replacement is None:
+                return current
+            if replacement.vault_binding_id != vault_binding_id or (
+                replacement.vault_id,
+                replacement.local_instance_id,
+            ) != (existing.vault_id, existing.local_instance_id):
+                raise RegistryError("relocation cannot change stable registration identity")
+            self._validate_registration(replacement)
+            registrations: dict[str, VaultRegistration] = {}
+            for binding_id, item in current.registrations.items():
+                if binding_id == vault_binding_id:
+                    registrations[binding_id] = replacement
+                    continue
+                recorded = (item.extensions or {}).get("bindingRevision")
+                if not isinstance(recorded, int) or isinstance(recorded, bool) or recorded <= 0:
+                    item = replace(
+                        item,
+                        extensions={
+                            **copy.deepcopy(item.extensions),
+                            "bindingRevision": current.revision,
+                        },
+                    )
+                registrations[binding_id] = item
+            self._assert_registration_unique(replacement, registrations)
+            updated = self._with_registrations(current, registrations)
+            if lineage_entry is not None:
+                lineage = list(copy.deepcopy(updated.extensions.get("bindingLineage") or []))
+                lineage.append(dict(lineage_entry(current)))
+                updated.extensions["bindingLineage"] = lineage
+            if existing.ref != replacement.ref and current.last_active_vault_ref == existing.ref:
+                updated = replace(updated, last_active_vault_ref=replacement.ref)
+            self._write_locked(updated)
+            return updated
+
     def require_authoritative_activation(
         self,
         proof: RegistryActivationProof,

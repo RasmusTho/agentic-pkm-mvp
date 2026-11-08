@@ -338,6 +338,7 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
     }
     assert _module_list(section["allowed_importers"]) == {
         "app.instance.binding_effect_lease",
+        "app.instance.binding_relocation",
         "app.instance.binding_removal",
         "app.instance.instance_state",
         "app.instance.legacy_owner_recovery",
@@ -357,12 +358,13 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
     # ownership fence and effect lease. SETTINGS-05A (#4967) adds the sealed dormant
     # record transaction. MVR-06A (#3863) adds the delegated background-runtime role
     # store. MVR-06B (#3864) adds the bridge-handoff/singleton supervisor and the
-    # production removal/reactivation coordinator. All write under the same boundary
-    # and take the same seal.
+    # production removal/reactivation coordinator; MVR-06C (#3865) adds the production
+    # relocation coordinator. All write under the same boundary and take the same seal.
     assert _module_list(capability_section["allowed_importers"]) == {
         "app.instance.background_authority",
         "app.instance.background_supervisor",
         "app.instance.binding_effect_lease",
+        "app.instance.binding_relocation",
         "app.instance.binding_removal",
         "app.instance.local_operator_principal",
         "app.instance.ownership_ledger",

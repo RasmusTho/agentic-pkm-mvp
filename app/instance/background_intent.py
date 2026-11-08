@@ -87,7 +87,8 @@ MVR06_TRANSFER_HOOK = "agentic-pkm.mvr06-intent-transfer-hook.v1"
 #: phase journal; it is no longer the binding authority.
 RETIRED_BRIDGE = "settings_rebind.v1"
 #: MVR-06B permits only singleton or explicit-empty intent. A second enrollment and every
-#: many-binding transition stay capability-gated through MVR-06C/06D.
+#: many-binding transition stay capability-gated: MVR-06C generalizes the supervisor but
+#: keeps it dormant, and only MVR-06D atomically lifts this with its queue-dispatch contract.
 MVR06B_MAX_BACKGROUND_BINDINGS = 1
 
 

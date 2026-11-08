@@ -1421,6 +1421,114 @@ class OwnershipLedger:
             self._write_ledger_locked(self._replace(current, leases=leases), key)
             return active
 
+    def relocate_active(
+        self,
+        vault_binding_id: str,
+        *,
+        channel_id: str,
+        source_root: Path,
+        destination_root: Path,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> OwnershipLease:
+        """MVR-06C: move one active lease's root locator under the global lock.
+
+        The lease must be this channel's active lease and match the source root or the
+        (already moved) destination root. The destination is admitted only when it does
+        not overlap any other live, retired, or transferring owner, nested or not.
+        Idempotent once the lease already names the destination.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        self._assert_existing_artifacts()
+        destination = Path(destination_root).expanduser().resolve(strict=False)
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            lease = current.leases.get(vault_binding_id)
+            if lease is None or lease.state != "active" or lease.channel_id != channel_id:
+                raise LedgerError("relocation requires the binding's active ownership lease")
+            candidate = self._lease_for_root(
+                channel_id=channel_id,
+                vault_binding_id=vault_binding_id,
+                root=destination,
+                key=key,
+                state="active",
+                owner_receipt_digest=lease.owner_receipt_digest,
+            )
+            try:
+                sealed = Path(self._open_root(lease.sealed_root, key)).resolve(strict=False)
+            except (LedgerError, UnicodeError):
+                sealed = None
+            if (
+                sealed == destination
+                and lease.root_fingerprint == candidate.root_fingerprint
+                and lease.ancestor_fingerprints == candidate.ancestor_fingerprints
+            ):
+                return lease
+            if not (
+                self._matches_root(lease, Path(source_root), key)
+                or self._matches_root(lease, destination, key)
+            ):
+                raise LedgerCollisionError(
+                    "relocation source does not match the binding's ownership lease"
+                )
+            others = {
+                binding_id: item
+                for binding_id, item in current.leases.items()
+                if binding_id != vault_binding_id
+            }
+            self._assert_no_collision(
+                self._replace(current, leases=others),
+                candidate,
+                key=key,
+                allow_same_channel_nested=False,
+            )
+            leases = dict(others)
+            leases[vault_binding_id] = candidate
+            self._write_ledger_locked(self._replace(current, leases=leases), key)
+            return candidate
+
+    def active_lease_locator(self, vault_binding_id: str, *, channel_id: str) -> Path | None:
+        """Read-only: the sealed root locator of this channel's active lease, if any.
+
+        Purely the recorded locator: it needs no physical match, so it stays readable
+        when the named directory is moved, unmounted, or replaced.
+        """
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            lease = current.leases.get(vault_binding_id)
+            if lease is None or lease.state != "active" or lease.channel_id != channel_id:
+                return None
+            return Path(self._open_root(lease.sealed_root, key)).resolve(strict=False)
+
+    def lease_locator_names(
+        self, vault_binding_id: str, *, channel_id: str, root: Path
+    ) -> bool:
+        """Read-only: is ``root`` the exact locator of this channel's active lease?
+
+        Stricter than fence admission (which compares the physical root fingerprint,
+        so a renamed directory still admits its new path): the sealed locator itself
+        must name ``root``. A relocation uses it to tell committed from uncommitted
+        ownership.
+        """
+
+        self._assert_existing_artifacts()
+        expected = Path(root).expanduser().resolve(strict=False)
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            lease = current.leases.get(vault_binding_id)
+            if lease is None or lease.state != "active" or lease.channel_id != channel_id:
+                return False
+            try:
+                sealed = Path(self._open_root(lease.sealed_root, key)).resolve(strict=False)
+            except (LedgerError, UnicodeError):
+                return False
+            return sealed == expected and self._matches_root(lease, expected, key)
+
     def active_owner(self, vault_binding_id: str) -> OwnershipLease | None:
         lease = self.load().leases.get(vault_binding_id)
         return lease if lease is not None and lease.state == "active" else None

@@ -935,8 +935,21 @@ class InstanceRegistryRuntime:
         vault_binding_id: str,
         destination: Path,
     ) -> VaultRegistration:
-        del vault_binding_id, destination
-        raise CapabilityNotReadyError("MVR-06C consumer effect-lease floor is required")
+        """MVR-06C production relocation: validate identity, reserve, drain, move, commit.
+
+        Raises ``CapabilityNotReadyError`` (the MVR-06C consumer effect-lease floor) until
+        the MVR-05 foreground and MVR-06B background consumers all hold the shared
+        per-binding effect lease. See :mod:`app.instance.binding_relocation`.
+        """
+
+        from app.instance.binding_relocation import BindingRelocationCoordinator
+
+        return BindingRelocationCoordinator(self).relocate(vault_binding_id, Path(destination))
+
+    def recover_relocation(self) -> VaultRegistration | None:
+        from app.instance.binding_relocation import BindingRelocationCoordinator
+
+        return BindingRelocationCoordinator(self).recover()
 
     def remove(
         self,
@@ -5288,11 +5301,16 @@ def _require_background_authority(registry_path: Path) -> object:
     )
 
 
+_BINDING_LIFECYCLE_COMMANDS = frozenset(
+    {"binding-remove", "binding-reactivate", "binding-relocate", "binding-lifecycle-recover"}
+)
+
 BACKGROUND_COMMANDS = (
     "background-authority-cutover",
     "background-supervisor-handoff",
     "binding-remove",
     "binding-reactivate",
+    "binding-relocate",
     "binding-lifecycle-recover",
     "background-authority-show",
     "background-role-revoke",
@@ -5307,7 +5325,7 @@ BACKGROUND_COMMANDS = (
 def _binding_lifecycle_command(
     args: argparse.Namespace, registry_path: Path
 ) -> dict[str, object]:
-    """Headless MVR-06B removal/reactivation producers. Receipts carry no host path."""
+    """Headless MVR-06B/06C removal/reactivation/relocation producers (no host path)."""
 
     runtime = InstanceRegistryRuntime.for_paths(
         InstanceStateLayout(
@@ -5341,11 +5359,20 @@ def _binding_lifecycle_command(
             "content_epoch": registration.extensions.get("contentEpoch"),
             "state": "healthy",
         }
+    if args.command == "binding-relocate":
+        relocated = runtime.relocate(args.vault_binding_id, Path(args.destination))
+        return {
+            "vault_binding_id": relocated.vault_binding_id,
+            "binding_revision": relocated.extensions.get("bindingRevision"),
+            "state": "relocated",
+        }
     removal = runtime.recover_removal()
     reactivation = runtime.recover_reactivation()
+    relocation = runtime.recover_relocation()
     return {
         "recovered_removal": None if removal is None else removal.vault_binding_id,
         "recovered_reactivation": None if reactivation is None else reactivation.vault_binding_id,
+        "recovered_relocation": None if relocation is None else relocation.vault_binding_id,
     }
 
 
@@ -5434,7 +5461,7 @@ def _background_command(args: argparse.Namespace) -> int:
                         _capability=local_operator_storage_capability(),
                     )
             payload = handoff.as_dict()
-        elif args.command in {"binding-remove", "binding-reactivate", "binding-lifecycle-recover"}:
+        elif args.command in _BINDING_LIFECYCLE_COMMANDS:
             payload = _binding_lifecycle_command(args, registry_path)
         elif args.command == "background-authority-show":
             payload = role_store.require().receipt()
@@ -6450,7 +6477,7 @@ def _main(argv: list[str] | None = None) -> int:
             command.add_argument("--host-global-root", type=Path, required=True)
             command.add_argument("--quiescence-proof-path", type=Path, required=True)
             command.add_argument("--legacy-bootstrap-root", default=None)
-        if name in {"binding-remove", "binding-reactivate", "binding-lifecycle-recover"}:
+        if name in _BINDING_LIFECYCLE_COMMANDS:
             command.add_argument("--channel", required=True)
             command.add_argument("--host-global-root", type=Path, required=True)
             command.add_argument("--watcher-posture", choices=("running", "absent"), required=True)
@@ -6460,6 +6487,9 @@ def _main(argv: list[str] | None = None) -> int:
             command.add_argument("--replacement-default-binding-id", default=None)
         if name == "binding-reactivate":
             command.add_argument("--root", required=True)
+        if name == "binding-relocate":
+            command.add_argument("--vault-binding-id", required=True)
+            command.add_argument("--destination", required=True)
         if name == "background-role-revoke":
             command.add_argument("--channel", default=None)
             command.add_argument("--host-global-root", type=Path, default=None)

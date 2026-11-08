@@ -384,7 +384,7 @@ _SETTINGS_BINDING: dict[str, str] = {}
 
 
 def _follow_background_settings(runtime: Any) -> None:
-    """Recompile vault-authored settings when this worker's durable binding moves.
+    """Recompile vault-authored settings when this worker's durable binding or root moves.
 
     The worker rebinds without a restart and settings are process-local, so nothing else
     would stop it dispatching the new vault's notes with the prior vault's routing. An
@@ -393,7 +393,9 @@ def _follow_background_settings(runtime: Any) -> None:
 
     if runtime is None or not getattr(runtime, "background_worker", False):
         return
-    if _SETTINGS_BINDING.get("binding") == runtime.vault_binding_id:
+    # MVR-06C: a relocation keeps the binding but moves its root, so key on both.
+    followed = f"{runtime.vault_binding_id}|{runtime.root}"
+    if _SETTINGS_BINDING.get("binding") == followed:
         return
     from app.settings.ingestion import ingest_settings
 
@@ -401,7 +403,7 @@ def _follow_background_settings(runtime: Any) -> None:
         ingest_settings(reason="worker_binding_rebind", vault_root=runtime.root)
     except Exception as exc:  # pragma: no cover - defensive; ingest already degrades
         logger.warning("Settings ingestion after worker rebind failed: %s", exc)
-    _SETTINGS_BINDING["binding"] = runtime.vault_binding_id
+    _SETTINGS_BINDING["binding"] = followed
 
 
 def run_once(

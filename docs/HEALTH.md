@@ -255,7 +255,26 @@ Where it is visible today: watcher and worker log the projection when their star
 starts the supervisor (`error` for `failed`), the worker heartbeat reports
 `status=background_lifecycle_failed` while blocked, and `background-binding-list|inspect` report
 durable intent. No `/api/health` field carries it yet; MVR-06B does not report or start more than one
-binding, and the zero/one/many health surface is MVR-06C/06D.
+binding.
+
+### Per-binding gated health (shipped dormant, MVR-06C / #3865)
+
+MVR-06C generalizes the projection per binding. `health()` now returns `supervisor:
+mvr06c-per-binding`, the gate posture `many_binding` (`dormant` in every production process;
+`internal_harness` only in the capability-gated test harness), `binding_capacity` (`1` in
+production until MVR-06D), and one redacted entry per supervised lifecycle, each also carrying
+its `binding_revision`. Truthfulness rules added by 06C:
+
+| Case | Reported |
+| --- | --- |
+| Binding under production relocation (`relocating` reservation) | `failed` with `binding is relocating`; no effect on either root until the commit, then the next reconcile rotates into a new `generation` on the new root. |
+| Running lifecycle whose root lost its ownership lease (moved, replaced, or relocated elsewhere) | Rotated to `failed` (`ownership lease`) on the next reconcile or effect, never left reported `running`. |
+| Two supervised bindings (internal harness only) | Independent entries: one binding's revision change, ownership failure, or GOV denial rotates or fails only that entry; the other keeps its generation. The background-role auth epoch and intent revision are instance-wide. |
+
+Production many-binding health is not active: no production process supervises or reports more
+than one binding until MVR-06D atomically enables many-binding enrollment/start and its
+queue-dispatch contract, and there is still no `/api/health` field (the aggregate zero/one/many
+health surface is MVR-06D).
 
 <!-- SECTION:HEALTH:END -->
 

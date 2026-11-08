@@ -1,4 +1,4 @@
-"""MVR-06B: compatibility bridge handoff and the singleton/explicit-empty supervisor.
+"""MVR-06B/06C: bridge handoff and the per-binding background lifecycle supervisor.
 
 `docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md` (MVR-06B) owns four things here:
 
@@ -13,7 +13,8 @@
   answer to "which binding does background work run on": the compatibility singleton or
   the explicit set (empty is durable idle). Request/session selection, registry
   membership, the instance default, and the env root never participate after handoff.
-- **The supervisor.** :class:`BackgroundLifecycleSupervisor` derives one immutable full
+- **The supervisor.** :class:`BackgroundLifecycleSupervisor` (generalized per binding by
+  MVR-06C; production still supervises at most one) derives one immutable full
   background :class:`ActiveContextSetV1` per running binding (typed ``no_workspace``,
   server-derived background principal, a domain-separated non-reversible capability
   digest that grants nothing), refuses a binding whose channel/root ownership lease is
@@ -22,6 +23,11 @@
   ownership fence then the shared per-binding effect lease, revalidating before I/O.
 - **Governed singleton/empty intent producers** (:func:`apply_governed_intent_mutation`)
   and the MVR-06 transfer repair hook (:func:`repair_background_intent_for_transfer`).
+- **MVR-06C dormant many-binding supervision and context handoff.** Every lifecycle
+  reconciles, drains, and fails on its own; a second production binding stays sealed
+  until MVR-06D, and only the internal harness capability may supervise an explicit set.
+  :class:`BackgroundContextHandoff` is the versioned cross-process context projection a
+  receiving process re-validates against its own durable resolution.
 
 The ``settings_rebind.v1`` record is retained as the shared two-phase phase journal
 (mutation gate -> old-root pre-commit scan/buffer/quiescent ack -> commit -> old-root
@@ -72,7 +78,11 @@ logger = logging.getLogger(__name__)
 LIFECYCLE_STATE_KEY: Final = "lifecycleState"
 LIFECYCLE_DRAINING_REMOVAL: Final = "draining_removal"
 LIFECYCLE_REACTIVATING: Final = "reactivating"
-SEALED_LIFECYCLE_STATES = frozenset({LIFECYCLE_DRAINING_REMOVAL, LIFECYCLE_REACTIVATING})
+#: MVR-06C: the production relocation coordinator's reservation (sealed until commit).
+LIFECYCLE_RELOCATING: Final = "relocating"
+SEALED_LIFECYCLE_STATES = frozenset(
+    {LIFECYCLE_DRAINING_REMOVAL, LIFECYCLE_REACTIVATING, LIFECYCLE_RELOCATING}
+)
 
 BACKGROUND_CAPABILITY_DOMAIN = b"agentic-pkm.background-capability.v1"
 BACKGROUND_CONTEXT_SCOPE = "background"
@@ -470,7 +480,8 @@ def apply_governed_intent_mutation(
         elif len(base) >= MVR06B_MAX_BACKGROUND_BINDINGS:
             raise CapabilityNotReadyError(
                 "capability_not_ready: a second background binding is gated until "
-                "MVR-06C/06D; remove the current member before adding another"
+                "MVR-06D atomically enables its matching queue-dispatch contract; remove "
+                "the current member before adding another"
             )
         else:
             members = (*base, target)
@@ -601,6 +612,7 @@ class BackgroundLifecycle:
             "status": self.status,
             "intent_revision": self.intent_revision,
             "registry_revision": self.registry_revision,
+            "binding_revision": self.binding_revision,
             "auth_epoch": self.auth_epoch,
             "context_id": None if self.context is None else self.context.context_id,
             "capability_digest": (
@@ -609,6 +621,114 @@ class BackgroundLifecycle:
             "failure": self.failure,
         }
 
+    def handoff(self, consumer: str) -> BackgroundContextHandoff:
+        """The redacted cross-process projection of this running generation."""
+
+        if self.status != "running" or self.binding_id is None or self.context is None:
+            raise BackgroundLifecycleError(
+                f"only a running lifecycle can hand off its context (status={self.status})"
+            )
+        return BackgroundContextHandoff(
+            producer=consumer,
+            binding_id=self.binding_id,
+            binding_revision=self.binding_revision,
+            intent_revision=self.intent_revision,
+            auth_epoch=self.auth_epoch,
+            authorization_epoch=self.authorization_epoch,
+            generation=self.generation,
+            context_id=self.context.context_id,
+            capability_digest=self.context.selection_capability_digest or "",
+        )
+
+
+BACKGROUND_CONTEXT_HANDOFF_SCHEMA: Final = "agentic-pkm.background-context-handoff.v1"
+_HANDOFF_FIELDS = frozenset(
+    {
+        "schema",
+        "producer",
+        "bindingId",
+        "bindingRevision",
+        "intentRevision",
+        "authEpoch",
+        "authorizationEpoch",
+        "generation",
+        "contextId",
+        "capabilityDigest",
+    }
+)
+
+
+@dataclass(frozen=True)
+class BackgroundContextHandoff:
+    """MVR-06C cross-process ActiveContextSet handoff (versioned, redacted, no host path).
+
+    One background process never shares its in-memory generation or an env snapshot with
+    another: it hands over this projection, and the receiver re-resolves its *own*
+    lifecycle from durable truth and accepts the handoff only when the binding, binding
+    revision, intent revision, auth epoch, and GOV authorization still agree. The
+    receiver's context is linked to, never replaced by, the producer's.
+    """
+
+    producer: str
+    binding_id: str
+    binding_revision: int
+    intent_revision: int
+    auth_epoch: int
+    authorization_epoch: str
+    generation: int
+    context_id: str
+    capability_digest: str
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "schema": BACKGROUND_CONTEXT_HANDOFF_SCHEMA,
+            "producer": self.producer,
+            "bindingId": self.binding_id,
+            "bindingRevision": self.binding_revision,
+            "intentRevision": self.intent_revision,
+            "authEpoch": self.auth_epoch,
+            "authorizationEpoch": self.authorization_epoch,
+            "generation": self.generation,
+            "contextId": self.context_id,
+            "capabilityDigest": self.capability_digest,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: object) -> BackgroundContextHandoff:
+        if not isinstance(payload, dict) or set(payload) != _HANDOFF_FIELDS:
+            raise BackgroundLifecycleError("background context handoff has an invalid shape")
+        if payload["schema"] != BACKGROUND_CONTEXT_HANDOFF_SCHEMA:
+            raise BackgroundLifecycleError("unknown background context handoff schema")
+        for name in ("bindingRevision", "intentRevision", "authEpoch", "generation"):
+            value = payload[name]
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise BackgroundLifecycleError(f"background context handoff {name} is invalid")
+        for name in ("producer", "bindingId", "authorizationEpoch", "contextId"):
+            if not isinstance(payload[name], str) or not payload[name].strip():
+                raise BackgroundLifecycleError(f"background context handoff {name} is invalid")
+        if not isinstance(payload["capabilityDigest"], str):
+            raise BackgroundLifecycleError("background context handoff digest is invalid")
+        return cls(
+            producer=payload["producer"],
+            binding_id=payload["bindingId"],
+            binding_revision=payload["bindingRevision"],
+            intent_revision=payload["intentRevision"],
+            auth_epoch=payload["authEpoch"],
+            authorization_epoch=payload["authorizationEpoch"],
+            generation=payload["generation"],
+            context_id=payload["contextId"],
+            capability_digest=payload["capabilityDigest"],
+        )
+
+
+@dataclass(frozen=True)
+class AcceptedContextHandoff:
+    """The receiver's own generation, linked to the producer context it accepted."""
+
+    lifecycle: BackgroundLifecycle
+    producer_context_id: str
+    producer_generation: int
+
 
 def _binding_revision(snapshot: RegistrySnapshot, binding_id: str) -> int:
     from app.instance.scalar_binding_runtime import _binding_revision as revision
@@ -616,11 +736,33 @@ def _binding_revision(snapshot: RegistrySnapshot, binding_id: str) -> int:
     return revision(snapshot, binding_id)
 
 
+class _MultiBindingHarnessCapability:
+    """MVR-06C: the private capability of the internal multi-binding harness."""
+
+    __slots__ = ()
+
+
+#: Held only by the internal capability-gated harness. Production enrollment, start, and
+#: queue dispatch of a second binding stay sealed until MVR-06D atomically enables its
+#: matching dispatch contract; nothing in production constructs a many-binding supervisor.
+_MVR06C_MULTI_BINDING_HARNESS: Final = _MultiBindingHarnessCapability()
+
+
 class BackgroundLifecycleSupervisor:
-    """Revision/auth-reconciling, ownership-checked, effect-leased singleton supervisor.
+    """Per-binding, revision/auth-reconciling, ownership-checked, effect-leased supervisor.
 
     One instance runs inside each background process (watcher, worker, settings). It
-    never mints identity: the principal is the MVR-06A delegated background role.
+    never mints identity: the principal is the MVR-06A delegated background role. It
+    keeps one immutable lifecycle generation per supervised binding (zero bindings is
+    one idle lifecycle). Each binding resolves, reconciles, drains, and fails on its own:
+    a binding's registry revision, ownership lease, sealed lifecycle state, or GOV verdict
+    rotates or fails only that binding; the background-role auth epoch and the durable
+    intent revision are instance-wide and rotate every lifecycle.
+
+    Production supervises the durable intent set, which MVR-06B/06C keep at zero or one
+    binding. A many-binding set is dormant: only the internal MVR-06C harness, holding
+    :data:`_MVR06C_MULTI_BINDING_HARNESS`, may supervise an explicit binding set, and it
+    never enrolls the set in durable intent or dispatches queued work.
     """
 
     def __init__(
@@ -634,7 +776,16 @@ class BackgroundLifecycleSupervisor:
         channel_id: str,
         consumer: str,
         drain_timeout: float = 30.0,
+        internal_binding_ids: tuple[str, ...] | None = None,
+        _harness_capability: object = None,
     ) -> None:
+        if internal_binding_ids is not None and (
+            _harness_capability is not _MVR06C_MULTI_BINDING_HARNESS
+        ):
+            raise CapabilityNotReadyError(
+                "capability_not_ready: multi-binding supervision is dormant until MVR-06D "
+                "atomically enables its matching queue-dispatch contract"
+            )
         self.registry = registry
         self.ownership_ledger = ownership_ledger
         self.effect_leases = effect_leases
@@ -643,7 +794,12 @@ class BackgroundLifecycleSupervisor:
         self.channel_id = channel_id
         self.consumer = consumer
         self.drain_timeout = drain_timeout
-        self._lifecycle: BackgroundLifecycle | None = None
+        self._internal = (
+            None
+            if internal_binding_ids is None
+            else tuple(dict.fromkeys(item.strip() for item in internal_binding_ids if item.strip()))
+        )
+        self._lifecycles: dict[str | None, BackgroundLifecycle] = {}
 
     @classmethod
     def for_runtime(
@@ -653,6 +809,8 @@ class BackgroundLifecycleSupervisor:
         ownership_root: Path,
         channel_id: str,
         consumer: str,
+        internal_binding_ids: tuple[str, ...] | None = None,
+        _harness_capability: object = None,
     ) -> BackgroundLifecycleSupervisor:
         from app.instance.binding_effect_lease import BindingEffectLeaseManager
         from app.instance.runtime import (
@@ -674,11 +832,28 @@ class BackgroundLifecycleSupervisor:
             principal_store=open_local_operator_principal_store(Path(registry_path)),
             channel_id=channel_id,
             consumer=consumer,
+            internal_binding_ids=internal_binding_ids,
+            _harness_capability=_harness_capability,
         )
 
     @property
+    def many_binding(self) -> bool:
+        return self._internal is not None
+
+    @property
     def lifecycle(self) -> BackgroundLifecycle | None:
-        return self._lifecycle
+        """The singleton (or idle) lifecycle; a many-binding supervisor has no singleton."""
+
+        if self.many_binding:
+            raise BackgroundLifecycleError("a multi-binding supervisor exposes lifecycles")
+        return next(iter(self._lifecycles.values()), None)
+
+    @property
+    def lifecycles(self) -> tuple[BackgroundLifecycle, ...]:
+        return tuple(self._lifecycles.values())
+
+    def lifecycle_for(self, binding_id: str) -> BackgroundLifecycle | None:
+        return self._lifecycles.get(binding_id)
 
     # -- resolution ---------------------------------------------------------------------
 
@@ -692,20 +867,40 @@ class BackgroundLifecycleSupervisor:
         validate_background_delegation(role, delegator)
         return role
 
-    def _resolve(self, generation: int) -> BackgroundLifecycle:
+    def _targets(self, state: BackgroundBindingState) -> tuple[str, ...]:
+        """The supervised set: durable intent in production, the harness set otherwise."""
+
+        if self._internal is not None:
+            return self._internal
+        if len(state.binding_ids) > MVR06B_MAX_BACKGROUND_BINDINGS:
+            raise CapabilityNotReadyError(
+                "many-binding supervision is sealed until MVR-06D atomically enables its "
+                "matching queue-dispatch contract"
+            )
+        return state.binding_ids
+
+    def _durable(self) -> tuple[RegistrySnapshot, BackgroundBindingState]:
         snapshot = self.registry.load()
         state = durable_background_state(snapshot)
         if state is None:
             raise CapabilityNotReadyError(
                 "the MVR-06B supervisor is not authoritative before the bridge handoff"
             )
-        if len(state.binding_ids) > MVR06B_MAX_BACKGROUND_BINDINGS:
-            raise CapabilityNotReadyError("many-binding supervision is sealed until MVR-06D")
+        return snapshot, state
+
+    def _resolve(self, generation: int, binding: str | None = None) -> BackgroundLifecycle:
+        """Resolve one lifecycle (``binding=None``: the idle lifecycle of an empty set)."""
+
+        snapshot, state = self._durable()
+        targets = self._targets(state)
+        if not self.many_binding:
+            # The singleton always resolves fresh durable truth, never a stale key.
+            binding = targets[0] if targets else None
         try:
             role = self._role()
         except Exception as exc:
-            return self._failed(snapshot, state, generation, None, f"authorization: {exc}", 0)
-        if not state.binding_ids:
+            return self._failed(snapshot, state, generation, binding, f"authorization: {exc}", 0)
+        if binding is None:
             return BackgroundLifecycle(
                 binding_id=None,
                 generation=generation,
@@ -718,7 +913,6 @@ class BackgroundLifecycleSupervisor:
                 auth_epoch=role.auth_epoch,
                 authorization_epoch=f"auth-epoch-{role.auth_epoch}",
             )
-        binding = state.binding_ids[0]
         registration = snapshot.registrations.get(binding)
         if registration is None:
             return self._failed(
@@ -833,8 +1027,15 @@ class BackgroundLifecycleSupervisor:
             binding_id=binding,
             generation=generation,
         )
+        # A many-binding supervisor namespaces each context by binding: two lifecycles in
+        # one process never share a context id even at the same generation.
+        scope_key = (
+            f"{state.intent_revision}:{generation}"
+            if not self.many_binding
+            else f"{binding or 'no-vault'}:{state.intent_revision}:{generation}"
+        )
         return ActiveContextSetV1(
-            context_id=f"background:{self.consumer}:{state.intent_revision}:{generation}",
+            context_id=f"background:{self.consumer}:{scope_key}",
             generation=generation,
             workspace=WorkspaceState.none(),
             scope=BACKGROUND_CONTEXT_SCOPE,
@@ -856,9 +1057,25 @@ class BackgroundLifecycleSupervisor:
 
     # -- lifecycle ----------------------------------------------------------------------
 
+    def _keys(self) -> tuple[str | None, ...]:
+        """The many-binding supervised keys (an empty set is one idle lifecycle)."""
+
+        _snapshot, state = self._durable()
+        return self._targets(state) or (None,)
+
+    def start_all(self) -> tuple[BackgroundLifecycle, ...]:
+        if not self.many_binding:
+            lifecycle = self._resolve(1)
+            self._lifecycles = {lifecycle.binding_id: lifecycle}
+        else:
+            self._lifecycles = {key: self._resolve(1, key) for key in self._keys()}
+        return self.lifecycles
+
     def start(self) -> BackgroundLifecycle:
-        self._lifecycle = self._resolve(1)
-        return self._lifecycle
+        lifecycles = self.start_all()
+        if self.many_binding:
+            raise BackgroundLifecycleError("a multi-binding supervisor starts through start_all")
+        return lifecycles[0]
 
     def _cursor_changed(self, current: BackgroundLifecycle) -> bool:
         snapshot = self.registry.load()
@@ -870,12 +1087,13 @@ class BackgroundLifecycleSupervisor:
             return True
         if state.intent_revision != current.intent_revision:
             return True
+        targets = self._targets(state)
         binding = current.binding_id
         if binding is None:
-            return bool(state.binding_ids)
-        registration = snapshot.registrations.get(binding)
-        if state.binding_ids != (binding,):
+            return bool(targets)
+        if binding not in targets or (not self.many_binding and targets != (binding,)):
             return True
+        registration = snapshot.registrations.get(binding)
         if registration is None:
             return current.status != "failed"
         if registration.extensions.get(LIFECYCLE_STATE_KEY) in SEALED_LIFECYCLE_STATES:
@@ -884,37 +1102,34 @@ class BackgroundLifecycleSupervisor:
             return True
         if current.status != "running":
             return False
-        # A verdict or delegation change has no registry revision of its own, so only a
-        # fresh decision can observe it; rotation then re-resolves or fails loudly.
+        # A verdict, delegation, or ownership change has no registry revision of its own,
+        # so only a fresh decision can observe it; rotation then re-resolves or fails
+        # loudly, and health never reports a binding running whose root lost its lease.
         from app.instance.scalar_binding_runtime import _authorize_binding
 
         try:
+            if current.root is not None:
+                self._require_ownership(binding, current.root)
             verdict = _authorize_binding(snapshot, binding, self.registry.path)
             role_now = self._role()
         except Exception:
             return True
         return f"{verdict.epoch}|auth-epoch-{role_now.auth_epoch}" != current.authorization_epoch
 
-    def reconcile(self) -> BackgroundLifecycle:
-        """Converge from durable registry revision + auth epoch (hints only accelerate).
+    def _reconcile_one(
+        self, current: BackgroundLifecycle, key: str | None
+    ) -> BackgroundLifecycle:
+        """Converge one lifecycle; the others are untouched by its drain or failure."""
 
-        A failed lifecycle is retried on every call: ownership or authority repair has
-        no registry revision of its own, so only a fresh resolution can observe it.
-        """
-
-        current = self._lifecycle
-        if current is None:
-            return self.start()
         if current.status != "failed" and not self._cursor_changed(current):
             return current
         if not self._drain(current):
-            self._lifecycle = replace(
+            return replace(
                 current,
                 status="failed",
                 failure="the prior generation's in-flight effects have not drained",
             )
-            return self._lifecycle
-        resolved = self._resolve(current.generation + 1)
+        resolved = self._resolve(current.generation + 1, key)
         if (
             current.status == "failed"
             and resolved.status == "failed"
@@ -923,8 +1138,61 @@ class BackgroundLifecycleSupervisor:
         ):
             # An unchanged failure is the same generation, not a rotation.
             resolved = replace(resolved, generation=current.generation)
-        self._lifecycle = resolved
-        return self._lifecycle
+        return resolved
+
+    def reconcile_all(self) -> tuple[BackgroundLifecycle, ...]:
+        """Converge every lifecycle from durable registry revision + auth epoch.
+
+        Hints only accelerate this. A failed lifecycle is retried on every call: ownership
+        or authority repair has no registry revision of its own, so only a fresh
+        resolution can observe it. A binding that left the supervised set is drained
+        and stopped; one that joined starts at its first generation.
+        """
+
+        previous = dict(self._lifecycles)
+        if not previous:
+            return self.start_all()
+        if not self.many_binding:
+            # The singleton rotates in place, so a rebind keeps one monotonic generation.
+            resolved = self._reconcile_one(next(iter(previous.values())), None)
+            self._lifecycles = {resolved.binding_id: resolved}
+            return self.lifecycles
+        keys = self._keys()
+        updated: dict[str | None, BackgroundLifecycle] = {}
+        for key in keys:
+            current = previous.get(key)
+            updated[key] = self._resolve(1, key) if current is None else self._reconcile_one(
+                current, key
+            )
+        for key, stopped in previous.items():
+            if key not in updated and not self._drain(stopped):
+                logger.error(
+                    "stopped background lifecycle has undrained effects consumer=%s binding=%s",
+                    self.consumer,
+                    key,
+                )
+        self._lifecycles = updated
+        return self.lifecycles
+
+    def _reconcile_binding(self, binding_id: str) -> BackgroundLifecycle:
+        """Many-binding: converge only ``binding_id``; no other binding is drained or waited on."""
+
+        if binding_id not in self._keys():
+            raise BackgroundLifecycleError(f"binding {binding_id} is not supervised")
+        current = self._lifecycles.get(binding_id)
+        updated = (
+            self._resolve(1, binding_id)
+            if current is None
+            else self._reconcile_one(current, binding_id)
+        )
+        self._lifecycles[binding_id] = updated
+        return updated
+
+    def reconcile(self) -> BackgroundLifecycle:
+        lifecycles = self.reconcile_all()
+        if self.many_binding:
+            raise BackgroundLifecycleError("a multi-binding supervisor reconciles all bindings")
+        return lifecycles[0]
 
     def _drain(self, lifecycle: BackgroundLifecycle) -> bool:
         """Wait out in-flight shared effects of the old generation before rotating."""
@@ -947,7 +1215,8 @@ class BackgroundLifecycleSupervisor:
             ):
                 return True
         except OwnershipFenceUnavailable:
-            # The fence refuses every new holder; resolution below fails closed.
+            # The fence refuses every new holder on this root (e.g. a relocation already
+            # moved the lease); resolution below fails closed or adopts the new root.
             return True
         except BindingEffectLeaseError as exc:
             if lifecycle.binding_id not in self.registry.load().registrations:
@@ -975,10 +1244,21 @@ class BackgroundLifecycleSupervisor:
             raise BackgroundLifecycleStale("GOV authorization changed before the effect")
 
     @contextmanager
-    def effect(self) -> Iterator[BackgroundLifecycle]:
-        """Host-global fence -> shared effect lease -> revalidate; held through receipt."""
+    def effect(self, binding_id: str | None = None) -> Iterator[BackgroundLifecycle]:
+        """Host-global fence -> shared effect lease -> revalidate; held through receipt.
 
-        lifecycle = self.reconcile()
+        A many-binding supervisor names the binding; its effect reconciles and leases only
+        that binding, so another binding's drain, failure, or in-flight work cannot block it.
+        """
+
+        if self.many_binding:
+            if binding_id is None:
+                raise BackgroundLifecycleError("a multi-binding effect must name its binding")
+            lifecycle = self._reconcile_binding(binding_id)
+        else:
+            lifecycle = self.reconcile()
+            if binding_id is not None and lifecycle.binding_id != binding_id:
+                raise BackgroundLifecycleError(f"binding {binding_id} is not supervised")
         if lifecycle.status != "running" or lifecycle.binding_id is None or lifecycle.root is None:
             if lifecycle.status == "idle":
                 raise BackgroundBindingIdle("durable background intent runs no binding")
@@ -991,12 +1271,58 @@ class BackgroundLifecycleSupervisor:
             self.require_current(lifecycle)
             yield lifecycle
 
+    def accept_handoff(self, payload: object) -> AcceptedContextHandoff:
+        """Accept another process's context handoff against this process's own truth.
+
+        The receiver reconciles first, then requires its own running lifecycle for the
+        same binding to agree on binding revision, intent revision, auth epoch, and GOV
+        authorization. A handoff superseded by a relocation, rebind, or revocation is
+        refused as stale; the receiver never adopts the producer's generation or root.
+        """
+
+        handoff = BackgroundContextHandoff.from_payload(payload)
+        lifecycle: BackgroundLifecycle | None
+        if self.many_binding:
+            try:
+                lifecycle = self._reconcile_binding(handoff.binding_id)
+            except BackgroundLifecycleError:
+                lifecycle = None
+        else:
+            lifecycle = self.reconcile()
+        if (
+            lifecycle is None
+            or lifecycle.binding_id != handoff.binding_id
+            or lifecycle.status != "running"
+        ):
+            raise BackgroundLifecycleStale(
+                "the handed-off binding is not running in this process"
+            )
+        if (
+            lifecycle.binding_revision != handoff.binding_revision
+            or lifecycle.intent_revision != handoff.intent_revision
+            or lifecycle.auth_epoch != handoff.auth_epoch
+            or lifecycle.authorization_epoch != handoff.authorization_epoch
+        ):
+            raise BackgroundLifecycleStale(
+                "the background context handoff was superseded by durable binding/auth truth"
+            )
+        return AcceptedContextHandoff(
+            lifecycle=lifecycle,
+            producer_context_id=handoff.context_id,
+            producer_generation=handoff.generation,
+        )
+
     def health(self) -> dict[str, Any]:
-        lifecycle = self._lifecycle
+        """Truthful gated health: one redacted entry per supervised lifecycle."""
+
         return {
             "consumer": self.consumer,
-            "supervisor": "mvr06b-singleton",
-            "lifecycles": [] if lifecycle is None else [lifecycle.health()],
+            "supervisor": "mvr06c-per-binding",
+            "binding_capacity": (
+                MVR06B_MAX_BACKGROUND_BINDINGS if self._internal is None else len(self._internal)
+            ),
+            "many_binding": "internal_harness" if self.many_binding else "dormant",
+            "lifecycles": [item.health() for item in self._lifecycles.values()],
         }
 
 
@@ -1112,7 +1438,10 @@ def revoke_background_role_fenced(
 
 
 __all__ = [
+    "AcceptedContextHandoff",
+    "BACKGROUND_CONTEXT_HANDOFF_SCHEMA",
     "BackgroundBindingIdle",
+    "BackgroundContextHandoff",
     "BackgroundLifecycleBlocked",
     "BackgroundBindingState",
     "BackgroundLifecycle",
@@ -1122,6 +1451,7 @@ __all__ = [
     "HandoffReceipt",
     "LIFECYCLE_DRAINING_REMOVAL",
     "LIFECYCLE_REACTIVATING",
+    "LIFECYCLE_RELOCATING",
     "LIFECYCLE_STATE_KEY",
     "SEALED_LIFECYCLE_STATES",
     "apply_governed_intent_mutation",
