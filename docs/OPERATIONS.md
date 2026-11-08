@@ -1162,6 +1162,10 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
 
 ### BuilderOps Issue-delivery repository support
 
+The [local OpenHands Canvas launcher instructions](development/BUILDER_SYSTEM_PROCESS_MAP.md#current-active-builder-carrier)
+describe repository-local support for an existing agent-server. This does not establish factory
+qualification or production activation.
+
 Issue #5586 adds repository-side `fca-issue-delivery.v2` support for the bounded Bifrost
 consumer, with an independently pinned trusted hub workflow, separate hub tracking Issue,
 and exact per-target protected policies and credential generations; hub-only v1 is unchanged.
