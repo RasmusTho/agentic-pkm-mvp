@@ -125,9 +125,8 @@ def activate_many_binding_dispatch(
     committed = registry.advance_mvr06d_runtime_floor(
         classification=classification, _capability=_capability
     )
-    from app.instance.background_supervisor import emit_background_intent_event
-
-    emit_background_intent_event(committed, reason="mvr06d_many_binding_activation")
+    # No wake-up hint: activation runs inside the stopped window, and every consumer
+    # reconstructs its lifecycles from this committed generation when it restarts.
     return {
         "activated": True,
         "minimum_runtime_schema": "mvr-06d",

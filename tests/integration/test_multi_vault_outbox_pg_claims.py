@@ -52,6 +52,7 @@ def pg_many(tmp_path, monkeypatch):
     with scratch_database() as dsn:
         stub_settings_reload(monkeypatch)
         monkeypatch.setenv("WORKER_CLAIM_LEASE_SECONDS", "30")
+        monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "index-outbox.jsonl"))
         runtime, a, b, _rest = many_binding_instance(tmp_path, monkeypatch, dsn=dsn)
         yield runtime, a.vault_binding_id, b.vault_binding_id, dsn
 

@@ -547,8 +547,10 @@ def classify_for_activation(conn: Any) -> dict[str, Any]:
         "count(*) filter (where vault_binding_id = %s) as unprovable, "
         "count(*) filter (where vault_binding_id = %s) as global_rows, "
         "count(*) filter (where vault_binding_id not in (%s, %s, %s)) as scoped, "
-        "count(*) filter (where claim_phase is not null or quarantined_at is not null "
-        "or effect_outcome is not null) as queue_state "
+        "(select count(*) from outbox state where state.claim_token is not null "
+        "or state.claim_phase is not null or state.quarantined_at is not null "
+        "or state.effect_outcome is not null or state.consumer_context is not null) "
+        "as queue_state "
         "from outbox where delivered_at is null",
         (
             COMPATIBILITY_BINDING_ID,

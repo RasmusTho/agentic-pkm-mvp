@@ -178,7 +178,14 @@ def rows(dsn: str, sql: str, params: tuple = ()) -> list[tuple]:
         return conn.execute(sql, params).fetchall()
 
 
-def emit_stage(runtime, binding_id: str, identity: str, *, stage: str = "candidate") -> str:
+def emit_stage(
+    runtime,
+    binding_id: str,
+    identity: str,
+    *,
+    stage: str = "candidate",
+    artifact_path: str | None = None,
+) -> str:
     """The real KA-06 producer, emitting inside ``binding_id``'s effect window."""
 
     from app.instance.scalar_binding_runtime import (
@@ -192,7 +199,10 @@ def emit_stage(runtime, binding_id: str, identity: str, *, stage: str = "candida
     with producer.effect(binding_id) as lifecycle:
         with frozen_binding_effect(background_effect_runtime(producer, lifecycle)):
             row_id = emit_stage_completed(
-                stage=stage, stage_version=1, content_identity=identity
+                stage=stage,
+                stage_version=1,
+                content_identity=identity,
+                extra_payload=None if artifact_path is None else {"artifact_path": artifact_path},
             )
     assert row_id, "the stage producer deduplicated a fresh emission"
     return row_id

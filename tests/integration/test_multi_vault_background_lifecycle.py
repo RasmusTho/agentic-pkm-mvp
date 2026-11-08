@@ -2176,3 +2176,203 @@ def test_relocation_never_compensates_a_landed_ownership_move(tmp_path, monkeypa
     assert recovered is not None and recovered.path == str(target.resolve())
     assert not shared_refused(restarted, binding, target)
     assert shared_refused(restarted, binding, old_root)
+
+
+# -- MVR-06D (#3866): queued-work convergence under many-binding dispatch -----------------
+
+
+@pytest.fixture
+def _pg_many(tmp_path, monkeypatch):
+    from tests._mvr06d_many_binding_harness import many_binding_instance, scratch_database
+
+    with scratch_database() as dsn:
+        stub_settings_reload(monkeypatch)
+        monkeypatch.setenv("WORKER_CLAIM_LEASE_SECONDS", "30")
+        monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "index-outbox.jsonl"))
+        runtime, a, b, _rest = many_binding_instance(tmp_path, monkeypatch, dsn=dsn)
+        yield runtime, a, b, dsn
+
+
+def _queue_row(dsn: str, row_id: str) -> dict:
+    from tests._mvr06d_many_binding_harness import rows
+
+    found = rows(
+        dsn,
+        "select id::text, legacy_key::text, vault_binding_id, delivered_at is not null, "
+        "quarantined_at is not null, quarantine_reason, consumer_context, payload "
+        "from outbox where id = %s",
+        (row_id,),
+    )
+    assert found
+    keys = ("id", "legacy_key", "binding", "delivered", "quarantined", "reason", "consumer",
+            "envelope")
+    return dict(zip(keys, found[0]))
+
+
+def _drain(dispatcher, ticks: int = 4) -> None:
+    for _ in range(ticks):
+        dispatcher.tick()
+
+
+@pytest.mark.pg
+def test_pending_rows_quarantine_across_removal_and_rebind(_pg_many, tmp_path, monkeypatch) -> None:
+    from app.workers import many_binding_dispatch as dispatch
+    from tests._mvr06c_relocation_harness import copy_vault
+    from tests._mvr06d_many_binding_harness import emit_stage, ready_signals, supervisor_for
+
+    runtime, a, b, dsn = _pg_many
+    worker = dispatch.ManyBindingDispatcher(supervisor_for(runtime, "worker"), owner="w")
+
+    # -- lifecycle removal quarantines durably, without dispatch or acknowledgement -------
+    removed_row = emit_stage(runtime, a.vault_binding_id, "after-lifecycle-removal")
+    admin(runtime).remove(a.vault_binding_id)
+    _drain(worker)
+    held = _queue_row(dsn, removed_row)
+    assert held["quarantined"] and not held["delivered"]
+    assert held["reason"] == "lifecycle_not_enrolled" and held["binding"] == a.vault_binding_id
+    assert ready_signals(dsn, "after-lifecycle-removal") == []
+    assert {item["id"] for item in dispatch.list_quarantined()} >= {removed_row}
+
+    # -- governed reissue can never retarget, and needs the same re-authorized binding ----
+    with pytest.raises(dispatch.QueuedWorkAdminError, match="original binding"):
+        dispatch.reissue_quarantined_row(removed_row, vault_binding_id=b.vault_binding_id)
+    with pytest.raises(dispatch.QueuedWorkAdminError, match="not running"):
+        dispatch.reissue_quarantined_row(removed_row, vault_binding_id=a.vault_binding_id)
+    admin(runtime).add(a.vault_binding_id)
+    reissued = dispatch.reissue_quarantined_row(removed_row, vault_binding_id=a.vault_binding_id)
+    assert reissued["state"] == "reissued"
+    _drain(worker)
+    settled = _queue_row(dsn, removed_row)
+    assert settled["delivered"] and not settled["quarantined"]
+    assert (settled["id"], settled["legacy_key"], settled["binding"]) == (
+        held["id"], held["legacy_key"], held["binding"]
+    )
+    assert [binding for _id, binding in ready_signals(dsn, "after-lifecycle-removal")] == [
+        a.vault_binding_id
+    ]
+
+    # -- an incompatible locator after relocation quarantines; a relative one follows ----
+    old_root = Path(a.path)
+    stale = emit_stage(
+        runtime, a.vault_binding_id, "absolute-old-root",
+        artifact_path=str(old_root / "Sources" / "candidate.md"),
+    )
+    relative = emit_stage(
+        runtime, a.vault_binding_id, "relative-locator", artifact_path="Sources/candidate.md"
+    )
+    target = copy_vault(old_root, tmp_path / "alpha-relocated")
+    runtime.relocate(a.vault_binding_id, target)
+    _drain(worker)
+    assert _queue_row(dsn, stale)["reason"] == "incompatible_locator"
+    assert ready_signals(dsn, "absolute-old-root") == []
+    moved = _queue_row(dsn, relative)
+    assert moved["delivered"] and moved["binding"] == a.vault_binding_id
+    assert moved["consumer"]["binding_revision"] > moved["consumer"]["producer_binding_revision"]
+
+    # -- lost GOV authority quarantines only that binding's work --------------------------
+    from app.governance.binding_authority import RegistryBindingAuthorizer
+    from tests.helpers.revoked_binding_authorizer import RevokedBindingAuthorizer
+
+    denied_row = emit_stage(runtime, b.vault_binding_id, "after-authority-loss")
+    kept_row = emit_stage(runtime, a.vault_binding_id, "unaffected-binding")
+    original = RegistryBindingAuthorizer.authorize
+
+    def authorize(self, request):
+        if request.vault_binding_id != b.vault_binding_id:
+            return original(self, request)
+        revoked = RevokedBindingAuthorizer(self)
+        revoked.revoke_for_test(b.vault_binding_id)
+        return revoked.authorize(request)
+
+    monkeypatch.setattr(RegistryBindingAuthorizer, "authorize", authorize)
+    _drain(worker)
+    assert _queue_row(dsn, denied_row)["reason"] == "authority_lost"
+    assert _queue_row(dsn, kept_row)["delivered"]
+    # Quarantine never redirected B's work to A.
+    assert ready_signals(dsn, "after-authority-loss") == []
+
+    # -- registration removal quarantines whatever the binding still had queued ----------
+    monkeypatch.setattr(RegistryBindingAuthorizer, "authorize", original)
+    gone_row = emit_stage(runtime, b.vault_binding_id, "before-registration-removal")
+    runtime.remove(b.vault_binding_id)
+    _drain(worker)
+    assert _queue_row(dsn, gone_row)["reason"] == "binding_removed"
+
+
+@pytest.mark.pg
+def test_pending_rows_survive_compatible_restart_generation(_pg_many, monkeypatch) -> None:
+    from app.instance.runtime import (
+        open_background_role_store,
+        open_local_operator_principal_store,
+    )
+    from app.workers import many_binding_dispatch as dispatch
+    from tests._mvr06d_many_binding_harness import emit_stage, ready_signals, supervisor_for
+
+    runtime, a, b, dsn = _pg_many
+    producer_rows = {
+        identity: emit_stage(runtime, a.vault_binding_id, identity)
+        for identity in ("before-rotation", "before-restart")
+    }
+    producer_meta = {
+        identity: _queue_row(dsn, row)["envelope"]["meta"]
+        for identity, row in producer_rows.items()
+    }
+
+    # -- generation rotation: the background role's auth epoch moves -------------------
+    first_worker = dispatch.ManyBindingDispatcher(supervisor_for(runtime, "worker"), owner="w1")
+    role_store = open_background_role_store(runtime.layout.registry_path)
+    role_store.revoke(_capability=STORAGE_MUTATION_CAPABILITY)
+    blocked = first_worker.tick()
+    assert {item.state for item in blocked.outcomes if item.scope != "global"} == {"blocked"}
+    for row in producer_rows.values():
+        state = _queue_row(dsn, row)
+        assert not state["quarantined"] and not state["delivered"]  # blocked, never quarantined
+    role_store.redelegate(
+        delegator=open_local_operator_principal_store(runtime.layout.registry_path).require(),
+        floor_guard=lambda: True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    # Dispatch only the first row under the rotated generation.
+    from app.services import outbox_claims
+
+    real_claim = outbox_claims.claim_next
+
+    def only(identity_row):
+        def claim(conn, **kwargs):
+            if kwargs.get("vault_binding_id") == a.vault_binding_id and not kwargs.get(
+                "recovery_only"
+            ):
+                kwargs["topics"] = ("knowledge_acquisition.stage.completed",)
+                found = real_claim(conn, **kwargs)
+                if found is not None and found.row_id != identity_row:
+                    outbox_claims.release_claim(conn, found, failed=False)
+                    return None
+                return found
+            return real_claim(conn, **kwargs)
+
+        return claim
+
+    monkeypatch.setattr(outbox_claims, "claim_next", only(producer_rows["before-rotation"]))
+    first_worker.tick()
+    rotated = _queue_row(dsn, producer_rows["before-rotation"])
+    assert rotated["delivered"] and not rotated["quarantined"]
+    assert rotated["binding"] == a.vault_binding_id
+    assert rotated["consumer"]["generation"] >= 2  # a fresh consumer generation ...
+    assert rotated["consumer"]["producer_context"] == producer_meta["before-rotation"][
+        "producer_context"
+    ]  # ... linked to the immutable producer provenance
+    assert rotated["consumer"]["producer_binding_revision"] == producer_meta["before-rotation"][
+        "binding_revision"
+    ]
+
+    # -- routine supervisor restart: a new process re-derives generation 1 -------------
+    monkeypatch.setattr(outbox_claims, "claim_next", real_claim)
+    restarted = dispatch.ManyBindingDispatcher(supervisor_for(runtime, "worker"), owner="w2")
+    _drain(restarted)
+    survived = _queue_row(dsn, producer_rows["before-restart"])
+    assert survived["delivered"] and not survived["quarantined"]
+    assert survived["binding"] == a.vault_binding_id
+    assert survived["consumer"]["owner"] == "w2"
+    assert survived["consumer"]["context_id"] != rotated["consumer"]["context_id"]
+    for identity in producer_rows:
+        assert [binding for _id, binding in ready_signals(dsn, identity)] == [a.vault_binding_id]

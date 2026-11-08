@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 EFFECT_CONTRACT_VERSION = "agentic-pkm.mvr06d-effect-contract.v1"
 DEFAULT_CLAIM_LEASE_SECONDS = 300.0
 _RECOVERY_BUDGET = 100
-_LOCATOR_KEYS = ("vault_path", "path", "note_path", "source_ref")
+_LOCATOR_KEYS = ("vault_path", "path", "note_path", "source_ref", "artifact_path")
 _RELATIVE_LOCATOR_KEYS = ("relative_path",)
 
 EffectKind = Literal["store_atomic", "no_effect"]
