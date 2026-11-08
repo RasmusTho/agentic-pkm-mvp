@@ -24,6 +24,80 @@ minimal coordinator dispatches each bug to its own end-to-end Codex task/session
 worktree, with serial implementation as the default. This is Builder System transition guidance,
 not Product/Runtime behavior or evidence of a shipped deterministic orchestrator.
 
+## OpenHands factory owner trial
+
+The local OpenHands delivery entry point is an experimental, explicitly authorized single-Issue
+path. It does not establish factory qualification or authorize merge or release. Install the pinned
+components with `scripts/setup_openhands_factory.sh /absolute/install/root /absolute/worktree/root`;
+the second argument is optional and defaults to `worktrees` under the install root. Node and Codex must be
+on `PATH`, with Codex CLI 0.167.0 and the existing ChatGPT subscription login. Start fetches
+`origin/main` and verifies it against the remote's current default-branch SHA before preparing a
+worktree. It fails if the network is unavailable, the default branch is not `main`, the SHAs
+do not match, or updating the tracking ref would not be a fast-forward; it does not use the
+factory checkout's `HEAD` as the base.
+
+The installer creates a private state directory and a short owner entry point bound to this factory
+checkout and the chosen roots. Replace the example paths and the explicitly authorized Issue:
+
+```sh
+/absolute/install/root/bin/openhands start --issue 123 --port 8765
+```
+
+Use the same entry point with `status`, `cancel`, `resume`, or `stop` in place of `start`. The command
+derives its pinned ACP and isolated service configuration; model selection stays on
+`gpt-6.1-terra` with subscription authentication, with no provider or model fallback. `cancel`
+interrupts the conversation; it does not establish that delegated processes have stopped. Lease
+and worktree heartbeats are not automated, so the operator must maintain them. Preserve state and
+reconcile an interrupted or uncertain start before retrying. Publication remains a separate
+host-side operation through `openhands_delivery` and its applicable repository gates.
+
+`stop` first checks that the recorded conversation is finished or has been interrupted through
+`cancel`, then records the existing ACP session and service settings privately and stops the
+recorded Canvas (if present) and backend while retaining session data. It does not verify
+delegated-process cancellation. To restore that backend for conversation readback or publication,
+use `start` again with the same Issue, installation, repository and roots. It reuses the recorded
+workspace, port, key and session; it does not claim the Issue again or resume an agent turn.
+An interrupted turn still requires the separate `resume` command. The retained recovery settings
+contain a sensitive ACP session identifier and must remain private.
+
+For a finished conversation on a clean committed worktree, use `verify` with the same Issue and
+roots. It rereads the recorded Issue contract and runs concrete `tests/...py` pytest targets in the
+retained Codex sandbox profile, capturing output and exit status in a private verification
+directory. The JSON result binds the evidence to `HEAD` and lists passing, failing and unresolved
+targets; document anchors, arbitrary commands and other unmapped targets remain unresolved. A
+nonzero command result or unresolved target makes `verify` exit nonzero. This is test evidence,
+not independent review or publication authority. Some tests need facilities excluded by the
+sandbox, such as network access; their actual results remain visible in the private logs.
+
+Use `review` with the same Issue and roots to run an independent native Codex review of the
+finished, committed candidate. The separate reviewer uses the guarded ChatGPT/Terra preflight and
+a read-only workspace profile; it records the structured verdict and actual response privately,
+bound to the exact candidate SHA. Refusals, failures, changed candidates and ambiguous output are
+unresolved. Its `review` entry and `verify` entries can be combined with the declared risk and
+other required evidence for `publish-full`; they do not replace the applicable review-repair or
+mechanism-convergence workflow.
+
+The launcher reads the applicable host and planned-worktree Codex TOML configuration to disable
+inherited MCP servers and plugins by name; it does not copy their configuration values. The service
+uses the `HOME`-based Codex configuration, and its effective-configuration preflight still refuses
+an enabled external tool or an unverified subscription/model before a worker turn. If configuration
+cannot be inspected, start fails and the operator must resolve the local configuration first.
+
+For the owner interface, install the independently reviewed `scripts/openhands_canvas.py` from
+the #6602 candidate as `/absolute/install/root/bin/openhands_canvas.py`, retaining its source and
+commit receipt. #6602 is a draft and this launcher is not yet merged. Start the installed official
+Agent Canvas against the recorded service using the same paths and Issue:
+
+```sh
+/absolute/install/root/bin/openhands ui --issue 123 --ui-port 3001 --open
+```
+
+`--open` is optional; omit it to use the returned loopback URL manually. The UI port defaults to
+3001 and must differ from the backend port. Use `ui --ui-action status` or `ui --ui-action stop`
+with the same Issue and roots to inspect or stop Canvas without stopping the backend. The command
+passes the private session-key file path to the launcher; never print or copy its contents into
+logs or PRs.
+
 ## Planning vocabulary and lightweight breakdown
 
 Use these terms consistently across specifications, skills, and issues:

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Invoked by codex-acp through CODEX_PATH; the launcher supplies the runtime.
+: "${OPENHANDS_FACTORY_PYTHON:?OpenHands factory Python is required}"
+exec "$OPENHANDS_FACTORY_PYTHON" -m app.builderops.openhands_proxy "$@"
