@@ -257,6 +257,14 @@ def test_mvr06d_floor_precedes_first_queue_state_write_and_blocks_older_runtime(
 
     runtime, first, dsn, legacy_pending, _unprovable = mvr06d_db
     binding = first.vault_binding_id
+    if subprocess.run(
+        ["git", "cat-file", "-e", f"{MVR06C_IMAGE_SHA}^{{commit}}"], cwd=REPO_ROOT
+    ).returncode != 0:
+        # A shallow CI checkout lacks the previous image; fetch exactly that commit.
+        subprocess.check_call(
+            ["git", "fetch", "--no-tags", "--depth=1", "origin", MVR06C_IMAGE_SHA],
+            cwd=REPO_ROOT,
+        )
     source = subprocess.check_output(
         ["git", "show", f"{MVR06C_IMAGE_SHA}:app/instance/vault_registry.py"],
         cwd=REPO_ROOT,

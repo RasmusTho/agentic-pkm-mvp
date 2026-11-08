@@ -36,6 +36,11 @@ from tests._mvr06d_many_binding_harness import (
 pytestmark = pytest.mark.pg
 
 
+#: Lease for crash-injection setups: long enough that a slow CI runner finishes the setup
+#: ticks before any injected crash's lease could expire and be reclaimed early.
+_CRASH_LEASE = 5
+
+
 class _Crash(BaseException):
     """A process death at an injected point: no in-process cleanup may run."""
 
@@ -70,7 +75,7 @@ def _row(dsn: str, row_id: str) -> dict:
     return dict(zip(keys, found[0]))
 
 
-def _expire_leases(monkeypatch, seconds: float = 1.2) -> None:
+def _expire_leases(monkeypatch, seconds: float = _CRASH_LEASE + 0.3) -> None:
     time.sleep(seconds)
 
 
@@ -171,7 +176,7 @@ def test_concurrent_claim_owner_and_crash_redelivery_preserve_at_least_once(
     assert {binding for _id, binding in ready_signals(dsn, "race-b-0")} == {binding_b}
 
     # -- crash after the handler effect, before acknowledgement -------------------------
-    monkeypatch.setenv("WORKER_CLAIM_LEASE_SECONDS", "1")
+    monkeypatch.setenv("WORKER_CLAIM_LEASE_SECONDS", str(_CRASH_LEASE))
     crashed = emit_stage(runtime, binding_a, "crash-after-effect")
     w1 = dispatch.ManyBindingDispatcher(supervisor_for(runtime, "worker"), owner="w1")
     _crash_at(monkeypatch, "effect_committed", crashed)
@@ -275,7 +280,7 @@ def test_revocation_after_effect_reconciles_receipt_before_authority_quarantine(
     pg_many, monkeypatch, loss
 ) -> None:
     runtime, binding_a, binding_b, dsn = pg_many
-    monkeypatch.setenv("WORKER_CLAIM_LEASE_SECONDS", "1")
+    monkeypatch.setenv("WORKER_CLAIM_LEASE_SECONDS", str(_CRASH_LEASE))
     applied = emit_stage(runtime, binding_b, "applied-before-loss")
     unapplied = emit_stage(runtime, binding_b, "unapplied-before-loss")
     ambiguous = emit_stage(runtime, binding_b, "ambiguous-before-loss")
@@ -316,10 +321,10 @@ def test_revocation_after_effect_reconciles_receipt_before_authority_quarantine(
         monkeypatch.setattr(RegistryBindingAuthorizer, "authorize", authorize)
         expected_reason = "authority_lost"
     else:
-        time.sleep(1.2)  # the crashed owner is gone; removal drains no live effect
+        time.sleep(_CRASH_LEASE + 0.3)  # the crashed owner is gone; removal drains no live effect
         runtime.remove(binding_b)
         expected_reason = "binding_removed"
-    time.sleep(1.2)
+    time.sleep(0.1 if loss == "removed" else _CRASH_LEASE + 0.3)
     w2 = dispatch.ManyBindingDispatcher(supervisor_for(runtime, "worker"), owner="w2")
     for _ in range(3):
         w2.tick()
