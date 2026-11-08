@@ -536,6 +536,33 @@ def pending_topic_count(conn: Any, topics: tuple[str, ...]) -> int:
     return int(_row_value(row, 0, "count") or 0) if row else 0
 
 
+def drain_blockers(conn: Any, vault_binding_id: str) -> dict[str, int]:
+    """Rows of one binding that the singleton drain path must never dispatch or acknowledge.
+
+    After MVR-06D a reactivation/transfer drain still settles a sealed or exclusively
+    drained binding through the singleton poll. That poll knows nothing of claims, so any
+    quarantined row, live or effect-bearing claim, or reconciliation-required row blocks
+    it: such a row is resolved through the claim protocol or governed quarantine first.
+    """
+
+    cur = _exec(
+        conn,
+        "select "
+        "count(*) filter (where quarantined_at is not null) as quarantined, "
+        "count(*) filter (where claim_phase = 'effect_reconciliation_required') "
+        "as reconciliation_required, "
+        "count(*) filter (where claim_phase = 'effect_pending' or effect_outcome is not null) "
+        "as effect_pending, "
+        "count(*) filter (where claim_phase = 'claimed' and claim_expires_at > now()) "
+        "as live_claims "
+        "from outbox where delivered_at is null and vault_binding_id = %s",
+        (vault_binding_id,),
+    )
+    row = cur.fetchone()
+    names = ("quarantined", "reconciliation_required", "effect_pending", "live_claims")
+    return {name: int(_row_value(row, index, name) or 0) for index, name in enumerate(names)}
+
+
 def classify_for_activation(conn: Any) -> dict[str, Any]:
     """Read-only MVR-05 classification census of undelivered rows for the 06D gate."""
 
@@ -592,6 +619,7 @@ __all__ = [
     "claimable_scopes",
     "classify_for_activation",
     "disposition_counts",
+    "drain_blockers",
     "drop_quarantined",
     "fenced_effect",
     "mark_effect_pending",

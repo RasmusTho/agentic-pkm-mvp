@@ -568,6 +568,42 @@ def run_once(
     return WorkerTickResult(state="processed", processed=1)
 
 
+class OutboxDrainBlocked(RuntimeError):
+    """MVR-06D: the binding holds claim/quarantine state the singleton drain must not touch."""
+
+
+def _require_drainable_under_claims(runtime: Any, binding_id: str) -> None:
+    """After the MVR-06D floor, refuse a singleton drain over claim/quarantine state.
+
+    The reactivation/transfer drain runs while the binding is sealed or exclusively
+    drained, so no many-binding worker can claim its rows concurrently; but its poll and
+    ack know nothing of claims. A quarantined, effect-bearing, reconciliation-required,
+    or live-claimed row is therefore never dispatched or acknowledged here.
+    """
+
+    from app.instance.vault_registry import many_binding_dispatch_enabled
+    from app.services.outbox import _open_conn
+    from app.services.outbox_claims import drain_blockers, require_claim_schema
+    from app.workers.many_binding_dispatch import queue_configured
+
+    if not many_binding_dispatch_enabled(runtime.registry_store.load()):
+        return
+    if not queue_configured():
+        return  # no durable queue exists, so no claim state can exist either
+    conn = _open_conn()
+    try:
+        require_claim_schema(conn)
+        blockers = drain_blockers(conn, binding_id)
+    finally:
+        conn.close()
+    if any(blockers.values()):
+        raise OutboxDrainBlocked(
+            "the binding's queue holds claim or quarantine state "
+            f"({', '.join(f'{k}={v}' for k, v in blockers.items() if v)}); resolve it through "
+            "the claim protocol or governed quarantine before draining"
+        )
+
+
 def drain_binding_outbox(*, vault_root: Path, binding_id: str, include_compatibility: bool = False) -> dict[str, Any]:
     """Settle source work through real dispatch/receipt/ack under its original ID."""
     from app.instance.settings_rebind import SettingsRebindStore
@@ -575,6 +611,7 @@ def drain_binding_outbox(*, vault_root: Path, binding_id: str, include_compatibi
     runtime = resolve_scalar_binding_runtime(requested_binding_id=binding_id, vault_root=vault_root)
     if runtime is None or runtime.vault_binding_id != binding_id:
         raise RuntimeError("transfer drain requires the source binding runtime")
+    _require_drainable_under_claims(runtime, binding_id)
     rebind = runtime.registry_store.load().settings_rebind
     compatibility = include_compatibility or (rebind is not None and SettingsRebindStore(runtime.registry_store).read().candidate_binding_id == binding_id)
     eligible = (binding_id, COMPATIBILITY_BINDING_ID) if compatibility else (binding_id,)

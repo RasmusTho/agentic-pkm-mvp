@@ -359,3 +359,42 @@ def test_revocation_after_effect_reconciles_receipt_before_authority_quarantine(
         item["binding_id"] == binding_a and item["status"] == "running"
         for item in health["lifecycles"]
     )
+
+
+def test_singleton_drain_never_touches_claim_or_quarantine_state(pg_many) -> None:
+    """Regression (convergence review P1): after the MVR-06D floor the reactivation/transfer
+    drain still settles rows through the singleton poll, so it must refuse a binding whose
+    queue holds quarantine, reconciliation-required, effect-bearing, or live claim state."""
+
+    from pathlib import Path
+
+    from app.workers.outbox_worker import OutboxDrainBlocked, drain_binding_outbox
+    from tests._mvr06b_handoff_harness import admin
+
+    runtime, binding_a, binding_b, dsn = pg_many
+    root_a = Path(runtime.registry.load().registrations[binding_a].path)
+    root_b = Path(runtime.registry.load().registrations[binding_b].path)
+    quarantined = emit_stage(runtime, binding_a, "quarantined-before-drain")
+    admin(runtime).remove(binding_a)
+    dispatch.ManyBindingDispatcher(supervisor_for(runtime, "worker"), owner="w").tick()
+    assert _row(dsn, quarantined)["quarantined"]
+    with pytest.raises(OutboxDrainBlocked, match="quarantined=1"):
+        drain_binding_outbox(vault_root=root_a, binding_id=binding_a)
+    state = _row(dsn, quarantined)
+    assert state["quarantined"] and not state["delivered"]
+
+    ambiguous = emit_stage(runtime, binding_b, "ambiguous-before-drain")
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        claim = claims.claim_next(conn, owner="crashed", vault_binding_id=binding_b,
+                                  lease_seconds=30,
+                                  topics=("knowledge_acquisition.stage.completed",))
+        assert claim is not None and claim.row_id == ambiguous
+        claim = claims.mark_effect_pending(conn, claim, {"contract": "older"})
+        with pytest.raises(OutboxDrainBlocked, match="effect_pending=1"):
+            drain_binding_outbox(vault_root=root_b, binding_id=binding_b)
+        assert claims.mark_reconciliation_required(conn, claim, reason="probe")
+    with pytest.raises(OutboxDrainBlocked, match="reconciliation_required=1"):
+        drain_binding_outbox(vault_root=root_b, binding_id=binding_b)
+    blocked = _row(dsn, ambiguous)
+    assert blocked["phase"] == "effect_reconciliation_required" and not blocked["delivered"]
+    assert ready_signals(dsn, "ambiguous-before-drain") == []
