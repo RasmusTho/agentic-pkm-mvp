@@ -97,6 +97,14 @@ class RelocationIdentityError(BindingRelocationRefused):
     """The target does not durably prove the binding's logical vault and local clone."""
 
 
+def _fault_point(phase: str) -> None:
+    """Process-failure injection seam for the non-journal durable boundaries."""
+
+    from app.instance import binding_removal
+
+    binding_removal._fault_point(phase)
+
+
 def _require_consumer_floors(snapshot: RegistrySnapshot) -> None:
     """The MVR-05 foreground and MVR-06B background shared-effect floors."""
 
@@ -248,10 +256,13 @@ class BindingRelocationCoordinator:
         try:
             return self._run(intent)
         except (RegistryError, BindingEffectLeaseError, LedgerError):
-            # A typed refusal before the ownership move leaves the source authoritative.
-            # Any other exception is a process failure: the journal is the authority.
-            if self.journal.before(intent, "ownership_relocated") and not self._owned_by_destination(
-                intent
+            # A typed refusal before the ownership move leaves the source authoritative,
+            # but only when the ledger *positively* still names the source: a move that
+            # landed before a crash (journal still ``drained``) only rolls forward, and
+            # an unreadable ledger keeps the journal. Any other exception is a process
+            # failure: the journal is the authority.
+            if self.journal.before(intent, "ownership_relocated") and (
+                self._ledger_locator(intent) == _canonical(intent["source"]["path"])
             ):
                 self._compensate(intent)
             raise
@@ -276,10 +287,11 @@ class BindingRelocationCoordinator:
             intent["drained_via"] = self._drain(intent)
             self.journal.save(intent, "drained")
         if before(intent, "ownership_relocated"):
-            if not self._owned_by_destination(intent):
+            source = VaultRegistration(**intent["source"])
+            locator = self._ledger_locator(intent)
+            if locator == _canonical(source.path):
                 # The target is proven again after the drain, immediately before the one
                 # mutation that moves authority: it may have changed while holders drained.
-                source = VaultRegistration(**intent["source"])
                 prove_relocation_identity(source, destination)
                 runtime.ledger.relocate_active(
                     binding_id,
@@ -288,6 +300,10 @@ class BindingRelocationCoordinator:
                     destination_root=destination,
                     _capability=_STORAGE_MUTATION_CAPABILITY,
                 )
+                _fault_point("binding-relocation:ledger_moved")
+            elif locator != destination:
+                # Neither root: never guess; the journal stays for recovery.
+                raise RegistryError("the binding's ownership locator names neither relocation root")
             self.journal.save(intent, "ownership_relocated")
         if before(intent, "committed"):
             self._commit(intent)
@@ -372,6 +388,16 @@ class BindingRelocationCoordinator:
         raise BindingRelocationRefused(
             "the binding's ownership lease names neither the source nor the target root"
         ) from refusal
+
+    def _ledger_locator(self, intent: dict[str, Any]) -> Path | None:
+        """The active lease's recorded locator; ``None`` when unreadable or absent."""
+
+        try:
+            return self.runtime.ledger.active_lease_locator(
+                intent["binding_id"], channel_id=self.runtime.layout.channel_id
+            )
+        except Exception:
+            return None
 
     def _owned_by_destination(self, intent: dict[str, Any]) -> bool:
         try:

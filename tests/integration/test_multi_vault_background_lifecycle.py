@@ -1931,6 +1931,8 @@ def test_relocation_rejects_different_initialized_vault_identity_before_commit(
         "identity_validated",
         "reserved",
         "drained",
+        # The ledger move is durable before its journal phase is.
+        "ledger_moved",
         "ownership_relocated",
         "committed",
         "consumers_reconciled",
@@ -2120,3 +2122,57 @@ def test_mvr06c_dormant_supervisor_isolates_two_internal_bindings(tmp_path, monk
     production.start()
     assert production.health()["many_binding"] == "dormant"
     assert production.health()["binding_capacity"] == 1
+
+
+def test_relocation_never_compensates_a_landed_ownership_move(tmp_path, monkeypatch) -> None:
+    """A ledger move that landed before a crash rolls forward, even if recovery is refused.
+
+    Regression for the convergence review's P1: with the journal still ``drained`` and the
+    target unreadable at recovery, compensation must not withdraw the reservation and
+    discard the journal while the ledger already names the target.
+    """
+
+    import shutil
+
+    from tests._mvr06c_relocation_harness import copy_vault, shared_refused
+    from tests._mvr_default_vault_harness import reopen_runtime
+
+    runtime, _first, _second, third = _relocation_instance(tmp_path, monkeypatch)
+    binding, old_root = third.vault_binding_id, Path(third.path)
+    target = copy_vault(old_root, tmp_path / "relocated")
+
+    def crash(name: str) -> None:
+        if name == "binding-relocation:ledger_moved":
+            raise _ProcessCrash(name)
+
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", crash)
+    with pytest.raises(_ProcessCrash):
+        runtime.relocate(binding, target)
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", lambda name: None)
+    journal = runtime.layout.root / "binding-relocation.json"
+    assert json.loads(journal.read_text(encoding="utf-8"))["phase"] == "drained"
+
+    # The target is unreadable when recovery runs (e.g. an unmounted volume).
+    parked = tmp_path / "parked"
+    shutil.move(str(target), parked)
+    restarted = reopen_runtime(runtime, tmp_path)
+    with pytest.raises(Exception, match="did not converge"):
+        restarted.recover_relocation()
+    # It rolled forward (registry and ledger both name the target) and kept its journal;
+    # it never withdrew the reservation back onto the source.
+    committed = restarted.registry.load().registrations[binding]
+    assert committed.path == str(target.resolve())
+    assert "lifecycleState" not in committed.extensions
+    assert journal.exists()
+    assert json.loads(journal.read_text(encoding="utf-8"))["phase"] == "committed"
+    assert restarted.ledger.active_lease_locator(
+        binding, channel_id=restarted.layout.channel_id
+    ) == target.resolve()
+    assert shared_refused(restarted, binding, old_root)
+
+    # Once the target is back, recovery rolls forward to one authorized root.
+    shutil.move(str(parked), target)
+    recovered = restarted.recover_relocation()
+    assert recovered is not None and recovered.path == str(target.resolve())
+    assert not shared_refused(restarted, binding, target)
+    assert shared_refused(restarted, binding, old_root)

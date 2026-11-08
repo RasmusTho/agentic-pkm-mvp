@@ -1488,6 +1488,22 @@ class OwnershipLedger:
             self._write_ledger_locked(self._replace(current, leases=leases), key)
             return candidate
 
+    def active_lease_locator(self, vault_binding_id: str, *, channel_id: str) -> Path | None:
+        """Read-only: the sealed root locator of this channel's active lease, if any.
+
+        Purely the recorded locator: it needs no physical match, so it stays readable
+        when the named directory is moved, unmounted, or replaced.
+        """
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            lease = current.leases.get(vault_binding_id)
+            if lease is None or lease.state != "active" or lease.channel_id != channel_id:
+                return None
+            return Path(self._open_root(lease.sealed_root, key)).resolve(strict=False)
+
     def lease_locator_names(
         self, vault_binding_id: str, *, channel_id: str, root: Path
     ) -> bool:
