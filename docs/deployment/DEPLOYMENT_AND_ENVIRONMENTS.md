@@ -333,6 +333,34 @@ background intent (`docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md`).
   release. A revoked background role (`background-role-revoke`) blocks the next background start
   until `background-role-redelegate`.
 
+## MVR-06D many-binding dispatch floor (MVR-06D, #3866)
+
+Repository support is shipped; no channel has been advanced by this change, and no deployment
+wrapper runs it yet. The floor is the all-process compatibility boundary for many-binding
+enrollment/start and the recoverable PostgreSQL claim/reconciliation state
+(`docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md`).
+
+- **Producer and order.** An operator runs
+  `python -m app.instance.runtime background-many-binding-activate --channel <c> --registry-path <r>
+  --host-global-root <h> --quiescence-proof-path <p>` inside a proved stopped deployment window,
+  after the MVR-06A cutover and MVR-06B handoff, after `alembic upgrade head` has installed the
+  outbox claim columns (revision `fa06d0c00001`, inert nullable DDL), and before any consumer
+  restarts. It refuses outside that window. Before writing anything it validates MVR-05's complete
+  cutover receipt, the claim schema, that no undelivered unscoped compatibility row remains, and
+  that no queue-state field exists yet; it then commits `minimumRuntimeSchema=mvr-06d` with
+  registry schema v4 and a counts-only classification receipt in one generation. The first
+  queue-state write (the first claim) can only happen after that commit.
+- **Operator preflight.** KD-A42F26A9AD87 still applies and is now enforced: drain the outbox (or
+  stop its writers and let the singleton worker settle) before activation — a pending unscoped row
+  refuses it. On DEV/TEST the `MVR06_BACKGROUND_CUTOVER=1` opt-in and its preconditions come first.
+- **Startup gate.** Every MVR-06A–06C image (MVR-06C `6da6e2342` and earlier) accepts only registry
+  schemas v1–v3 and stops at its consumer-preflight schema gate before registry, principal, or
+  vault access, so no older API/watcher/worker can interpret claim fencing or reconciliation state.
+- **Compatible rollback / roll-forward images.** Only an MVR-06D-compatible image (one containing
+  `app/services/outbox_claims.py`) may run a floored channel, in either direction. The floor has no
+  compensation and is never lowered by a rollback; there is no database downgrade (the claim
+  revision is forward-only).
+
 ## Environment matrix
 
 The contract spans three channels: `dev`, `test`, and `prod`. The local Compose fallback can run them in

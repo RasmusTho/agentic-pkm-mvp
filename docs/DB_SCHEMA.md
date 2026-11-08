@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/alembic/versions/f7a05a4b0001_seed_membership_prerequisites.py + app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py + app/alembic/versions/f8a05a9b0001_mvr05a_residual_binding_keys.py + app/services/outbox.py + app/workers/outbox_binding_gate.py + app/instance/mvr05_cutover.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-16)
+Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py + app/alembic/versions/f7a05a4b0001_seed_membership_prerequisites.py + app/alembic/versions/f5a05a5b0001_mvr05a5_replay_projection_binding_keys.py + app/alembic/versions/f8a05a9b0001_mvr05a_residual_binding_keys.py + app/services/outbox.py + app/workers/outbox_binding_gate.py + app/instance/mvr05_cutover.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-16); outbox claim columns against app/alembic/versions/fa06d0c00001_mvr06d_outbox_recoverable_claims.py + app/services/outbox_claims.py (2026-11-08)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -701,7 +701,33 @@ audited `app/services/outbox.py::bootstrap()` produced it; `bootstrap()` is asse
   - `attempts` (`int`, default `0`)
   - `vault_binding_id` (`text`, `NOT NULL`, compatibility default; MVR-05A7)
   - `legacy_key` (`uuid`, retained pre-cutover idempotency lineage; MVR-05A7)
-  - Indexes: `outbox_created_idx`, `outbox_delivered_idx`
+  - MVR-06D recoverable claim state (revision `fa06d0c00001`, forward-only, all nullable; written
+    only by `app/services/outbox_claims.py` after the registry's `minimumRuntimeSchema=mvr-06d`
+    floor commits):
+    - `claim_token` (`bigint`, database-monotonic fencing token from sequence
+      `outbox_claim_token_seq`; kept after acknowledgement), `claim_owner` (`text`),
+      `claim_expires_at` (`timestamptz`, lease expiry; a lease-expired claim is reclaimable)
+    - `claim_phase` (`text`: `claimed` | `effect_pending` | `effect_reconciliation_required`;
+      CHECK `outbox_claim_phase_check` requires token, owner, and expiry whenever it is set)
+    - `effect_descriptor` (`jsonb`, bounded descriptor persisted with `effect_pending`),
+      `effect_outcome` (`text`: `applied` | `no_effect`; CHECK `outbox_effect_outcome_check`) and
+      `effect_receipt` (`jsonb`), recorded in the same token-checked transaction as the admitted
+      handler's store effect
+    - `consumer_context` (`jsonb`, the dispatching ActiveContextSet generation linked to the
+      immutable producer context)
+    - `quarantined_at` (`timestamptz`), `quarantine_reason` (`text`): terminal, observable
+      quarantine of an unsafe vault-bound row, keeping its binding
+  - Indexes: `outbox_created_idx`, `outbox_delivered_idx`, partial `outbox_claimable_idx`
+    (`vault_binding_id, created_at` where undelivered and not quarantined)
+
+Claim semantics (MVR-06D): a claim leases one undelivered, unquarantined row of exactly one
+routing scope (`explicitly-global` or one vault binding) with `FOR UPDATE SKIP LOCKED`, so at most
+one concurrent claim owner exists per row; an expired lease is reclaimable and a reclaimed
+`effect_pending` row is reconciled from `effect_outcome` before anything else. Acknowledgement
+(`delivered_at`) requires a durable `effect_outcome`; a crash between effect and acknowledgement
+redelivers under the unchanged at-least-once and binding-scoped idempotency contract.
+`effect_reconciliation_required` rows are never reclaimed. The full protocol is
+`docs/EVENTS.md :: Recoverable claims, routing, and acknowledgement (MVR-06D, shipped)`.
 
 Interpretation:
 - the outbox is the canonical runtime queue,
