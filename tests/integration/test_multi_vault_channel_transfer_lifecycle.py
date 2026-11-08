@@ -11,6 +11,21 @@ import app.instance.channel_transfer as transfers
 from tests._mvr05c_transfer_harness import transfer_pair, reopen
 
 
+def _join_fork_child(process, *, timeout: float = 15) -> None:
+    """Bound a forked crash-injection child: kill it if it outlives the timeout.
+
+    A child forked from a multi-threaded test process can deadlock on an inherited lock.
+    Leaving it alive would let multiprocessing's exit-time join wait on it forever, after
+    pytest-timeout no longer applies; killing it turns that into an ordinary failure.
+    """
+
+    process.join(timeout=timeout)
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=5)
+        raise AssertionError("forked transfer child did not exit; it was killed")
+
+
 def assert_transferred(source, destination, original, target):
     owners = source.ledger.load()
     assert source.ledger.active_owner(original.vault_binding_id) is None
@@ -44,7 +59,7 @@ def test_production_transfer_recovers_after_every_durable_phase(tmp_path, monkey
 
     process = multiprocessing.get_context("fork").Process(target=interrupted_transfer)
     process.start()
-    process.join(timeout=15)
+    _join_fork_child(process)
     assert process.exitcode == 86
     intent = json.loads((source.layout.root / "channel-transfer.json").read_text())
     if transfers.PHASES.index(phase) < transfers.PHASES.index("ownership_activated"):
@@ -301,7 +316,7 @@ def test_transfer_recovers_from_internal_durable_boundaries(tmp_path, monkeypatc
 
     child = multiprocessing.get_context("fork").Process(target=interrupted)
     child.start()
-    child.join(timeout=15)
+    _join_fork_child(child)
     assert child.exitcode == 87
     target = reopen(source).recover_transfer(reopen(destination), stop_and_prove=stop)
     assert_transferred(source, destination, original, target)
@@ -476,3 +491,104 @@ def test_foreground_floor_atomically_qualifies_schema_and_old_reader_refuses(tmp
         with pytest.raises(RuntimeError, match="schema mismatch"):
             module.VaultRegistryStore(runtime.registry.path).read_existing()
         assert runtime.registry.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("mode", ["compatibility", "explicit"])
+def test_post_handoff_transfer_repairs_mvr06_intent_before_restart(tmp_path, monkeypatch, mode):
+    """MVR-06B (#3864): the MVR-06 intent hook replaces the retired bridge hook."""
+    from app.instance.background_supervisor import durable_background_state
+    from app.instance.settings_rebind import SettingsRebindStore, _install_dormant_settings_rebind
+    from tests._mvr06_background_harness import (
+        record_mvr05_floor,
+        run_background_cutover_through_cli,
+    )
+    from tests._mvr06b_handoff_harness import admin, handoff_through_cli, supervisor
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    source, destination, original, lifecycle = transfer_pair(tmp_path, monkeypatch)
+    record_mvr05_floor(source)
+    _install_dormant_settings_rebind(
+        source.registry, binding_id=original.vault_binding_id,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    peers = (destination,)
+    assert run_background_cutover_through_cli(source, other_runtimes=peers)["_exit_code"] == 0
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    assert handoff_through_cli(source, other_runtimes=peers)["_exit_code"] == 0
+    if mode == "explicit":
+        admin(source).add(original.vault_binding_id)
+    before = durable_background_state(source.registry.load())
+    assert before.binding_ids == (original.vault_binding_id,)
+    assert before.mode == mode
+
+    order: list[str] = []
+
+    def fault(phase):
+        order.append(phase)
+        if phase == "compatibility_repaired":
+            # The authoritative intent is repaired before the source is retired.
+            state = durable_background_state(source.registry.load())
+            assert original.vault_binding_id not in state.binding_ids
+            assert original.vault_binding_id in source.registry.load().registrations
+
+    monkeypatch.setattr(transfers, "_fault_point", fault)
+    target = source.transfer_to(destination, original.vault_binding_id, stop_and_prove=lifecycle)
+    assert_transferred(source, destination, original, target)
+
+    after = durable_background_state(source.registry.load())
+    assert after.mode == mode  # compatibility idle/no-vault, or explicit-empty
+    assert after.binding_ids == ()
+    assert after.intent_revision == before.intent_revision + 1
+    record = SettingsRebindStore(source.registry).read()
+    assert record.candidate_binding_id is None
+    # Restart can neither resurrect the transferred binding nor enrol the destination.
+    restarted = reopen(source)
+    assert supervisor(restarted).start().status == "idle"
+    assert target not in (durable_background_state(restarted.registry.load()).binding_ids)
+    assert "backgroundIntent" not in destination.registry.load().extensions
+
+
+def test_removed_binding_cross_channel_rehome_records_predecessor_lineage(tmp_path, monkeypatch):
+    """MVR-06B (#3864): rehome mints a destination binding only through governed transfer."""
+    from app.instance.binding_removal import binding_epoch_lineage
+    from app.instance.settings_rebind import _install_dormant_settings_rebind
+    from tests._mvr06_background_harness import (
+        record_mvr05_floor,
+        run_background_cutover_through_cli,
+    )
+    from tests._mvr06b_handoff_harness import handoff_through_cli
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    source, destination, original, lifecycle = transfer_pair(tmp_path, monkeypatch)
+    # The original is the rollback target; rehome a second, removable registration.
+    extra_root = tmp_path / "source" / "extra"
+    extra_root.mkdir()
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    initialize_test_vault(extra_root)
+    extra = source.production_register(extra_root, producer="api")
+    record_mvr05_floor(source)
+    _install_dormant_settings_rebind(
+        source.registry, binding_id=original.vault_binding_id,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    peers = (destination,)
+    assert run_background_cutover_through_cli(source, other_runtimes=peers)["_exit_code"] == 0
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+    assert handoff_through_cli(source, other_runtimes=peers)["_exit_code"] == 0
+
+    source.remove(extra.vault_binding_id)
+    target = source.rehome_removed(destination, extra_root, stop_and_prove=lifecycle)
+    snapshot = source.registry.load()
+    # Historical rows stamped under the source id stay attributable: its retired epochs
+    # and its predecessor -> successor transfer record are both durable.
+    assert [item["event"] for item in binding_epoch_lineage(snapshot, extra.vault_binding_id)] == [
+        "removed",
+        "reactivated",
+    ]
+    lineage = destination.registry.load().transfer_lineage[-1]
+    assert lineage.source_binding_id == extra.vault_binding_id
+    assert lineage.destination_binding_id == target
+    assert snapshot.transfer_lineage[-1] == lineage
+    assert source.ledger.active_owner(target).channel_id == destination.layout.channel_id
+    assert source.ledger.active_owner(extra.vault_binding_id) is None

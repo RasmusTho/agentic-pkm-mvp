@@ -19,6 +19,7 @@ from app.instance._storage_boundary import (
 )
 
 if TYPE_CHECKING:
+    from app.instance.background_intent import BackgroundBindingIntent
     from app.instance.vault_registry import KnownVaultRef, VaultRegistryStore
 
 
@@ -296,6 +297,16 @@ class SettingsRebindStore:
 
         snapshot = self._registry.load()
         current = self.read()
+        candidate = (
+            None
+            if candidate_binding_id is None
+            else snapshot.registrations.get(candidate_binding_id)
+        )
+        if candidate is not None and candidate.extensions.get("lifecycleState") is not None:
+            # MVR-06B: a draining-removal or reactivating binding admits no new holder.
+            raise SettingsRebindCandidatePolicyError(
+                "settings rebind candidate is sealed by its registration lifecycle"
+            )
         if current.phase == "prepared":
             if current.candidate_binding_id == candidate_binding_id:
                 return current
@@ -334,8 +345,14 @@ class SettingsRebindStore:
         desired_revision: int,
         selection: KnownVaultRef | None,
         default_change: tuple[str | None, str | None] | None = None,
+        background_intent: BackgroundBindingIntent | None = None,
     ) -> SettingsRebindRecord:
-        """Atomically commit the prepared binding and compatibility selection."""
+        """Atomically commit the prepared binding and compatibility selection.
+
+        After the MVR-06B handoff the same generation also commits the durable
+        background intent revision (derived for a compatibility picker/default
+        change, supplied for a governed background transition).
+        """
 
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
@@ -343,6 +360,7 @@ class SettingsRebindStore:
             desired_revision=desired_revision,
             selection=selection,
             default_change=default_change,
+            background_intent=background_intent,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
         return SettingsRebindRecord.from_payload(snapshot.settings_rebind)
@@ -426,16 +444,29 @@ class SettingsRebindStore:
         raise RegistryError("absent watcher cannot reconcile this settings rebind revision")
 
     def compatibility_binding_id(self) -> str:
-        """Return the durable binding allowed to admit compatibility effects."""
+        """Return the durable binding allowed to admit compatibility effects.
 
-        current = self.read()
-        if current.phase == "prepared":
-            raise RegistryError("compatibility handoff is awaiting commit")
-        if current.candidate_binding_id is None:
-            raise RegistryError("compatibility binding is not selected")
-        if current.reload_revision not in {None, current.desired_revision}:
-            raise RegistryError("compatibility handoff is awaiting settings reload")
-        return current.candidate_binding_id
+        Once MVR-06B intent is ``explicit`` the journal candidate is the *background*
+        binding; carrier-free foreground effects keep following foreground selection.
+        """
+
+        if _background_intent_mode(self._registry) == "explicit":
+            binding_id = _foreground_compatibility_binding(self._registry)
+        else:
+            current = self.read()
+            if current.phase == "prepared":
+                raise RegistryError("compatibility handoff is awaiting commit")
+            if current.candidate_binding_id is None:
+                raise RegistryError("compatibility binding is not selected")
+            if current.reload_revision not in {None, current.desired_revision}:
+                raise RegistryError("compatibility handoff is awaiting settings reload")
+            binding_id = current.candidate_binding_id
+        registration = self._registry.load().registrations.get(binding_id)
+        if registration is not None and registration.extensions.get("lifecycleState") is not None:
+            # MVR-06B: carrier-free writes take no effect lease, so the draining-removal
+            # or reactivating seal is enforced at this admission point too.
+            raise RegistryError("compatibility binding is sealed by its registration lifecycle")
+        return binding_id
 
 
 def require_compatibility_binding_ready(
@@ -545,6 +576,12 @@ class SettingsRebindActivation:
         candidate_binding_id: str,
         candidate_root: Path,
     ) -> SettingsRebindRecord:
+        if _background_intent_mode(self.store._registry) == "explicit":
+            # MVR-06B: after the first governed add/remove the explicit set alone owns
+            # background work; a picker choose/open is foreground selection only.
+            raise SettingsRebindCandidatePolicyError(
+                "explicit background intent: picker selection does not rebind the watcher"
+            )
         prior = self.store.read()
         try:
             return self._activate_locked(
@@ -574,6 +611,37 @@ class SettingsRebindActivation:
             selection=None, candidate_binding_id=None, candidate_root=None,
         )
 
+    def activate_background(
+        self,
+        *,
+        candidate_binding_id: str | None,
+        candidate_root: Path | None,
+        intent: BackgroundBindingIntent,
+    ) -> SettingsRebindRecord:
+        """MVR-06B governed background transition through the same two-phase journal.
+
+        Used by governed add/remove and the transfer repair hook: the running
+        lifecycle is drained, final-scanned, committed together with ``intent``, and
+        resumed exactly like a picker rebind, while picker history stays untouched.
+        """
+
+        prior = self.store.read()
+        try:
+            return self._activate_locked(
+                selection=None,
+                candidate_binding_id=candidate_binding_id,
+                candidate_root=candidate_root,
+                background_intent=intent,
+            )
+        except SettingsRebindCandidatePolicyError:
+            raise
+        except Exception:
+            self._cancel_before_commit(
+                prior,
+                expected_candidate_binding_id=candidate_binding_id,
+            )
+            raise
+
     def activate_default(
         self,
         *,
@@ -594,7 +662,30 @@ class SettingsRebindActivation:
         )
         if binding_id is not None and registration is None:
             raise RegistryError("default target is not registered")
-        if prior.candidate_binding_id == binding_id and prior.reload_revision in {
+        mode = _background_intent_mode(self.store._registry)
+        if mode == "explicit":
+            # The explicit set is unaffected by MVR-02 default changes.
+            with compatibility_ingress_window(self.store._registry, transition=True):
+                snapshot = self.store._registry.load()
+                updated = self.store._registry.set_instance_default(
+                    binding_id,
+                    provenance=provenance or "explicit",
+                    expected_revision=snapshot.revision,
+                    _capability=capability,
+                )
+                return SettingsRebindRecord.from_payload(updated.settings_rebind)
+        # The background candidate is the post-mutation MVR-02 resolution, so foreground
+        # and background stay identical: a clear falls back to the registered legacy
+        # bootstrap before truthful no-vault (only after the MVR-06B handoff; the bridge
+        # keeps its original clear-to-no-target posture).
+        candidate_id = binding_id
+        candidate_registration = registration
+        if binding_id is None and mode == "compatibility":
+            candidate_id = _registered_legacy_bootstrap(snapshot)
+            candidate_registration = (
+                snapshot.registrations.get(candidate_id) if candidate_id else None
+            )
+        if prior.candidate_binding_id == candidate_id and prior.reload_revision in {
             None,
             prior.desired_revision,
         } and prior.phase in {"dormant", "committed", "no_lifecycle", "cancelled"}:
@@ -609,21 +700,23 @@ class SettingsRebindActivation:
                 return SettingsRebindRecord.from_payload(updated.settings_rebind)
         selection = (
             KnownVaultRef(
-                ref=registration.ref,
-                path=registration.path,
-                vault_id=registration.vault_id,
-                local_instance_id=registration.local_instance_id,
-                vault_name=registration.vault_name,
-                last_opened_at=registration.last_opened_at,
+                ref=candidate_registration.ref,
+                path=candidate_registration.path,
+                vault_id=candidate_registration.vault_id,
+                local_instance_id=candidate_registration.local_instance_id,
+                vault_name=candidate_registration.vault_name,
+                last_opened_at=candidate_registration.last_opened_at,
             )
-            if registration is not None
+            if candidate_registration is not None
             else None
         )
         try:
             return self._activate_locked(
                 selection=selection,
-                candidate_binding_id=binding_id,
-                candidate_root=Path(registration.path) if registration else None,
+                candidate_binding_id=candidate_id,
+                candidate_root=(
+                    Path(candidate_registration.path) if candidate_registration else None
+                ),
                 default_change=(binding_id, provenance),
             )
         except SettingsRebindCandidatePolicyError:
@@ -631,7 +724,7 @@ class SettingsRebindActivation:
         except Exception:
             self._cancel_before_commit(
                 prior,
-                expected_candidate_binding_id=binding_id,
+                expected_candidate_binding_id=candidate_id,
             )
             raise
 
@@ -645,6 +738,14 @@ class SettingsRebindActivation:
 
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
+        if prior.phase == "prepared":
+            # This attempt resumed a crashed one, so what it read is the prepared revision,
+            # not the binding to restore. That binding is the revision's own prior.
+            prior = replace(
+                prior,
+                candidate_binding_id=prior.prior_binding_id,
+                prior_binding_id=None,
+            )
         with compatibility_ingress_window(self.store._registry, transition=True):
             snapshot = self.store._registry.load()
             current = self.store.read()
@@ -694,8 +795,48 @@ class SettingsRebindActivation:
         candidate_binding_id: str | None,
         candidate_root: Path | None,
         default_change: tuple[str | None, str | None] | None = None,
+        background_intent: BackgroundBindingIntent | None = None,
     ) -> SettingsRebindRecord:
         current = self.store.read()
+        if (
+            background_intent is not None
+            and current.candidate_binding_id == candidate_binding_id
+            and current.phase != "prepared"
+        ):
+            # The running binding does not move: commit only the intent revision. (A prepared
+            # revision with this candidate is a crashed attempt, resumed below.)
+            from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+            from app.instance.background_intent import (
+                BACKGROUND_INTENT_KEY,
+                BackgroundBindingIntent,
+            )
+
+            with compatibility_ingress_window(self.store._registry, transition=True):
+                snapshot = self.store._registry.load()
+                stored = BackgroundBindingIntent.from_payload(
+                    snapshot.extensions[BACKGROUND_INTENT_KEY]
+                )
+                running = tuple(
+                    item
+                    for item in stored.effective_binding_ids()
+                    if item in snapshot.registrations
+                )
+                target = () if candidate_binding_id is None else (candidate_binding_id,)
+                if current.phase == "no_lifecycle" and running != target:
+                    # A crash between the acknowledgement and the commit: this revision was
+                    # never committed, so finish it instead of mistaking it for a no-op.
+                    self.store.commit_selection(
+                        desired_revision=current.desired_revision,
+                        selection=None,
+                        background_intent=background_intent,
+                    )
+                    return self._reload_if_needed(self.store.read(), candidate_root)
+                self.store._registry.commit_background_intent(
+                    background_intent,
+                    expected_revision=snapshot.revision,
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                )
+            return self.store.read()
         if current.candidate_binding_id == candidate_binding_id:
             if current.phase in {"dormant", "no_lifecycle", "cancelled"}:
                 if current.phase == "no_lifecycle":
@@ -713,6 +854,10 @@ class SettingsRebindActivation:
             # watcher remains deployed. Quiesce that prior transition before
             # allowing a new candidate to replace it.
             self._wait_for_completed_if_enabled(current)
+            if _background_intent_mode(self.store._registry) is not None:
+                # MVR-06B: a crash may have left that prior revision's reload unfinished,
+                # and in explicit mode no picker retry exists to finish it.
+                current = self.finish_pending_reload()
 
         _activation_fault_point("prepare")
         try:
@@ -736,7 +881,14 @@ class SettingsRebindActivation:
         if prepared.phase != "prepared":
             return prepared
 
-        if self.watcher_enabled:
+        # MVR-06B: after the handoff a revision with no prior binding has no old root to
+        # bracket, so nothing waits for a watcher; the running watcher adopts the committed
+        # durable binding (never the boot env root) through its lifecycle fence.
+        unbracketed = (
+            prepared.prior_binding_id is None
+            and _background_intent_mode(self.store._registry) is not None
+        )
+        if self.watcher_enabled and not unbracketed:
             _activation_fault_point("acknowledge")
             self._wait_for_stage(prepared, required_stage="acknowledged")
         else:
@@ -754,6 +906,7 @@ class SettingsRebindActivation:
                     desired_revision=prepared.desired_revision,
                     selection=selection,
                     default_change=default_change,
+                    background_intent=background_intent,
                 )
         except RegistryError:
             # A same-target request can win the lock after both callers have
@@ -771,10 +924,37 @@ class SettingsRebindActivation:
         # A commit fault is post-commit: recovery must observe the durable B
         # binding and roll forward, matching the watcher transaction seam.
         _activation_fault_point("commit")
+        if background_intent is None and _background_intent_mode(self.store._registry):
+            # MVR-06B: the idempotent wake-up for this compatibility revision. Losing it
+            # (crash here) is closed by the supervisor's durable revision cursor.
+            from app.instance import background_supervisor
+
+            background_supervisor.emit_background_intent_event(
+                self.store._registry.load(), reason="compatibility_rebind"
+            )
 
         self._wait_for_completed_if_enabled(committed)
         committed = self._reload_if_needed(committed, candidate_root)
         return committed
+
+    def finish_pending_reload(self) -> SettingsRebindRecord:
+        """Complete a committed revision a crash left before its SETTINGS-01 reload."""
+
+        record = self.store.read()
+        if (
+            record.phase not in {"committed", "no_lifecycle"}
+            or record.reload_revision in {None, record.desired_revision}
+        ):
+            return record
+        self._wait_for_completed_if_enabled(record)
+        registration = (
+            self.store._registry.load().registrations.get(record.candidate_binding_id)
+            if record.candidate_binding_id is not None
+            else None
+        )
+        return self._reload_if_needed(
+            record, Path(registration.path) if registration is not None else None
+        )
 
     def _commit_uncommitted_selection(
         self,
@@ -817,6 +997,8 @@ class SettingsRebindActivation:
             )
 
     def _wait_for_completed_if_enabled(self, record: SettingsRebindRecord) -> None:
+        if record.phase == "no_lifecycle" and _background_intent_mode(self.store._registry):
+            return  # an unbracketed post-handoff revision writes no watcher receipt
         if self.watcher_enabled:
             _activation_fault_point("resume")
             self._wait_for_stage(record, required_stage="completed")
@@ -950,6 +1132,57 @@ class SettingsRebindActivation:
         if required_stage == "completed":
             return self._wait_timeout_seconds * _COMPLETION_SCAN_CYCLES
         return self._wait_timeout_seconds
+
+
+def _background_intent_mode(registry: VaultRegistryStore) -> str | None:
+    """``compatibility``/``explicit`` once the MVR-06B handoff completed, else ``None``."""
+
+    from app.instance.background_intent import (
+        BACKGROUND_INTENT_KEY,
+        BackgroundBindingIntent,
+    )
+
+    raw = registry.load().extensions.get(BACKGROUND_INTENT_KEY)
+    if raw is None:
+        return None
+    intent = BackgroundBindingIntent.from_payload(raw)
+    return intent.mode if intent.handoff_complete else None
+
+
+def _foreground_compatibility_binding(registry: VaultRegistryStore) -> str:
+    """Explicit-mode foreground binding: last selection > default > legacy bootstrap."""
+
+    snapshot = registry.load()
+    for registration in snapshot.registrations.values():
+        if registration.ref == snapshot.last_active_vault_ref:
+            return registration.vault_binding_id
+    if snapshot.default_vault_binding_id in snapshot.registrations:
+        return str(snapshot.default_vault_binding_id)
+    bootstrap = _registered_legacy_bootstrap(snapshot)
+    if bootstrap is None:
+        raise RegistryError("compatibility binding is not selected")
+    return bootstrap
+
+
+def _registered_legacy_bootstrap(snapshot: object) -> str | None:
+    """The MVR-02 legacy-bootstrap fallback binding, or ``None`` for no-vault.
+
+    Only an already-registered binding qualifies (the adapter never registers); an
+    ambiguous or unresolvable env root is truthful no-vault, never a guess.
+    """
+
+    raw = (os.getenv("WATCHER_VAULT_PATH") or os.getenv("VAULT_ROOT") or "").strip()
+    if not raw:
+        return None
+    from app.instance.default_vault import (
+        VaultSelectionError,
+        resolve_legacy_bootstrap_binding,
+    )
+
+    try:
+        return resolve_legacy_bootstrap_binding(snapshot, Path(raw).expanduser())  # type: ignore[arg-type]
+    except VaultSelectionError:
+        return None
 
 
 def _install_dormant_settings_rebind(

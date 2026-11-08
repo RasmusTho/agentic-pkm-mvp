@@ -49,13 +49,18 @@ HANDOFF_STATES = frozenset({HANDOFF_PENDING, HANDOFF_COMPLETE})
 
 #: Provenance of the one-time MVR-06 initialization (the only 06A producer).
 PROVENANCE_MVR06_FLOOR_CUTOVER = "mvr06_floor_cutover"
+# MVR-06B producers (parsed since 06A so a 06A image understands them): the bridge
+# handoff and legacy picker rebind, the MVR-02 default rebind, and the governed
+# add/remove administration.
+PROVENANCE_COMPATIBILITY_HANDOFF = "compatibility_handoff"
+PROVENANCE_COMPATIBILITY_DEFAULT = "compatibility_default"
+PROVENANCE_BACKGROUND_INTENT = "background_intent"
 INTENT_PROVENANCES = frozenset(
     {
         PROVENANCE_MVR06_FLOOR_CUTOVER,
-        # Reserved for the MVR-06B producers; parsed now so 06A images understand them.
-        "compatibility_handoff",
-        "compatibility_default",
-        "background_intent",
+        PROVENANCE_COMPATIBILITY_HANDOFF,
+        PROVENANCE_COMPATIBILITY_DEFAULT,
+        PROVENANCE_BACKGROUND_INTENT,
     }
 )
 
@@ -65,6 +70,84 @@ HandoffState = Literal["pending", "complete"]
 
 class BackgroundIntentError(RegistryError):
     """The durable background-intent record is malformed, partial, or ambiguous."""
+
+
+#: MVR-06B: the registry key of the durable supervisor handoff record. It is written in
+#: the same registry generation that completes the compatibility handoff, so "bridge
+#: retired" and "supervisor authoritative" are one durable fact, never two.
+BACKGROUND_SUPERVISOR_KEY = "backgroundSupervisor"
+BACKGROUND_SUPERVISOR_SCHEMA = "agentic-pkm.background-supervisor.v1"
+#: The explicit versioned worker-binding contract that replaced the MVR-05 scalar
+#: (env-root) worker resolution at the handoff.
+BACKGROUND_WORKER_CONTRACT = "agentic-pkm.background-worker-binding.v1"
+#: The schema-versioned MVR-06 transfer repair hook that replaced the retired
+#: ``settings_rebind.v1`` hook in the channel-transfer journal.
+MVR06_TRANSFER_HOOK = "agentic-pkm.mvr06-intent-transfer-hook.v1"
+#: The bridge the handoff retired. ``settings_rebind.v1`` stays the shared two-phase
+#: phase journal; it is no longer the binding authority.
+RETIRED_BRIDGE = "settings_rebind.v1"
+#: MVR-06B permits only singleton or explicit-empty intent. A second enrollment and every
+#: many-binding transition stay capability-gated through MVR-06C/06D.
+MVR06B_MAX_BACKGROUND_BINDINGS = 1
+
+
+@dataclass(frozen=True)
+class BackgroundSupervisorRecord:
+    """The durable MVR-06B handoff receipt: which contracts became authoritative."""
+
+    handoff_registry_revision: int
+    handoff_intent_revision: int
+    retired_bridge_revision: int
+    worker_contract: str = BACKGROUND_WORKER_CONTRACT
+    transfer_hook: str = MVR06_TRANSFER_HOOK
+    retired_bridge: str = RETIRED_BRIDGE
+    max_bindings: int = MVR06B_MAX_BACKGROUND_BINDINGS
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "schema": BACKGROUND_SUPERVISOR_SCHEMA,
+            "handoffRegistryRevision": self.handoff_registry_revision,
+            "handoffIntentRevision": self.handoff_intent_revision,
+            "retiredBridge": self.retired_bridge,
+            "retiredBridgeRevision": self.retired_bridge_revision,
+            "workerContract": self.worker_contract,
+            "transferHook": self.transfer_hook,
+            "maxBindings": self.max_bindings,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: object) -> "BackgroundSupervisorRecord":
+        expected = {
+            "schema",
+            "handoffRegistryRevision",
+            "handoffIntentRevision",
+            "retiredBridge",
+            "retiredBridgeRevision",
+            "workerContract",
+            "transferHook",
+            "maxBindings",
+        }
+        if not isinstance(payload, Mapping) or set(payload) != expected:
+            raise BackgroundIntentError("background supervisor record has an invalid shape")
+        if payload["schema"] != BACKGROUND_SUPERVISOR_SCHEMA:
+            raise BackgroundIntentError("unknown background supervisor schema")
+        for key in ("handoffRegistryRevision", "handoffIntentRevision", "retiredBridgeRevision"):
+            value = payload[key]
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise BackgroundIntentError(f"background supervisor {key} is invalid")
+        if payload["retiredBridge"] != RETIRED_BRIDGE:
+            raise BackgroundIntentError("background supervisor retired an unknown bridge")
+        if payload["workerContract"] != BACKGROUND_WORKER_CONTRACT:
+            raise BackgroundIntentError("background supervisor worker contract is unknown")
+        if payload["transferHook"] != MVR06_TRANSFER_HOOK:
+            raise BackgroundIntentError("background supervisor transfer hook is unknown")
+        if payload["maxBindings"] != MVR06B_MAX_BACKGROUND_BINDINGS:
+            raise BackgroundIntentError("background supervisor binding capacity is unknown")
+        return cls(
+            handoff_registry_revision=payload["handoffRegistryRevision"],
+            handoff_intent_revision=payload["handoffIntentRevision"],
+            retired_bridge_revision=payload["retiredBridgeRevision"],
+        )
 
 
 @dataclass(frozen=True)
@@ -94,6 +177,21 @@ class BackgroundBindingIntent:
     @property
     def explicit_empty(self) -> bool:
         return self.mode == INTENT_MODE_EXPLICIT and not self.background_vault_binding_ids
+
+    @property
+    def handoff_complete(self) -> bool:
+        return self.compatibility_handoff == HANDOFF_COMPLETE
+
+    def effective_binding_ids(self) -> tuple[str, ...]:
+        """The members the supervisor runs: the compatibility singleton or explicit set."""
+
+        if self.mode == INTENT_MODE_COMPATIBILITY:
+            if self.compatibility_handoff != HANDOFF_COMPLETE:
+                return ()
+            return () if self.compatibility_binding_id is None else (
+                self.compatibility_binding_id,
+            )
+        return self.background_vault_binding_ids
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -185,6 +283,16 @@ class BackgroundBindingIntent:
 __all__ = [
     "BACKGROUND_INTENT_KEY",
     "BACKGROUND_INTENT_SCHEMA",
+    "BACKGROUND_SUPERVISOR_KEY",
+    "BACKGROUND_SUPERVISOR_SCHEMA",
+    "BACKGROUND_WORKER_CONTRACT",
+    "MVR06B_MAX_BACKGROUND_BINDINGS",
+    "MVR06_TRANSFER_HOOK",
+    "PROVENANCE_BACKGROUND_INTENT",
+    "PROVENANCE_COMPATIBILITY_DEFAULT",
+    "PROVENANCE_COMPATIBILITY_HANDOFF",
+    "RETIRED_BRIDGE",
+    "BackgroundSupervisorRecord",
     "HANDOFF_COMPLETE",
     "HANDOFF_PENDING",
     "INTENT_MODE_COMPATIBILITY",

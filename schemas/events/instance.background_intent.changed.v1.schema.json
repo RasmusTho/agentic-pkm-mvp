@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/instance.background_intent.changed.v1.schema.json",
+  "title": "instance.background_intent.changed payload (v1)",
+  "description": "Payload of the instance.background_intent.changed outbox event (MVR-06B, #3864, docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md). Producer: app.instance.background_supervisor.emit_background_intent_event, called after the durable registry generation of the compatibility bridge handoff, a post-handoff compatibility picker/default rebind, a governed background-intent add/remove, or the MVR-06 channel-transfer repair hook. Idempotency key basis: (topic, intent_revision, 'instance-background-intent-changed-v1'). Lineage posture: an idempotent wake-up hint only; the background supervisor reconciles the durable registry revision and auth epoch, so a lost or duplicated hint never changes truth. Redaction: binding identity and revisions only, never a content-root path, vault name, filesystem identity, or other raw binding payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_version",
+    "intent_revision",
+    "registry_revision",
+    "mode",
+    "vault_binding_ids",
+    "reason"
+  ],
+  "properties": {
+    "event_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Payload contract version."
+    },
+    "intent_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The durable background-intent revision this hint announces."
+    },
+    "registry_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The registry generation that committed the revision."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "compatibility",
+        "explicit"
+      ],
+      "description": "The durable intent mode."
+    },
+    "vault_binding_ids": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The bindings the supervisor runs: empty for explicit-empty or compatibility no-vault; at most one in MVR-06B."
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "compatibility_handoff",
+        "governed_add",
+        "governed_remove",
+        "channel_transfer",
+        "compatibility_rebind",
+        "binding_removal"
+      ],
+      "description": "Which producer committed the revision."
+    }
+  }
+}

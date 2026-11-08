@@ -116,13 +116,17 @@ def _current_proof(
     binding_id = payload.get("binding")
     revision = payload.get("revision")
     token_principal = payload.get("principal")
-    rebind = SettingsRebindStore(registry).read()
+    store = SettingsRebindStore(registry)
+    rebind = store.read()
     if (
         not isinstance(binding_id, str)
         or not isinstance(revision, int)
         or not isinstance(token_principal, str)
         or token_principal != principal
-        or rebind.candidate_binding_id != binding_id
+        # The current compatibility binding, not the raw journal candidate: in MVR-06B
+        # explicit mode that is the background binding, and this read refuses a binding
+        # sealed by a removal or reactivation.
+        or store.compatibility_binding_id() != binding_id
         or rebind.desired_revision != revision
         or rebind.phase == "prepared"
         or rebind.reload_revision not in {None, rebind.desired_revision}
@@ -235,6 +239,8 @@ def _registered_root(registry: VaultRegistryStore, binding_id: str) -> Path:
     registration = registry.load().registrations.get(binding_id)
     if registration is None:
         raise CompatibilityMutationError("compatibility binding is not registered")
+    if registration.extensions.get("lifecycleState") is not None:
+        raise CompatibilityMutationError("compatibility binding is sealed by its lifecycle")
     return Path(registration.path)
 
 

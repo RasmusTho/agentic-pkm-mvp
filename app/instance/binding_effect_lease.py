@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping, TypedDict, cast
@@ -144,6 +145,36 @@ class BindingEffectLeaseError(RuntimeError):
 
 class OwnershipFenceUnavailable(BindingEffectLeaseError, LedgerError):
     """The ledger refused a foreground binding effect acquisition."""
+
+
+class BindingLifecycleSealed(BindingEffectLeaseError):
+    """MVR-06B: a draining-removal or reactivating binding admits no new shared effect.
+
+    The removal/reactivation reconciler holds the exclusive lease; every ordinary
+    foreground/background holder is refused until the lifecycle completes or recovers.
+    """
+
+
+#: Registration lifecycle reservations that seal ordinary (shared) effect acquisition.
+_SEALED_LIFECYCLE_STATES = frozenset({"draining_removal", "reactivating"})
+_RECONCILER_ADMISSION: ContextVar[str | None] = ContextVar(
+    "mvr06b_lifecycle_reconciler_admission", default=None
+)
+
+
+@contextmanager
+def lifecycle_reconciler_admission(vault_binding_id: str) -> Iterator[None]:
+    """Admit only this context's rebuild effects past the binding's lifecycle seal.
+
+    Held solely by the reactivation coordinator around its own production rebuild: every
+    other holder stays refused until the durable rebuild receipt clears the reservation.
+    """
+
+    token = _RECONCILER_ADMISSION.set(vault_binding_id)
+    try:
+        yield
+    finally:
+        _RECONCILER_ADMISSION.reset(token)
 
 
 class BindingEffectLeaseTimeout(BindingEffectLeaseError):
@@ -343,6 +374,8 @@ class BindingEffectLeaseManager:
                     vault_binding_id, channel_id=channel_id, root=root
                 ):
                     with self._state_locked(vault_binding_id):
+                        if mode == "shared":
+                            self._assert_lifecycle_admits_shared(vault_binding_id)
                         current = self._load_reconciled_locked(vault_binding_id)
                         if mode == "shared":
                             available = (
@@ -427,6 +460,8 @@ class BindingEffectLeaseManager:
             if held is None:
                 raise BindingEffectLeaseError("binding effect acquisition ended without a holder")
             yield held
+        except BindingLifecycleSealed:
+            raise
         except LedgerError as exc:
             raise OwnershipFenceUnavailable(str(exc)) from exc
         finally:
@@ -701,6 +736,43 @@ class BindingEffectLeaseManager:
         self._atomic_private_json(self._state_path(vault_binding_id), recovered)
         path.unlink()
         self._fsync_directory(self.state_root)
+
+    def retire_binding_state(self, vault_binding_id: str) -> None:
+        """MVR-06B: drop a removed binding's local fairness state (idempotent).
+
+        Only valid once the registry no longer carries the binding's lease state and no
+        holder or waiter remains, i.e. after the removal commit drained every holder.
+        """
+
+        self._ensure_state_root()
+        with self._state_locked(vault_binding_id):
+            if self._registry_state(vault_binding_id) != self._empty_state(vault_binding_id):
+                raise BindingEffectLeaseError("binding lease state is still registry-owned")
+            path = self._state_path(vault_binding_id)
+            if os.path.lexists(path):
+                value = self._validate_state(
+                    vault_binding_id, json.loads(self._read_private_text(path))
+                )
+                holders = [*value["sharedHolders"], *value["exclusivePending"]]
+                if value["exclusiveHolder"] is not None:
+                    holders.append(value["exclusiveHolder"])
+                if any(self._holder_alive(holder) for holder in holders):
+                    raise BindingEffectLeaseError("a retired binding still has lease holders")
+                os.unlink(path)
+            journal = self._journal_path(vault_binding_id)
+            if os.path.lexists(journal):
+                os.unlink(journal)
+            self._fsync_directory(self.state_root)
+
+    def _assert_lifecycle_admits_shared(self, vault_binding_id: str) -> None:
+        if _RECONCILER_ADMISSION.get() == vault_binding_id:
+            return
+        registration = self.registry_store.load().registrations.get(vault_binding_id)
+        state = None if registration is None else registration.extensions.get("lifecycleState")
+        if state in _SEALED_LIFECYCLE_STATES:
+            raise BindingLifecycleSealed(
+                f"binding effect acquisition is sealed while the binding is {state}"
+            )
 
     def _registry_state(self, vault_binding_id: str) -> _LeaseState:
         snapshot = self.registry_store.load()

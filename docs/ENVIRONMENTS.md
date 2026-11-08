@@ -451,6 +451,32 @@ The existing `PKM_SETTINGS_PROFILE` control mechanism continues to work without 
 
 The settings profile is now understood as a **narrower control mechanism that lives beneath the environment model**, rather than the full environment specification. As the runtime evolves, new environment-specific behavior should be controlled via `PKM_ENVIRONMENT` rather than extending the settings profile approach. The legacy `PKM_SETTINGS_PROFILE` mechanism does not project to `test`; `test` is reachable only through the first-class `PKM_ENVIRONMENT=test` selector, which the local bootstrap workflow now uses.
 
+### Background lifecycle supervision (shipped, MVR-06B / #3864)
+
+Background watcher/worker/settings lifecycles no longer take their binding from the frozen
+`VAULT_ROOT`/`WATCHER_VAULT_PATH` env snapshot once the MVR-06B handoff has run; the env stays
+a bootstrap adapter only. Control surface:
+
+| Surface | Purpose |
+| --- | --- |
+| `python -m app.instance.runtime background-supervisor-handoff --channel <c> --registry-path <r> --host-global-root <h> --quiescence-proof-path <p> [--legacy-bootstrap-root <root>]` | One-time, inside the proved stopped deployment window: retire the #3163 picker bridge and seat the singleton/explicit-empty supervisor atomically. Idempotent after success. KD-A42F26A9AD87 applies: drain the outbox or stop writers before the MVR-06 opt-in on DEV/TEST. |
+| `GET/POST/DELETE /api/instance/background-bindings`, `background-binding-list|inspect|add|remove` | Governed singleton/explicit-empty intent (a second binding is `capability_not_ready` until MVR-06C/06D). |
+| `background-role-revoke --channel <c> --host-global-root <h>` | After the handoff a GOV revocation must drain affected lifecycles through the ownership fence → exclusive binding-lease order; the unfenced form is refused. |
+| `binding-remove --vault-binding-id <id> [--replacement-default-binding-id <id>]`, `binding-reactivate --root <root>`, `binding-lifecycle-recover` (each with `--channel`, `--registry-path`, `--host-global-root`, `--watcher-posture running|absent`, and `--watcher-state-dir` when running) | Production registration removal (draining reservation → drain → final scan → tombstone commit → post-commit drain → ownership release) and same-channel tombstone reactivation (content epoch advance, derived-state invalidation, full rescan re-emitted and settled through worker dispatch, rebuild receipt), each crash-recoverable from its journal. The MVR-01C scalar rollback target is refused before any reservation. Cross-channel rehome (`InstanceRegistryRuntime.rehome_removed`) is reactivation followed by the governed transfer. |
+
+The supervisor (`app/instance/background_supervisor.py`) is ownership-checked: start/rebind
+requires the active MVR-01 ledger lease for this exact channel, binding, and canonical root
+fingerprint, so a binding leased in another release channel, pending, retired, or whose root
+changed is refused (also after restart). It reconciles the durable registry revision and the
+background-role auth epoch at start and on every effect; wake-up hints
+(`instance.background_intent.changed`) only accelerate that. Every background effect holds the
+shared per-binding effect lease from final validation through I/O and receipt: the outbox worker
+resolves the durable binding through its process supervisor and revalidates inside the lease, and
+an ordinary watcher cycle runs inside `supervisor.effect()` on the durable root, while its
+bracketing rebind scans stay the journal-bound reconciler. Relocation is still sealed (MVR-06C) and
+many-binding supervision is sealed until MVR-06D. Pending queue rows of a removed binding stay
+undispatched and attributable; their quarantine disposition is MVR-06D.
+
 ## Canonical Local Test Bootstrap
 
 The official local `test` golden path is:

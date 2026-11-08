@@ -563,6 +563,12 @@ class VaultManager:
         snapshot = registry.load()
         if snapshot.settings_rebind is None:
             return None
+        from app.instance.settings_rebind import _background_intent_mode
+
+        if _background_intent_mode(registry) == "explicit":
+            # MVR-06B: explicit background intent is unaffected by picker events; the
+            # choose/open is an ordinary foreground selection write.
+            return None
         target_identity = resolve_filesystem_root_identity(vault_path)
         registration = next(
             (

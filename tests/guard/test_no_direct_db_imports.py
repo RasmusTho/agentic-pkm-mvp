@@ -72,6 +72,9 @@ ALLOW_FILES = (
     # Episode notes are the SoR; the `episodes` table is a rebuildable projection.
     # Same bounded pattern already allowed for app/jobs/decisions_projection.py above.
     'app/jobs/episodes_projection.py',
+    # MVR-06B (#3864): tombstone reactivation invalidates exactly one binding's derived
+    # rows through conn_rw, the same bounded pattern as these projection rebuilds.
+    'app/instance/binding_removal.py',
     # Episode Resolution Engine tick-runtime state (ERE-04, #3179). Same bounded
     # pattern as app/heimdal/cursor_store.py below: a dedicated key/value state
     # table (`episode_engine_state`: durable vault-activity cursor + open-segment

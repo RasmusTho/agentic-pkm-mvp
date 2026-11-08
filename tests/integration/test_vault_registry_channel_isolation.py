@@ -289,8 +289,6 @@ def test_runtime_api_exports_only_coordinator_owned_transfer_activation() -> Non
     for method_name in (
         "prepare_nested_registration",
         "relocate",
-        "remove",
-        "reactivate_removed",
     ):
         parameters = inspect.signature(
             getattr(InstanceRegistryRuntime, method_name)
@@ -299,6 +297,21 @@ def test_runtime_api_exports_only_coordinator_owned_transfer_activation() -> Non
         assert "crash_after" not in parameters
         method_source = inspect.getsource(getattr(InstanceRegistryRuntime, method_name))
         assert "CapabilityNotReadyError" in method_source
+        assert "self.registry" not in method_source
+        assert "self.ledger" not in method_source
+    # MVR-06B (#3864) activates removal/reactivation: both delegate to the floor-gated
+    # production coordinator and still accept no caller-authored proof or crash seam.
+    for method_name, coordinator in (
+        ("remove", "BindingRemovalCoordinator"),
+        ("reactivate_removed", "BindingReactivationCoordinator"),
+    ):
+        parameters = inspect.signature(
+            getattr(InstanceRegistryRuntime, method_name)
+        ).parameters
+        assert "proof" not in parameters
+        assert "crash_after" not in parameters
+        method_source = inspect.getsource(getattr(InstanceRegistryRuntime, method_name))
+        assert coordinator in method_source
         assert "self.registry" not in method_source
         assert "self.ledger" not in method_source
     for method_name in ("transfer_to", "recover_transfer"):

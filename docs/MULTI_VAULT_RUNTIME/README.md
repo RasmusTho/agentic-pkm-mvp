@@ -22,6 +22,11 @@ background lifecycle binding are still target state. MVR-06A (#3863) adds only t
 for the latter: the opt-in `minimumRuntimeSchema=mvr-06` floor, the delegated least-privilege
 background-runtime role, and a read-only staged background intent whose add/remove commands fail
 `capability_not_ready`; the legacy picker bridge remains the authoritative watcher owner until 06B.
+MVR-06B (#3864) retires that bridge atomically into the ownership-checked,
+revision/auth-reconciling, effect-leased singleton/explicit-empty background supervisor, activates
+governed singleton/explicit-empty intent, and activates production registration removal and
+same-channel tombstone reactivation; a second binding, relocation, and many-binding supervision
+stay sealed for MVR-06C/06D.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 
@@ -243,7 +248,8 @@ production resolution, never an authorized subset. A dimension may seed an expli
 selection, and what the immutable snapshot stores is the resolved explicit binding set plus the
 dimension revision as provenance. Registration removal transactionally strips that binding from
 every dimension in the same locked registry transaction; production registration removal itself
-stays `capability_not_ready` until MVR-06B.
+was `capability_not_ready` until MVR-06B (#3864) activated it behind the background supervisor
+floor.
 
 ### Fresh bootstrap after operational-lineage loss
 

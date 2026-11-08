@@ -33,7 +33,14 @@ from app.instance.filesystem_identity import (
 from app.receipts.settings_write import emit_settings_write_receipts_for_changes
 from app.instance.background_intent import (
     BACKGROUND_INTENT_KEY,
+    BACKGROUND_SUPERVISOR_KEY,
+    INTENT_MODE_COMPATIBILITY,
+    INTENT_MODE_EXPLICIT,
+    MVR06B_MAX_BACKGROUND_BINDINGS,
+    PROVENANCE_COMPATIBILITY_DEFAULT,
+    PROVENANCE_COMPATIBILITY_HANDOFF,
     BackgroundBindingIntent,
+    BackgroundSupervisorRecord,
 )
 from app.instance.settings_rebind import (
     MINIMUM_SETTINGS_REBIND_RUNTIME,
@@ -385,6 +392,82 @@ def _validate_mvr06_floor_receipt(receipt: object) -> None:
         or receipt.get("previousMinimumRuntimeSchema") != MVR05_MINIMUM_RUNTIME_SCHEMA
     ):
         raise RegistryError("MVR-06 runtime floor receipt is invalid")
+
+
+def _validate_background_supervisor_state(
+    intent: BackgroundBindingIntent, extensions: Mapping[str, Any]
+) -> None:
+    """MVR-06B: the handoff and the supervisor receipt are one durable fact."""
+
+    raw = extensions.get(BACKGROUND_SUPERVISOR_KEY)
+    if intent.handoff_complete:
+        if raw is None:
+            raise RegistryError(
+                "a completed compatibility handoff requires its supervisor receipt"
+            )
+        BackgroundSupervisorRecord.from_payload(raw)
+        if len(intent.background_vault_binding_ids) > MVR06B_MAX_BACKGROUND_BINDINGS:
+            raise RegistryError(
+                "MVR-06B background intent admits at most one binding; many-binding "
+                "intent is sealed until MVR-06D"
+            )
+    elif raw is not None:
+        raise RegistryError("a pending compatibility handoff cannot carry a supervisor receipt")
+
+
+def _next_handoff_intent(
+    current: "RegistrySnapshot",
+    candidate_id: str | None,
+    *,
+    default_change: tuple[str | None, str | None] | None,
+    background_intent: BackgroundBindingIntent | None,
+) -> BackgroundBindingIntent | None:
+    """The intent revision a post-handoff two-phase commit carries, if any.
+
+    Before the MVR-06B handoff the bridge owns the binding and no intent moves. After
+    it, a compatibility-mode picker/default commit derives the next compatibility
+    revision in the same generation, a governed background transition supplies its own
+    revision, and an explicit-mode intent can never be moved by picker or default.
+    """
+
+    raw = current.extensions.get(BACKGROUND_INTENT_KEY)
+    stored = None if raw is None else BackgroundBindingIntent.from_payload(raw)
+    if stored is None or not stored.handoff_complete:
+        if background_intent is not None:
+            raise CapabilityNotReadyError(
+                "background intent mutation is sealed until the MVR-06B handoff"
+            )
+        return None
+    if background_intent is not None:
+        if background_intent.revision != stored.revision + 1:
+            raise RegistryRevisionConflict("background intent revision raced the commit")
+        effective = background_intent.effective_binding_ids()
+        running = (candidate_id,) if candidate_id is not None else ()
+        if background_intent.mode == INTENT_MODE_EXPLICIT:
+            # An explicit member whose registration is gone stays as loudly failed intent;
+            # it is never what the shared journal resumes.
+            running_members = tuple(
+                item for item in effective if item in current.registrations
+            )
+            if running_members != running:
+                raise RegistryError("background intent and the phase journal disagree")
+        elif effective != running:
+            raise RegistryError("background intent and the phase journal disagree")
+        return background_intent
+    if stored.mode == INTENT_MODE_EXPLICIT:
+        raise RegistryError(
+            "picker and default changes cannot move explicit background intent"
+        )
+    return replace(
+        stored,
+        revision=stored.revision + 1,
+        compatibility_binding_id=candidate_id,
+        provenance=(
+            PROVENANCE_COMPATIBILITY_DEFAULT
+            if default_change is not None
+            else PROVENANCE_COMPATIBILITY_HANDOFF
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -979,6 +1062,7 @@ class VaultRegistryStore:
         desired_revision: int,
         selection: KnownVaultRef | None,
         default_change: tuple[str | None, str | None] | None = None,
+        background_intent: BackgroundBindingIntent | None = None,
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Commit rebind state and last-active selection in one registry generation.
@@ -1003,11 +1087,23 @@ class VaultRegistryStore:
                     "settings rebind selection commit requires the matching prepared/no_lifecycle revision"
                 )
             candidate_id = rebind.candidate_binding_id
+            next_intent = _next_handoff_intent(
+                current,
+                candidate_id,
+                default_change=default_change,
+                background_intent=background_intent,
+            )
             registrations = copy.deepcopy(current.registrations)
             if candidate_id is None:
                 if selection is not None:
                     raise RegistryError("no-target settings rebind cannot carry a selection")
                 registration = None
+            elif selection is None and background_intent is not None:
+                # MVR-06B background-only transition (governed add/remove, removal,
+                # transfer repair): the lifecycle rebinds, picker history does not move.
+                registration = current.registrations.get(candidate_id)
+                if registration is None:
+                    raise RegistryError("settings rebind candidate binding is not registered")
             else:
                 registration = current.registrations.get(candidate_id)
                 if registration is None:
@@ -1033,6 +1129,7 @@ class VaultRegistryStore:
                     )
                 ):
                     raise RegistryError("settings rebind selection identity does not match candidate")
+            if selection is not None and registration is not None and candidate_id is not None:
                 registrations[candidate_id] = VaultRegistration(
                     vault_binding_id=registration.vault_binding_id,
                     ref=registration.ref,
@@ -1053,6 +1150,8 @@ class VaultRegistryStore:
             )
             next_revision = current.revision + 1
             extensions = copy.deepcopy(current.extensions)
+            if next_intent is not None:
+                extensions[BACKGROUND_INTENT_KEY] = next_intent.as_payload()
             if current.authority == REGISTRY_AUTHORITY_ACTIVE:
                 scalar_floor = extensions.get("scalarRollback")
                 if not isinstance(scalar_floor, dict):
@@ -1066,7 +1165,9 @@ class VaultRegistryStore:
                 revision=next_revision,
                 last_active_vault_ref=(
                     current.last_active_vault_ref
-                    if default_change is not None or registration is None
+                    if default_change is not None
+                    or registration is None
+                    or selection is None
                     else registration.ref
                 ),
                 registrations=registrations,
@@ -1639,6 +1740,212 @@ class VaultRegistryStore:
                     "forkRegistryRevision": revision,
                 }
             updated = replace(current, revision=revision, extensions=extensions)
+            self._write_locked(updated)
+            return updated
+
+    def complete_background_handoff(
+        self,
+        *,
+        intent: BackgroundBindingIntent,
+        supervisor: BackgroundSupervisorRecord,
+        settings_rebind: Mapping[str, Any] | None,
+        expected_revision: int,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """MVR-06B: retire the legacy picker bridge and seat the supervisor atomically.
+
+        One registry generation materializes the compatibility binding, records the
+        supervisor handoff receipt, and (only for an unbound dormant journal) aligns the
+        shared ``settings_rebind.v1`` phase journal with the materialized binding. A crash
+        or refusal before this write leaves the bridge authoritative; after it the
+        supervisor is. There is no generation in which both, or neither, own the watcher.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            raw = current.extensions.get(BACKGROUND_INTENT_KEY)
+            if raw is None:
+                raise CapabilityNotReadyError("the MVR-06A staged intent is required first")
+            staged = BackgroundBindingIntent.from_payload(raw)
+            if staged.handoff_complete:
+                raise RegistryError("the compatibility handoff already completed")
+            if (
+                not intent.handoff_complete
+                or intent.mode != INTENT_MODE_COMPATIBILITY
+                or intent.revision != staged.revision + 1
+            ):
+                raise RegistryError("the handoff intent is not the next compatibility revision")
+            binding = intent.compatibility_binding_id
+            if binding is not None and binding not in current.registrations:
+                raise RegistryError("the handoff binding is not registered")
+            extensions = copy.deepcopy(current.extensions)
+            extensions[BACKGROUND_INTENT_KEY] = intent.as_payload()
+            extensions[BACKGROUND_SUPERVISOR_KEY] = supervisor.as_payload()
+            revision = current.revision + 1
+            if supervisor.handoff_registry_revision != revision:
+                raise RegistryError("the supervisor receipt names another registry generation")
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                extensions["scalarRollback"] = {
+                    **extensions["scalarRollback"],
+                    "forkRegistryRevision": revision,
+                }
+            updated = replace(
+                current,
+                revision=revision,
+                extensions=extensions,
+                settings_rebind=(
+                    copy.deepcopy(current.settings_rebind)
+                    if settings_rebind is None
+                    else copy.deepcopy(dict(settings_rebind))
+                ),
+            )
+            self._write_locked(updated)
+            return updated
+
+    def commit_background_intent(
+        self,
+        intent: BackgroundBindingIntent,
+        *,
+        expected_revision: int,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Commit a governed intent revision that does not move the running binding.
+
+        Used for the first explicit mutation whose snapshot already equals its result
+        (add-current, remove-nonmember) and for explicit-mode stale-intent removal. A
+        transition that changes the running binding instead commits through the
+        two-phase ``commit_settings_rebind_selection`` seam.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            raw = current.extensions.get(BACKGROUND_INTENT_KEY)
+            if raw is None:
+                raise CapabilityNotReadyError("background intent is not initialized")
+            stored = BackgroundBindingIntent.from_payload(raw)
+            if not stored.handoff_complete:
+                raise CapabilityNotReadyError(
+                    "background intent mutation is sealed until the MVR-06B handoff"
+                )
+            if intent.revision != stored.revision + 1 or not intent.handoff_complete:
+                raise RegistryError("background intent revision must advance by exactly one")
+            if stored.effective_binding_ids() != intent.effective_binding_ids():
+                if stored.mode == INTENT_MODE_COMPATIBILITY or intent.effective_binding_ids():
+                    # Removing a stale explicit member that no lifecycle runs is the only
+                    # running-set change admitted here; anything else must drain first.
+                    raise RegistryError(
+                        "a running-binding change requires the two-phase rebind commit"
+                    )
+            extensions = copy.deepcopy(current.extensions)
+            extensions[BACKGROUND_INTENT_KEY] = intent.as_payload()
+            revision = current.revision + 1
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                extensions["scalarRollback"] = {
+                    **extensions["scalarRollback"],
+                    "forkRegistryRevision": revision,
+                }
+            updated = replace(current, revision=revision, extensions=extensions)
+            self._write_locked(updated)
+            return updated
+
+    def commit_background_transition(
+        self,
+        *,
+        expected_revision: int,
+        registrations: dict[str, VaultRegistration],
+        removal_tombstones: dict[str, RemovalTombstone],
+        extensions: dict[str, Any],
+        settings_rebind: Mapping[str, Any] | None,
+        default: tuple[str | None, str | None],
+        removed_binding_id: str | None = None,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """MVR-06B removal/reactivation commit: one generation, every reference repaired.
+
+        The production removal/reactivation coordinator computes the complete next
+        state (registration or tombstone, MVR-02 default, compatibility intent, and the
+        shared phase journal) and commits it here under the registry lock with a CAS on
+        ``expected_revision``. A removal also repairs dimension membership in the same
+        generation, exactly like :meth:`remove_registration`.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            validated: dict[str, VaultRegistration] = {}
+            for binding_id, registration in registrations.items():
+                if binding_id != registration.vault_binding_id:
+                    raise RegistryError("registration key does not match vault_binding_id")
+                self._validate_registration(registration)
+                self._assert_registration_unique(registration, validated)
+                validated[binding_id] = registration
+            default_binding, default_provenance = default
+            if default_binding is not None and default_binding not in validated:
+                raise RegistryDefaultConflict(
+                    "background transition would leave the instance default dangling"
+                )
+            next_revision = current.revision + 1
+            next_extensions = copy.deepcopy(extensions)
+            if next_extensions.get("bindingEffectLeases") != current.extensions.get(
+                "bindingEffectLeases"
+            ):
+                states = next_extensions.get("bindingEffectLeases")
+                # A removal retires exactly the removed binding's persisted lease state.
+                expected_states = copy.deepcopy(current.extensions.get("bindingEffectLeases"))
+                if isinstance(expected_states, dict) and removed_binding_id is not None:
+                    expected_states.pop(removed_binding_id, None)
+                if states != expected_states:
+                    raise RegistryError(
+                        "binding effect lease state requires its dedicated producer"
+                    )
+            if removed_binding_id is not None:
+                from app.instance.vault_dimensions import (
+                    repair_dimensions_for_removed_binding,
+                )
+
+                repair_dimensions_for_removed_binding(
+                    next_extensions,
+                    vault_binding_id=removed_binding_id,
+                    registry_revision=next_revision,
+                )
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                floor = next_extensions.get("scalarRollback")
+                if not isinstance(floor, dict):
+                    raise RegistryError("active registry scalar rollback floor is invalid")
+                if (
+                    removed_binding_id is not None
+                    and floor.get("targetVaultBindingId") == removed_binding_id
+                ):
+                    raise RegistryDefaultConflict(
+                        "removing the MVR-01C scalar rollback target requires an "
+                        "explicit authorized floor retarget"
+                    )
+                next_extensions["scalarRollback"] = {
+                    **floor,
+                    "forkRegistryRevision": next_revision,
+                }
+            updated = replace(
+                current,
+                revision=next_revision,
+                registrations=validated,
+                removal_tombstones=copy.deepcopy(removal_tombstones),
+                settings_rebind=(
+                    copy.deepcopy(current.settings_rebind)
+                    if settings_rebind is None
+                    else copy.deepcopy(dict(settings_rebind))
+                ),
+                extensions=next_extensions,
+                default_vault_binding_id=default_binding,
+                default_vault_provenance=default_provenance,
+            )
             self._write_locked(updated)
             return updated
 
@@ -2604,7 +2911,10 @@ class VaultRegistryStore:
                     "background intent requires the MVR-06 runtime floor; "
                     "the floor must commit before the first intent field"
                 )
-            BackgroundBindingIntent.from_payload(raw_intent)
+            parsed_intent = BackgroundBindingIntent.from_payload(raw_intent)
+            _validate_background_supervisor_state(parsed_intent, extensions)
+        elif BACKGROUND_SUPERVISOR_KEY in extensions:
+            raise RegistryError("a background supervisor record requires background intent")
         settings_floor = _optional_str(
             runtime_floors.get(MINIMUM_SETTINGS_REBIND_RUNTIME_KEY)
         )

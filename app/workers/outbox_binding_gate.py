@@ -156,19 +156,25 @@ def current_binding_effect_window(runtime: ScalarBindingRuntime) -> Iterator[Non
 def _binding_effect_window(
     message: Mapping[str, Any], runtime: ScalarBindingRuntime
 ) -> Iterator[None]:
-    with runtime.effect_leases.shared_effect(
-        runtime.vault_binding_id,
-        channel_id=runtime.channel_id,
-        root=Path(runtime.root),
-    ):
-        # Rotation/revocation must take the exclusive side of this lease. Once
-        # shared is held, a fresh registry/GOV read is stable through ack and
-        # all receipt writes. The frozen context prevents those nested writes
-        # from reacquiring the host-global ownership lock in reverse order.
-        validate_frozen_binding_runtime(runtime)
-        _require_current_stamp(message, runtime)
-        with frozen_binding_effect(runtime):
-            yield
+    from app.instance.binding_effect_lease import BindingLifecycleSealed
+
+    try:
+        with runtime.effect_leases.shared_effect(
+            runtime.vault_binding_id,
+            channel_id=runtime.channel_id,
+            root=Path(runtime.root),
+        ):
+            # Rotation/revocation must take the exclusive side of this lease. Once
+            # shared is held, a fresh registry/GOV read is stable through ack and
+            # all receipt writes. The frozen context prevents those nested writes
+            # from reacquiring the host-global ownership lock in reverse order.
+            validate_frozen_binding_runtime(runtime)
+            _require_current_stamp(message, runtime)
+            with frozen_binding_effect(runtime):
+                yield
+    except BindingLifecycleSealed as exc:
+        # MVR-06B: a draining/reactivating binding defers the row, it does not fail it.
+        raise OutboxBindingDeferred(str(exc)) from exc
 
 
 __all__ = [

@@ -38,7 +38,10 @@ from app.events.topic_schema_registry import (
 )
 from app.indexer.consumer import process_event as process_indexer_event
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
-from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
+from app.instance.scalar_binding_runtime import (
+    resolve_background_worker_runtime,
+    resolve_scalar_binding_runtime,
+)
 from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 from app.knowledge.write_ops import read_note_text_with_version
 from app.objects import resolve_canonical_object_id
@@ -347,6 +350,60 @@ class WorkerTickResult:
     processed: int = 0
 
 
+def _resolve_worker_binding_runtime(vault_root: Path | None) -> Any:
+    """Scalar env-root binding before the MVR-06B handoff; durable versioned intent after."""
+
+    from app.instance.background_supervisor import process_background_supervisor
+
+    if process_background_supervisor("worker") is None:
+        return resolve_scalar_binding_runtime(vault_root=vault_root)
+    runtime = resolve_background_worker_runtime(vault_root=vault_root)
+    _follow_background_settings(runtime)
+    return runtime
+
+
+def _background_lifecycle_failed() -> bool:
+    """A sealed or removed durable member has no root, yet it is failed, not healthy idle."""
+
+    from app.instance.background_supervisor import process_background_supervisor
+
+    try:
+        supervisor = process_background_supervisor("worker")
+    except Exception:
+        return False  # the tick's own resolver fails closed on this registry read
+    if supervisor is None:
+        return False
+    lifecycle = supervisor.reconcile()
+    if lifecycle.status != "failed":
+        return False
+    logger.error("worker tick blocked: background lifecycle is failed: %s", lifecycle.failure)
+    return True
+
+
+_SETTINGS_BINDING: dict[str, str] = {}
+
+
+def _follow_background_settings(runtime: Any) -> None:
+    """Recompile vault-authored settings when this worker's durable binding moves.
+
+    The worker rebinds without a restart and settings are process-local, so nothing else
+    would stop it dispatching the new vault's notes with the prior vault's routing. An
+    ingestion failure degrades loudly on health, exactly like startup ingestion.
+    """
+
+    if runtime is None or not getattr(runtime, "background_worker", False):
+        return
+    if _SETTINGS_BINDING.get("binding") == runtime.vault_binding_id:
+        return
+    from app.settings.ingestion import ingest_settings
+
+    try:
+        ingest_settings(reason="worker_binding_rebind", vault_root=runtime.root)
+    except Exception as exc:  # pragma: no cover - defensive; ingest already degrades
+        logger.warning("Settings ingestion after worker rebind failed: %s", exc)
+    _SETTINGS_BINDING["binding"] = runtime.vault_binding_id
+
+
 def run_once(
     *,
     vault_root: Path | None = None,
@@ -361,11 +418,33 @@ def run_once(
     preserving the loud misconfiguration contract.
     """
     if _resolve_optional_vault_root(vault_root) is None:
+        if _background_lifecycle_failed():
+            return WorkerTickResult(state="background_lifecycle_failed", processed=0)
         logger.debug("outbox worker tick idled: no vault selected")
         return WorkerTickResult(state="no_vault", processed=0)
 
     resolved_root = _resolve_optional_vault_root(vault_root)
-    binding_runtime = resolve_scalar_binding_runtime(vault_root=resolved_root)
+    from app.instance.background_supervisor import (
+        BackgroundBindingIdle,
+        BackgroundLifecycleBlocked,
+    )
+
+    try:
+        # A transfer drain settles its named source binding, which may already have left
+        # durable intent; every ordinary tick resolves the versioned background binding.
+        binding_runtime = (
+            resolve_scalar_binding_runtime(vault_root=resolved_root)
+            if _eligible_binding_ids is not None
+            else _resolve_worker_binding_runtime(resolved_root)
+        )
+    except BackgroundLifecycleBlocked as exc:
+        # MVR-06B: a failed lifecycle performs no effect and reconciles on the next tick.
+        logger.error("outbox worker tick blocked: %s", exc)
+        return WorkerTickResult(state="background_lifecycle_failed", processed=0)
+    except BackgroundBindingIdle:
+        # MVR-06B: explicit-empty or compatibility no-vault intent is durable idle.
+        logger.debug("outbox worker tick idled: durable background intent runs no binding")
+        return WorkerTickResult(state="no_vault", processed=0)
     eligible = eligible_worker_bindings(binding_runtime)
     if _eligible_binding_ids is not None:
         if eligible is None or not set(_eligible_binding_ids).issubset(eligible):
@@ -943,6 +1022,14 @@ def _resolve_optional_vault_root(vault_root: Path | None = None) -> Path | None:
     """
     if vault_root is not None:
         return vault_root.expanduser().resolve()
+    # MVR-06B: after the bridge handoff durable versioned intent owns the worker's
+    # binding; the env root is a pre-handoff bootstrap adapter only, so a rebind needs no
+    # restart and empty intent idles even with an env root configured.
+    from app.instance.background_supervisor import durable_background_root
+
+    durable, durable_root = durable_background_root()
+    if durable:
+        return None if durable_root is None else durable_root.resolve()
     watcher_root = os.getenv("WATCHER_VAULT_PATH")
     if watcher_root:
         watcher_path = Path(watcher_root).expanduser()
@@ -2224,7 +2311,7 @@ def run(
     if startup_root is not None:
         try:
             startup_stamp = required_worker_binding_stamp(
-                resolve_scalar_binding_runtime(vault_root=startup_root)
+                _resolve_worker_binding_runtime(startup_root)
             )
             require_upgrade_drained(startup_stamp)
         except OutboxEnvelopeUpgradeBlocked:
@@ -2236,9 +2323,15 @@ def run(
     # this the worker's LLM routing / embeddings run on pydantic code defaults.
     # Invalid sources degrade loudly on health rather than crashing the worker.
     try:
+        from app.instance.background_supervisor import durable_background_root
         from app.settings.ingestion import ingest_settings
 
-        ingest_settings(reason="worker_startup")
+        durable, durable_root = durable_background_root()
+        if not durable:
+            ingest_settings(reason="worker_startup")
+        elif durable_root is not None:
+            # MVR-06B: settings follow the durable binding, never the boot env root.
+            ingest_settings(reason="worker_startup", vault_root=durable_root)
     except Exception as exc:  # pragma: no cover - defensive; ingest already degrades
         logger.warning("Settings ingestion at worker startup failed: %s", exc)
 
@@ -2274,6 +2367,7 @@ def run(
     errors_total = 0
     last_heartbeat = 0.0
     binding_blocked_pending = 0
+    lifecycle_blocked = False
 
     # The loop polls/dispatches only while a vault is selected. When no vault is
     # bound, ``no_vault_idle`` short-circuits the poll/dispatch body for that tick
@@ -2283,6 +2377,7 @@ def run(
         WORKER_LAST_TICK_TIMESTAMP.set(time.time())
         tick_vault_root = _resolve_optional_vault_root(None)
         no_vault_idle = tick_vault_root is None
+        lifecycle_blocked = no_vault_idle and _background_lifecycle_failed()
         if no_vault_idle:
             # No-vault idle guard (#2407): match run_once's runtime decision. With
             # no vault selected the production loop must not poll/dispatch
@@ -2291,11 +2386,25 @@ def run(
             # row instead of leaving it queued until a vault is selected.
             logger.debug("worker tick idled: no vault selected")
         try:
-            binding_runtime = (
-                None
-                if tick_vault_root is None
-                else resolve_scalar_binding_runtime(vault_root=tick_vault_root)
+            from app.instance.background_supervisor import (
+                BackgroundBindingIdle,
+                BackgroundLifecycleBlocked,
             )
+
+            try:
+                binding_runtime = (
+                    None
+                    if tick_vault_root is None
+                    else _resolve_worker_binding_runtime(tick_vault_root)
+                )
+            except BackgroundBindingIdle as exc:
+                # MVR-06B: explicit-empty / no-vault durable intent is honest idle, and a
+                # failed lifecycle is loud but no effect: it reconciles on the next tick.
+                binding_runtime = None
+                no_vault_idle = True
+                lifecycle_blocked = isinstance(exc, BackgroundLifecycleBlocked)
+                if lifecycle_blocked:
+                    logger.error("worker tick blocked: %s", exc)
             eligible = eligible_worker_bindings(binding_runtime)
             binding_stamp = required_worker_binding_stamp(binding_runtime)
             message = (
@@ -2471,7 +2580,9 @@ def run(
                 last_processed=last_processed,
                 outbox_path=outbox_path,
                 status=(
-                    "blocked_pending_mvr06"
+                    "background_lifecycle_failed"
+                    if lifecycle_blocked
+                    else "blocked_pending_mvr06"
                     if binding_blocked_pending
                     else "running"
                 ),

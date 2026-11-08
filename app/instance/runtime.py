@@ -143,6 +143,8 @@ class InstanceRegistryRuntime:
         self.registry = VaultRegistryStore(layout.registry_path)
         self.ledger = ledger
         self._legacy_path = legacy_path or (layout.root / "legacy-app-local.md")
+        #: Headless removal/reactivation states its watcher posture explicitly (MVR-06B).
+        self.lifecycle_watcher_posture: dict[str, Any] | None = None
 
     @classmethod
     def for_paths(
@@ -939,16 +941,59 @@ class InstanceRegistryRuntime:
     def remove(
         self,
         vault_binding_id: str,
+        *,
+        replacement_default_binding_id: str | None = None,
     ) -> RemovalTombstone:
-        del vault_binding_id
-        raise CapabilityNotReadyError("MVR-06B consumer drain floor is required")
+        """MVR-06B production removal: reserve, drain, final-scan, tombstone, release.
+
+        Sealed (``capability_not_ready``) until both the MVR-05 foreground and the
+        MVR-06B background consumer floors are proven. See
+        :mod:`app.instance.binding_removal`.
+        """
+
+        from app.instance.binding_removal import BindingRemovalCoordinator
+
+        return BindingRemovalCoordinator(self).remove(
+            vault_binding_id, replacement_default_binding_id=replacement_default_binding_id
+        )
+
+    def recover_removal(self) -> RemovalTombstone | None:
+        from app.instance.binding_removal import BindingRemovalCoordinator
+
+        return BindingRemovalCoordinator(self).recover()
 
     def reactivate_removed(
         self,
         root: Path,
     ) -> VaultRegistration:
-        del root
-        raise CapabilityNotReadyError("MVR-06B consumer drain floor is required")
+        """MVR-06B same-channel tombstone reactivation with a full derived-state rebuild."""
+
+        from app.instance.binding_removal import BindingReactivationCoordinator
+
+        return BindingReactivationCoordinator(self).reactivate_root(root)
+
+    def recover_reactivation(self) -> VaultRegistration | None:
+        from app.instance.binding_removal import BindingReactivationCoordinator
+
+        return BindingReactivationCoordinator(self).recover()
+
+    def rehome_removed(
+        self,
+        destination: InstanceRegistryRuntime,
+        root: Path,
+        *,
+        stop_and_prove: Callable[[], DeploymentQuiescenceProof] | None = None,
+    ) -> str:
+        """Cross-channel rehome of a tombstoned binding: reactivate, then govern transfer.
+
+        Both legs are their own recoverable journals, and the transfer is the only way a
+        destination binding is minted, so predecessor/successor lineage is always recorded.
+        """
+
+        reactivated = self.reactivate_removed(root)
+        return self.transfer_to(
+            destination, reactivated.vault_binding_id, stop_and_prove=stop_and_prove
+        )
 
     def rotate_ledger_key(
         self,
@@ -1144,9 +1189,19 @@ class _TransferSourceChannelLifecycle:
     def repair_compatibility(
         self, runtime: InstanceRegistryRuntime, source: VaultRegistration
     ) -> None:
+        from app.instance.background_supervisor import (
+            handoff_complete,
+            repair_background_intent_for_transfer,
+        )
         from app.instance.settings_rebind import SettingsRebindActivation
 
-        if runtime.registry.load().settings_rebind is not None:
+        snapshot = runtime.registry.load()
+        if handoff_complete(snapshot):
+            # MVR-06B: the retired ``settings_rebind.v1`` hook is replaced by the
+            # schema-versioned MVR-06 intent hook, which repairs durable intent (and
+            # drains the lifecycle through the same journal) before source retirement.
+            repair_background_intent_for_transfer(runtime.registry, source.vault_binding_id)
+        elif snapshot.settings_rebind is not None:
             SettingsRebindActivation.from_environment(runtime.registry).retire_for_transfer(
                 source.vault_binding_id
             )
@@ -1672,6 +1727,8 @@ def _preflight_runtime(
     ledger = runtime.ledger.require_existing()
     if not ledger.legacy_bootstrap_complete:
         raise RegistryError("host-global legacy owner inventory bootstrap is incomplete")
+    if consumer in _background_consumers():
+        _start_background_supervisor(runtime, consumer)
     known_roots = [Path(item.path) for item in runtime.registry.load().registrations.values()]
     validate_registry_disjoint_from_content(
         layout.registry_path,
@@ -5169,6 +5226,58 @@ def open_background_intent_admin_service(
     return BackgroundIntentAdminService(VaultRegistryStore(Path(registry_path)))
 
 
+def _start_background_supervisor(runtime: InstanceRegistryRuntime, consumer: str) -> None:
+    """MVR-06B: after the bridge handoff, start the supervisor from durable intent.
+
+    Durable intent is the only binding authority; a phase journal that disagrees is reported
+    loudly. A failed lifecycle is reported the same way; it never redirects to another binding.
+    """
+
+    import logging
+
+    from app.instance.background_supervisor import (
+        BackgroundLifecycleSupervisor,
+        durable_background_state,
+    )
+    from app.instance.settings_rebind import SettingsRebindRecord
+
+    snapshot = runtime.registry.load()
+    state = durable_background_state(snapshot)
+    if state is None:
+        return
+    if snapshot.settings_rebind is not None:
+        record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
+        running = tuple(
+            item
+            for item in state.binding_ids
+            if item in snapshot.registrations
+            and snapshot.registrations[item].extensions.get("lifecycleState") is None
+        )
+        journal = () if record.candidate_binding_id is None else (record.candidate_binding_id,)
+        candidate = snapshot.registrations.get(record.candidate_binding_id or "")
+        # A sealed candidate is a removal/reactivation awaiting recovery, whose watcher must
+        # be able to start and acknowledge; it reconciles from its own journal.
+        sealed = candidate is not None and candidate.extensions.get("lifecycleState") is not None
+        if record.phase != "prepared" and not sealed and journal != running:
+            # Durable intent is the authority and each mismatch has its own convergence
+            # (retry or lifecycle recovery), some of which need these very consumers up.
+            logging.getLogger(__name__).error(
+                "the settings rebind phase journal disagrees with durable background intent; "
+                "retry the interrupted command or run binding-lifecycle-recover"
+            )
+    lifecycle = BackgroundLifecycleSupervisor.for_runtime(
+        registry_path=runtime.layout.registry_path,
+        ownership_root=runtime.ledger.root,
+        channel_id=runtime.layout.channel_id,
+        consumer=consumer,
+    ).start()
+    log = logging.getLogger(__name__)
+    if lifecycle.status == "failed":
+        log.error("background lifecycle failed at startup: %s", lifecycle.health())
+    else:
+        log.info("background lifecycle started: %s", lifecycle.health())
+
+
 def _require_background_authority(registry_path: Path) -> object:
     from app.instance.background_authority import require_background_runtime_authority
 
@@ -5181,6 +5290,10 @@ def _require_background_authority(registry_path: Path) -> object:
 
 BACKGROUND_COMMANDS = (
     "background-authority-cutover",
+    "background-supervisor-handoff",
+    "binding-remove",
+    "binding-reactivate",
+    "binding-lifecycle-recover",
     "background-authority-show",
     "background-role-revoke",
     "background-role-redelegate",
@@ -5189,6 +5302,51 @@ BACKGROUND_COMMANDS = (
     "background-binding-add",
     "background-binding-remove",
 )
+
+
+def _binding_lifecycle_command(
+    args: argparse.Namespace, registry_path: Path
+) -> dict[str, object]:
+    """Headless MVR-06B removal/reactivation producers. Receipts carry no host path."""
+
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout(
+            root=registry_path.parent,
+            channel_id=args.channel,
+            registry_path=registry_path,
+        ),
+        args.host_global_root,
+        initialize_layout=False,
+    )
+    if args.watcher_posture == "running" and args.watcher_state_dir is None:
+        raise ValueError("--watcher-posture running requires --watcher-state-dir")
+    runtime.lifecycle_watcher_posture = {
+        "enabled": args.watcher_posture == "running",
+        "state_dir": args.watcher_state_dir,
+    }
+    if args.command == "binding-remove":
+        tombstone = runtime.remove(
+            args.vault_binding_id,
+            replacement_default_binding_id=args.replacement_default_binding_id,
+        )
+        return {
+            "vault_binding_id": tombstone.vault_binding_id,
+            "content_epoch": tombstone.content_epoch,
+            "state": "removed",
+        }
+    if args.command == "binding-reactivate":
+        registration = runtime.reactivate_removed(Path(args.root))
+        return {
+            "vault_binding_id": registration.vault_binding_id,
+            "content_epoch": registration.extensions.get("contentEpoch"),
+            "state": "healthy",
+        }
+    removal = runtime.recover_removal()
+    reactivation = runtime.recover_reactivation()
+    return {
+        "recovered_removal": None if removal is None else removal.vault_binding_id,
+        "recovered_reactivation": None if reactivation is None else reactivation.vault_binding_id,
+    }
 
 
 def _background_command(args: argparse.Namespace) -> int:
@@ -5240,12 +5398,69 @@ def _background_command(args: argparse.Namespace) -> int:
                         _capability=local_operator_storage_capability(),
                     )
             payload = receipt.as_dict()
+        elif args.command == "background-supervisor-handoff":
+            from app.instance.background_supervisor import (
+                run_compatibility_bridge_handoff,
+            )
+
+            layout = InstanceStateLayout(
+                root=registry_path.parent,
+                channel_id=args.channel,
+                registry_path=registry_path,
+            )
+            layout.require_existing()
+            with _deployment_admission_locked(args.host_global_root):
+                with _producer_transition_locked(layout):
+                    proof = json.loads(
+                        args.quiescence_proof_path.read_text(encoding="utf-8")
+                    )
+                    _require_proved_deployment_lease(
+                        host_global_root=args.host_global_root,
+                        channel=args.channel,
+                        nonce=proof.get("nonce"),
+                    )
+                    # Only an explicit operator root is resolved here: the init container
+                    # has no vault mount, so the env bootstrap comes from durable enrollment.
+                    handoff = run_compatibility_bridge_handoff(
+                        registry,
+                        channel_id=args.channel,
+                        ownership_root=args.host_global_root,
+                        legacy_bootstrap_root=(
+                            Path(args.legacy_bootstrap_root)
+                            if args.legacy_bootstrap_root
+                            else None
+                        ),
+                        stopped_window_proven=True,
+                        _capability=local_operator_storage_capability(),
+                    )
+            payload = handoff.as_dict()
+        elif args.command in {"binding-remove", "binding-reactivate", "binding-lifecycle-recover"}:
+            payload = _binding_lifecycle_command(args, registry_path)
         elif args.command == "background-authority-show":
             payload = role_store.require().receipt()
         elif args.command == "background-role-revoke":
-            payload = role_store.revoke(
-                _capability=local_operator_storage_capability()
-            ).receipt()
+            from app.instance.background_supervisor import (
+                handoff_complete,
+                revoke_background_role_fenced,
+            )
+
+            if handoff_complete(registry.read_existing()):
+                if args.channel is None or args.host_global_root is None:
+                    raise ValueError(
+                        "after the MVR-06B handoff a GOV revocation must drain the "
+                        "affected lifecycles: pass --channel and --host-global-root"
+                    )
+                payload = revoke_background_role_fenced(
+                    registry=registry,
+                    role_store=role_store,
+                    ownership_root=args.host_global_root,
+                    channel_id=args.channel,
+                    _capability=local_operator_storage_capability(),
+                ).receipt()
+            else:
+                payload = role_store.revoke(
+                    _capability=local_operator_storage_capability()
+                ).receipt()
         elif args.command == "background-role-redelegate":
             payload = role_store.redelegate(
                 delegator=open_local_operator_principal_store(registry_path).require(),
@@ -6230,6 +6445,24 @@ def _main(argv: list[str] | None = None) -> int:
                 choices=("existing-install", "channel", "native"),
                 required=True,
             )
+        if name == "background-supervisor-handoff":
+            command.add_argument("--channel", required=True)
+            command.add_argument("--host-global-root", type=Path, required=True)
+            command.add_argument("--quiescence-proof-path", type=Path, required=True)
+            command.add_argument("--legacy-bootstrap-root", default=None)
+        if name in {"binding-remove", "binding-reactivate", "binding-lifecycle-recover"}:
+            command.add_argument("--channel", required=True)
+            command.add_argument("--host-global-root", type=Path, required=True)
+            command.add_argument("--watcher-posture", choices=("running", "absent"), required=True)
+            command.add_argument("--watcher-state-dir", type=Path, default=None)
+        if name == "binding-remove":
+            command.add_argument("--vault-binding-id", required=True)
+            command.add_argument("--replacement-default-binding-id", default=None)
+        if name == "binding-reactivate":
+            command.add_argument("--root", required=True)
+        if name == "background-role-revoke":
+            command.add_argument("--channel", default=None)
+            command.add_argument("--host-global-root", type=Path, default=None)
         if name in {
             "background-binding-inspect",
             "background-binding-add",

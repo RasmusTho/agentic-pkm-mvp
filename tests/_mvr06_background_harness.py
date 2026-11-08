@@ -60,12 +60,14 @@ def mvr05_instance(tmp_path: Path, *, extra_roots: tuple[str, ...] = ()):
 
 
 def run_background_cutover_through_cli(
-    runtime, *, bootstrap_kind: str = "existing-install"
+    runtime, *, bootstrap_kind: str = "existing-install", other_runtimes=()
 ) -> dict:
     """The shipped cutover command inside a proved stopped window, then finish it."""
 
     legacy_path = runtime.layout.root / "missing-legacy.md"
-    proof, inventory_path = deployment_authority(runtime, legacy_path)
+    proof, inventory_path = deployment_authority(
+        runtime, legacy_path, other_runtimes=other_runtimes
+    )
     try:
         receipt = cli(
             "background-authority-cutover",
