@@ -604,6 +604,97 @@ def _require_drainable_under_claims(runtime: Any, binding_id: str) -> None:
         )
 
 
+SINGLETON_DRAIN_CONTRACT = "agentic-pkm.mvr06d-singleton-drain.v1"
+_DRAIN_CLAIM_WAITS = 50
+_DRAIN_CLAIM_WAIT_SECONDS = 0.2
+
+
+def _drain_one_under_claims(
+    runtime: Any, binding_id: str, eligible: tuple[str, ...], *, vault_root: Path
+) -> str:
+    """MVR-06D: settle one source row of a transfer/reactivation drain through a claim.
+
+    After the floor the drain may run while many-binding workers are live, so every row is
+    leased through the same recoverable claim protocol (one owner per row, token-fenced
+    effect, acknowledgement only with a durable outcome). Quarantined and
+    reconciliation-required rows are never claimable here, so they stay pending and the
+    drain reports them unsettled. The drain keeps the singleton handler set; a crash
+    inside a non-atomic handler leaves an unprovable ``effect_pending`` that blocks.
+    """
+
+    from app.services import outbox_claims as claims
+    from app.services.outbox import _open_conn, open_outbox_txn_conn
+    from app.workers.many_binding_dispatch import _lease_seconds
+
+    owner = f"singleton-drain:{binding_id}"
+    conn = _open_conn()
+    try:
+        claim = None
+        for scope in eligible:
+            if scope == COMPATIBILITY_BINDING_ID:
+                continue  # activation proved no unscoped row is pending
+            claim = claims.claim_next(
+                conn, owner=owner, vault_binding_id=scope, lease_seconds=_lease_seconds()
+            )
+            if claim is not None:
+                break
+        if claim is None:
+            return "idle"
+        context = {"owner": owner, "routing_class": "drain"}
+        if claim.recovered_effect_pending:
+            if claim.effect_outcome is not None:
+                claims.ack_claim(conn, claim, consumer_context={**context, "reconciled": "effect_outcome_durable"})
+                return "processed"
+            claims.mark_reconciliation_required(
+                conn, claim, reason="a drained effect outcome is neither durable nor provably absent"
+            )
+            raise OutboxDrainBlocked("a source row needs effect reconciliation before draining")
+        message = claim.message()
+        claim = claims.mark_effect_pending(
+            conn,
+            claim,
+            {
+                "contract": SINGLETON_DRAIN_CONTRACT,
+                "kind": "singleton_drain",
+                "topic": claim.topic,
+                "vault_binding_id": claim.vault_binding_id,
+                "claim_token": claim.token,
+                "consumer_context": context,
+            },
+        )
+        payload = claim.payload
+        trace_id = payload.get("trace_id") or _trace_id_from_envelope(claim.event) or "-"
+        txn = open_outbox_txn_conn()
+        if txn is None:
+            claims.release_claim(conn, claim, failed=False)
+            raise RuntimeError("the claim-aware drain requires a transactional DB connection")
+        try:
+            with worker_effect_window(message, runtime=runtime):
+                with claims.fenced_effect(
+                    txn, claim, outcome=claims.OUTCOME_APPLIED,
+                    receipt={"consumer_context": context, "claim_token": claim.token},
+                ):
+                    _dispatch_topic(
+                        claim.topic, payload, trace_id=trace_id, message=message,
+                        event_id=_event_id_from_message(message), vault_root=vault_root,
+                    )
+        except (InvalidPanelNoteUUIDDispatchError, SchemaViolationDispatchError) as exc:
+            claims.quarantine_claim(conn, claim, reason="drain_dispatch_refused")
+            logger.warning("drain quarantined row %s: %s", claim.row_id, exc)
+            return "processed"
+        except (claims.StaleClaimToken, claims.EffectAlreadyRecorded):
+            return "processed"  # another owner holds or settled this row
+        except Exception:
+            claims.release_claim(conn, claim, failed=True)
+            raise
+        finally:
+            txn.close()
+        claims.ack_claim(conn, claim, consumer_context=context)
+        return "processed"
+    finally:
+        conn.close()
+
+
 def drain_binding_outbox(*, vault_root: Path, binding_id: str, include_compatibility: bool = False) -> dict[str, Any]:
     """Settle source work through real dispatch/receipt/ack under its original ID."""
     from app.instance.settings_rebind import SettingsRebindStore
@@ -615,18 +706,31 @@ def drain_binding_outbox(*, vault_root: Path, binding_id: str, include_compatibi
     rebind = runtime.registry_store.load().settings_rebind
     compatibility = include_compatibility or (rebind is not None and SettingsRebindStore(runtime.registry_store).read().candidate_binding_id == binding_id)
     eligible = (binding_id, COMPATIBILITY_BINDING_ID) if compatibility else (binding_id,)
+    from app.instance.vault_registry import many_binding_dispatch_enabled
+    from app.workers.many_binding_dispatch import queue_configured
+
+    claim_aware = queue_configured() and many_binding_dispatch_enabled(runtime.registry_store.load())
     settled: list[str] = []
+    waits = 0
     for _ in range(10000):
         pending = pending_transfer_rows(binding_id, include_compatibility=compatibility)
         if not pending:
             return {"schema": "binding-transfer-drain.v1", "source_binding_id": binding_id,
                     "terminal_row_ids": settled, "unsettled": 0}
-        result = run_once(vault_root=vault_root, _eligible_binding_ids=eligible)
+        if claim_aware:
+            state = _drain_one_under_claims(runtime, binding_id, eligible, vault_root=vault_root)
+            if state == "idle" and waits < _DRAIN_CLAIM_WAITS:
+                # A live many-binding claim owns the remaining row: let it settle.
+                waits += 1
+                time.sleep(_DRAIN_CLAIM_WAIT_SECONDS)
+                continue
+        else:
+            state = run_once(vault_root=vault_root, _eligible_binding_ids=eligible).state
         remaining = pending_transfer_rows(binding_id, include_compatibility=compatibility)
         previous_ids = {str(row["id"]) for row in pending}
         remaining_ids = {str(row["id"]) for row in remaining}
         settled.extend(sorted(previous_ids - remaining_ids))
-        if result.state != "processed" or remaining_ids == previous_ids:
+        if state != "processed" or remaining_ids == previous_ids:
             raise RuntimeError("source queue has unsettled or stale rows; transfer is not ready")
     raise RuntimeError("source queue drain exceeded its bounded budget")
 
@@ -981,8 +1085,11 @@ def _emit_ka_consumer_signal(
         trace_id=trace_id,
         payload=dict(payload),
     )
-    if conn is not None:
-        # Fenced store effect: a failure propagates and rolls the transaction back.
+    try:
+        if conn is None:
+            append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
+            if not _use_db_outbox():
+                return
         write_outbox_event(
             event,
             conn,
@@ -990,17 +1097,10 @@ def _emit_ka_consumer_signal(
             vault_binding_id=source_vault_binding_id,
             producer="worker.ka_consumer_signal",
         )
-        return
-    try:
-        append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
-        if _use_db_outbox():
-            write_outbox_event(
-                event,
-                idempotency_key=key,
-                vault_binding_id=source_vault_binding_id,
-                producer="worker.ka_consumer_signal",
-            )
     except Exception:
+        if conn is not None:
+            # Fenced store effect: a failure propagates and rolls the transaction back.
+            raise
         # Best-effort observability signal: a failure here must never re-block
         # the outbox poll loop or fail the dispatch of the KA stage event
         # itself (these are audit-only side effects).

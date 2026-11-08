@@ -398,3 +398,69 @@ def test_singleton_drain_never_touches_claim_or_quarantine_state(pg_many) -> Non
     blocked = _row(dsn, ambiguous)
     assert blocked["phase"] == "effect_reconciliation_required" and not blocked["delivered"]
     assert ready_signals(dsn, "ambiguous-before-drain") == []
+
+
+def test_drain_and_live_workers_share_one_claim_owner_per_row(pg_many, tmp_path, monkeypatch) -> None:
+    """Regression (convergence re-review P1): a transfer/reactivation drain may run while
+    many-binding workers are live, so it leases rows through the same claim protocol; and
+    a worker blocks -- never quarantines -- the queue of a binding that is sealed."""
+
+    from pathlib import Path
+
+    from app.workers.outbox_worker import drain_binding_outbox
+
+    runtime, binding_a, binding_b, dsn = pg_many
+    root_a = Path(runtime.registry.load().registrations[binding_a].path)
+    identities = [f"drain-race-{index}" for index in range(10)]
+    rows_a = [emit_stage(runtime, binding_a, identity) for identity in identities]
+    context = multiprocessing.get_context("spawn")
+    log_path = tmp_path / "drain-race.jsonl"
+    workers = [
+        context.Process(
+            target=race_worker,
+            args=(dict(os.environ), str(runtime.layout.registry_path), str(runtime.ledger.root),
+                  runtime.layout.channel_id, f"live-{index}", str(log_path), 200),
+        )
+        for index in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    try:
+        receipt = drain_binding_outbox(vault_root=root_a, binding_id=binding_a)
+    finally:
+        for worker in workers:
+            worker.join(timeout=100)
+            if worker.is_alive():
+                worker.kill()
+                worker.join(timeout=5)
+    assert receipt["unsettled"] == 0
+    for row_id in rows_a:
+        state = _row(dsn, row_id)
+        assert state["delivered"] and not state["quarantined"] and state["outcome"] == "applied"
+    for identity in identities:
+        # One effect per source row, whoever owned it (the drain or a live worker).
+        assert len(ready_signals(dsn, identity)) == 1, identity
+    if log_path.exists():
+        starts: dict[str, int] = {}
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            event = json.loads(line)
+            if event["stage"] == "effect_pending":
+                starts[event["row"]] = starts.get(event["row"], 0) + 1
+        assert all(count == 1 for count in starts.values()), starts
+
+    # A sealed binding (a removal crashed after its draining reservation) is blocked by
+    # the worker: its pending rows stay pending, never quarantined, until it settles.
+    sealed_row = emit_stage(runtime, binding_b, "sealed-binding")
+
+    def crash(name: str) -> None:
+        if name == "binding-removal:reserved":
+            raise _Crash(name)
+
+    monkeypatch.setattr("app.instance.binding_removal._fault_point", crash)
+    with pytest.raises(_Crash):
+        runtime.remove(binding_b)
+    worker = dispatch.ManyBindingDispatcher(supervisor_for(runtime, "worker"), owner="w")
+    for _ in range(2):
+        worker.tick()
+    held = _row(dsn, sealed_row)
+    assert not held["quarantined"] and not held["delivered"]

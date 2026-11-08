@@ -350,8 +350,14 @@ class ManyBindingDispatcher:
     def _quarantine_reason(
         self, scope: str, snapshot: Any, intent_ids: set[str], lifecycles: Mapping[str, Any]
     ) -> str | None:
-        if scope not in snapshot.registrations:
+        transfer = snapshot.extensions.get("channelTransfer")
+        if isinstance(transfer, Mapping) and transfer.get("source_binding_id") == scope:
+            return None  # a channel transfer drains this binding's queue; block, never quarantine
+        registration = snapshot.registrations.get(scope)
+        if registration is None:
             return "binding_removed"
+        if registration.extensions.get("lifecycleState") is not None:
+            return None  # sealed (removal/reactivation/relocation) work blocks until it settles
         if scope not in intent_ids:
             return "lifecycle_not_enrolled"
         lifecycle = lifecycles.get(scope)
