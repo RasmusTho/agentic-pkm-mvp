@@ -890,6 +890,27 @@ watcher's final old-root scan and drain receipts. State `absent` only when no wa
   example a target that changed) withdraws it and keeps the old root. The MVR-01C scalar rollback
   target cannot be relocated.
 
+### Many-binding activation and quarantined work (MVR-06D)
+
+```bash
+python -m app.instance.runtime background-many-binding-activate --channel <c> --registry-path <registry> --host-global-root <h> --quiescence-proof-path <proof>
+python -m app.instance.runtime background-queue-list --registry-path <registry>
+python -m app.instance.runtime background-queue-reissue --registry-path <registry> --row-id <id> --vault-binding-id <id>
+python -m app.instance.runtime background-queue-drop --registry-path <registry> --row-id <id> --reason <text>
+```
+
+- Activation runs once, inside the proved stopped window, after `alembic upgrade head`. A refusal
+  naming unscoped compatibility rows means the outbox is not drained: let the singleton worker
+  settle it (KD-A42F26A9AD87), then retry. After activation no MVR-06A–06C image can start.
+- `/api/health` `background_lifecycles.readiness` `degraded` with quarantined rows: inspect them
+  with `background-queue-list`. A row reissues only to its own binding once that binding runs
+  again under current authority; otherwise drop it with a reason.
+- `blocked` readiness means an `effect_reconciliation_required` row: its effect outcome is
+  ambiguous. Verify the effect manually before deciding; the runtime never replays, acknowledges,
+  or drops it on its own.
+- `unadmitted_pending` counts rows whose handler has no reconciliation read yet (ingest, panel
+  scan, promotion, debrief, note move, embedding). Many-binding dispatch leaves them pending.
+
 ## Obsidian sync runtime
 
 Current runtime model:

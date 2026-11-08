@@ -28,7 +28,11 @@ governed singleton/explicit-empty intent, and activates production registration 
 same-channel tombstone reactivation. MVR-06C (#3865) generalizes the supervisor per binding but
 keeps many-binding supervision dormant (a second binding stays sealed until MVR-06D enables its
 queue-dispatch contract), and activates production relocation behind the shared/exclusive
-effect-lease order.
+effect-lease order. MVR-06D (#3866) activates many-binding enrollment/start together with its
+recoverable PostgreSQL claim dispatch behind the `minimumRuntimeSchema=mvr-06d` floor (registry v4),
+quarantines or revalidates pending queued work under current authority and binding, and adds the
+zero/one/many `/api/health` projection; vault-file and derived-projection handlers are not yet
+admitted to many-binding dispatch.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 
