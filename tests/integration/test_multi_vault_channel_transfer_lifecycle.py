@@ -11,6 +11,21 @@ import app.instance.channel_transfer as transfers
 from tests._mvr05c_transfer_harness import transfer_pair, reopen
 
 
+def _join_fork_child(process, *, timeout: float = 15) -> None:
+    """Bound a forked crash-injection child: kill it if it outlives the timeout.
+
+    A child forked from a multi-threaded test process can deadlock on an inherited lock.
+    Leaving it alive would let multiprocessing's exit-time join wait on it forever, after
+    pytest-timeout no longer applies; killing it turns that into an ordinary failure.
+    """
+
+    process.join(timeout=timeout)
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=5)
+        raise AssertionError("forked transfer child did not exit; it was killed")
+
+
 def assert_transferred(source, destination, original, target):
     owners = source.ledger.load()
     assert source.ledger.active_owner(original.vault_binding_id) is None
@@ -44,7 +59,7 @@ def test_production_transfer_recovers_after_every_durable_phase(tmp_path, monkey
 
     process = multiprocessing.get_context("fork").Process(target=interrupted_transfer)
     process.start()
-    process.join(timeout=15)
+    _join_fork_child(process)
     assert process.exitcode == 86
     intent = json.loads((source.layout.root / "channel-transfer.json").read_text())
     if transfers.PHASES.index(phase) < transfers.PHASES.index("ownership_activated"):
@@ -301,7 +316,7 @@ def test_transfer_recovers_from_internal_durable_boundaries(tmp_path, monkeypatc
 
     child = multiprocessing.get_context("fork").Process(target=interrupted)
     child.start()
-    child.join(timeout=15)
+    _join_fork_child(child)
     assert child.exitcode == 87
     target = reopen(source).recover_transfer(reopen(destination), stop_and_prove=stop)
     assert_transferred(source, destination, original, target)
