@@ -46,6 +46,32 @@ Codex is the only active Builder worker carrier. The executable instruction and 
 `AGENTS.md` → `.codex/skills/README.md :: Skill routing` → the selected `.codex/skills/**`
 workflow and active `.codex/agents/**` role adapter.
 
+For local observation and control of an existing OpenHands conversation, the owner can launch the
+official Agent Canvas static server with `scripts/openhands_canvas.py`. This is a local interface,
+not qualification of OpenHands as a Builder carrier. It requires Node.js, an installed
+`@openhands/agent-canvas` package with its built frontend, an already-running compatible loopback
+agent-server, and that server's session key in an owner-only regular file.
+The state directory must be owner-only; it is created if its parent exists. For example:
+
+```bash
+python3 scripts/openhands_canvas.py start --package-dir /path/to/node_modules/@openhands/agent-canvas \
+  --backend http://127.0.0.1:8000 --key-file /private/path/session-key \
+  --state-dir /private/path/canvas-state --port 3001
+python3 scripts/openhands_canvas.py status --state-dir /private/path/canvas-state
+python3 scripts/openhands_canvas.py stop --state-dir /private/path/canvas-state
+```
+
+Start prints the Canvas loopback URL; `--open` also opens it in the browser. The backend URL must
+use a numeric loopback address, HTTP, and an explicit port. The Canvas listener is restricted to
+`127.0.0.1`. Its official reverse proxy may send forwarded headers; the backend must not grant them
+authentication or identity authority. The session key authenticates the backend, is passed to the
+static server through its environment, and is not saved in launcher state or logs. The private state
+stores a key fingerprint so a repeated start refuses a changed key; stop and start to apply it. Canvas injects
+the key into its local page for the browser, so this listener must remain local. Stop targets only
+the recorded Canvas process and does not stop the backend. If process identity no longer matches,
+the launcher retains state and refuses to signal that PID. On macOS, the launcher rechecks process
+identity immediately before sending `SIGTERM`; on Linux it uses a pidfd when available.
+
 The repository also contains a dormant Claude native CLI implementation for the protected
 one-Issue path. A versioned approval binds its target, executable and isolation profile; the
 existing host-owned verifier port has no default implementation. Without a separately installed
