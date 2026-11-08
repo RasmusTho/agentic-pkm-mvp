@@ -71,6 +71,10 @@ the key into its local page for the browser, so this listener must remain local.
 the recorded Canvas process and does not stop the backend. If process identity no longer matches,
 the launcher retains state and refuses to signal that PID. On macOS, the launcher rechecks process
 identity immediately before sending `SIGTERM`; on Linux it uses a pidfd when available.
+If startup is interrupted before the process identity is recorded, status reports an unknown
+outcome and start and stop refuse. The owner must reconcile the recorded marker and server process;
+after confirming no such Canvas process remains, remove `server.json` from the state directory before
+starting again.
 
 The repository also contains a dormant Claude native CLI implementation for the protected
 one-Issue path. A versioned approval binds its target, executable and isolation profile; the

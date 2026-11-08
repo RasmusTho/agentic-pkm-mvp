@@ -160,6 +160,31 @@ def test_failed_start_cleans_up_and_can_retry(setup, monkeypatch):
     assert len(setup.launches) == 2
 
 
+def test_interrupted_start_retains_unknown_intent_and_prevents_duplicate(setup, monkeypatch, capsys):
+    spawn = canvas.subprocess.Popen
+
+    def spawn_after_intent(*args, **kwargs):
+        intent = json.loads((setup.state / "server.json").read_text())
+        assert intent["phase"] == "starting"
+        assert intent["marker"].startswith("/__owner_canvas_")
+        assert intent["backend"] == "http://127.0.0.1:8000"
+        assert "test-only-session-key" not in (setup.state / "server.json").read_text()
+        return spawn(*args, **kwargs)
+
+    monkeypatch.setattr(canvas.subprocess, "Popen", spawn_after_intent)
+    monkeypatch.setattr(canvas, "process_info", lambda pid: (_ for _ in ()).throw(KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        canvas.main(["start", *setup.args])
+    assert setup.running
+    assert canvas.main(["status", "--state-dir", str(setup.state)]) == 1
+    assert "startup outcome unknown" in capsys.readouterr().err
+    assert canvas.main(["start", *setup.args]) == 1
+    assert canvas.main(["stop", "--state-dir", str(setup.state)]) == 1
+    assert len(setup.launches) == 1
+    assert setup.running
+    assert (setup.state / "server.json").exists()
+
+
 def test_macos_rechecks_identity_before_stop(setup, monkeypatch, capsys):
     monkeypatch.delattr(canvas.os, "pidfd_open")
     monkeypatch.setattr(canvas.sys, "platform", "darwin")

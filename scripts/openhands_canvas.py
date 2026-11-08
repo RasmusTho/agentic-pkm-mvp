@@ -92,12 +92,17 @@ def read_state(path: Path) -> dict | None:
                 raise CanvasError("server state is not private")
             state = json.load(stream)
         if (not isinstance(state, dict) or state.get("version") != 1
-                or type(state.get("pid")) is not int or state["pid"] <= 1
+                or state.get("phase") not in (None, "starting")
                 or not all(isinstance(state.get(k), str) and state[k] for k in
-                           ("started", "marker", "server", "url", "backend"))
+                           ("marker", "server", "url", "backend"))
                 or not state["marker"].startswith("/__owner_canvas_")
                 or len(state["marker"]) != len("/__owner_canvas_") + 32
                 or any(c not in "0123456789abcdef" for c in state["marker"][-32:])):
+            raise ValueError
+        if state.get("phase") != "starting" and (
+            type(state.get("pid")) is not int or state["pid"] <= 1
+            or not isinstance(state.get("started"), str) or not state["started"]
+        ):
             raise ValueError
         return state
     except (ValueError, TypeError, UnicodeError, OSError) as exc:
@@ -232,6 +237,8 @@ def start(args, state_path: Path) -> str:
         raise CanvasError("Canvas package must contain scripts/static-server.mjs and build/index.html")
     current = read_state(state_path)
     if current:
+        if current.get("phase") == "starting":
+            raise CanvasError("startup outcome unknown; owner reconciliation required before start")
         status = process_status(current)
         if status == "mismatch":
             raise CanvasError("recorded PID belongs to another process; refusing to start")
@@ -258,10 +265,15 @@ def start(args, state_path: Path) -> str:
     for route in ("/api", "/sockets", "/server_info", "/alive", "/health", "/ready", "/docs", "/redoc", "/openapi.json"):
         command.extend(("--route", f"{route}={backend}"))
     env = {"PATH": os.defpath, "SESSION_API_KEY": key, "AGENT_CANVAS_DISABLE_TELEMETRY": "1"}
+    intent = {"version": 1, "phase": "starting", "marker": marker,
+              "server": str(server), "url": url, "backend": backend,
+              "key_fingerprint": hashlib.sha256(key.encode("utf-8")).hexdigest()}
+    write_state(state_path, intent)
     try:
         process = subprocess.Popen(command, cwd=package, env=env, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError as exc:
+        state_path.unlink()
         raise CanvasError("could not start Canvas server") from exc
     try:
         info = process_info(process.pid)
@@ -305,6 +317,8 @@ def main(argv: list[str] | None = None) -> int:
                     webbrowser.open(url)
             else:
                 state = read_state(state_path)
+                if state and state.get("phase") == "starting":
+                    raise CanvasError("startup outcome unknown; owner reconciliation required")
                 status = process_status(state) if state else "stopped"
                 if status == "mismatch":
                     raise CanvasError("recorded PID belongs to another process; state retained")
