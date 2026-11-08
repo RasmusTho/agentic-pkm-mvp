@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import io
 import os
-import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -10,6 +11,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
@@ -86,32 +88,38 @@ def setup(tmp_path, monkeypatch):
     launches = []
 
     class Process:
-        pid = 12345
+        pid = 54321
 
         def __init__(self, command, **kwargs):
-            launches.append((command, kwargs))
-            running[self.pid] = ("Mon Nov  9 01:02:03 2026", "S", " ".join(command))
+            launches.append((command[5:], kwargs))
+            running[12345] = command[4]
+            self.stdout = io.BytesIO(b'{"pid":12345}\n')
 
         def poll(self):
-            return None if self.pid in running else 0
+            return None if running else 0
 
         def terminate(self):
-            running.pop(self.pid, None)
+            running.clear()
 
         def wait(self, timeout=None):
             return 0
 
-    def send_signal(fd, sig):
-        assert sig == signal.SIGTERM
-        running.pop(Process.pid, None)
+    def request(state_path, state, action):
+        if state.get("supervised") is not True:
+            raise canvas.CanvasError("legacy Canvas is not supervised")
+        if state["pid"] != 12345 or (running and state["marker"] != running[12345]):
+            raise canvas.CanvasError("supervisor refused request; state retained")
+        if action == "stop":
+            running.clear()
+            return "stopped"
+        return "running" if running else "stopped"
 
     monkeypatch.setattr(canvas.shutil, "which", lambda _: "/usr/bin/node")
     monkeypatch.setattr(canvas.subprocess, "Popen", Process)
-    monkeypatch.setattr(canvas, "process_info", lambda pid: running.get(pid))
+    monkeypatch.setattr(canvas, "supervisor_request", request)
+    monkeypatch.setattr(canvas.select, "select", lambda r, w, x, timeout: (r, [], []))
     monkeypatch.setattr(canvas, "wait_ready", lambda process, port: None)
     monkeypatch.setattr(canvas, "ensure_port_free", lambda port: None)
-    monkeypatch.setattr(canvas.os, "pidfd_open", lambda pid: os.open(os.devnull, os.O_RDONLY), raising=False)
-    monkeypatch.setattr(canvas.signal, "pidfd_send_signal", send_signal, raising=False)
     args = ["--package-dir", str(package), "--backend", "http://127.0.0.1:8000",
             "--key-file", str(key_file), "--state-dir", str(state_dir)]
     return SimpleNamespace(args=args, state=state_dir, key=key_file, running=running, launches=launches)
@@ -146,14 +154,13 @@ def test_rotated_key_requires_restart(setup, capsys):
 
 def test_stop_owns_only_the_canvas_process(setup, capsys):
     assert canvas.main(["start", *setup.args]) == 0
-    state = json.loads((setup.state / "server.json").read_text())
-    # A reused PID, even one with the same command, must not be signalled.
-    original = setup.running[state["pid"]]
-    setup.running[state["pid"]] = ("different start time", original[1], original[2])
+    state_file = setup.state / "server.json"
+    state = json.loads(state_file.read_text())
+    state_file.write_text(json.dumps({**state, "pid": state["pid"] + 1}))
     assert canvas.main(["stop", "--state-dir", str(setup.state)]) == 1
     assert state["pid"] in setup.running
-    assert (setup.state / "server.json").exists()
-    setup.running[state["pid"]] = original
+    assert state_file.exists()
+    state_file.write_text(json.dumps(state))
     assert canvas.main(["stop", "--state-dir", str(setup.state)]) == 0
     assert not setup.running
     assert not (setup.state / "server.json").exists()
@@ -165,6 +172,7 @@ def test_key_and_loopback_configuration(setup, capsys):
     command, kwargs = setup.launches[0]
     assert kwargs["env"]["SESSION_API_KEY"] == "test-only-session-key"
     assert kwargs["env"]["AGENT_CANVAS_DISABLE_TELEMETRY"] == "1"
+    assert "--auth-required" in command
     assert "test-only-session-key" not in " ".join(command)
     assert "test-only-session-key" not in (setup.state / "server.json").read_text()
     assert "--host" in command and command[command.index("--host") + 1] == "127.0.0.1"
@@ -226,7 +234,7 @@ def test_interrupted_start_retains_unknown_intent_and_prevents_duplicate(setup, 
         return spawn(*args, **kwargs)
 
     monkeypatch.setattr(canvas.subprocess, "Popen", spawn_after_intent)
-    monkeypatch.setattr(canvas, "process_info", lambda pid: (_ for _ in ()).throw(KeyboardInterrupt()))
+    monkeypatch.setattr(canvas.select, "select", lambda *args: (_ for _ in ()).throw(KeyboardInterrupt()))
     with pytest.raises(KeyboardInterrupt):
         canvas.main(["start", *setup.args])
     assert setup.running
@@ -239,98 +247,119 @@ def test_interrupted_start_retains_unknown_intent_and_prevents_duplicate(setup, 
     assert (setup.state / "server.json").exists()
 
 
-def test_macos_rechecks_identity_before_stop(setup, monkeypatch, capsys):
-    monkeypatch.delattr(canvas.os, "pidfd_open")
-    monkeypatch.setattr(canvas.sys, "platform", "darwin")
-    calls = []
-
-    def kill(pid, sig):
-        calls.append((pid, sig))
-        setup.running.pop(pid)
-
-    monkeypatch.setattr(canvas.os, "kill", kill)
+def test_unavailable_supervisor_preserves_state(setup, monkeypatch):
     assert canvas.main(["start", *setup.args]) == 0
-    state = json.loads((setup.state / "server.json").read_text())
-    original = setup.running[state["pid"]]
-    observations = iter([original, ("different start", original[1], original[2])])
-    monkeypatch.setattr(canvas, "process_info", lambda pid: next(observations))
-    assert canvas.main(["stop", "--state-dir", str(setup.state)]) == 1
-    assert not calls
-    assert (setup.state / "server.json").exists()
-    assert "refusing to stop" in capsys.readouterr().err
-    monkeypatch.setattr(canvas, "process_info", lambda pid: setup.running.get(pid))
-    assert canvas.main(["stop", "--state-dir", str(setup.state)]) == 0
-    assert calls == [(state["pid"], signal.SIGTERM)]
-
-
-def test_unavailable_identity_preserves_state(setup, monkeypatch):
-    assert canvas.main(["start", *setup.args]) == 0
-    monkeypatch.setattr(canvas, "process_info", lambda pid: (_ for _ in ()).throw(canvas.CanvasError("inspection unavailable")))
+    monkeypatch.setattr(canvas, "supervisor_request", lambda *args: (_ for _ in ()).throw(canvas.CanvasError("supervisor unavailable")))
+    assert canvas.main(["status", "--state-dir", str(setup.state)]) == 1
+    assert canvas.main(["start", *setup.args]) == 1
     assert canvas.main(["stop", "--state-dir", str(setup.state)]) == 1
     assert (setup.state / "server.json").exists()
     assert setup.running
+    assert len(setup.launches) == 1
 
 
-def test_disappearing_process_preserves_state(setup, monkeypatch):
-    assert canvas.main(["start", *setup.args]) == 0
-    state = json.loads((setup.state / "server.json").read_text())
-    original = setup.running[state["pid"]]
-    observations = iter([original, None])
-    monkeypatch.setattr(canvas, "process_info", lambda pid: next(observations))
-    assert canvas.main(["stop", "--state-dir", str(setup.state)]) == 1
-    assert (setup.state / "server.json").exists()
-    assert setup.running
+def test_legacy_state_never_signals_a_process(tmp_path, monkeypatch):
+    state = {"pid": 12345, "marker": "/__owner_canvas_" + "a" * 32}
+    monkeypatch.setattr(canvas.os, "kill", lambda *args: pytest.fail("legacy PID must not be signalled"))
+    with pytest.raises(canvas.CanvasError, match="legacy Canvas"):
+        canvas.supervisor_request(tmp_path / "server.json", state, "stop")
 
 
-def test_identity_change_after_signal_preserves_state(setup, monkeypatch):
-    assert canvas.main(["start", *setup.args]) == 0
-    state = json.loads((setup.state / "server.json").read_text())
-    original = setup.running[state["pid"]]
-    observations = iter([original, original, ("different start", original[1], original[2])])
-    monkeypatch.setattr(canvas, "process_info", lambda pid: next(observations))
-    monkeypatch.setattr(canvas.signal, "pidfd_send_signal", lambda fd, sig: None)
-    assert canvas.main(["stop", "--state-dir", str(setup.state)]) == 1
-    assert (setup.state / "server.json").exists()
-
-
-def test_process_identity_parsing(monkeypatch):
-    result = SimpleNamespace(returncode=0, stdout="Mon Nov  9 01:02:03 2026  S  node /tmp/static-server.mjs --host 127.0.0.1 --reject-prefix /__owner_canvas_" + "a" * 32 + " --route /api=http://127.0.0.1:8000")
-    monkeypatch.setattr(canvas.subprocess, "run", lambda *args, **kwargs: result)
-    state = {"pid": 123, "started": "Mon Nov 9 01:02:03 2026",
-             "marker": "/__owner_canvas_" + "a" * 32, "server": "/tmp/static-server.mjs"}
-    assert canvas.process_status(state) == "running"
-    assert canvas.process_status({**state, "marker": "/__owner_canvas_" + "b" * 32}) == "mismatch"
-    assert canvas.process_status({**state, "started": "different"}) == "mismatch"
-    assert canvas.process_status({**state, "server": "/tmp/static-server"}) == "mismatch"
-
-
-def test_real_process_identity_and_stop(tmp_path):
+def test_real_supervisor_controls_only_its_child(tmp_path):
+    control = tmp_path / "control"
+    os.mkfifo(control, 0o600)
     marker = "/__owner_canvas_" + "a" * 32
-    server = str(tmp_path / "static-server.mjs")
-    # The test child is never a real Canvas or backend and has no network access.
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", server,
-                              "--host", "127.0.0.1", "--reject-prefix", marker, "--route", "/api=http://127.0.0.1:8000"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={})
-    backend = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={})
+    script = Path(__file__).resolve().parents[2] / "scripts/openhands_canvas.py"
+    helper = subprocess.Popen([sys.executable, str(script), "_supervise", str(control), marker,
+                               sys.executable, "-c", "import time; time.sleep(30)"],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env={"PATH": os.defpath})
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={})
+    state = None
     try:
-        try:
-            info = canvas.process_info(child.pid)
-        except PermissionError:
-            pytest.skip("process inspection is unavailable")
-        assert info is not None
-        state = {"pid": child.pid, "started": info[0], "marker": marker, "server": server}
-        assert canvas.process_status(state) == "running"
-        assert canvas.process_status({**state, "started": "not the start time"}) == "mismatch"
-        canvas.stop_owned(state)
-        child.wait(timeout=5)
-        assert backend.poll() is None
+        assert helper.stdout is not None
+        assert canvas.select.select([helper.stdout], [], [], 5)[0]
+        pid = json.loads(helper.stdout.readline())["pid"]
+        state = {"supervised": True, "control": control.name, "marker": marker, "pid": pid}
+        assert canvas.supervisor_request(tmp_path / "server.json", state, "status") == "running"
+        with pytest.raises(canvas.CanvasError, match="refused"):
+            canvas.supervisor_request(tmp_path / "server.json", {**state, "pid": unrelated.pid}, "stop")
+        assert unrelated.poll() is None
+        assert canvas.supervisor_request(tmp_path / "server.json", state, "status") == "running"
+        assert canvas.supervisor_request(tmp_path / "server.json", state, "stop") == "stopped"
+        assert helper.wait(timeout=5) == 0
+        assert unrelated.poll() is None
+        with pytest.raises(canvas.CanvasError, match="supervisor unavailable"):
+            canvas.supervisor_request(tmp_path / "server.json", state, "stop")
     finally:
-        if child.poll() is None:
-            child.terminate()
-        child.wait(timeout=5)
-        backend.terminate()
-        backend.wait(timeout=5)
+        if helper.poll() is None and state is not None:
+            try:
+                canvas.supervisor_request(tmp_path / "server.json", state, "stop")
+            except canvas.CanvasError:
+                pass
+        if helper.poll() is None:
+            helper.wait(timeout=35)
+        unrelated.terminate()
+        unrelated.wait(timeout=5)
+
+
+def test_assembled_launcher_with_real_supervisor(tmp_path, monkeypatch, capsys):
+    if not shutil.which("node"):
+        pytest.skip("node is required")
+    package = tmp_path / "package"
+    (package / "scripts").mkdir(parents=True)
+    (package / "scripts" / "static-server.mjs").write_text("setTimeout(() => {}, 30000);\n")
+    (package / "build").mkdir()
+    (package / "build" / "index.html").write_text("fixture")
+    key = tmp_path / "key"
+    key.write_text("synthetic-only-key\n")
+    key.chmod(0o600)
+    state_dir = tmp_path / "state"
+    args = ["--package-dir", str(package), "--backend", "http://127.0.0.1:8000",
+            "--key-file", str(key), "--state-dir", str(state_dir)]
+    helpers = []
+    spawn = subprocess.Popen
+
+    def observe(*args, **kwargs):
+        process = spawn(*args, **kwargs)
+        helpers.append(process)
+        return process
+
+    monkeypatch.setattr(canvas.subprocess, "Popen", observe)
+    # Only network effects are substituted; supervisor and CLI remain real.
+    monkeypatch.setattr(canvas, "ensure_port_free", lambda port: None)
+    monkeypatch.setattr(canvas, "wait_ready", lambda process, port: None)
+    try:
+        assert canvas.main(["start", *args]) == 0
+        assert canvas.main(["status", "--state-dir", str(state_dir)]) == 0
+        assert canvas.main(["start", *args]) == 0
+        assert len(helpers) == 1
+        assert "synthetic-only-key" not in (state_dir / "server.json").read_text()
+        assert "synthetic-only-key" not in capsys.readouterr().out
+        assert canvas.main(["stop", "--state-dir", str(state_dir)]) == 0
+        assert helpers[0].wait(timeout=5) == 0
+    finally:
+        if (state_dir / "server.json").exists():
+            canvas.main(["stop", "--state-dir", str(state_dir)])
+        for helper in helpers:
+            if helper.poll() is None:
+                helper.wait(timeout=35)
+
+
+def test_installed_canvas_auth_mode_does_not_inject_key():
+    package = os.environ.get("OPENHANDS_CANVAS_PACKAGE")
+    node = shutil.which("node")
+    if not package or not node:
+        pytest.skip("installed Canvas package and node are required")
+    server = (Path(package) / "scripts/static-server.mjs").as_uri()
+    js = ("const m=await import(process.argv[1]);"
+          "const c=m.parseArgs(['--auth-required'],process.env);"
+          "if(!c.authRequired || c.sessionApiKey!==null)process.exit(1)")
+    result = subprocess.run([node, "--input-type=module", "-e", js, server],
+                            env={"PATH": os.defpath, "SESSION_API_KEY": "synthetic-key"},
+                            capture_output=True, check=False)
+    assert result.returncode == 0
+    assert b"synthetic-key" not in result.stdout + result.stderr
 
 
 def test_real_installed_canvas_with_isolated_backend(tmp_path):
@@ -375,7 +404,12 @@ def test_real_installed_canvas_with_isolated_backend(tmp_path):
         assert result.stdout.strip() == url
         assert key not in result.stdout + result.stderr + (state / "server.json").read_text()
         with urlopen(url, timeout=3) as response:
-            assert key.encode() in response.read()
+            page = response.read()
+            assert key.encode() not in page
+            assert b"__AGENT_CANVAS_AUTH_REQUIRED__" in page
+        with pytest.raises(HTTPError) as unauthenticated:
+            urlopen(url + "/api/test", timeout=3)
+        assert unauthenticated.value.code == 401
         request = Request(url + "/api/test", headers={"X-Session-API-Key": key})
         with urlopen(request, timeout=3) as response:
             assert response.read() == b"backend"

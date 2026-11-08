@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import errno
 import fcntl
 import hashlib
 import http.client
@@ -12,6 +11,7 @@ import ipaddress
 import json
 import os
 import secrets
+import select
 import shutil
 import signal
 import socket
@@ -99,11 +99,14 @@ def read_state(path: Path) -> dict | None:
                 or len(state["marker"]) != len("/__owner_canvas_") + 32
                 or any(c not in "0123456789abcdef" for c in state["marker"][-32:])):
             raise ValueError
-        if state.get("phase") != "starting" and (
-            type(state.get("pid")) is not int or state["pid"] <= 1
-            or not isinstance(state.get("started"), str) or not state["started"]
-        ):
-            raise ValueError
+        if state.get("phase") != "starting":
+            if type(state.get("pid")) is not int or state["pid"] <= 1:
+                raise ValueError
+            if state.get("supervised") is True:
+                if state.get("control") != "control-" + state["marker"][-32:]:
+                    raise ValueError
+            elif not isinstance(state.get("started"), str) or not state["started"]:
+                raise ValueError
         return state
     except (ValueError, TypeError, UnicodeError, OSError) as exc:
         raise CanvasError("invalid server state; refusing to act") from exc
@@ -122,73 +125,106 @@ def write_state(path: Path, state: dict) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def process_info(pid: int) -> tuple[str, str, str] | None:
-    # Never print the command: it could belong to an unrelated reused PID.
-    result = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "lstart=", "-o", "stat=", "-o", "command="],
-                            capture_output=True, text=True, check=False)
-    if result.returncode:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return None
-        except OSError as exc:
-            raise CanvasError("cannot inspect recorded process") from exc
-        raise CanvasError("cannot inspect recorded process")
-    parts = result.stdout.strip().split(None, 6)
-    if len(parts) != 7:
-        raise CanvasError("cannot identify recorded process")
-    return " ".join(parts[:5]), parts[5], parts[6]
+def _fifo_open(path: Path, flags: int) -> int:
+    fd = os.open(path, flags | os.O_NONBLOCK | os.O_NOFOLLOW)
+    info = os.fstat(fd)
+    if not stat.S_ISFIFO(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        os.close(fd)
+        raise CanvasError("invalid private supervisor channel")
+    return fd
 
 
-def process_status(state: dict) -> str:
-    info = process_info(state["pid"])
-    if info is None or info[1].startswith("Z"):
-        return "stopped"
-    started, _, command = info
-    server_arg = f" {state['server']} --host 127.0.0.1 "
-    marker_arg = f" --reject-prefix {state['marker']} "
-    if started != state["started"] or server_arg not in command or marker_arg not in command:
-        return "mismatch"
-    return "running"
-
-
-def stop_owned(state: dict) -> None:
-    pid = state["pid"]
-    pidfd = None
+def supervisor_request(state_path: Path, state: dict, action: str) -> str:
+    if state.get("supervised") is not True:
+        raise CanvasError("legacy Canvas is not supervised; owner reconciliation required")
+    reply = state_path.parent / ("reply-" + secrets.token_hex(16))
+    reply_fd = None
+    created = False
     try:
-        if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
-            try:
-                pidfd = os.pidfd_open(pid)
-            except OSError as exc:
-                if exc.errno != errno.ENOSYS:
-                    raise
-        elif sys.platform not in ("darwin", "linux"):
-            raise CanvasError("process signalling is unavailable on this platform; state retained")
-        status = process_status(state)
-        if status == "stopped":
-            raise CanvasError("recorded Canvas process is no longer available; state retained")
-        if status != "running":
-            raise CanvasError("recorded PID belongs to another process; refusing to stop it")
-        if pidfd is not None:
-            signal.pidfd_send_signal(pidfd, signal.SIGTERM)
-        else:
-            # macOS has no pidfd; inspect identity immediately before signalling.
-            os.kill(pid, signal.SIGTERM)
-        for _ in range(50):
-            status = process_status(state)
-            if status == "mismatch":
-                raise CanvasError("recorded PID changed during stop; state retained")
-            if status == "stopped":
-                return
-            time.sleep(0.1)
-        raise CanvasError("Canvas did not stop; state retained")
-    except ProcessLookupError:
-        raise CanvasError("recorded Canvas process is no longer available; state retained") from None
-    except OSError as exc:
-        raise CanvasError("could not stop recorded Canvas process") from exc
+        os.mkfifo(reply, 0o600)
+        created = True
+        reply_fd = _fifo_open(reply, os.O_RDWR)
+        control_fd = _fifo_open(state_path.parent / state["control"], os.O_WRONLY)
+        try:
+            message = f"{action} {state['pid']} {state['marker']} {reply.name}\n".encode()
+            os.write(control_fd, message)
+        finally:
+            os.close(control_fd)
+        if not select.select([reply_fd], [], [], 7)[0]:
+            raise CanvasError("supervisor did not respond; state retained")
+        response = os.read(reply_fd, 1024).decode("ascii").strip()
+        if response not in ("running", "stopped"):
+            raise CanvasError("supervisor refused request; state retained")
+        return response
+    except (OSError, UnicodeError) as exc:
+        raise CanvasError("supervisor unavailable; state retained") from exc
     finally:
-        if pidfd is not None:
-            os.close(pidfd)
+        if reply_fd is not None:
+            os.close(reply_fd)
+        if created:
+            reply.unlink(missing_ok=True)
+
+
+def supervise(control: Path, marker: str, command: list[str]) -> int:
+    # Only this process can reap or signal its own Canvas child.
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    child = None
+    control_fd = None
+    try:
+        control_fd = _fifo_open(control, os.O_RDWR)
+        child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, env=os.environ.copy())
+        print(json.dumps({"pid": child.pid}), flush=True)
+        sys.stdout.close()
+        pending = b""
+        while True:
+            if not select.select([control_fd], [], [], 1)[0]:
+                continue
+            pending += os.read(control_fd, 4096)
+            if len(pending) > 4096:
+                pending = b""
+                continue
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                parts = line.decode("ascii", errors="replace").split()
+                if len(parts) != 4:
+                    continue
+                action, pid, requested_marker, reply_name = parts
+                if (not reply_name.startswith("reply-") or len(reply_name) != 38
+                        or any(c not in "0123456789abcdef" for c in reply_name[6:])):
+                    continue
+                if pid != str(child.pid) or requested_marker != marker or action not in ("status", "stop"):
+                    result = "refused"
+                else:
+                    result = "running" if child.poll() is None else "stopped"
+                if action == "stop" and result == "running":
+                    # A live child cannot have its PID reused before this parent reaps it.
+                    child.terminate()
+                    try:
+                        child.wait(timeout=5)
+                        result = "stopped"
+                    except subprocess.TimeoutExpired:
+                        result = "running"
+                try:
+                    fd = _fifo_open(control.parent / reply_name, os.O_WRONLY)
+                    try:
+                        os.write(fd, (result + "\n").encode("ascii"))
+                    finally:
+                        os.close(fd)
+                except (CanvasError, OSError):
+                    pass
+                if action == "stop" and result == "stopped":
+                    return 0
+    except (OSError, CanvasError):
+        if child is None:
+            try:
+                print('{"error":"supervisor could not start Canvas"}', flush=True)
+            except (OSError, ValueError):
+                pass
+        return 1
+    finally:
+        if control_fd is not None:
+            os.close(control_fd)
 
 
 def wait_ready(process: subprocess.Popen, port: int) -> None:
@@ -223,10 +259,6 @@ def ensure_port_free(port: int) -> None:
 
 def start(args, state_path: Path) -> str:
     backend = endpoint_url(args.backend)
-    if sys.platform not in ("darwin", "linux") and not (
-        hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal")
-    ):
-        raise CanvasError("process signalling is unavailable on this platform")
     if not 1 <= args.port <= 65535:
         raise CanvasError("port must be between 1 and 65535")
     url = f"http://127.0.0.1:{args.port}"
@@ -241,9 +273,7 @@ def start(args, state_path: Path) -> str:
     if current:
         if current.get("phase") == "starting":
             raise CanvasError("startup outcome unknown; owner reconciliation required before start")
-        status = process_status(current)
-        if status == "mismatch":
-            raise CanvasError("recorded PID belongs to another process; refusing to start")
+        status = supervisor_request(state_path, current, "status")
         if status == "running":
             if (current["url"], current["backend"], current["server"]) != (url, backend, str(server)):
                 raise CanvasError("Canvas already running with different configuration")
@@ -255,6 +285,9 @@ def start(args, state_path: Path) -> str:
             if not secrets.compare_digest(fingerprint, hashlib.sha256(key.encode("utf-8")).hexdigest()):
                 raise CanvasError("session key changed; stop and start Canvas to apply it")
             return url
+        if supervisor_request(state_path, current, "stop") != "stopped":
+            raise CanvasError("Canvas did not stop; state retained")
+        (state_path.parent / current["control"]).unlink(missing_ok=True)
         state_path.unlink()
     key = private_file(Path(args.key_file))
     node = shutil.which("node")
@@ -262,37 +295,66 @@ def start(args, state_path: Path) -> str:
         raise CanvasError("node is required to start Canvas")
     ensure_port_free(args.port)
     marker = "/__owner_canvas_" + secrets.token_hex(16)
+    control = state_path.parent / ("control-" + marker[-32:])
     command = [node, str(server), "--host", "127.0.0.1", "--port", str(args.port),
-               "--dir", str(build), "--reject-prefix", marker]
+               "--dir", str(build), "--reject-prefix", marker, "--auth-required"]
     for route in ("/api", "/sockets", "/server_info", "/alive", "/health", "/ready", "/docs", "/redoc", "/openapi.json"):
         command.extend(("--route", f"{route}={backend}"))
     env = {"PATH": os.defpath, "SESSION_API_KEY": key, "AGENT_CANVAS_DISABLE_TELEMETRY": "1"}
     intent = {"version": 1, "phase": "starting", "marker": marker,
-              "server": str(server), "url": url, "backend": backend,
+              "server": str(server), "url": url, "backend": backend, "control": control.name,
               "key_fingerprint": hashlib.sha256(key.encode("utf-8")).hexdigest()}
     write_state(state_path, intent)
+    control_created = False
     try:
-        process = subprocess.Popen(command, cwd=package, env=env, stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        os.mkfifo(control, 0o600)
+        control_created = True
+        process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_supervise",
+                                    str(control), marker, *command], cwd=package, env=env,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError as exc:
+        if control_created:
+            control.unlink(missing_ok=True)
         state_path.unlink()
-        raise CanvasError("could not start Canvas server") from exc
+        raise CanvasError("could not start Canvas supervisor") from exc
+    state = None
     try:
-        info = process_info(process.pid)
-        if info is None or marker not in info[2] or str(server) not in info[2]:
-            raise CanvasError("could not identify started Canvas process")
-        state = {"version": 1, "pid": process.pid, "started": info[0], "marker": marker,
+        assert process.stdout is not None
+        if not select.select([process.stdout], [], [], 10)[0]:
+            raise CanvasError("supervisor startup unknown; owner reconciliation required")
+        try:
+            response = json.loads(process.stdout.readline(1024))
+        except (ValueError, UnicodeError) as exc:
+            raise CanvasError("supervisor startup unknown; owner reconciliation required") from exc
+        if not isinstance(response, dict):
+            raise CanvasError("supervisor startup unknown; owner reconciliation required")
+        if "error" in response:
+            control.unlink(missing_ok=True)
+            state_path.unlink(missing_ok=True)
+            raise CanvasError("supervisor could not start Canvas")
+        pid = response.get("pid")
+        if type(pid) is not int or pid <= 1:
+            raise CanvasError("supervisor startup unknown; owner reconciliation required")
+        state = {"version": 1, "pid": pid, "supervised": True, "control": control.name, "marker": marker,
                  "server": str(server), "url": url, "backend": backend,
                  "key_fingerprint": hashlib.sha256(key.encode("utf-8")).hexdigest()}
         write_state(state_path, state)
         wait_ready(process, args.port)
+        if supervisor_request(state_path, state, "status") != "running":
+            raise CanvasError("Canvas server exited before becoming ready")
     except Exception:
-        # This is still our unreaped child, so its PID cannot have been reused.
-        if process.poll() is None:
-            process.terminate()
-        process.wait(timeout=5)
-        state_path.unlink(missing_ok=True)
+        if state is not None:
+            try:
+                if supervisor_request(state_path, state, "stop") == "stopped":
+                    control.unlink(missing_ok=True)
+                    state_path.unlink(missing_ok=True)
+            except CanvasError:
+                pass  # Preserve state when the child cannot be reconciled.
         raise
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
     return url
 
 
@@ -302,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
     launch = sub.add_parser("start", help="start Canvas against an already-running loopback backend")
     launch.add_argument("--package-dir", required=True, help="installed @openhands/agent-canvas package directory")
     launch.add_argument("--backend", required=True, help="backend URL, e.g. http://127.0.0.1:8000")
-    launch.add_argument("--key-file", required=True, help="private session-key file")
+    launch.add_argument("--key-file", required=True, help="private session-key file; enter the same key in Canvas")
     launch.add_argument("--state-dir", required=True, help="private local state directory")
     launch.add_argument("--port", type=int, default=3001, help="Canvas loopback port (default: 3001)")
     launch.add_argument("--open", action="store_true", help="open the Canvas URL in a browser")
@@ -311,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--state-dir", required=True, help="private local state directory")
     args = parser.parse_args(argv)
     try:
-        with locked_state(Path(args.state_dir)) as state_path:
+        with locked_state(Path(os.path.abspath(args.state_dir))) as state_path:
             if args.action == "start":
                 url = start(args, state_path)
                 print(url)
@@ -321,13 +383,11 @@ def main(argv: list[str] | None = None) -> int:
                 state = read_state(state_path)
                 if state and state.get("phase") == "starting":
                     raise CanvasError("startup outcome unknown; owner reconciliation required")
-                status = process_status(state) if state else "stopped"
-                if status == "mismatch":
-                    raise CanvasError("recorded PID belongs to another process; state retained")
+                status = supervisor_request(state_path, state, "status") if state else "stopped"
                 if args.action == "stop" and state:
-                    if status == "stopped":
-                        raise CanvasError("recorded Canvas process is no longer running; state retained")
-                    stop_owned(state)
+                    if supervisor_request(state_path, state, "stop") != "stopped":
+                        raise CanvasError("Canvas did not stop; state retained")
+                    (state_path.parent / state["control"]).unlink(missing_ok=True)
                     state_path.unlink()
                     status = "stopped"
                 print(f"{status}" + (f" {state['url']}" if state and status == "running" else ""))
@@ -338,4 +398,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 6 and sys.argv[1] == "_supervise":
+        raise SystemExit(supervise(Path(sys.argv[2]), sys.argv[3], sys.argv[4:]))
     raise SystemExit(main())

@@ -66,15 +66,18 @@ use a numeric loopback address, HTTP, and an explicit port. The Canvas listener 
 `127.0.0.1`. Its official reverse proxy may send forwarded headers; the backend must not grant them
 authentication or identity authority. The session key authenticates the backend, is passed to the
 static server through its environment, and is not saved in launcher state or logs. The private state
-stores a key fingerprint so a repeated start refuses a changed key; stop and start to apply it. Canvas injects
-the key into its local page for the browser, so this listener must remain local. Stop targets only
-the recorded Canvas process and does not stop the backend. If process identity no longer matches,
-the launcher retains state and refuses to signal that PID. On macOS, the launcher rechecks process
-identity immediately before sending `SIGTERM`; on Linux it uses a pidfd when available.
+stores a key fingerprint so a repeated start refuses a changed key; stop and start to apply it.
+Canvas runs with its upstream `--auth-required` option: the owner enters the session key in the
+browser's Canvas prompt, which may retain it in browser storage. The served page does not embed
+the key. Stop asks a private local supervisor to terminate only its own unreaped Canvas child; it
+does not stop the backend. If the supervisor is unavailable or identity does not match, the launcher
+retains state and refuses to guess or signal a PID.
 If startup is interrupted before the process identity is recorded, status reports an unknown
 outcome and start and stop refuse. The owner must reconcile the recorded marker and server process;
 after confirming no such Canvas process remains, remove `server.json` from the state directory before
-starting again.
+starting again. State from the older unsupervised launcher is also refused; the owner must reconcile
+that process and remove its state before starting the supervised version. A previously running older
+Canvas can still expose the key in its local page until the owner stops it.
 
 The repository also contains a dormant Claude native CLI implementation for the protected
 one-Issue path. A versioned approval binds its target, executable and isolation profile; the
