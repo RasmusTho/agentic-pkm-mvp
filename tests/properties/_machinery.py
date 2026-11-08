@@ -489,7 +489,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "then MARR-11 (#5794) added a clone-local model-profile definition "
         "earlier in the file."
     ),
-    ("app/instance/vault_registry.py", 3644): (
+    ("app/instance/vault_registry.py", 3707): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
         "registry (default_app_local_settings_path(), typically an XDG data "
         "dir) -- a machine-local app config store outside the vault content "
@@ -505,7 +505,9 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "#6479 adds native qualification reads and predecessor checks earlier "
         "in the file, moving the same app-local configuration site to 3114. "
         "MVR-06A adds background intent above this unchanged site; composed "
-        "with the native qualification reads, its call is now at 3334."
+        "with the native qualification reads, its call is now at 3334. "
+        "MVR-06B moved it to 3644 and MVR-06C's relocation transaction to 3707 "
+        "(site unchanged, still not a vault-content write)."
     ),
 }
 
