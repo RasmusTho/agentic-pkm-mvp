@@ -348,6 +348,41 @@ class WorkerTickResult:
 
     state: str
     processed: int = 0
+    #: MVR-06D: the redacted per-scope outcome of a many-binding tick.
+    many_binding: dict[str, Any] | None = None
+
+
+def _many_binding_supervisor() -> Any:
+    """The process supervisor once MVR-06D activated many-binding dispatch, else ``None``.
+
+    Read fresh every tick: the floor commits inside a stopped window, but a running
+    pre-activation process must never keep dispatching through the singleton poll.
+    """
+
+    from app.instance.background_supervisor import process_background_supervisor
+    from app.instance.vault_registry import many_binding_dispatch_enabled
+
+    try:
+        supervisor = process_background_supervisor("worker")
+    except Exception:
+        return None  # the singleton resolver fails closed on the same registry read
+    if supervisor is None or not many_binding_dispatch_enabled(supervisor.registry.load()):
+        return None
+    return supervisor
+
+
+def _run_many_binding_tick(supervisor: Any) -> WorkerTickResult:
+    from app.workers.many_binding_dispatch import process_many_binding_dispatcher
+
+    tick = process_many_binding_dispatcher(supervisor).tick()
+    for outcome in tick.outcomes:
+        if outcome.lifecycle_status == "failed":
+            logger.error(
+                "worker binding %s blocked: %s", outcome.scope, outcome.detail or "failed"
+            )
+    return WorkerTickResult(
+        state=tick.state, processed=tick.processed, many_binding=tick.as_dict()
+    )
 
 
 def _resolve_worker_binding_runtime(vault_root: Path | None) -> Any:
@@ -419,6 +454,11 @@ def run_once(
     A set-but-missing ``VAULT_ROOT`` still raises through the strict resolver,
     preserving the loud misconfiguration contract.
     """
+    if _eligible_binding_ids is None and vault_root is None:
+        many = _many_binding_supervisor()
+        if many is not None:
+            # MVR-06D: every binding (and the global scope) dispatches through claims.
+            return _run_many_binding_tick(many)
     if _resolve_optional_vault_root(vault_root) is None:
         if _background_lifecycle_failed():
             return WorkerTickResult(state="background_lifecycle_failed", processed=0)
@@ -528,6 +568,133 @@ def run_once(
     return WorkerTickResult(state="processed", processed=1)
 
 
+class OutboxDrainBlocked(RuntimeError):
+    """MVR-06D: the binding holds claim/quarantine state the singleton drain must not touch."""
+
+
+def _require_drainable_under_claims(runtime: Any, binding_id: str) -> None:
+    """After the MVR-06D floor, refuse a singleton drain over claim/quarantine state.
+
+    The reactivation/transfer drain runs while the binding is sealed or exclusively
+    drained, so no many-binding worker can claim its rows concurrently; but its poll and
+    ack know nothing of claims. A quarantined, effect-bearing, reconciliation-required,
+    or live-claimed row is therefore never dispatched or acknowledged here.
+    """
+
+    from app.instance.vault_registry import many_binding_dispatch_enabled
+    from app.services.outbox import _open_conn
+    from app.services.outbox_claims import drain_blockers, require_claim_schema
+    from app.workers.many_binding_dispatch import queue_configured
+
+    if not many_binding_dispatch_enabled(runtime.registry_store.load()):
+        return
+    if not queue_configured():
+        return  # no durable queue exists, so no claim state can exist either
+    conn = _open_conn()
+    try:
+        require_claim_schema(conn)
+        blockers = drain_blockers(conn, binding_id)
+    finally:
+        conn.close()
+    if any(blockers.values()):
+        raise OutboxDrainBlocked(
+            "the binding's queue holds claim or quarantine state "
+            f"({', '.join(f'{k}={v}' for k, v in blockers.items() if v)}); resolve it through "
+            "the claim protocol or governed quarantine before draining"
+        )
+
+
+SINGLETON_DRAIN_CONTRACT = "agentic-pkm.mvr06d-singleton-drain.v1"
+_DRAIN_CLAIM_WAITS = 50
+_DRAIN_CLAIM_WAIT_SECONDS = 0.2
+
+
+def _drain_one_under_claims(
+    runtime: Any, binding_id: str, eligible: tuple[str, ...], *, vault_root: Path
+) -> str:
+    """MVR-06D: settle one source row of a transfer/reactivation drain through a claim.
+
+    After the floor the drain may run while many-binding workers are live, so every row is
+    leased through the same recoverable claim protocol (one owner per row, token-fenced
+    effect, acknowledgement only with a durable outcome). Quarantined and
+    reconciliation-required rows are never claimable here, so they stay pending and the
+    drain reports them unsettled. The drain keeps the singleton handler set; a crash
+    inside a non-atomic handler leaves an unprovable ``effect_pending`` that blocks.
+    """
+
+    from app.services import outbox_claims as claims
+    from app.services.outbox import _open_conn, open_outbox_txn_conn
+    from app.workers.many_binding_dispatch import _lease_seconds
+
+    owner = f"singleton-drain:{binding_id}"
+    conn = _open_conn()
+    try:
+        claim = None
+        for scope in eligible:
+            if scope == COMPATIBILITY_BINDING_ID:
+                continue  # activation proved no unscoped row is pending
+            claim = claims.claim_next(
+                conn, owner=owner, vault_binding_id=scope, lease_seconds=_lease_seconds()
+            )
+            if claim is not None:
+                break
+        if claim is None:
+            return "idle"
+        context = {"owner": owner, "routing_class": "drain"}
+        if claim.recovered_effect_pending:
+            if claim.effect_outcome is not None:
+                claims.ack_claim(conn, claim, consumer_context={**context, "reconciled": "effect_outcome_durable"})
+                return "processed"
+            claims.mark_reconciliation_required(
+                conn, claim, reason="a drained effect outcome is neither durable nor provably absent"
+            )
+            raise OutboxDrainBlocked("a source row needs effect reconciliation before draining")
+        message = claim.message()
+        claim = claims.mark_effect_pending(
+            conn,
+            claim,
+            {
+                "contract": SINGLETON_DRAIN_CONTRACT,
+                "kind": "singleton_drain",
+                "topic": claim.topic,
+                "vault_binding_id": claim.vault_binding_id,
+                "claim_token": claim.token,
+                "consumer_context": context,
+            },
+        )
+        payload = claim.payload
+        trace_id = payload.get("trace_id") or _trace_id_from_envelope(claim.event) or "-"
+        txn = open_outbox_txn_conn()
+        if txn is None:
+            claims.release_claim(conn, claim, failed=False)
+            raise RuntimeError("the claim-aware drain requires a transactional DB connection")
+        try:
+            with worker_effect_window(message, runtime=runtime):
+                with claims.fenced_effect(
+                    txn, claim, outcome=claims.OUTCOME_APPLIED,
+                    receipt={"consumer_context": context, "claim_token": claim.token},
+                ):
+                    _dispatch_topic(
+                        claim.topic, payload, trace_id=trace_id, message=message,
+                        event_id=_event_id_from_message(message), vault_root=vault_root,
+                    )
+        except (InvalidPanelNoteUUIDDispatchError, SchemaViolationDispatchError) as exc:
+            claims.quarantine_claim(conn, claim, reason="drain_dispatch_refused")
+            logger.warning("drain quarantined row %s: %s", claim.row_id, exc)
+            return "processed"
+        except (claims.StaleClaimToken, claims.EffectAlreadyRecorded):
+            return "processed"  # another owner holds or settled this row
+        except Exception:
+            claims.release_claim(conn, claim, failed=True)
+            raise
+        finally:
+            txn.close()
+        claims.ack_claim(conn, claim, consumer_context=context)
+        return "processed"
+    finally:
+        conn.close()
+
+
 def drain_binding_outbox(*, vault_root: Path, binding_id: str, include_compatibility: bool = False) -> dict[str, Any]:
     """Settle source work through real dispatch/receipt/ack under its original ID."""
     from app.instance.settings_rebind import SettingsRebindStore
@@ -535,21 +702,35 @@ def drain_binding_outbox(*, vault_root: Path, binding_id: str, include_compatibi
     runtime = resolve_scalar_binding_runtime(requested_binding_id=binding_id, vault_root=vault_root)
     if runtime is None or runtime.vault_binding_id != binding_id:
         raise RuntimeError("transfer drain requires the source binding runtime")
+    _require_drainable_under_claims(runtime, binding_id)
     rebind = runtime.registry_store.load().settings_rebind
     compatibility = include_compatibility or (rebind is not None and SettingsRebindStore(runtime.registry_store).read().candidate_binding_id == binding_id)
     eligible = (binding_id, COMPATIBILITY_BINDING_ID) if compatibility else (binding_id,)
+    from app.instance.vault_registry import many_binding_dispatch_enabled
+    from app.workers.many_binding_dispatch import queue_configured
+
+    claim_aware = queue_configured() and many_binding_dispatch_enabled(runtime.registry_store.load())
     settled: list[str] = []
+    waits = 0
     for _ in range(10000):
         pending = pending_transfer_rows(binding_id, include_compatibility=compatibility)
         if not pending:
             return {"schema": "binding-transfer-drain.v1", "source_binding_id": binding_id,
                     "terminal_row_ids": settled, "unsettled": 0}
-        result = run_once(vault_root=vault_root, _eligible_binding_ids=eligible)
+        if claim_aware:
+            state = _drain_one_under_claims(runtime, binding_id, eligible, vault_root=vault_root)
+            if state == "idle" and waits < _DRAIN_CLAIM_WAITS:
+                # A live many-binding claim owns the remaining row: let it settle.
+                waits += 1
+                time.sleep(_DRAIN_CLAIM_WAIT_SECONDS)
+                continue
+        else:
+            state = run_once(vault_root=vault_root, _eligible_binding_ids=eligible).state
         remaining = pending_transfer_rows(binding_id, include_compatibility=compatibility)
         previous_ids = {str(row["id"]) for row in pending}
         remaining_ids = {str(row["id"]) for row in remaining}
         settled.extend(sorted(previous_ids - remaining_ids))
-        if result.state != "processed" or remaining_ids == previous_ids:
+        if state != "processed" or remaining_ids == previous_ids:
             raise RuntimeError("source queue has unsettled or stale rows; transfer is not ready")
     raise RuntimeError("source queue drain exceeded its bounded budget")
 
@@ -697,6 +878,55 @@ def _dispatch_topic(
         logger.debug("worker skipping unsupported topic=%s trace_id=%s", topic, trace_id)
 
 
+#: Every topic :func:`_dispatch_topic` runs a handler for; any other topic is a no-effect skip.
+HANDLED_DISPATCH_TOPICS = frozenset(
+    {
+        INGEST_OBJECT_CREATED,
+        INGEST_VAULT_CHANGED,
+        INGEST_OBJECT_DELETED,
+        PANEL_SCAN_REQUESTED,
+        PROMOTE_INTENT_CREATED,
+        "debrief.trigger.created",
+        NOTE_MOVE_WORKBENCH,
+        INDEX_EMBEDDING_REQUESTED,
+        KNOWLEDGE_ACQUISITION_STAGE_COMPLETED,
+        KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED,
+    }
+)
+#: MVR-06D: handlers whose entire durable effect is a store write on a passed connection,
+#: so it commits atomically with the claim's effect outcome under the fencing token.
+STORE_ATOMIC_DISPATCH_TOPICS = frozenset(
+    {KNOWLEDGE_ACQUISITION_STAGE_COMPLETED, KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED}
+)
+
+
+def dispatch_store_atomic_effect(
+    topic: str,
+    payload: Mapping[str, Any],
+    *,
+    conn: Any,
+    trace_id: str | None,
+    source_vault_binding_id: str,
+    message: Mapping[str, Any],
+) -> None:
+    """MVR-06D: run one admitted store-atomic handler inside the fenced effect transaction."""
+
+    if topic not in STORE_ATOMIC_DISPATCH_TOPICS:
+        raise ValueError(f"topic {topic!r} has no store-atomic effect contract")
+    _validate_dispatch_payload(topic, payload, message=message)
+    handler = (
+        handle_knowledge_acquisition_stage_completed
+        if topic == KNOWLEDGE_ACQUISITION_STAGE_COMPLETED
+        else handle_knowledge_acquisition_stage_dead_lettered
+    )
+    handler(
+        payload,
+        trace_id=trace_id,
+        source_vault_binding_id=source_vault_binding_id,
+        conn=conn,
+    )
+
+
 def _indexer_payload(payload: Mapping[str, Any]) -> dict[str, object]:
     return dict(payload)
 
@@ -818,8 +1048,15 @@ def _emit_ka_consumer_signal(
     payload: Mapping[str, Any],
     trace_id: str | None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    conn: Any = None,
 ) -> None:
     """Durable, item-scoped observability signal for a handled KA stage event.
+
+    MVR-06D: with ``conn`` (the many-binding worker's fenced effect transaction) the DB
+    outbox row is the whole durable effect and commits atomically with the claim's
+    effect outcome; the JSONL audit fallback sink and the in-process fast-path are
+    skipped, so a rolled-back or stale-token effect leaves no trace and a reconciled
+    redelivery never re-emits.
 
     Mirrors ``_dead_letter_outbox_message``'s dual-write shape (JSONL audit
     sink always; DB outbox additionally when enabled) rather than an
@@ -834,7 +1071,7 @@ def _emit_ka_consumer_signal(
     ad-hoc scheme or a volatile cache.
     """
     key = derive_idempotency_key(event_type, content_identity, fingerprint)
-    if _KA_CONSUMER_SIGNAL_DEDUP.seen(key):
+    if conn is None and _KA_CONSUMER_SIGNAL_DEDUP.seen(key):
         logger.debug(
             "KA consumer signal skipped (duplicate delivery) event_type=%s content_identity=%s",
             event_type,
@@ -849,15 +1086,21 @@ def _emit_ka_consumer_signal(
         payload=dict(payload),
     )
     try:
-        append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
-        if _use_db_outbox():
-            write_outbox_event(
-                event,
-                idempotency_key=key,
-                vault_binding_id=source_vault_binding_id,
-                producer="worker.ka_consumer_signal",
-            )
+        if conn is None:
+            append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
+            if not _use_db_outbox():
+                return
+        write_outbox_event(
+            event,
+            conn,
+            idempotency_key=key,
+            vault_binding_id=source_vault_binding_id,
+            producer="worker.ka_consumer_signal",
+        )
     except Exception:
+        if conn is not None:
+            # Fenced store effect: a failure propagates and rolls the transaction back.
+            raise
         # Best-effort observability signal: a failure here must never re-block
         # the outbox poll loop or fail the dispatch of the KA stage event
         # itself (these are audit-only side effects).
@@ -873,6 +1116,7 @@ def handle_knowledge_acquisition_stage_completed(
     *,
     trace_id: str | None = None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    conn: Any = None,
 ) -> None:
     """Consume ``knowledge_acquisition.stage.completed`` (KA-06 → KA-07, #3107).
 
@@ -926,6 +1170,7 @@ def handle_knowledge_acquisition_stage_completed(
         },
         trace_id=trace_id,
         source_vault_binding_id=source_vault_binding_id,
+        conn=conn,
     )
     logger.info(
         "knowledge_acquisition candidate ready for triage content_identity=%s trace_id=%s",
@@ -939,6 +1184,7 @@ def handle_knowledge_acquisition_stage_dead_lettered(
     *,
     trace_id: str | None = None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    conn: Any = None,
 ) -> None:
     """Consume ``knowledge_acquisition.stage.dead_lettered`` (KA-06 → KA-07, #3107).
 
@@ -984,6 +1230,7 @@ def handle_knowledge_acquisition_stage_dead_lettered(
         },
         trace_id=trace_id,
         source_vault_binding_id=source_vault_binding_id,
+        conn=conn,
     )
     logger.warning(
         "knowledge_acquisition stage dead-letter surfaced content_identity=%s stage=%s "
@@ -2377,6 +2624,38 @@ def run(
     while True:
         ticks_total += 1
         WORKER_LAST_TICK_TIMESTAMP.set(time.time())
+        many_supervisor = _many_binding_supervisor()
+        if many_supervisor is not None:
+            try:
+                many_tick = _run_many_binding_tick(many_supervisor)
+            except Exception:
+                errors_total += 1
+                logger.exception("worker many-binding tick failed")
+                raise
+            processed_total += many_tick.processed
+            now = time.time()
+            if now - last_heartbeat >= heartbeat_interval:
+                write_worker_heartbeat(
+                    path=heartbeat_path,
+                    ticks_total=ticks_total,
+                    errors_total=errors_total,
+                    processed_total=processed_total,
+                    processed_by_event=processed_by_event,
+                    last_processed=last_processed,
+                    outbox_path=outbox_path,
+                    status=(
+                        "background_lifecycle_failed"
+                        if many_tick.state == "background_lifecycle_failed"
+                        else "running"
+                    ),
+                    binding_blocked_pending=0,
+                    now=now,
+                )
+                last_heartbeat = now
+            if stop_after_ticks is not None and ticks_total >= stop_after_ticks:
+                break
+            time.sleep(interval)
+            continue
         tick_vault_root = _resolve_optional_vault_root(None)
         no_vault_idle = tick_vault_root is None
         lifecycle_blocked = no_vault_idle and _background_lifecycle_failed()

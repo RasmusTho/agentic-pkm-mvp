@@ -107,8 +107,58 @@ MVR-05A choke-point translation to the live scalar binding and now stamp the com
 producer that knows its own binding passes it explicitly (for example an `ObjectStore` opened for
 one binding, the Heimdal meeting finalizer, and the episode-debrief trigger). Producers that read
 their own committed row back match the producer `legacy_key` under any non-quarantine binding
-instead of the retired compatibility marker. Multi-binding background lifecycles remain MVR-06
-work; this contract does not remove the compatibility translator.
+instead of the retired compatibility marker. Multi-binding dispatch is the MVR-06D claim contract
+below; this contract does not remove the compatibility translator.
+
+### Recoverable claims, routing, and acknowledgement (MVR-06D, shipped)
+
+Once the registry records `minimumRuntimeSchema=mvr-06d` (`background-many-binding-activate`),
+every worker consumes the outbox through `app/services/outbox_claims.py` and
+`app/workers/many_binding_dispatch.py` instead of the singleton poll. Before activation the
+singleton poll/ack path is unchanged and writes no claim field.
+
+- **Routing.** A claim names exactly one scope: the singleton `global` scope
+  (`explicitly-global`; no binding lease is acquired or invented) or one vault binding, claimed
+  only by that binding's running lifecycle inside the host-global ownership fence then its shared
+  effect lease. Unscoped `legacy-compatibility-binding` rows and MVR-05 quarantine-marker rows have
+  no claim scope; activation refuses while an unscoped row is undelivered.
+- **Claim.** `claim_next` atomically leases the oldest unclaimed or lease-expired row of its scope
+  (`FOR UPDATE SKIP LOCKED` + `UPDATE ... RETURNING`), stamping a database-monotonic fencing token
+  from `outbox_claim_token_seq`, an owner, and an expiry. At most one claim owner exists per row.
+- **Effect.** Before the handler runs, `effect_pending` is persisted with the token and a bounded
+  effect descriptor (contract version, kind, topic, binding, binding-scoped idempotency key,
+  consumer context). The handler then runs inside `fenced_effect`: one store transaction that locks
+  the row, rejects a stale token (an owner that paused past its lease after another worker
+  reclaimed the row), writes the handler's store effect on that connection, and records
+  `effect_outcome` (`applied` / `no_effect`). A stale owner's effect therefore never becomes
+  durable.
+- **Admission.** Only handlers whose effect is atomic with that outcome run here: topics with no
+  consumer effect and the store-atomic knowledge-acquisition consumer signals. Vault-file and
+  derived-projection handler topics are excluded from claims (no post-effect reconciliation read
+  exists yet) and stay pending.
+- **Acknowledgement and at-least-once.** `ack_claim` sets `delivered_at` only when an effect
+  outcome is durable. A crash after the effect but before acknowledgement leaves `effect_pending`
+  with a durable outcome; after the lease expires another worker reclaims it and acknowledges it
+  without replaying the effect. A crash before the effect commit leaves no outcome, which for an
+  admitted (atomic) contract proves the effect did not apply, so the row is redelivered. Delivery
+  stays at-least-once and idempotency stays keyed on the binding-scoped key; nothing claims
+  exactly-once effects.
+- **Recovery before quarantine.** For a binding that was removed, is no longer enrolled, or lost
+  GOV authority, an expired `effect_pending` row is reconciled first: a durable outcome is
+  acknowledged under its prior authorized provenance (`consumer_context.reconciled`,
+  `authority_at_recovery`; this grants no new authority); a provably absent outcome follows the
+  current-authority quarantine; an outcome that is neither (for example recorded under an effect
+  contract this image no longer runs) moves to `effect_reconciliation_required`, which is never
+  redispatched, acknowledged, dropped, or quarantined.
+- **Revalidation and quarantine.** Before dispatch a vault-bound row must still name the same
+  stable binding with a complete envelope, and every payload locator (`vault_path`, `path`,
+  `note_path`, `source_ref`, `artifact_path`, `relative_path`) must resolve under the binding's
+  current root. A failure quarantines the row durably (`quarantined_at`, `quarantine_reason`)
+  without dispatch or acknowledgement; the row keeps its binding, id, and `legacy_key`. A routine
+  restart or generation rotation never invalidates a row; dispatch records `consumer_context`
+  (consumer context id, generation, binding/intent revision) linked to the stored
+  `meta.producer_context` and producer binding revision. Governed reissue returns a quarantined row
+  only to its same, currently authorized binding.
 
 Notes:
 

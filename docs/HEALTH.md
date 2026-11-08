@@ -254,8 +254,7 @@ and the worker dispatches no vault-bound row.
 Where it is visible today: watcher and worker log the projection when their startup preflight
 starts the supervisor (`error` for `failed`), the worker heartbeat reports
 `status=background_lifecycle_failed` while blocked, and `background-binding-list|inspect` report
-durable intent. No `/api/health` field carries it yet; MVR-06B does not report or start more than one
-binding.
+durable intent. MVR-06B itself reported no `/api/health` field; MVR-06D (below) adds it.
 
 ### Per-binding gated health (shipped dormant, MVR-06C / #3865)
 
@@ -271,10 +270,41 @@ its `binding_revision`. Truthfulness rules added by 06C:
 | Running lifecycle whose root lost its ownership lease (moved, replaced, or relocated elsewhere) | Rotated to `failed` (`ownership lease`) on the next reconcile or effect, never left reported `running`. |
 | Two supervised bindings (internal harness only) | Independent entries: one binding's revision change, ownership failure, or GOV denial rotates or fails only that entry; the other keeps its generation. The background-role auth epoch and intent revision are instance-wide. |
 
-Production many-binding health is not active: no production process supervises or reports more
-than one binding until MVR-06D atomically enables many-binding enrollment/start and its
-queue-dispatch contract, and there is still no `/api/health` field (the aggregate zero/one/many
-health surface is MVR-06D).
+Before the MVR-06D activation no production process supervises or reports more than one
+binding (see below).
+
+### Zero/one/many background health and `/api/health` (shipped, MVR-06D / #3866)
+
+After `background-many-binding-activate` records `minimumRuntimeSchema=mvr-06d`, `health()`
+reports `supervisor: mvr06d-per-binding`, `many_binding: active`, `binding_capacity: null`
+(unbounded explicit set), an aggregate `status`, and each lifecycle's bounded `failure_kind`
+(`role`, `unregistered`, `sealed`, `ownership`, `authorization`, `drain`). Before activation the
+06C values (`dormant`, capacity `1`) are unchanged.
+
+`GET /api/health` now carries an informational `background_lifecycles` field once the MVR-06B
+handoff has run (absent before it; it never changes `ok`/`required_ok`). It is a read-only
+projection: the API re-resolves every enrolled binding from durable truth (no drain, lease, or
+effect), so its `generation` values are a projection — each watcher/worker keeps its own
+generations in its heartbeat. Fields: the supervisor projection above, `dispatch_contract`
+(`singleton` before activation, `mvr06d-claims` after), `readiness`, and `queue` (`backend`
+`absent` for a memory store; for PostgreSQL after activation, per-scope counts of `pending`,
+`claimed`, `effect_pending`, `reconciliation_required`, and `quarantined` rows plus
+`unadmitted_pending`). Only opaque binding ids, revisions, statuses, and counts are exposed —
+never a host path or payload.
+
+| Case | `status` / `readiness` |
+| --- | --- |
+| Zero enrolled bindings (explicit-empty) | `idle` / `idle` — durable, never a fallback to the default, survives restart. |
+| One or more bindings, all running, clean queue | `healthy` / `healthy`. |
+| Any failed member | `degraded` / `degraded`; the failed entry is reported with its `failure_kind`, the others keep running, and no work is redirected. |
+| A quarantined row, an unadmitted handler row pending, or the queue unreadable | readiness `degraded` (a valid global row never degrades it). |
+| An `effect_reconciliation_required` row | readiness `blocked`: an ambiguous post-crash effect outcome is neither replayed, acknowledged, dropped, nor quarantined until an operator reconciles it. |
+
+The many-binding watcher heartbeat keys `watchers` by `<spec>@<binding_id>`, omits
+`vault_path`, and reports `degraded` when any lifecycle failed; the worker heartbeat reports
+`background_lifecycle_failed` when a member is failed and nothing was processed. Readiness is
+reported only after MVR-05's classification receipt and current authority checks passed at
+activation.
 
 <!-- SECTION:HEALTH:END -->
 

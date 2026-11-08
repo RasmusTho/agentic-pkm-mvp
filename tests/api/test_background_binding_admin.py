@@ -468,3 +468,72 @@ def test_mvr06c_rejects_many_until_mvr06d_dispatch_gate(handed_off) -> None:
                 internal_binding_ids=(binding_a, binding_b),
                 _harness_capability=capability,
             )
+
+
+def test_mvr06d_enrollment_enables_many_with_dispatch(handed_off, monkeypatch) -> None:
+    """MVR-06D: a two-or-more explicit set persists and starts only once the matching
+    many-binding queue-dispatch contract is enabled, and restart reconstructs exactly that
+    deduplicated, re-authorized set."""
+
+    from app.instance import background_supervisor
+    from app.instance.background_supervisor import process_background_supervisor
+    from app.instance.vault_registry import many_binding_dispatch_enabled
+    from tests._mvr06d_many_binding_harness import activate_many_binding
+
+    runtime, binding_a, binding_b, client = handed_off
+    registry_path = str(runtime.layout.registry_path)
+    url = "/api/instance/background-bindings"
+    assert client.post(url, json={"vault_binding_id": binding_a}).status_code == 200
+
+    # Before activation the second enrollment is refused and nothing is persisted.
+    files_before = _files_digest(runtime)
+    sealed = client.post(url, json={"vault_binding_id": binding_b})
+    assert sealed.status_code == 409 and "MVR-06D" in sealed.json()["detail"]["message"]
+    assert _files_digest(runtime) == files_before
+    assert not many_binding_dispatch_enabled(runtime.registry.load())
+
+    # The matching dispatch contract is enabled by the shipped activation command only.
+    activated = activate_many_binding(runtime)
+    assert activated["_exit_code"] == 0 and activated["activated"] is True, activated
+    assert activated["minimum_runtime_schema"] == "mvr-06d"
+    assert client.get(url).json()["intent_mutations"] == "many"
+
+    added = client.post(url, json={"vault_binding_id": binding_b})
+    assert added.status_code == 200, added.text
+    assert sorted(added.json()["background_vault_binding_ids"]) == sorted((binding_a, binding_b))
+    revision = _intent(runtime).revision
+    # Re-adding a member is idempotent (deduplicated by vault_binding_id) through both
+    # producers: no new revision, no duplicate member.
+    again = client.post(url, json={"vault_binding_id": binding_b})
+    assert again.status_code == 200 and again.json()["changed"] is False
+    cli_again = cli(
+        "background-binding-add", "--registry-path", registry_path,
+        "--vault-binding-id", binding_a, "--consumer", "cli",
+    )
+    assert cli_again["_exit_code"] == 0 and cli_again["changed"] is False
+    assert _intent(runtime).revision == revision
+    assert _intent(runtime).background_vault_binding_ids == tuple(sorted((binding_a, binding_b)))
+
+    # The process supervisor starts both.
+    background_supervisor._PROCESS_SUPERVISORS.clear()
+    worker = process_background_supervisor("worker")
+    started = {item.binding_id: item.status for item in worker.start_all()}
+    assert started == {binding_a: "running", binding_b: "running"}
+    assert worker.health()["many_binding"] == "active"
+    assert worker.health()["binding_capacity"] is None
+
+    # Restart reconstructs exactly the durable set and re-authorizes every member: a
+    # member whose authority is gone comes back failed, never silently dropped or healthy.
+    _deny_content_authority(monkeypatch, binding_b)
+    background_supervisor._PROCESS_SUPERVISORS.clear()
+    restarted = process_background_supervisor("worker")
+    after = {item.binding_id: item for item in restarted.start_all()}
+    assert set(after) == {binding_a, binding_b}
+    assert after[binding_a].status == "running"
+    assert after[binding_b].status == "failed"
+    assert after[binding_b].failure_kind == "authorization"
+
+    # Request/session selection never enrols a member.
+    listed = client.get(url).json()
+    assert sorted(listed["background_vault_binding_ids"]) == sorted((binding_a, binding_b))
+    assert listed["mode"] == "explicit"

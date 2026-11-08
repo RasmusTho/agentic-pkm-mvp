@@ -60,12 +60,33 @@ FOREGROUND_REGISTRY_SCHEMA = "agentic-pkm.instance-vault-registry.v2"
 # only v1/v2 and therefore refuses this registry at its existing schema gate, before any
 # registry, principal, or vault access -- the same lever MVR-05C used for v2.
 BACKGROUND_INTENT_REGISTRY_SCHEMA = "agentic-pkm.instance-vault-registry.v3"
+# MVR-06D: the many-binding queue-dispatch floor qualifies the registry schema again, so
+# every MVR-06A..06C image (which accepts only v1..v3) refuses the registry at the same
+# schema gate before it can interpret claim fencing or reconciliation state.
+MANY_BINDING_REGISTRY_SCHEMA = "agentic-pkm.instance-vault-registry.v4"
 SUPPORTED_REGISTRY_SCHEMAS = frozenset(
-    {CURRENT_REGISTRY_SCHEMA, FOREGROUND_REGISTRY_SCHEMA, BACKGROUND_INTENT_REGISTRY_SCHEMA}
+    {
+        CURRENT_REGISTRY_SCHEMA,
+        FOREGROUND_REGISTRY_SCHEMA,
+        BACKGROUND_INTENT_REGISTRY_SCHEMA,
+        MANY_BINDING_REGISTRY_SCHEMA,
+    }
+)
+#: Registry schemas that carry the MVR-06 background-intent family of floors.
+MVR06_FAMILY_REGISTRY_SCHEMAS = frozenset(
+    {BACKGROUND_INTENT_REGISTRY_SCHEMA, MANY_BINDING_REGISTRY_SCHEMA}
 )
 MINIMUM_RUNTIME_SCHEMA_KEY = "minimumRuntimeSchema"
 MVR05_MINIMUM_RUNTIME_SCHEMA = "mvr-05"
 MVR06_MINIMUM_RUNTIME_SCHEMA = "mvr-06"
+#: MVR-06D: many-binding enrollment/start and the recoverable claim dispatch contract.
+MVR06D_MINIMUM_RUNTIME_SCHEMA = "mvr-06d"
+#: Every floor that already understands background role, delegation, and intent schemas.
+MVR06_FAMILY_RUNTIME_SCHEMAS = frozenset(
+    {MVR06_MINIMUM_RUNTIME_SCHEMA, MVR06D_MINIMUM_RUNTIME_SCHEMA}
+)
+MVR06D_FLOOR_RECEIPT_KEY = "mvr06dFloorCutover"
+MVR06D_FLOOR_RECEIPT_SCHEMA = "agentic-pkm.mvr06d-runtime-floor.v1"
 #: Floor receipt recorded with the MVR-06 floor so its own compensation can restore the
 #: exact pre-floor schema, and nothing else can claim it.
 MVR06_FLOOR_RECEIPT_KEY = "mvr06FloorCutover"
@@ -394,19 +415,51 @@ def _validate_mvr06_floor_receipt(receipt: object) -> None:
         raise RegistryError("MVR-06 runtime floor receipt is invalid")
 
 
+def _validate_mvr06d_floor_receipt(receipt: object) -> None:
+    if (
+        not isinstance(receipt, dict)
+        or set(receipt)
+        != {
+            "schema",
+            "previousRegistrySchema",
+            "previousMinimumRuntimeSchema",
+            "classification",
+        }
+        or receipt.get("schema") != MVR06D_FLOOR_RECEIPT_SCHEMA
+        or receipt.get("previousRegistrySchema") != BACKGROUND_INTENT_REGISTRY_SCHEMA
+        or receipt.get("previousMinimumRuntimeSchema") != MVR06_MINIMUM_RUNTIME_SCHEMA
+        or not isinstance(receipt.get("classification"), dict)
+    ):
+        raise RegistryError("MVR-06D runtime floor receipt is invalid")
+
+
+def many_binding_dispatch_enabled(snapshot: "RegistrySnapshot") -> bool:
+    """MVR-06D: whether many-binding enrollment/start and claim dispatch are active."""
+
+    floors = snapshot.extensions.get("runtimeFloors") or {}
+    return (
+        isinstance(floors, dict)
+        and floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) == MVR06D_MINIMUM_RUNTIME_SCHEMA
+    )
+
+
 def _validate_background_supervisor_state(
     intent: BackgroundBindingIntent, extensions: Mapping[str, Any]
 ) -> None:
     """MVR-06B: the handoff and the supervisor receipt are one durable fact."""
 
     raw = extensions.get(BACKGROUND_SUPERVISOR_KEY)
+    floors = extensions.get("runtimeFloors") or {}
+    many = isinstance(floors, dict) and (
+        floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) == MVR06D_MINIMUM_RUNTIME_SCHEMA
+    )
     if intent.handoff_complete:
         if raw is None:
             raise RegistryError(
                 "a completed compatibility handoff requires its supervisor receipt"
             )
         BackgroundSupervisorRecord.from_payload(raw)
-        if len(intent.background_vault_binding_ids) > MVR06B_MAX_BACKGROUND_BINDINGS:
+        if not many and len(intent.background_vault_binding_ids) > MVR06B_MAX_BACKGROUND_BINDINGS:
             raise RegistryError(
                 "MVR-06B background intent admits at most one binding; many-binding "
                 "intent is sealed until MVR-06D"
@@ -1541,12 +1594,15 @@ class VaultRegistryStore:
             next_runtime_floors[MINIMUM_SETTINGS_REBIND_RUNTIME_KEY] = (
                 current_rebind_floor
             )
-        if current_runtime_floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) == (
-            MVR06_MINIMUM_RUNTIME_SCHEMA
+        if current_runtime_floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) in (
+            MVR06_FAMILY_RUNTIME_SCHEMAS
         ):
             # The MVR-06 floor has a dedicated producer and compensation; a generic
             # extension writer can neither lower it nor drop its receipt.
-            for key in (MINIMUM_RUNTIME_SCHEMA_KEY, MVR06_FLOOR_RECEIPT_KEY):
+            protected = [MINIMUM_RUNTIME_SCHEMA_KEY, MVR06_FLOOR_RECEIPT_KEY]
+            if MVR06D_FLOOR_RECEIPT_KEY in current_runtime_floors:
+                protected.append(MVR06D_FLOOR_RECEIPT_KEY)
+            for key in protected:
                 incoming = next_runtime_floors.get(key)
                 if incoming is not None and incoming != current_runtime_floors.get(key):
                     raise RegistryError(
@@ -1581,7 +1637,7 @@ class VaultRegistryStore:
             current = self._read_current_locked(recover=True)
             if current.schema == FOREGROUND_REGISTRY_SCHEMA:
                 return current
-            mvr06 = current.schema == BACKGROUND_INTENT_REGISTRY_SCHEMA
+            mvr06 = current.schema in MVR06_FAMILY_REGISTRY_SCHEMAS
             if mvr06 and (current.extensions.get("runtimeFloors") or {}).get(
                 "minimumForegroundOwnership"
             ) == "mvr05c.v1":
@@ -1592,8 +1648,8 @@ class VaultRegistryStore:
             revision = current.revision + 1
             if current.authority == REGISTRY_AUTHORITY_ACTIVE:
                 extensions["scalarRollback"] = {**extensions["scalarRollback"], "forkRegistryRevision": revision}
-            # v3 already rejects every pre-MVR-06 reader; keep it rather than lowering it.
-            next_schema = BACKGROUND_INTENT_REGISTRY_SCHEMA if mvr06 else FOREGROUND_REGISTRY_SCHEMA
+            # v3/v4 already reject every pre-MVR-06 reader; keep it rather than lowering it.
+            next_schema = current.schema if mvr06 else FOREGROUND_REGISTRY_SCHEMA
             updated = replace(current, schema=next_schema, revision=revision, extensions=extensions)
             self._write_locked(updated)
             return updated
@@ -1617,7 +1673,7 @@ class VaultRegistryStore:
             if not isinstance(floors, dict):
                 raise RegistryError("runtime floors are invalid")
             minimum = floors.get(MINIMUM_RUNTIME_SCHEMA_KEY)
-            if minimum == MVR06_MINIMUM_RUNTIME_SCHEMA:
+            if minimum in MVR06_FAMILY_RUNTIME_SCHEMAS:
                 return current
             if minimum != MVR05_MINIMUM_RUNTIME_SCHEMA or not isinstance(
                 floors.get("mvr05CutoverFence"), dict
@@ -1643,6 +1699,68 @@ class VaultRegistryStore:
             updated = replace(
                 current,
                 schema=BACKGROUND_INTENT_REGISTRY_SCHEMA,
+                revision=revision,
+                extensions=extensions,
+            )
+            self._write_locked(updated)
+            return updated
+
+    def advance_mvr06d_runtime_floor(
+        self,
+        *,
+        classification: Mapping[str, object],
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """MVR-06D: atomically qualify schema v4 and ``minimumRuntimeSchema=mvr-06d``.
+
+        This one generation is the activation of many-binding enrollment/start and its
+        recoverable claim dispatch contract. It runs inside the proved stopped window,
+        after the completed MVR-06B handoff and after the caller validated MVR-05's
+        classification receipt (``classification`` is that bounded, redacted result).
+        No queue-state field is written before it commits, and no compensation exists:
+        recovery uses an MVR-06D-compatible roll-forward or rollback image. Idempotent.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            floors = current.extensions.get("runtimeFloors") or {}
+            if not isinstance(floors, dict):
+                raise RegistryError("runtime floors are invalid")
+            minimum = floors.get(MINIMUM_RUNTIME_SCHEMA_KEY)
+            if minimum == MVR06D_MINIMUM_RUNTIME_SCHEMA:
+                return current
+            if minimum != MVR06_MINIMUM_RUNTIME_SCHEMA:
+                raise CapabilityNotReadyError(
+                    "the MVR-06D floor requires the recorded MVR-06 runtime floor"
+                )
+            raw_intent = current.extensions.get(BACKGROUND_INTENT_KEY)
+            if raw_intent is None or not BackgroundBindingIntent.from_payload(
+                raw_intent
+            ).handoff_complete:
+                raise CapabilityNotReadyError(
+                    "the MVR-06D floor requires the completed MVR-06B supervisor handoff"
+                )
+            next_floors = copy.deepcopy(floors)
+            next_floors[MINIMUM_RUNTIME_SCHEMA_KEY] = MVR06D_MINIMUM_RUNTIME_SCHEMA
+            next_floors[MVR06D_FLOOR_RECEIPT_KEY] = {
+                "schema": MVR06D_FLOOR_RECEIPT_SCHEMA,
+                "previousRegistrySchema": current.schema,
+                "previousMinimumRuntimeSchema": MVR06_MINIMUM_RUNTIME_SCHEMA,
+                "classification": copy.deepcopy(dict(classification)),
+            }
+            extensions = copy.deepcopy(current.extensions)
+            extensions["runtimeFloors"] = next_floors
+            revision = current.revision + 1
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                extensions["scalarRollback"] = {
+                    **extensions["scalarRollback"],
+                    "forkRegistryRevision": revision,
+                }
+            updated = replace(
+                current,
+                schema=MANY_BINDING_REGISTRY_SCHEMA,
                 revision=revision,
                 extensions=extensions,
             )
@@ -1835,7 +1953,11 @@ class VaultRegistryStore:
                 )
             if intent.revision != stored.revision + 1 or not intent.handoff_complete:
                 raise RegistryError("background intent revision must advance by exactly one")
-            if stored.effective_binding_ids() != intent.effective_binding_ids():
+            if stored.effective_binding_ids() != intent.effective_binding_ids() and not (
+                # MVR-06D: each binding is its own lifecycle; the caller drains every
+                # departing member under its exclusive lease before this commit.
+                many_binding_dispatch_enabled(current)
+            ):
                 if stored.mode == INTENT_MODE_COMPATIBILITY or intent.effective_binding_ids():
                     # Removing a stale explicit member that no lifecycle runs is the only
                     # running-set change admitted here; anything else must drain first.
@@ -2950,14 +3072,18 @@ class VaultRegistryStore:
         if not isinstance(runtime_floors, dict):
             raise RegistryError("runtime floors are invalid")
         foreground_floor = runtime_floors.get("minimumForegroundOwnership")
-        mvr06_floor = (
-            runtime_floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) == MVR06_MINIMUM_RUNTIME_SCHEMA
-        )
-        if (schema == BACKGROUND_INTENT_REGISTRY_SCHEMA) != mvr06_floor:
+        minimum_runtime = runtime_floors.get(MINIMUM_RUNTIME_SCHEMA_KEY)
+        mvr06_floor = minimum_runtime in MVR06_FAMILY_RUNTIME_SCHEMAS
+        mvr06d_floor = minimum_runtime == MVR06D_MINIMUM_RUNTIME_SCHEMA
+        if (schema == BACKGROUND_INTENT_REGISTRY_SCHEMA) != (
+            minimum_runtime == MVR06_MINIMUM_RUNTIME_SCHEMA
+        ):
             raise RegistryError("MVR-06 runtime floor requires its qualified registry schema")
+        if (schema == MANY_BINDING_REGISTRY_SCHEMA) != mvr06d_floor:
+            raise RegistryError("MVR-06D runtime floor requires its qualified registry schema")
         # v3 subsumes v2: the foreground floor may already be present, or be advanced later
         # by a channel transfer, without leaving the MVR-06 qualified schema.
-        if schema != BACKGROUND_INTENT_REGISTRY_SCHEMA and (
+        if schema not in MVR06_FAMILY_REGISTRY_SCHEMAS and (
             (schema == FOREGROUND_REGISTRY_SCHEMA) != (foreground_floor == "mvr05c.v1")
         ):
             raise RegistryError("foreground ownership floor requires its qualified registry schema")
@@ -2967,6 +3093,10 @@ class VaultRegistryStore:
             _validate_mvr06_floor_receipt(runtime_floors.get(MVR06_FLOOR_RECEIPT_KEY))
         elif MVR06_FLOOR_RECEIPT_KEY in runtime_floors:
             raise RegistryError("MVR-06 floor receipt requires the MVR-06 runtime floor")
+        if mvr06d_floor:
+            _validate_mvr06d_floor_receipt(runtime_floors.get(MVR06D_FLOOR_RECEIPT_KEY))
+        elif MVR06D_FLOOR_RECEIPT_KEY in runtime_floors:
+            raise RegistryError("MVR-06D floor receipt requires the MVR-06D runtime floor")
         raw_intent = extensions.get(BACKGROUND_INTENT_KEY)
         if raw_intent is not None:
             if not mvr06_floor:
@@ -3813,6 +3943,10 @@ __all__ = [
     "MINIMUM_RUNTIME_SCHEMA_KEY",
     "MVR05_MINIMUM_RUNTIME_SCHEMA",
     "MVR06_MINIMUM_RUNTIME_SCHEMA",
+    "MVR06D_MINIMUM_RUNTIME_SCHEMA",
+    "MVR06_FAMILY_RUNTIME_SCHEMAS",
+    "MANY_BINDING_REGISTRY_SCHEMA",
+    "many_binding_dispatch_enabled",
     "DEFAULT_PROVENANCE_EXPLICIT",
     "DEFAULT_PROVENANCE_FIRST_INITIALIZE",
     "DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING",
