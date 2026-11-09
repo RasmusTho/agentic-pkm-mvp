@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -472,24 +473,34 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
 
 
 def status(directory: Path) -> dict[str, Any]:
-    with service._locked(directory):
-        state = _state(directory)
-        result: dict[str, Any] = {"state": state}
-        server_dir = directory / "server"
-        if server_dir.is_dir():
-            try:
-                result["service_status"] = service.status(server_dir)["status"]
-            except (service.ServiceError, OSError) as exc:
-                result["service_status_error"] = str(exc)
-        if state["phase"] in {"creating_conversation", "active", "interrupting", "interrupted", "resuming"}:
-            try:
-                data = _conversation(directory, state)
-            except DeliveryError as exc:
-                result["conversation_readback_error"] = str(exc)
-            else:
-                result["conversation_status"] = data.get("execution_status")
-                result["sub_conversation_ids"] = data.get("sub_conversation_ids")
-        return result
+    """Read atomic state without waiting for a long-running delivery operation."""
+    try:
+        info = directory.lstat()
+    except FileNotFoundError as exc:
+        raise DeliveryError("No valid delivery state in this directory") from exc
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) & 0o077):
+        raise service.ServiceError("State directory must be private and owned by the current user")
+    state = _state(directory)
+    result: dict[str, Any] = {"state": state}
+    server_dir = directory / "server"
+    if server_dir.is_dir():
+        try:
+            result["service_status"] = service.status(server_dir)["status"]
+        except (service.ServiceError, OSError) as exc:
+            result["service_status_error"] = str(exc)
+    if state["phase"] in {"creating_conversation", "active", "interrupting", "interrupted", "resuming"}:
+        try:
+            data = _conversation(directory, state)
+        except DeliveryError as exc:
+            result["conversation_readback_error"] = str(exc)
+        else:
+            result["conversation_status"] = data.get("execution_status")
+            result["sub_conversation_ids"] = data.get("sub_conversation_ids")
+    refreshed = _state(directory)
+    if refreshed != state:
+        return {"state": refreshed, "snapshot_notice": "Delivery state changed during status; retry for live readback"}
+    return result
 
 
 def cancel(directory: Path) -> dict[str, Any]:

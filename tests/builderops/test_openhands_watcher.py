@@ -1,4 +1,5 @@
 import fcntl
+import hashlib
 import json
 import threading
 from datetime import datetime, timedelta, timezone
@@ -53,7 +54,8 @@ def authorized_run(tmp_path, monkeypatch):
     state = {"version": 1, "kind": "openhands_delivery_run.v1", "phase": "active",
              "auto_finish": True, "issue": 5230, "repository": delivery.REPOSITORY,
              "root": str(factory.FACTORY_ROOT), "worktree": str(worktree), "branch": branch,
-             "base_commit": "a" * 40, "pickup_receipt": receipt}
+             "base_commit": "a" * 40, "pickup_receipt": receipt, "port": 8123,
+             "conversation_id": "conversation-1", "session_id": "session-1", "agent_id": "worker-agent"}
     service._write(directory, state)
     handoff = {"version": 1, "issue": 5230, "title": "Implement feature", "paths": ["feature.py"],
                "risk_surfaces": ["auth"], "body": {key: BODY_INPUTS[key] for key in watcher.BODY_FIELDS}}
@@ -66,6 +68,8 @@ def authorized_run(tmp_path, monkeypatch):
     class Runner:
         staged = False
         committed = False
+        head = "a" * 40
+        commits = 0
 
         def run(self, argv, *, cwd, input_text=None):
             command = tuple(argv)
@@ -76,7 +80,7 @@ def authorized_run(tmp_path, monkeypatch):
             elif command[-2:] == ("branch", "--show-current"):
                 output = branch
             elif command[-2:] == ("rev-parse", "HEAD"):
-                output = "a" * 40
+                output = self.head
             elif command[:2] == ("git", "check-ignore"):
                 pass
             elif command[:2] == ("git", "ls-files") and "--error-unmatch" in command:
@@ -92,6 +96,8 @@ def authorized_run(tmp_path, monkeypatch):
                 self.staged = True
             elif "commit" in command:
                 self.committed = True
+                self.commits += 1
+                self.head = "b" * 40 if self.commits == 1 else "c" * 40
             elif "agent_workspace_preflight.sh" in command[0]:
                 pass
             else:
@@ -103,7 +109,7 @@ def authorized_run(tmp_path, monkeypatch):
     monkeypatch.setattr(delivery, "_conversation", lambda *args: {"execution_status": "finished"})
     monkeypatch.setattr(delivery, "_finished_run", lambda *args: state)
     monkeypatch.setattr(delivery, "_full_claim_readback", lambda *args: calls.append(("claim-readback",)))
-    monkeypatch.setattr(factory, "_candidate_head", lambda *args: "b" * 40)
+    monkeypatch.setattr(factory, "_candidate_head", lambda *args: runner.head)
 
     class Keeper:
         def __init__(self, state, watch_dir):
@@ -179,6 +185,131 @@ def test_watcher_retries_publication_without_repeating_commit(authorized_run, mo
     watcher.run(*arguments)
     assert watcher.status(directory)["status"] == "finished"
     assert len(attempts) == 2 and sum("commit" in call for call in calls) == 1
+
+
+@pytest.mark.parametrize("mode", ["success", "ambiguous", "replay", "repeated", "session_drift"])
+@pytest.mark.parametrize("kind", ["review", "verification"])
+def test_watcher_repairs_actionable_feedback_once_and_preserves_replay(authorized_run, monkeypatch, mode, kind):
+    directory, worktree, state, _, runner, calls = authorized_run
+    review = {"head_sha": "b" * 40, "verdict": "unresolved", "summary": "A concrete defect needs repair",
+              "findings": [{"severity": "P1", "description": "Handle the missing value in this branch.",
+                            "file": "feature.py", "line": 3}]}
+    raw = json.dumps(review)
+    artifact = directory / "review.txt"
+    artifact.write_text(raw)
+    if kind == "review":
+        failure = factory.FinishEvidenceError("review unresolved", kind="review", evidence={
+            "status": "unresolved", "head_sha": "b" * 40, "reason": None,
+            "review": {"head_sha": "b" * 40, "evidence": {"path": str(artifact),
+                       "sha256": hashlib.sha256(raw.encode()).hexdigest()}},
+        })
+    else:
+        tests = worktree / "tests"
+        tests.mkdir()
+        (tests / "test_feature.py").write_text("# target\n")
+        raw = "FAILED test_feature.py::test_bug - AssertionError: actual failure\n1 failed\n"
+        artifact.write_text(raw)
+        failure = factory.FinishEvidenceError("test failed", kind="verification", evidence={
+            "status": "failed", "head_sha": "b" * 40, "unresolved": [], "failed": [{
+                "target": "tests/test_feature.py::test_bug", "head_sha": "b" * 40, "result": "fail",
+                "exit_code": 1, "evidence": {"path": str(artifact), "sha256": hashlib.sha256(raw.encode()).hexdigest()},
+            }],
+        })
+    messages, finish_calls, reads = [], [], []
+    worker_id = "b51e5cc1-d1d3-4f2c-996f-80a405e2cf6b"
+
+    def finish(*args, **kwargs):
+        finish_calls.append(runner.head)
+        if len(finish_calls) == 1 or mode == "repeated":
+            raise failure
+        return {"pr_number": 1234, "commit_sha": runner.head, "checks": {}}
+
+    def conversation(*args):
+        if not messages:
+            return {"execution_status": "finished", "last_user_message_id": "old-message",
+                    "agent_state": {"acp_session_id": worker_id, "acp_session_cwd": str(worktree)}}
+        return {"execution_status": "finished", "last_user_message_id": "repair-message",
+                "leaf_event_id": "agent-response", "agent_state": {
+                    "acp_session_id": ("5218525d-28ae-4c89-8b18-1827b234e046" if mode == "session_drift"
+                                       else worker_id), "acp_session_cwd": str(worktree)}}
+
+    def http(port, key, method, path, payload=None, **kwargs):
+        assert port == state["port"] and state["conversation_id"] in path
+        if method == "POST":
+            assert service._read(directory / "watcher")["phase"] == "repair_sending"
+            messages.append(payload)
+            if mode == "ambiguous":
+                raise delivery.DeliveryError("OpenHands API unavailable or outcome uncertain")
+            runner.staged = False
+            return 200, {"success": True}
+        reads.append(path)
+        if mode == "replay" and len(reads) == 2:
+            raise delivery.DeliveryError("Temporary event readback failure")
+        return 200, {"id": "repair-message", "source": "user", "llm_message": {
+            "role": "user", "content": messages[0]["content"],
+        }}
+
+    monkeypatch.setattr(factory, "_finish", finish)
+    monkeypatch.setattr(delivery, "_conversation", conversation)
+    monkeypatch.setattr(delivery, "_server_key", lambda *args: "local-test-key")
+    monkeypatch.setattr(delivery, "_http", http)
+    arguments = (Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
+    watcher.run(*arguments)
+    result = watcher.status(directory)
+    if mode in {"ambiguous", "session_drift"}:
+        assert result["status"] == "pending" and result["phase"] == "repair_sending"
+        watcher.run(*arguments)
+        assert len(messages) == 1 and runner.commits == 1
+        return
+    if mode == "replay":
+        assert result["status"] == "pending" and result["phase"] == "repair_sent"
+        watcher.run(*arguments)
+        result = watcher.status(directory)
+    assert len(messages) == 1 and runner.commits == 2
+    expected = "Handle the missing value" if kind == "review" else "AssertionError: actual failure"
+    assert messages[0]["run"] is True and expected in messages[0]["content"][0]["text"]
+    prompt = messages[0]["content"][0]["text"]
+    assert "Preserve the Issue's exclusions and existing behavior outside the authorized fix" in prompt
+    assert "actual acceptance criteria and examples and relevant regressions" in prompt
+    assert "pre-existing behavior as a blocker merely because it could be improved" in prompt
+    assert "regressions and failed acceptance criteria within scope" in prompt
+    assert "smallest in-scope fix" in prompt and "leave it unresolved" in prompt
+    assert finish_calls == ["b" * 40, "c" * 40]
+    assert result["status"] == ("failed" if mode == "repeated" else "finished")
+    watcher.run(*arguments)
+    assert len(messages) == 1 and runner.commits == 2
+
+
+def test_test_failure_feedback_uses_actual_bound_output(authorized_run):
+    directory, worktree, state, handoff, _, _ = authorized_run
+    tests = worktree / "tests"
+    tests.mkdir()
+    (tests / "test_feature.py").write_text("# target\n")
+    source = "FAILED tests/test_feature.py::test_bug - AssertionError: actual failure\n1 failed\n"
+    log = directory / "failure.log"
+    log.write_text(source)
+    failure = factory.FinishEvidenceError("failed", kind="verification", evidence={
+        "status": "failed", "head_sha": "b" * 40, "unresolved": [], "failed": [{
+            "target": "tests/test_feature.py::test_bug", "head_sha": "b" * 40, "result": "fail",
+            "exit_code": 1, "evidence": {"path": str(log), "sha256": hashlib.sha256(source.encode()).hexdigest()},
+        }],
+    })
+    assert "AssertionError: actual failure" in watcher._repair_feedback(failure, state, handoff, "b" * 40, directory)
+    failure.evidence["unresolved"] = [{"reason": "another target was not run"}]
+    assert watcher._repair_feedback(failure, state, handoff, "b" * 40, directory) is None
+
+
+def test_unresolved_review_without_actionable_findings_is_not_resent(authorized_run):
+    directory, _, state, handoff, _, _ = authorized_run
+    raw = json.dumps({"head_sha": "b" * 40, "verdict": "unresolved", "summary": "Review unavailable", "findings": []})
+    artifact = directory / "review.txt"
+    artifact.write_text(raw)
+    error = factory.FinishEvidenceError("unresolved", kind="review", evidence={
+        "status": "unresolved", "head_sha": "b" * 40, "reason": None,
+        "review": {"head_sha": "b" * 40, "evidence": {"path": str(artifact),
+                   "sha256": hashlib.sha256(raw.encode()).hexdigest()}},
+    })
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
 
 
 def test_watcher_reports_failed_verification_without_publication(authorized_run, monkeypatch):

@@ -1,5 +1,6 @@
 import json
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,40 @@ ROOT = Path(__file__).resolve().parents[2]
 BODY = (ROOT / "tests/fixtures/issue_readiness/valid_ready_candidate.md").read_text()
 HEAD = "a" * 40
 FULL_CLAIM_READBACK = delivery._full_claim_readback
+
+
+def test_status_does_not_wait_for_delivery_lock_and_detects_state_drift(tmp_path, monkeypatch):
+    directory = tmp_path / "delivery"
+    directory.mkdir(mode=0o700)
+    state = {"version": 1, "kind": "openhands_delivery_run.v1", "phase": "active"}
+    delivery.service._write(directory, state)
+    monkeypatch.setattr(delivery, "_conversation", lambda *args: {
+        "execution_status": "finished", "sub_conversation_ids": [],
+    })
+    results = []
+    done = threading.Event()
+
+    def read_status():
+        try:
+            results.append(delivery.status(directory))
+        finally:
+            done.set()
+
+    with delivery.service._locked(directory):
+        thread = threading.Thread(target=read_status, daemon=True)
+        thread.start()
+        assert done.wait(1), "status waited for the delivery lock"
+    thread.join(timeout=1)
+    assert results[0]["state"] == state and results[0]["conversation_status"] == "finished"
+
+    def changed_during_read(*args):
+        delivery.service._write(directory, {**state, "phase": "interrupted"})
+        return {"execution_status": "finished"}
+
+    monkeypatch.setattr(delivery, "_conversation", changed_during_read)
+    snapshot = delivery.status(directory)
+    assert snapshot["state"]["phase"] == "interrupted" and "snapshot_notice" in snapshot
+    assert "conversation_status" not in snapshot
 
 
 @pytest.fixture

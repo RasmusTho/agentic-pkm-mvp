@@ -697,6 +697,9 @@ def test_owner_review_records_independent_candidate_evidence(tmp_path, monkeypat
     assert code == (0 if review_outcome == "pass" else 1)
     assert captured["worker"] == worker_thread and captured["candidate"] == head
     assert body in captured["prompt"] and "diff --git" in captured["prompt"]
+    assert "actual acceptance criteria and examples and relevant regressions" in captured["prompt"]
+    assert "pre-existing behavior as a blocker merely because it could be improved" in captured["prompt"]
+    assert "new regressions and failed acceptance criteria as findings" in captured["prompt"]
     assert worker_thread not in json.dumps(output) and "independent-thread-id" not in json.dumps(output)
     assert os.stat(output["evidence_file"]).st_mode & 0o777 == 0o600
     if review_outcome != "refused":
