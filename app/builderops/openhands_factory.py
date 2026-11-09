@@ -413,7 +413,7 @@ def _ui(install: Path, directory: Path, issue: int, action: str, port: int, open
     if action == "start":
         if output != f"http://127.0.0.1:{port}":
             raise delivery.DeliveryError("Canvas launch result is uncertain; inspect its local state")
-        ui = {"status": "running", "url": output}
+        ui: dict[str, Any] = {"status": "running", "url": output}
     elif output == "stopped":
         ui = {"status": "stopped", "url": None}
     else:
@@ -684,13 +684,13 @@ def _run_verify_command(command: list[str], worktree: Path, temp_dir: Path, log:
                     process.stdout.close()
                     return None
                 for key, _ in selector.select(timeout=0.2):
-                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    chunk = os.read(key.fd, 65536)
                     if chunk:
                         stream.write(chunk)
                         written += len(chunk)
                     else:
                         selector.unregister(key.fileobj)
-                        key.fileobj.close()
+                        process.stdout.close()
         result = process.wait()
         if result != 0 and written == 0:
             stream.write(f"[verification runner] Command exited {result} without output.\n".encode())

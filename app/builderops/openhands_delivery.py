@@ -134,7 +134,8 @@ def preview(root: Path, issue_number: int, branch: str, worktree: Path) -> dict[
     if issue.get("state") != "OPEN":
         raise DeliveryError("Issue is not open")
     title, body, updated = issue.get("title"), issue.get("body"), issue.get("updatedAt")
-    if not all(isinstance(x, str) and x.strip() for x in (title, body, updated)):
+    if (not isinstance(title, str) or not title.strip() or not isinstance(body, str) or not body.strip()
+            or not isinstance(updated, str) or not updated.strip()):
         raise DeliveryError("Issue contract or update timestamp is missing")
     raw_labels = issue.get("labels")
     if not isinstance(raw_labels, list) or any(
@@ -1012,12 +1013,12 @@ def _full_snapshot(
     remote = publication._read_remote_head(runner, worktree, state["branch"])
     prs = publication._read_pr_history(runner, worktree, REPOSITORY, state["branch"])
     workflow_review = evidence.get("workflow_review_receipt")
-    workflow_path = None
+    workflow_path: str | None = None
     if workflow_review is not None:
-        workflow_path = Path(workflow_review["path"])
-        if not workflow_path.is_absolute():
-            workflow_path = evidence_file.resolve().parent / workflow_path
-        workflow_path = str(workflow_path.resolve(strict=True))
+        receipt_path = Path(workflow_review["path"])
+        if not receipt_path.is_absolute():
+            receipt_path = evidence_file.resolve().parent / receipt_path
+        workflow_path = str(receipt_path.resolve(strict=True))
     snapshot = {"head": head, "base": authority.base_sha, "authority": authority.as_mapping(),
                 "issue": issue, "paths": sorted(actual), "evidence_sha256": evidence_digest,
                 "risk_surfaces": sorted(evidence["risk_surfaces"]),
@@ -1131,6 +1132,8 @@ def _publish_full_update(
     retry = prior.get("binding_sha256") == binding_hash
     previous = prior.get("previous_candidate") if retry else prior.get("candidate")
     pr_number = prior.get("pr_number")
+    if type(pr_number) is not int or pr_number <= 0:
+        raise DeliveryError("Previous publication has no valid PR number")
     if (not isinstance(previous, dict) or previous.get("issue") != state["issue"]
             or previous.get("branch") != state["branch"] or previous.get("base") != snapshot["base"]
             or not isinstance(previous.get("head"), str)

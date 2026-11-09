@@ -125,7 +125,7 @@ class _Rpc:
             if not events:
                 raise ReviewError("Reviewer timed out")
             try:
-                data = os.read(events[0][0].fileobj.fileno(), 65536)
+                data = os.read(events[0][0].fd, 65536)
             except OSError as exc:
                 raise ReviewError("Reviewer transport failed") from exc
             if not data:
@@ -215,11 +215,12 @@ def run_review(
     except OSError as exc:
         raise ReviewError("Cannot start guarded reviewer") from exc
     assert process.stderr is not None
+    stderr_stream = process.stderr
     diagnostic_bytes = bytearray()
 
     def drain_stderr() -> None:
         try:
-            while data := os.read(process.stderr.fileno(), 4096):
+            while data := os.read(stderr_stream.fileno(), 4096):
                 diagnostic_bytes.extend(data)
                 if len(diagnostic_bytes) > 16384:
                     del diagnostic_bytes[:-16384]
@@ -264,7 +265,7 @@ def run_review(
                 raise ReviewError("Reviewer produced too many events")
             if turn_id is None:
                 continue
-            completed = [e.get("params") for e in events if e.get("method") == "turn/completed"
+            completed = [e["params"] for e in events if e.get("method") == "turn/completed"
                          and isinstance(e.get("params"), dict) and e["params"].get("threadId") == thread
                          and isinstance(e["params"].get("turn"), dict)
                          and e["params"]["turn"].get("id") == turn_id]
@@ -307,7 +308,7 @@ def run_review(
         stderr_thread.join(timeout=2)
         process.stderr.close()
     assert pending_error is not None
-    message = str(pending_error)
-    if message in {"Reviewer exited before completing", "Reviewer transport failed"}:
-        message += f" (exit {process.returncode}): {_startup_diagnostic(bytes(diagnostic_bytes))}"
-    raise ReviewError(message, response=pending_error.response) from pending_error
+    failure_message = str(pending_error)
+    if failure_message in {"Reviewer exited before completing", "Reviewer transport failed"}:
+        failure_message += f" (exit {process.returncode}): {_startup_diagnostic(bytes(diagnostic_bytes))}"
+    raise ReviewError(failure_message, response=pending_error.response) from pending_error
