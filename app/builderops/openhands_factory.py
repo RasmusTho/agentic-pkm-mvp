@@ -1029,6 +1029,34 @@ def _finish(
     return delivery.publish_full(directory, paths, title, body, evidence_file, executor=executor)
 
 
+def _check_serial_admission(state_root: Path, selected_issue: int) -> None:
+    """Allow another worker only after each prior recorded delivery is terminal."""
+    from app.builderops import openhands_watcher as watcher
+
+    for directory in sorted(state_root.iterdir()):
+        if not re.fullmatch(r"issue-[1-9][0-9]*", directory.name):
+            continue
+        if directory.name == f"issue-{selected_issue}":
+            continue
+        if directory.is_symlink() or not directory.is_dir():
+            raise delivery.DeliveryError("Another delivery has uncertain state; inspect it before starting")
+        try:
+            observed = delivery.status(directory)
+            state = observed["state"]
+            watch = watcher.status(directory)
+        except (delivery.DeliveryError, service.ServiceError, OSError, KeyError) as exc:
+            raise delivery.DeliveryError("Another delivery has uncertain state; inspect it before starting") from exc
+        publication_state = state.get("full_publication")
+        published = (isinstance(publication_state, dict)
+                     and publication_state.get("state") == "draft_published"
+                     and type(publication_state.get("pr_number")) is int)
+        terminal_watcher = watch.get("status") == "finished" and watch.get("phase") == "published"
+        terminal_legacy = (watch.get("status") == "not_started"
+                           and observed.get("conversation_status") == "finished")
+        if not published or not (terminal_watcher or terminal_legacy):
+            raise delivery.DeliveryError("Another delivery is active or unresolved; inspect it before starting")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("start", "status", "cancel", "resume", "stop", "ui", "control", "verify", "review", "finish", "watch"))
@@ -1066,6 +1094,7 @@ def main(argv: list[str] | None = None) -> int:
                     result["owner_ui"] = _ui_route(install, directory, result)
                     print(json.dumps(result, indent=2))
                     return 0
+                _check_serial_admission(state_root, args.issue)
                 _refresh_base(repo)
                 node, codex = _executable("node"), _executable("codex")
                 worktree = worktree_root / f"issue-{args.issue}-openhands"
@@ -1099,6 +1128,10 @@ def main(argv: list[str] | None = None) -> int:
                 result["note"] += " Start Canvas for the host Issue to open this conversation."
             print(json.dumps(result, indent=2))
             return 0
+        elif args.command == "resume":
+            with service._locked(state_root):
+                _check_serial_admission(state_root, args.issue)
+                result = delivery.resume(directory)
         elif args.command == "stop":
             result = _stop(install, directory, args.issue)
         elif args.command == "verify":

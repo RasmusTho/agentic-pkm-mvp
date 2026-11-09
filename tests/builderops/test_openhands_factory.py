@@ -66,6 +66,32 @@ def _recorded_run(install, state_root, worktrees, *, conversation="finished"):
     return directory, state, server, saved, thread_id
 
 
+@pytest.mark.parametrize("watch_status,phase,conversation,allowed", [
+    ("running", "watching", "running", False),
+    ("pending", "ci_wait", "finished", False),
+    ("finished", "published", None, True),
+    ("not_started", None, "finished", True),
+    ("not_started", None, "running", False),
+])
+def test_serial_admission_requires_prior_delivery_to_be_terminal(
+    tmp_path, monkeypatch, watch_status, phase, conversation, allowed
+):
+    from app.builderops import openhands_watcher as watcher
+
+    prior = tmp_path / "issue-41"
+    prior.mkdir()
+    monkeypatch.setattr(delivery, "status", lambda path: {
+        "state": {"full_publication": {"state": "draft_published", "pr_number": 42}},
+        "conversation_status": conversation,
+    })
+    monkeypatch.setattr(watcher, "status", lambda path: {"status": watch_status, "phase": phase})
+    if allowed:
+        factory._check_serial_admission(tmp_path, 43)
+    else:
+        with pytest.raises(delivery.DeliveryError, match="active or unresolved"):
+            factory._check_serial_admission(tmp_path, 43)
+
+
 def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys):
     from app.builderops import openhands_watcher as watcher
 

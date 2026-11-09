@@ -50,7 +50,9 @@ Issue and its draft PR, or `status #456`, `cancel #456`, `resume #456`, or `stop
 recorded run. This conversation is a command bridge and makes no model request; the task itself
 still uses the guarded native Codex session. No backlog scanner is enabled. The control session
 currently depends on its host Issue backend and Canvas staying available; it is a trial route, not
-an adopted default. If it is unavailable, restore that recorded host session with `start --issue
+an adopted default. A new start or resume is refused until earlier recorded deliveries reach a known
+published terminal state; inspect an active or uncertain earlier run first. If it is unavailable,
+restore that recorded host session with `start --issue
 123`, start its Canvas with `ui --issue 123 --ui-action start`, then run `control --issue 123`
 again. Stop the host with `stop --issue 123` only after its conversation is finished or cancelled;
 this makes the attached control unavailable. Roll back to the previous operation by continuing to

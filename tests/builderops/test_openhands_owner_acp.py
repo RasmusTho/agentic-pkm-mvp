@@ -15,7 +15,7 @@ from app.builderops import openhands_owner_acp as owner
 
 @pytest.mark.parametrize("message", ["start 1; start 2", "start 1 and 2", "start 0", "start -1", "delete 3", "start 4\nstatus 5"])
 def test_owner_requires_one_explicit_issue_command(tmp_path, monkeypatch, message):
-    monkeypatch.setattr(owner.subprocess, "run", lambda *args, **kwargs: pytest.fail("unexpected effect"))
+    monkeypatch.setattr(owner, "_invoke", lambda *args, **kwargs: pytest.fail("unexpected effect"))
     assert "one explicit Issue command" in owner.run_command(tmp_path / "entry", message)
 
 
@@ -24,14 +24,14 @@ def test_owner_calls_only_factory_and_does_not_forward_provider_keys(tmp_path, m
     monkeypatch.setenv("OPENAI_API_KEY", "not-forwarded")
     monkeypatch.setattr(owner, "_port", lambda: 18650)
 
-    def execute(args, **kwargs):
-        calls.append((args, kwargs))
+    def execute(args, env):
+        calls.append((args, env))
         return SimpleNamespace(returncode=0, stdout=json.dumps({"conversation_status": "running"}))
 
-    monkeypatch.setattr(owner.subprocess, "run", execute)
+    monkeypatch.setattr(owner, "_invoke", execute)
     result = owner.run_command(tmp_path / "openhands", "/start #42")
     assert calls[0][0] == [str(tmp_path / "openhands"), "start", "--issue", "42", "--port", "18650"]
-    assert "OPENAI_API_KEY" not in calls[0][1]["env"]
+    assert "OPENAI_API_KEY" not in calls[0][1]
     assert "Conversation: running" in result
 
 
@@ -43,19 +43,39 @@ def test_uncertain_start_is_not_retried(tmp_path, monkeypatch):
         calls.append(args)
         raise owner.subprocess.TimeoutExpired(args[0], 240)
 
-    monkeypatch.setattr(owner.subprocess, "run", timed_out)
+    monkeypatch.setattr(owner, "_invoke", timed_out)
     assert "status #42" in owner.run_command(tmp_path / "openhands", "start 42")
     assert len(calls) == 1
 
 
 def test_owner_explains_known_admission_failure_without_echoing_arbitrary_output(tmp_path, monkeypatch):
     monkeypatch.setattr(owner, "_port", lambda: 18650)
-    monkeypatch.setattr(owner.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+    monkeypatch.setattr(owner, "_invoke", lambda *args, **kwargs: SimpleNamespace(
         returncode=1, stderr="OpenHands factory: Issue does not have exactly agent:ready as its agent state"))
     assert "not ready" in owner.run_command(tmp_path / "entry", "start #42")
-    monkeypatch.setattr(owner.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+    monkeypatch.setattr(owner, "_invoke", lambda *args, **kwargs: SimpleNamespace(
         returncode=1, stderr="untrusted output must not be echoed"))
     assert "untrusted" not in owner.run_command(tmp_path / "entry", "start #42")
+
+
+def test_owner_timeout_stops_the_started_process_group(monkeypatch):
+    calls = []
+
+    class Process:
+        pid = 1234
+        count = 0
+
+        def communicate(self, timeout=None):
+            self.count += 1
+            if self.count == 1:
+                raise owner.subprocess.TimeoutExpired("factory", timeout)
+            return "", ""
+
+    monkeypatch.setattr(owner.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(owner.os, "killpg", lambda pid, sig: calls.append((pid, sig)))
+    with pytest.raises(owner.subprocess.TimeoutExpired):
+        owner._invoke(["factory"], {})
+    assert calls == [(1234, owner.signal.SIGTERM)]
 
 
 def test_status_shows_published_pr_and_ci_without_raw_state():

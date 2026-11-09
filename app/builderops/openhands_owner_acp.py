@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import uuid
@@ -68,6 +69,28 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
     return "\n".join(fields)
 
 
+def _invoke(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=240)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+        raise
+    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+
 def run_command(entry: Path, message: str) -> str:
     if message.strip().lower() in {"help", "/help"}:
         return HELP
@@ -85,8 +108,7 @@ def run_command(entry: Path, message: str) -> str:
     env = {k: os.environ[k] for k in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR",
            "DISPATCHER_STATE_DIR", "DISPATCHER_DB_PATH", "DISPATCHER_EVENTS_PATH") if k in os.environ}
     try:
-        result = subprocess.run(args, env=env, stdin=subprocess.DEVNULL, capture_output=True,
-                                text=True, timeout=240, check=False)
+        result = _invoke(args, env)
     except (OSError, subprocess.TimeoutExpired):
         return f"Issue #{issue}: outcome is uncertain. Use `status #{issue}` before retrying."
     if result.returncode:
@@ -96,6 +118,10 @@ def run_command(entry: Path, message: str) -> str:
             "Issue is not open": "The Issue is not open.",
             "Existing branch, worktree or PR requires reconciliation":
                 "Existing work needs reconciliation before starting.",
+            "Another delivery is active or unresolved; inspect it before starting":
+                "Another delivery is active or unresolved; inspect its status first.",
+            "Another delivery has uncertain state; inspect it before starting":
+                "Another delivery has uncertain state; inspect it first.",
         }
         diagnostic = result.stderr.strip().removeprefix("OpenHands factory: ")
         if diagnostic in diagnostics:
