@@ -204,6 +204,47 @@ def test_linked_worktree_git_metadata_is_readable_without_write_access(tmp_path,
     assert str(git_dir) not in settings["sandbox_read_roots"]
 
 
+def test_test_environment_installs_repo_manifests_and_records_exact_resolution(tmp_path, monkeypatch):
+    directory, worktree = tmp_path / "run", tmp_path / "worktree"
+    directory.mkdir()
+    worktree.mkdir()
+    for name in ("requirements.txt", "dev-requirements.txt"):
+        (worktree / name).write_text(f"{name}-package==1.0\n")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "example==1.0\n", "")
+
+    monkeypatch.setattr(delivery.subprocess, "run", run)
+    result = delivery._prepare_test_environment(directory, worktree, Path("/runtime/bin/python"))
+    assert calls[0][:4] == ["uv", "venv", "--python", "/runtime/bin/python"]
+    assert calls[1][-4:] == ["-r", str(worktree / "requirements.txt"),
+                             "-r", str(worktree / "dev-requirements.txt")]
+    assert calls[2][1:3] == ["pip", "freeze"]
+    assert Path(result["frozen"]).read_text() == "example==1.0\n"
+    assert result["frozen_sha256"] == delivery._sha("example==1.0\n")
+    assert set(result["manifests"]) == {"requirements.txt", "dev-requirements.txt"}
+
+
+def test_automatic_start_prepares_tests_before_starting_worker(orchestration, monkeypatch):
+    kwargs, events, _ = orchestration
+
+    def prepare(directory, worktree, python):
+        events.append(("test-setup", str(worktree)))
+        return {"python": str(directory / "test-venv/bin/python")}
+
+    monkeypatch.setattr(delivery, "_prepare_test_environment", prepare)
+    monkeypatch.setattr(delivery, "_include_read_root", lambda settings, path: settings)
+    result = delivery.start(**kwargs, auto_finish=True)
+    assert result["state"]["test_environment"]["python"].endswith("/test-venv/bin/python")
+    assert next(i for i, x in enumerate(events) if x[0] == "test-setup") < next(
+        i for i, x in enumerate(events) if x[0] == "service"
+    )
+    created = next(x for x in events if x[0] == "POST" and x[1] == "/conversations")
+    assert result["state"]["test_environment"]["python"] in created[2]["initial_message"]["content"][0]["text"]
+
+
 def test_start_claims_then_starts_workspace_bound_conversation_and_prevents_replay(orchestration):
     kwargs, events, http = orchestration
     result = delivery.start(**kwargs)

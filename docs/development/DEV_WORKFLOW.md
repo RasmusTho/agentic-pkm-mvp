@@ -37,7 +37,26 @@ do not match, or updating the tracking ref would not be a fast-forward; it does 
 factory checkout's `HEAD` as the base.
 
 The installer creates a private state directory and a short owner entry point bound to this factory
-checkout and the chosen roots. Replace the example paths and the explicitly authorized Issue:
+checkout and the chosen roots. The current experimental Canvas route attaches a deterministic
+control conversation to an already running factory Issue backend and Canvas. Once that backend and
+Canvas are running, create or recover the conversation once with:
+
+```sh
+/absolute/install/root/bin/openhands control --issue 123
+```
+
+Open the returned Canvas URL. In **Builder control**, enter `start #456` to authorize that one
+Issue and its draft PR, or `status #456`, `cancel #456`, `resume #456`, or `stop #456` for the
+recorded run. This conversation is a command bridge and makes no model request; the task itself
+still uses the guarded native Codex session. No backlog scanner is enabled. The control session
+currently depends on its host Issue backend and Canvas staying available; it is a trial route, not
+an adopted default. If it is unavailable, restore that recorded host session with `start --issue
+123`, start its Canvas with `ui --issue 123 --ui-action start`, then run `control --issue 123`
+again. Stop the host with `stop --issue 123` only after its conversation is finished or cancelled;
+this makes the attached control unavailable. Roll back to the previous operation by continuing to
+use the existing CLI; retain the recorded sessions and draft PRs.
+
+The CLI remains available directly. Replace the example paths and explicitly authorized Issue:
 
 ```sh
 /absolute/install/root/bin/openhands start --issue 123 --port 8765
@@ -47,7 +66,12 @@ Use the same entry point with `status`, `cancel`, `resume`, or `stop` in place o
 derives its pinned ACP and isolated service configuration; model selection stays on
 `gpt-6.1-terra` with subscription authentication, with no provider or model fallback. `cancel`
 interrupts the conversation; it does not establish that delegated processes have stopped. For a
-new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. The
+new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Before
+starting the worker, the host uses `uv` and that Issue's checked-out `requirements.txt` and
+`dev-requirements.txt` to create a separate per-run Python environment. Its resolved packages are
+recorded in the private run directory, and verification refuses changed requirement manifests.
+This leaves the OpenHands runtime environment separate. The worker is told the test interpreter's
+path; historical runs without this environment retain their original interpreter. The
 worker is instructed to leave a private ignored `.codex-tmp/openhands-finish.json` with its proposed
 title, body fields, risk classification and exact changed paths. After observing the finished
 conversation and children, the watcher checks the claim, branch/worktree gate, handoff and actual
@@ -87,6 +111,12 @@ branch inspection and is not automatically repeated. Older runs without the reco
 authorization remain manual. The watcher does not restart itself after a host reboot; an expired
 dispatcher lease cannot be revived by its heartbeat. Preserve state and reconcile an interrupted or uncertain
 start before retrying.
+
+After publishing, the watcher waits for GitHub checks and independently re-reads the draft PR and
+its current head. It reports a failure as failed, a genuinely incomplete or unavailable result as
+pending, and success only when the recorded current head has passed the check wait. It does not
+yet automatically diagnose or repair a CI-only failure. Resuming `watch` in the CI-wait phase
+rechecks the same draft instead of publishing another one.
 
 `stop` first checks that the recorded conversation is finished or has been interrupted through
 `cancel`, then records the existing ACP session and service settings privately and stops the

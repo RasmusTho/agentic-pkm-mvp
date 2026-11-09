@@ -1,0 +1,168 @@
+"""A deterministic Canvas conversation for the existing OpenHands owner CLI.
+
+This ACP endpoint makes no model requests. A user submits one explicit Issue
+number; the existing factory owns admission, execution, verification and PRs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import re
+import socket
+import subprocess
+import uuid
+from pathlib import Path
+from typing import Any
+
+import acp
+from acp.schema import AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse, PromptResponse
+
+COMMAND = re.compile(r"/?(start|status|cancel|resume|stop)\s+#?([1-9][0-9]{0,8})\s*", re.IGNORECASE)
+HELP = ("Enter `start #123`, `status #123`, `cancel #123`, `resume #123`, or `stop #123`. "
+        "Start authorizes only that Issue; the factory checks its contract and ownership.")
+
+
+def _port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
+    raw_state, raw_watcher = result.get("state"), result.get("watcher")
+    state: dict[str, Any] = raw_state if isinstance(raw_state, dict) else {}
+    watcher: dict[str, Any] = raw_watcher if isinstance(raw_watcher, dict) else {}
+    raw_publication = state.get("full_publication")
+    publication: dict[str, Any] = raw_publication if isinstance(raw_publication, dict) else {}
+    pr = watcher.get("pr_number") or publication.get("pr_number")
+    delivery_status = watcher.get("status")
+    if delivery_status == "not_started" and type(pr) is int and pr > 0:
+        delivery_status = "draft published"
+    fields = [f"Issue #{issue}: {action} request completed."]
+    for label, value in (("Conversation", result.get("conversation_status")),
+                         ("Service", result.get("service_status")),
+                         ("Delivery", delivery_status), ("Phase", watcher.get("phase")),
+                         ("Cancellation", result.get("cancel_status"))):
+        if isinstance(value, str):
+            fields.append(f"{label}: {value}.")
+    reason = watcher.get("reason")
+    if isinstance(reason, str) and len(reason) <= 240 and re.fullmatch(r"[A-Za-z0-9 .,;:_#()/-]+", reason):
+        fields.append(f"Detail: {reason}.")
+    if type(pr) is int and pr > 0:
+        fields.append(f"Draft PR: https://github.com/RasmusTho/agentic-pkm-mvp/pull/{pr}")
+    ci = watcher.get("ci")
+    if isinstance(ci, dict) and isinstance(ci.get("status"), str):
+        fields.append(f"CI: {ci['status']}.")
+    if action == "cancel":
+        fields.append("Delegated-process cancellation has not been verified.")
+    return "\n".join(fields)
+
+
+def run_command(entry: Path, message: str) -> str:
+    if message.strip().lower() in {"help", "/help"}:
+        return HELP
+    match = COMMAND.fullmatch(message.strip())
+    if match is None:
+        return "Please use one explicit Issue command. " + HELP
+    action, issue_text = match.groups()
+    action, issue = action.lower(), int(issue_text)
+    args = [str(entry), action, "--issue", str(issue)]
+    if action == "start":
+        try:
+            args.extend(["--port", str(_port())])
+        except OSError:
+            return "No local worker port is available; no Issue was started."
+    env = {k: os.environ[k] for k in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR",
+           "DISPATCHER_STATE_DIR", "DISPATCHER_DB_PATH", "DISPATCHER_EVENTS_PATH") if k in os.environ}
+    try:
+        result = subprocess.run(args, env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                                text=True, timeout=1200 if action == "start" else 240, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return f"Issue #{issue}: outcome is uncertain. Use `status #{issue}` before retrying."
+    if result.returncode:
+        diagnostics = {
+            "Issue does not have exactly agent:ready as its agent state":
+                "The Issue is not ready for factory pickup.",
+            "Issue is not open": "The Issue is not open.",
+            "Existing branch, worktree or PR requires reconciliation":
+                "Existing work needs reconciliation before starting.",
+            "Repository test environment setup failed; inspect the installation":
+                "Test dependency setup failed; inspect the retained run before retrying.",
+        }
+        diagnostic = result.stderr.strip().removeprefix("OpenHands factory: ")
+        if diagnostic in diagnostics:
+            return f"Issue #{issue}: {diagnostics[diagnostic]}"
+        return f"Issue #{issue}: {action} did not complete. Use `status #{issue}` to inspect the recorded state."
+    try:
+        payload = json.loads(result.stdout)
+    except (ValueError, UnicodeError):
+        return f"Issue #{issue}: outcome is uncertain. Use `status #{issue}` before retrying."
+    if not isinstance(payload, dict):
+        return f"Issue #{issue}: outcome is uncertain. Use `status #{issue}` before retrying."
+    return _summary(action, issue, payload)
+
+
+class OwnerAgent:
+    def __init__(self, entry: Path) -> None:
+        self.entry = entry
+        self.client: Any = None
+        self.session_id: str | None = None
+        self.lock = asyncio.Lock()
+
+    def on_connect(self, client: Any) -> None:
+        self.client = client
+
+    async def initialize(self, protocol_version: int, **kwargs: Any) -> InitializeResponse:
+        return InitializeResponse(protocolVersion=acp.PROTOCOL_VERSION,
+                                  agentCapabilities=AgentCapabilities(loadSession=True))
+
+    async def new_session(self, cwd: str, **kwargs: Any) -> NewSessionResponse:
+        if self.session_id is not None:
+            raise ValueError("Only one owner control session is supported")
+        self.session_id = str(uuid.uuid4())
+        return NewSessionResponse(sessionId=self.session_id)
+
+    async def load_session(self, cwd: str, session_id: str, **kwargs: Any) -> LoadSessionResponse:
+        if self.session_id is not None or str(uuid.UUID(session_id)) != session_id:
+            raise ValueError("Owner control session is invalid")
+        self.session_id = session_id
+        return LoadSessionResponse()
+
+    async def prompt(self, session_id: str, prompt: list[Any], **kwargs: Any) -> PromptResponse:
+        if session_id != self.session_id or self.client is None:
+            raise ValueError("Owner control session is unknown")
+        if len(prompt) != 1 or getattr(prompt[0], "type", None) != "text":
+            response = HELP
+        else:
+            async with self.lock:
+                task = asyncio.create_task(asyncio.to_thread(run_command, self.entry, str(prompt[0].text)))
+                try:
+                    response = await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    # The CLI may already have claimed or published. Keep the
+                    # turn serialized until its exact outcome is recorded.
+                    await task
+                    raise
+        await self.client.session_update(session_id, acp.update_agent_message_text(response))
+        return PromptResponse(stopReason="end_turn")
+
+    async def cancel(self, session_id: str, **kwargs: Any) -> None:
+        # A start may already have external effects. Its recorded state must be
+        # reconciled by `status`, never restarted implicitly on interruption.
+        return None
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--entry", type=Path, required=True)
+    args = parser.parse_args()
+    if not args.entry.is_absolute() or not args.entry.is_file() or not os.access(args.entry, os.X_OK):
+        raise SystemExit("An absolute executable factory entry is required")
+    asyncio.run(acp.run_agent(OwnerAgent(args.entry)))
+
+
+if __name__ == "__main__":
+    main()

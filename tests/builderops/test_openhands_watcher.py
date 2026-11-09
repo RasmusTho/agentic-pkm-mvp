@@ -16,6 +16,7 @@ from app.builderops import publication
 from tests.scripts.test_publication import BODY_INPUTS
 
 REAL_KEEPER = watcher._LeaseKeeper
+REAL_WAIT_FOR_CI = watcher._wait_for_ci
 
 
 def test_authorized_worker_prompt_requests_only_local_handoff():
@@ -127,7 +128,82 @@ def authorized_run(tmp_path, monkeypatch):
             pass
 
     monkeypatch.setattr(watcher, "_LeaseKeeper", Keeper)
+    monkeypatch.setattr(watcher, "_wait_for_ci", lambda state, observation, *args: {
+        "status": "passed", "checks": observation.get("checks", {}),
+    })
     return directory, worktree, state, handoff, runner, calls
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "runs", "expected"),
+    [
+        (0, [{"id": 1, "name": "CI", "status": "completed", "conclusion": "success"}], "passed"),
+        (0, [{"id": 1, "name": "CI", "status": "completed", "conclusion": "failure"},
+             {"id": 2, "name": "CI", "status": "completed", "conclusion": "success"}], "passed"),
+        (0, [{"id": 1, "name": "CI", "status": "completed", "conclusion": "success"},
+             {"id": 2, "name": "CI", "status": "in_progress", "conclusion": None}], "pending"),
+        (1, [{"id": 1, "name": "CI", "status": "completed", "conclusion": "failure"}], "failed"),
+        (2, [{"id": 1, "name": "CI", "status": "completed", "conclusion": "failure"},
+             {"id": 2, "name": "lint", "status": "in_progress", "conclusion": None}], "failed"),
+        (2, [{"id": 1, "name": "CI", "status": "in_progress", "conclusion": None}], "pending"),
+        (0, [], "pending"),
+    ],
+)
+def test_ci_wait_uses_current_head_and_latest_executed_checks(tmp_path, monkeypatch, exit_code, runs, expected):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    watch_dir = tmp_path / "watcher"
+    watch_dir.mkdir()
+    head = "a" * 40
+    state = {"worktree": str(worktree), "branch": "codex/example"}
+    observation = {"pr_number": 42, "head": head}
+    pr = {"number": 42, "state": "open", "draft": True,
+          "head": {"sha": head, "repo": {"full_name": delivery.REPOSITORY}},
+          "base": {"ref": "main", "repo": {"full_name": delivery.REPOSITORY}}}
+    reads = []
+    monkeypatch.setattr(publication, "_read_pr_history", lambda *args: reads.append("pr") or [pr])
+    monkeypatch.setattr(delivery, "_check_readback", lambda *args: {
+        "commit": head, "check_runs": runs, "statuses": [], "combined_status": "pending",
+    })
+    monkeypatch.setattr(watcher.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=exit_code))
+    result = REAL_WAIT_FOR_CI(state, observation, watch_dir, SimpleNamespace(check=lambda: None), object())
+    assert result["status"] == expected
+    assert result["head"] == head and result["pr_number"] == 42
+    assert reads == ["pr", "pr", "pr"]
+
+
+def test_ci_wait_refuses_head_change_during_readback(tmp_path, monkeypatch):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    watch_dir = tmp_path / "watcher"
+    watch_dir.mkdir()
+    head = "a" * 40
+    pr = {"number": 42, "state": "open", "draft": True,
+          "head": {"sha": head, "repo": {"full_name": delivery.REPOSITORY}},
+          "base": {"ref": "main", "repo": {"full_name": delivery.REPOSITORY}}}
+    monkeypatch.setattr(watcher.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(publication, "_read_pr_history", lambda *args: [pr])
+
+    def changed(*args):
+        pr["head"]["sha"] = "b" * 40
+        return {"check_runs": [], "statuses": []}
+
+    monkeypatch.setattr(delivery, "_check_readback", changed)
+    with pytest.raises(delivery.DeliveryError, match="Draft PR changed"):
+        REAL_WAIT_FOR_CI({"worktree": str(worktree), "branch": "codex/example"},
+                         {"pr_number": 42, "head": head}, watch_dir, SimpleNamespace(check=lambda: None), object())
+
+
+def test_ci_wait_resumes_without_repeating_publication(authorized_run, monkeypatch):
+    directory, worktree, state, _, runner, _ = authorized_run
+    watch_dir = directory / "watcher"
+    watch_dir.mkdir()
+    service._write(watch_dir, {"version": 1, "status": "pending", "phase": "ci_wait",
+                               "pr_number": 1234, "head": "b" * 40})
+    monkeypatch.setattr(factory, "_finish", lambda *args, **kwargs: pytest.fail("publication repeated"))
+    watcher.run(Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
+    assert watcher.status(directory)["status"] == "finished"
+    assert runner.commits == 0
 
 
 def test_watcher_commits_scoped_changes_and_runs_finish_once(authorized_run, monkeypatch):

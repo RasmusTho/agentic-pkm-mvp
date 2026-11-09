@@ -21,6 +21,7 @@ from app.builderops import openhands_delivery as delivery
 from app.builderops import openhands_factory as factory
 from app.builderops import openhands_service as service
 from app.builderops import publication
+from app.builderops.ci_handoff_state import TERMINAL_GREEN_CONCLUSIONS, latest_checks_by_name
 from app.dispatcher import leases
 from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
@@ -32,6 +33,7 @@ HANDOFF = ".codex-tmp/openhands-finish.json"
 BODY_FIELDS = frozenset({"summary", "sbs_impact", "owner_doc_resolution", "builderops_records", "builderops_reason"})
 POLL_SECONDS = 10
 MAX_HEARTBEAT_INTERVAL = 30 * 60
+CI_WAIT_SECONDS = 8100
 
 
 def _make_store() -> SqliteStore:
@@ -440,6 +442,55 @@ def _send_repair(directory: Path, state: dict[str, Any], watcher: dict[str, Any]
     return True
 
 
+def _wait_for_ci(state: dict[str, Any], watcher: dict[str, Any], watch_dir: Path,
+                 keeper: _LeaseKeeper, runner: delivery.DraftOnlyExecutor) -> dict[str, Any]:
+    """Wait without a model, then bind independent GitHub evidence to the draft head."""
+    pr_number, head = watcher.get("pr_number"), watcher.get("head")
+    if type(pr_number) is not int or pr_number <= 0 or not isinstance(head, str) or not publication.GIT_SHA_RE.fullmatch(head):
+        raise delivery.DeliveryError("Published draft identity is unavailable for CI readback")
+    worktree = Path(state["worktree"]).resolve(strict=True)
+
+    def check_pr() -> None:
+        prs = publication._read_pr_history(runner, worktree, delivery.REPOSITORY, state["branch"])
+        if (len(prs) != 1 or prs[0].get("number") != pr_number or prs[0].get("state") != "open"
+                or prs[0].get("draft") is not True or publication._nested(prs[0], "head", "sha") != head
+                or publication._nested(prs[0], "base", "ref") != "main"
+                or publication._nested(prs[0], "base", "repo", "full_name") != delivery.REPOSITORY
+                or publication._nested(prs[0], "head", "repo", "full_name") != delivery.REPOSITORY):
+            raise delivery.DeliveryError("Draft PR changed during CI wait; reconcile its current head")
+
+    keeper.check()
+    check_pr()
+    log_path = watch_dir / f"ci-{uuid.uuid4().hex}.log"
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        with os.fdopen(fd, "wb") as log:
+            try:
+                result = subprocess.run(
+                    [str(factory.FACTORY_ROOT / "scripts/await_pr_checks.sh"), str(pr_number),
+                     "--repo", delivery.REPOSITORY, "--timeout", str(CI_WAIT_SECONDS)],
+                    cwd=worktree, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                    check=False, timeout=CI_WAIT_SECONDS + 120,
+                )
+                exit_code: int | None = result.returncode
+            except (OSError, subprocess.TimeoutExpired):
+                exit_code = None
+    finally:
+        keeper.check()
+    check_pr()
+    checks = delivery._check_readback(runner, worktree, head)
+    check_pr()
+    latest = latest_checks_by_name(checks["check_runs"])
+    pending = (not latest or any(item["status"] != "completed" for item in latest)
+               or any(item["state"] not in {"success", "failure", "error"} for item in checks["statuses"]))
+    failed = (any(item["status"] == "completed" and item["conclusion"] not in TERMINAL_GREEN_CONCLUSIONS
+                  for item in latest) or any(item["state"] in {"failure", "error"} for item in checks["statuses"]))
+    outcome = "failed" if failed else "pending" if pending else "failed" if exit_code == 1 else "passed" if exit_code == 0 else "pending"
+    return {"status": outcome,
+            "exit_code": exit_code, "head": head, "pr_number": pr_number,
+            "checks": checks, "log": str(log_path)}
+
+
 def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: Path) -> None:
     watch_dir = directory / "watcher"
     watch_dir.mkdir(mode=0o700, exist_ok=True)
@@ -477,6 +528,13 @@ def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: P
             watcher["status"] = "running"
             service._write(watch_dir, watcher)
             guarded = _GuardedExecutor(keeper)
+            if watcher.get("phase") == "ci_wait":
+                ci = _wait_for_ci(state, watcher, watch_dir, keeper, delivery.DraftOnlyExecutor(guarded))
+                watcher.update(status="finished" if ci["status"] == "passed" else ci["status"],
+                               phase="published" if ci["status"] == "passed" else "ci_wait",
+                               checks=ci["checks"], ci=ci)
+                service._write(watch_dir, watcher)
+                return
             while True:
                 read_failures = 0
                 while True:
@@ -539,8 +597,13 @@ def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: P
                         continue
                     raise
                 keeper.check()
-                watcher.update(status="finished", phase="published", pr_number=result["pr_number"],
+                watcher.update(status="running", phase="ci_wait", pr_number=result["pr_number"],
                                head=result["commit_sha"], checks=result["checks"])
+                service._write(watch_dir, watcher)
+                ci = _wait_for_ci(state, watcher, watch_dir, keeper, delivery.DraftOnlyExecutor(guarded))
+                watcher.update(status="finished" if ci["status"] == "passed" else ci["status"],
+                               phase="published" if ci["status"] == "passed" else "ci_wait",
+                               checks=ci["checks"], ci=ci)
                 break
         except factory.FinishEvidenceError as exc:
             watcher.update(status="failed", reason=str(exc))
@@ -550,7 +613,7 @@ def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: P
         except (delivery.DeliveryError, service.ServiceError, publication.PublicationRefusal,
                 publication.PublicationCommandError, OSError, ValueError, KeyError, TypeError) as exc:
             watcher.update(status="pending" if (keeper is not None and keeper.error is not None)
-                           or watcher.get("phase") in {"staging", "committing", "publishing", "repair_sending", "repair_sent"}
+                           or watcher.get("phase") in {"staging", "committing", "publishing", "repair_sending", "repair_sent", "ci_wait"}
                            else "failed", reason=str(exc))
         finally:
             if keeper is not None:

@@ -1,4 +1,7 @@
+import io
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +13,24 @@ from app.builderops.openhands_policy import (
     verify_effective_config,
     verify_thread_response,
 )
+from app.builderops.openhands_proxy import GuardedProxy
+
+
+def test_model_rejection_preserves_the_existing_proxy_session(tmp_path: Path) -> None:
+    child = SimpleNamespace(stdin=io.BytesIO(), stdout=io.BytesIO())
+    output = io.BytesIO()
+    proxy = GuardedProxy(child, tmp_path, output, allowed_read_roots=())
+    proxy._preflight = "ok"
+    proxy._threads.add("main")
+    proxy.receive_client({"id": 1, "method": "turn/start",
+                          "params": {"threadId": "main", "model": "other-model"}})
+    proxy.receive_client({"id": 2, "method": "turn/start",
+                          "params": {"threadId": "main", "input": []}})
+    rejected = json.loads(output.getvalue())
+    forwarded = json.loads(child.stdin.getvalue())
+    assert rejected["id"] == 1 and rejected["error"]["message"] == "model_not_permitted"
+    assert forwarded["id"] == 2 and forwarded["params"]["model"] == MODEL
+    assert forwarded["params"]["threadId"] == "main"
 
 
 def test_title_helper_is_refused_without_poisoning_the_next_turn(tmp_path: Path) -> None:

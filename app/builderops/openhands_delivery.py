@@ -245,9 +245,16 @@ def _include_git_metadata(settings: dict[str, Any], root: Path) -> dict[str, Any
     git_dir = Path(result.stdout.strip()).resolve(strict=True)
     if not git_dir.is_dir():
         raise DeliveryError("Git metadata directory is unavailable")
+    return _include_read_root(settings, git_dir)
+
+
+def _include_read_root(settings: dict[str, Any], path: Path) -> dict[str, Any]:
+    resolved = path.resolve(strict=True)
+    if not resolved.is_dir():
+        raise DeliveryError("Sandbox read directory is unavailable")
     roots = list(settings["sandbox_read_roots"])
-    if str(git_dir) not in roots:
-        roots.append(str(git_dir))
+    if str(resolved) not in roots:
+        roots.append(str(resolved))
     args = list(settings["codex_config_args"])
     matching = [i for i, arg in enumerate(args)
                 if arg.startswith("permissions.builder_factory.filesystem=")]
@@ -314,7 +321,8 @@ def _conversation(directory: Path, state: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _task_prompt(plan: dict[str, Any], *, auto_finish: bool = False) -> str:
+def _task_prompt(plan: dict[str, Any], *, auto_finish: bool = False,
+                 test_python: Path | None = None) -> str:
     issue = plan["issue"]
     instructions = "\n\n".join(
         f"### {path}\n{entry['content']}" for path, entry in plan["instructions"].items()
@@ -343,9 +351,45 @@ def _task_prompt(plan: dict[str, Any], *, auto_finish: bool = False) -> str:
         "commit, push, publish, merge, access credentials, or make external effects. "
         "The delivery host handles publication and independent verification.\n\n"
         f"{handoff}"
+        + (f"The isolated repository test interpreter is {test_python}; use it for Python tests.\n\n"
+           if test_python is not None else "")
+        +
         f"## Full issue contract\n{issue['body']}\n\n"
         f"## Repository builder instructions\n{instructions}"
     )
+
+
+def _prepare_test_environment(directory: Path, worktree: Path, python: Path) -> dict[str, Any]:
+    """Install the checked-out project's test dependencies outside the agent runtime."""
+    manifests = [worktree / "requirements.txt", worktree / "dev-requirements.txt"]
+    if any(not path.is_file() or path.is_symlink() for path in manifests):
+        raise DeliveryError("Repository test requirements are unavailable")
+    environment = directory / "test-venv"
+    if environment.exists() or environment.is_symlink():
+        raise DeliveryError("Test environment already exists; reconcile before continuing")
+    try:
+        hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in manifests}
+        commands = [
+            ["uv", "venv", "--python", str(python), str(environment)],
+            ["uv", "pip", "install", "--python", str(environment / "bin/python"),
+             "-r", str(manifests[0]), "-r", str(manifests[1])],
+            ["uv", "pip", "freeze", "--python", str(environment / "bin/python")],
+        ]
+        for command in commands:
+            result = subprocess.run(command, cwd=worktree, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, check=False, timeout=900)
+            if result.returncode:
+                raise DeliveryError("Repository test environment setup failed; inspect the installation")
+        if any(hashlib.sha256(path.read_bytes()).hexdigest() != hashes[path.name] for path in manifests):
+            raise DeliveryError("Repository test requirements changed during setup")
+        frozen = directory / "test-requirements-frozen.txt"
+        fd = os.open(frozen, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            stream.write(result.stdout)
+        return {"python": str(environment / "bin/python"), "manifests": hashes,
+                "frozen": str(frozen), "frozen_sha256": _sha(result.stdout)}
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise DeliveryError("Repository test environment setup failed; inspect the installation") from exc
 
 
 def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch: str,
@@ -383,7 +427,8 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
         finally:
             Path(temp_name).unlink(missing_ok=True)
         session_id = str(uuid.uuid4())
-        prompt = _task_prompt(plan, auto_finish=auto_finish)
+        test_python = directory / "test-venv/bin/python" if auto_finish else None
+        prompt = _task_prompt(plan, auto_finish=auto_finish, test_python=test_python)
         state: dict[str, Any] = {
             "version": 1, "kind": "openhands_delivery_run.v1", "issue": issue,
             "repository": REPOSITORY, "root": str(root), "branch": branch,
@@ -423,6 +468,19 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
                 or current_issue.get("title") != plan["issue"]["title"]
                 or current_issue.get("body") != plan["issue"]["body"]):
             raise DeliveryError("Issue contract changed after claim; reconcile before continuing")
+        if auto_finish:
+            _save(directory, state, "preparing_tests")
+            state["test_environment"] = _prepare_test_environment(directory, worktree, python)
+            settings = _include_read_root(settings, directory / "test-venv")
+            fd, temp_name = tempfile.mkstemp(prefix=".settings-", dir=directory)
+            try:
+                with os.fdopen(fd, "w") as stream:
+                    json.dump(settings, stream, sort_keys=True)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temp_name, bound_settings)
+            finally:
+                Path(temp_name).unlink(missing_ok=True)
         _save(directory, state, "starting_service")
         try:
             service.start(directory / "server", python, worktree, port, bound_settings)
@@ -702,7 +760,7 @@ def _check_readback(
                 or not isinstance(check.get("name"), str)
                 or not isinstance(check.get("status"), str)):
             raise DeliveryError("PR exists but GitHub check-run identity is ambiguous")
-        checks.append({key: check.get(key) for key in ("name", "status", "conclusion", "html_url")})
+        checks.append({key: check.get(key) for key in ("id", "name", "status", "conclusion", "started_at", "html_url")})
     result = executor.run([*prefix, f"repos/{REPOSITORY}/commits/{commit_sha}/status",
                            "-f", "per_page=100"], cwd=worktree)
     if result.returncode:
