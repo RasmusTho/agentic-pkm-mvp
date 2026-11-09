@@ -85,11 +85,11 @@ def test_owner_timeout_stops_the_started_process_group(monkeypatch):
 
 def test_status_reports_unverified_recovery_without_disclosing_process_details():
     result = owner._summary("status", 42, {"state": {"phase": "interrupted"}, "recovery": {
-        "continuation": "blocked", "execution": {"observed_descendants": [{"pid": 12345}]},
+        "continuation": "blocked", "execution": {"candidate_descendant_count": 1},
         "worktree": {"status": "observed", "dirty": True}, "publication": {"status": "ambiguous"},
     }})
     assert "Continuation is blocked" in result
-    assert "Visible descendant processes: 1; visibility is incomplete" in result
+    assert "Candidate descendant processes: 1; ancestry and visibility are incomplete" in result
     assert "Worktree snapshot: changed" in result and "Publication readback is ambiguous" in result
     assert "12345" not in result
 
@@ -100,7 +100,7 @@ def test_status_reports_live_children_and_existing_pr_in_recovery():
             {"id": "private-id", "status": "running"}, {"id": "another-id", "status": "paused"}]},
         "publication": {"status": "observed", "matching_prs": [{"number": 77, "draft": False}]},
     }})
-    assert "2 observed, 1 running" in result and "native child processes remain unverified" in result
+    assert "2 observed, 1 running" in result and "Native child processes remain unverified" in result
     assert "Non-draft PR: https://github.com/RasmusTho/agentic-pkm-mvp/pull/77" in result
     assert "private-id" not in result
     unknown = owner._summary("status", 42, {"recovery": {"continuation": "blocked", "publication": {"status": "unknown"}}})

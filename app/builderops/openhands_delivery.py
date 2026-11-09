@@ -483,6 +483,32 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
         }
 
 
+def _bounded_recovery_child(port: int, key: str, child_id: str, timeout: float) -> tuple[int, Any]:
+    """Read a local child response with a hard process deadline and bounded body."""
+    script = (
+        "import json,sys,urllib.request,urllib.error; "
+        "v=json.load(sys.stdin); "
+        "r=urllib.request.Request('http://127.0.0.1:%d/api/conversations/%s'%(v['port'],v['id']),"
+        "headers={'X-Session-API-Key':v['key']}); "
+        "o=urllib.request.build_opener(urllib.request.ProxyHandler({})); "
+        "x=o.open(r,timeout=v['timeout']); b=x.read(262145); "
+        "assert len(b)<=262144; print(json.dumps({'status':x.status,'body':json.loads(b)}))"
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-I", "-c", script],
+            input=json.dumps({"port": port, "id": child_id, "key": key, "timeout": timeout}),
+            text=True, capture_output=True, check=True, timeout=timeout,
+            env={name: os.environ[name] for name in ("PATH", "LANG") if name in os.environ},
+        )
+        result = json.loads(proc.stdout)
+        if not isinstance(result, dict) or type(result.get("status")) is not int:
+            raise ValueError("invalid response")
+        return result["status"], result.get("body")
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+        raise DeliveryError("Delegated conversation readback unavailable") from exc
+
+
 def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[str, Any]) -> dict[str, Any]:
     """Collect bounded, read-only evidence without inferring that unknown execution stopped."""
     observation: dict[str, Any] = {
@@ -507,18 +533,21 @@ def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[s
                 or server.get("workspace") != state.get("worktree") or server.get("port") != state.get("port")):
             raise ValueError("recorded service does not match the delivery")
         root_pid = server["pid"]
-        result = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,pgid=,lstart=,stat="],
-            capture_output=True, text=True, check=True, timeout=remaining(2),
-        )
-        rows: dict[int, dict[str, Any]] = {}
-        for line in result.stdout.splitlines():
-            fields = line.split()
-            if len(fields) != 9:
-                raise ValueError("invalid process snapshot")
-            pid, ppid, pgid = map(int, fields[:3])
-            rows[pid] = {"pid": pid, "parent_pid": ppid, "process_group": pgid,
-                         "started": " ".join(fields[3:8]), "state": fields[8]}
+        def process_rows() -> dict[int, dict[str, Any]]:
+            result = subprocess.run(
+                ["ps", "-axo", "pid=,ppid=,pgid=,lstart=,stat="],
+                capture_output=True, text=True, check=True, timeout=remaining(2),
+            )
+            parsed: dict[int, dict[str, Any]] = {}
+            for line in result.stdout.splitlines():
+                fields = line.split()
+                if len(fields) != 9:
+                    raise ValueError("invalid process snapshot")
+                pid, ppid, pgid = map(int, fields[:3])
+                parsed[pid] = {"pid": pid, "parent_pid": ppid, "process_group": pgid,
+                               "started": " ".join(fields[3:8]), "state": fields[8]}
+            return parsed
+        rows = process_rows()
         after = service._read(server_dir)
         identity_keys = ("pid", "started", "marker", "workspace", "port")
         if (root_pid not in rows or rows[root_pid]["started"] != server.get("started")
@@ -531,8 +560,26 @@ def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[s
             if expanded == owned:
                 break
             owned = expanded
-        observation["execution"]["observed_descendants"] = [rows[pid] for pid in sorted(owned - {root_pid})]
-        observation["execution"]["visibility"] = "point-in-time descendants only; detached work may be missing"
+        if len(owned) > 33:
+            raise ValueError("too many candidate descendants")
+        for pid in sorted(owned):
+            remaining(2)
+            current = service._identity(pid)
+            if current is None or current[0] != rows[pid]["started"]:
+                raise ValueError("candidate process identity changed during observation")
+        again = process_rows()
+        for pid in owned:
+            if pid not in again or any(again[pid][name] != rows[pid][name]
+                                       for name in ("parent_pid", "process_group", "started")):
+                raise ValueError("candidate ancestry changed during observation")
+        final_server = service._read(server_dir)
+        if (not isinstance(final_server, dict) or service._status(final_server) != "running"
+                or any(final_server.get(k) != server.get(k) for k in identity_keys)):
+            raise ValueError("recorded service changed during observation")
+        observation["execution"]["candidate_descendant_count"] = len(owned - {root_pid})
+        observation["execution"]["visibility"] = (
+            "Candidate ancestry was rechecked, but process enumeration is not atomic; detached work may be missing"
+        )
     except (service.ServiceError, OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         pass
 
@@ -551,18 +598,20 @@ def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[s
                 if child_id != child or child_id in seen:
                     raise ValueError("invalid delegated conversation identity")
                 seen.add(child_id)
-                code, detail = _http(state["port"], key, "GET", f"/conversations/{child_id}", timeout=remaining(3))
+                code, detail = _bounded_recovery_child(state["port"], key, child_id, remaining(3))
                 if (code != 200 or not isinstance(detail, dict) or str(detail.get("id")) != child_id
                         or detail.get("parent_conversation_id") != parent_id
                         or not isinstance(detail.get("workspace"), dict)
-                        or detail["workspace"].get("working_dir") != state["worktree"]
+                        or not isinstance(detail["workspace"].get("working_dir"), str)
                         or not isinstance(detail.get("execution_status"), str)
                         or not isinstance(detail.get("sub_conversation_ids"), list)):
                     raise ValueError("delegated conversation readback unavailable")
-                details.append({"id": child_id, "parent_id": parent_id, "status": detail["execution_status"]})
+                workspace_state = "parent" if detail["workspace"]["working_dir"] == state["worktree"] else "unverified"
+                details.append({"id": child_id, "parent_id": parent_id, "status": detail["execution_status"],
+                                "workspace": workspace_state})
                 queue.extend((child_id, nested) for nested in detail["sub_conversation_ids"])
             observation["delegated_work"]["openhands_conversations"] = details
-        except (DeliveryError, OSError, ValueError, KeyError, TypeError, AttributeError):
+        except (DeliveryError, service.ServiceError, OSError, ValueError, KeyError, TypeError, AttributeError):
             observation["delegated_work"]["openhands_readback"] = "unknown"
 
     env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG") if key in os.environ}
@@ -647,7 +696,7 @@ def status(directory: Path) -> dict[str, Any]:
         data: dict[str, Any] = {}
         try:
             data = _conversation(directory, state)
-        except DeliveryError as exc:
+        except (DeliveryError, service.ServiceError) as exc:
             result["conversation_readback_error"] = str(exc)
         else:
             result["conversation_status"] = data.get("execution_status")

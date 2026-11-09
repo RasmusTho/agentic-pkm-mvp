@@ -64,8 +64,8 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
     if isinstance(recovery, dict) and recovery.get("continuation") == "blocked":
         fields.append("Continuation is blocked: previous execution and delegated work are not verified stopped.")
         execution = recovery.get("execution")
-        if isinstance(execution, dict) and isinstance(execution.get("observed_descendants"), list):
-            fields.append(f"Visible descendant processes: {len(execution['observed_descendants'])}; visibility is incomplete.")
+        if isinstance(execution, dict) and type(execution.get("candidate_descendant_count")) is int:
+            fields.append(f"Candidate descendant processes: {execution['candidate_descendant_count']}; ancestry and visibility are incomplete.")
         else:
             fields.append("Process readback is unavailable; execution status is unknown.")
         worktree = recovery.get("worktree")
@@ -81,7 +81,9 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
             for item in conversations
         ):
             active = sum(item["status"] == "running" for item in conversations)
-            fields.append(f"OpenHands child conversations: {len(conversations)} observed, {active} running; native child processes remain unverified.")
+            unresolved = sum(item.get("workspace") != "parent" for item in conversations)
+            fields.append(f"OpenHands child conversations: {len(conversations)} observed, {active} running; "
+                          f"{unresolved} have unverified workspace identity. Native child processes remain unverified.")
         else:
             fields.append("OpenHands child conversation readback is unavailable.")
         pr_readback = recovery.get("publication")

@@ -1,6 +1,8 @@
 import json
 import subprocess
 import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -45,6 +47,23 @@ def test_status_does_not_wait_for_delivery_lock_and_detects_state_drift(tmp_path
     snapshot = delivery.status(directory)
     assert snapshot["state"]["phase"] == "interrupted" and "snapshot_notice" in snapshot
     assert "conversation_status" not in snapshot
+
+
+def test_recovery_status_survives_service_inspection_failure(tmp_path, monkeypatch):
+    directory = tmp_path / "run"
+    directory.mkdir(mode=0o700)
+    (directory / "server").mkdir(mode=0o700)
+    state = {"version": 1, "kind": "openhands_delivery_run.v1", "phase": "interrupted"}
+    delivery.service._write(directory, state)
+    def unavailable(*args, **kwargs):
+        raise delivery.service.ServiceError("Cannot inspect recorded process")
+    monkeypatch.setattr(delivery.service, "status", unavailable)
+    monkeypatch.setattr(delivery, "_conversation", unavailable)
+    result = delivery.status(directory)
+    assert result["state"] == state
+    assert result["recovery"]["continuation"] == "blocked"
+    assert result["recovery"]["execution"]["status"] == "unknown"
+    assert "conversation_readback_error" in result and "service_status_error" in result
 
 
 @pytest.fixture
@@ -258,14 +277,17 @@ def test_interrupted_recovery_observes_processes_children_worktree_and_pr_withou
     (tmp_path / "server").mkdir()
     monkeypatch.setattr(delivery.service, "_read", lambda *args: server)
     monkeypatch.setattr(delivery.service, "_status", lambda *args: "running")
+    monkeypatch.setattr(delivery.service, "_identity", lambda pid: (
+        "Mon Nov 9 20:24:07 2026" if pid == 12345 else "Mon Nov 9 20:24:08 2026", "redacted"))
     monkeypatch.setattr(delivery, "_server_key", lambda *args: "test-key")
     reads = []
-    def http(port, key, method, path, *args, **kwargs):
-        reads.append((method, path))
+    child_workspace = {"path": str(worktree)}
+    def child_read(port, key, child_id, timeout):
+        reads.append(("GET", f"/conversations/{child_id}"))
         return 200, {"id": child, "parent_conversation_id": parent_id,
-                     "workspace": {"working_dir": str(worktree)}, "execution_status": "running",
+                     "workspace": {"working_dir": child_workspace["path"]}, "execution_status": "running",
                      "sub_conversation_ids": []}
-    monkeypatch.setattr(delivery, "_http", http)
+    monkeypatch.setattr(delivery, "_bounded_recovery_child", child_read)
     monkeypatch.setattr(delivery.publication, "_read_pr_history", lambda *args: [
         {"number": 42, "state": "open", "draft": True,
          "head": {"sha": head, "ref": "codex/issue-123", "repo": {"full_name": delivery.REPOSITORY}},
@@ -282,12 +304,16 @@ def test_interrupted_recovery_observes_processes_children_worktree_and_pr_withou
     result = delivery._recovery_observation(tmp_path, state, {"sub_conversation_ids": [child]})
     assert result["continuation"] == "blocked"
     assert result["execution"]["status"] == "unknown"
-    assert result["execution"]["observed_descendants"][0]["pid"] == 12346
+    assert result["execution"]["candidate_descendant_count"] == 1
     assert result["delegated_work"]["status"] == "unknown"
     assert result["delegated_work"]["openhands_conversations"][0]["status"] == "running"
     assert result["worktree"]["dirty"] is True and result["worktree"]["head"] == head
     assert result["publication"]["matching_prs"][0]["number"] == 42
     assert reads == [("GET", f"/conversations/{child}")]
+    child_workspace["path"] = str(tmp_path / "isolated-child")
+    isolated = delivery._recovery_observation(tmp_path, state, {"sub_conversation_ids": [child]})
+    assert isolated["delegated_work"]["openhands_conversations"][0]["workspace"] == "unverified"
+    assert isolated["delegated_work"]["status"] == "unknown"
     monkeypatch.setattr(delivery.publication, "_read_pr_history", lambda *args: [
         {"number": 42, "state": "open", "draft": True,
          "head": {"sha": head, "ref": "codex/issue-123", "repo": {"full_name": delivery.REPOSITORY}},
@@ -301,7 +327,7 @@ def test_interrupted_recovery_observes_processes_children_worktree_and_pr_withou
     assert ambiguous["continuation"] == "blocked"
     monkeypatch.setattr(delivery.service, "_read", lambda *args: {**server, "workspace": "/unrelated"})
     wrong_server = delivery._recovery_observation(tmp_path, state, {"sub_conversation_ids": []})
-    assert "observed_descendants" not in wrong_server["execution"]
+    assert "candidate_descendant_count" not in wrong_server["execution"]
     other_repo = tmp_path / "other-repo"
     other_repo.mkdir()
     subprocess.run(["git", "-C", str(other_repo), "init"], capture_output=True, check=True)
@@ -315,6 +341,46 @@ def test_interrupted_recovery_observes_processes_children_worktree_and_pr_withou
     git("config", "--local", "core.fsmonitor", str(hook))
     configured = delivery._recovery_observation(tmp_path, state, {"sub_conversation_ids": []})
     assert configured["worktree"]["status"] == "unknown" and not marker.exists()
+
+
+def test_recovery_child_readback_has_hard_time_and_size_limits():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            assert self.headers.get("X-Session-API-Key") == "test-key"
+            if self.path.endswith("/slow"):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"{")
+                self.wfile.flush()
+                time.sleep(0.5)
+                return
+            body = b"x" * 262145 if self.path.endswith("/large") else b'{"id":"child"}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        assert delivery._bounded_recovery_child(port, "test-key", "normal", 2) == (200, {"id": "child"})
+        with pytest.raises(delivery.DeliveryError, match="readback unavailable"):
+            delivery._bounded_recovery_child(port, "test-key", "large", 2)
+        started = time.monotonic()
+        with pytest.raises(delivery.DeliveryError, match="readback unavailable"):
+            delivery._bounded_recovery_child(port, "test-key", "slow", 0.2)
+        assert time.monotonic() - started < 1.5
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_start_refuses_base_change_after_environment_preflight(orchestration):
