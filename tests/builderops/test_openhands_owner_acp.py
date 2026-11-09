@@ -111,6 +111,14 @@ def test_status_reports_live_children_and_existing_pr_in_recovery():
     assert "GitHub PR readback is unavailable" in unknown
 
 
+def test_recorded_publication_does_not_assert_pr_is_currently_draft():
+    result = owner._summary("status", 42, {"state": {"full_publication": {"pr_number": 77}},
+        "watcher": {"status": "not_started"}, "recovery": {"continuation": "blocked", "publication": {
+            "status": "observed", "matching_prs": [{"number": 77, "draft": False, "state": "closed", "merged": True}]}}})
+    assert "Delivery: publication recorded" in result
+    assert "Merged PR" in result and "draft published" not in result
+
+
 def test_status_shows_published_pr_and_ci_without_raw_state():
     result = owner._summary("status", 42, {"state": {"full_publication": {"pr_number": 123}},
         "watcher": {"status": "finished", "phase": "published", "ci": {"status": "passed", "head": "a" * 40}}})

@@ -41,7 +41,7 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
     pr = watcher.get("pr_number") or publication.get("pr_number")
     delivery_status = watcher.get("status")
     if delivery_status == "not_started" and type(pr) is int and pr > 0:
-        delivery_status = "draft published"
+        delivery_status = "publication recorded"
     fields = [f"Issue #{issue}: {action} request completed."]
     for label, value in (("Conversation", result.get("conversation_status")),
                          ("Service", result.get("service_status")),
