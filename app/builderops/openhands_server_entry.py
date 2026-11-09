@@ -85,6 +85,13 @@ class DeliveryInputFence:
                     pass
                 await self._refuse_http(send)
                 return
+            # The delivery path uses only conversation creation and message
+            # admission. Other write endpoints can start background work or
+            # run a long shell command outside this cancellation boundary.
+            if not (method == "POST" and (path == "/api/conversations" or
+                    re.fullmatch(r"/api/conversations/[0-9a-fA-F-]{32,36}/(?:events|run)", path))):
+                await self._refuse_http(send)
+                return
             # Do not hold the cancellation fence while a client slowly uploads a body.
             messages: list[dict[str, Any]] = []
             size = 0
