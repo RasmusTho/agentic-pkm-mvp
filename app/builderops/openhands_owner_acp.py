@@ -20,8 +20,8 @@ from typing import Any
 import acp
 from acp.schema import AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse, PromptResponse
 
-COMMAND = re.compile(r"/?(start|status|cancel|resume|stop)\s+#?([1-9][0-9]{0,8})\s*", re.IGNORECASE)
-HELP = ("Enter `start #123`, `status #123`, `cancel #123`, `resume #123`, or `stop #123`. "
+COMMAND = re.compile(r"/?(start|status|cancel|resume|stop|watch)\s+#?([1-9][0-9]{0,8})\s*", re.IGNORECASE)
+HELP = ("Enter `start #123`, `status #123`, `cancel #123`, `resume #123`, `stop #123`, or `watch #123`. "
         "Start authorizes only that Issue; the factory checks its contract and ownership.")
 
 
@@ -44,7 +44,8 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
     fields = [f"Issue #{issue}: {action} request completed."]
     for label, value in (("Conversation", result.get("conversation_status")),
                          ("Service", result.get("service_status")),
-                         ("Delivery", delivery_status), ("Phase", watcher.get("phase")),
+                         ("Run phase", state.get("phase")), ("Delivery", delivery_status),
+                         ("Watcher phase", watcher.get("phase")),
                          ("Cancellation", result.get("cancel_status"))):
         if isinstance(value, str):
             fields.append(f"{label}: {value}.")
@@ -58,6 +59,10 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
         fields.append(f"CI: {ci['status']}.")
     if action == "cancel":
         fields.append("Delegated-process cancellation has not been verified.")
+    if result.get("conversation_readback_error") or result.get("service_status_error"):
+        fields.append("Live readback is unavailable; inspect the recorded run.")
+    if result.get("snapshot_notice"):
+        fields.append("Run state changed during readback; request status again.")
     return "\n".join(fields)
 
 

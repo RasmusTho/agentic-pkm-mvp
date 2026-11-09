@@ -501,7 +501,9 @@ def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: P
         except BlockingIOError:
             return
         watcher = service._read(watch_dir) or {"version": 1, "status": "running", "phase": "watching"}
-        if watcher.get("status") in {"finished", "failed"}:
+        if watcher.get("status") == "finished" or (
+            watcher.get("status") == "failed" and watcher.get("phase") != "ci_wait"
+        ):
             return
         if watcher.get("phase") in {"staging", "committing", "repair_sending"}:
             reason = ("Repair message outcome is ambiguous; inspect the conversation before retry"

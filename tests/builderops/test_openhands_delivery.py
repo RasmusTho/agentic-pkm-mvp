@@ -212,13 +212,17 @@ def test_test_environment_installs_repo_manifests_and_records_exact_resolution(t
         (worktree / name).write_text(f"{name}-package==1.0\n")
     calls = []
 
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-setup")
+
     def run(command, **kwargs):
         calls.append(command)
+        assert "OPENAI_API_KEY" not in kwargs["env"]
         return subprocess.CompletedProcess(command, 0, "example==1.0\n", "")
 
     monkeypatch.setattr(delivery.subprocess, "run", run)
     result = delivery._prepare_test_environment(directory, worktree, Path("/runtime/bin/python"))
-    assert calls[0][:4] == ["uv", "venv", "--python", "/runtime/bin/python"]
+    assert calls[0][:5] == ["uv", "venv", "--no-config", "--python", "/runtime/bin/python"]
+    assert calls[1][3:6] == ["--no-config", "--only-binary", ":all:"]
     assert calls[1][-4:] == ["-r", str(worktree / "requirements.txt"),
                              "-r", str(worktree / "dev-requirements.txt")]
     assert calls[2][1:3] == ["pip", "freeze"]

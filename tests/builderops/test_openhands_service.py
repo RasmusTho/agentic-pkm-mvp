@@ -37,6 +37,7 @@ def test_start_assembles_loopback_server_and_sanitizes_environment(
     monkeypatch.setenv("RANDOM_SECRET", "should-not-pass")
     monkeypatch.setenv("OH_SESSION_API_KEYS_0", "should-not-pass")
     monkeypatch.setenv("OH_WORKSPACE_PATH", "/untrusted")
+    monkeypatch.setenv("DISPATCHER_STATE_DIR", "/chosen/dispatcher")
     settings = json.loads(settings_file.read_text())
     settings["resume_thread_id"] = "01a1bcfd-b399-7e32-8834-4e34bd9bfbac"
     settings_file.write_text(json.dumps(settings))
@@ -77,6 +78,7 @@ def test_start_assembles_loopback_server_and_sanitizes_environment(
     assert key not in capsys.readouterr().out
     assert "PROVIDER_API_KEY" not in captured["env"]
     assert "RANDOM_SECRET" not in captured["env"]
+    assert env["DISPATCHER_STATE_DIR"] == "/chosen/dispatcher"
     assert service.status(state_dir)["status"] == "running"
     assert json.loads((state_dir / "service.json").read_text())["pid"] == 12345
     with pytest.raises(service.ServiceError, match="running"):

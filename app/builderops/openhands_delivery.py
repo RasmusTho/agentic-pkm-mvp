@@ -370,14 +370,17 @@ def _prepare_test_environment(directory: Path, worktree: Path, python: Path) -> 
     try:
         hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in manifests}
         commands = [
-            ["uv", "venv", "--python", str(python), str(environment)],
-            ["uv", "pip", "install", "--python", str(environment / "bin/python"),
+            ["uv", "venv", "--no-config", "--python", str(python), str(environment)],
+            ["uv", "pip", "install", "--no-config", "--only-binary", ":all:",
+             "--python", str(environment / "bin/python"),
              "-r", str(manifests[0]), "-r", str(manifests[1])],
-            ["uv", "pip", "freeze", "--python", str(environment / "bin/python")],
+            ["uv", "pip", "freeze", "--no-config", "--python", str(environment / "bin/python")],
         ]
+        env = {key: os.environ[key] for key in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR")
+               if key in os.environ}
         for command in commands:
             result = subprocess.run(command, cwd=worktree, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, check=False, timeout=900)
+                                    capture_output=True, text=True, check=False, timeout=900, env=env)
             if result.returncode:
                 raise DeliveryError("Repository test environment setup failed; inspect the installation")
         if any(hashlib.sha256(path.read_bytes()).hexdigest() != hashes[path.name] for path in manifests):

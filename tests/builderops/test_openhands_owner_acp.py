@@ -66,6 +66,14 @@ def test_status_shows_published_pr_and_ci_without_raw_state():
     assert "full_publication" not in result
 
 
+def test_status_surfaces_phase_and_unavailable_readback_without_raw_errors():
+    result = owner._summary("status", 42, {"state": {"phase": "preparing_tests"},
+        "conversation_readback_error": "private detail"})
+    assert "Run phase: preparing_tests" in result
+    assert "readback is unavailable" in result
+    assert "private detail" not in result
+
+
 def test_real_acp_process_accepts_a_status_command(tmp_path):
     entry = tmp_path / "factory"
     entry.write_text('#!/bin/sh\nprintf \'{"conversation_status":"finished"}\\n\'\n')

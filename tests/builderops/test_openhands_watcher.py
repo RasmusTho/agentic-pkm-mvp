@@ -194,11 +194,12 @@ def test_ci_wait_refuses_head_change_during_readback(tmp_path, monkeypatch):
                          {"pr_number": 42, "head": head}, watch_dir, SimpleNamespace(check=lambda: None), object())
 
 
-def test_ci_wait_resumes_without_repeating_publication(authorized_run, monkeypatch):
+@pytest.mark.parametrize("prior_status", ["pending", "failed"])
+def test_ci_wait_resumes_without_repeating_publication(authorized_run, monkeypatch, prior_status):
     directory, worktree, state, _, runner, _ = authorized_run
     watch_dir = directory / "watcher"
     watch_dir.mkdir()
-    service._write(watch_dir, {"version": 1, "status": "pending", "phase": "ci_wait",
+    service._write(watch_dir, {"version": 1, "status": prior_status, "phase": "ci_wait",
                                "pr_number": 1234, "head": "b" * 40})
     monkeypatch.setattr(factory, "_finish", lambda *args, **kwargs: pytest.fail("publication repeated"))
     watcher.run(Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)

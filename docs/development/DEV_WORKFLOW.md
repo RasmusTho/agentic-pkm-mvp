@@ -68,7 +68,8 @@ derives its pinned ACP and isolated service configuration; model selection stays
 interrupts the conversation; it does not establish that delegated processes have stopped. For a
 new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Before
 starting the worker, the host uses `uv` and that Issue's checked-out `requirements.txt` and
-`dev-requirements.txt` to create a separate per-run Python environment. Its resolved packages are
+`dev-requirements.txt` to create a separate per-run Python environment. Setup strips inherited
+credentials and installs only binary wheels, without running source-package build backends. Its resolved packages are
 recorded in the private run directory, and verification refuses changed requirement manifests.
 This leaves the OpenHands runtime environment separate. The worker is told the test interpreter's
 path; historical runs without this environment retain their original interpreter. The
@@ -115,8 +116,9 @@ start before retrying.
 After publishing, the watcher waits for GitHub checks and independently re-reads the draft PR and
 its current head. It reports a failure as failed, a genuinely incomplete or unavailable result as
 pending, and success only when the recorded current head has passed the check wait. It does not
-yet automatically diagnose or repair a CI-only failure. Resuming `watch` in the CI-wait phase
-rechecks the same draft instead of publishing another one.
+yet automatically diagnose or repair a CI-only failure. Enter `watch #456` in the control
+conversation to recheck a pending or rerun CI result; this reuses the same draft instead of
+publishing another one.
 
 `stop` first checks that the recorded conversation is finished or has been interrupted through
 `cancel`, then records the existing ACP session and service settings privately and stops the

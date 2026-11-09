@@ -216,7 +216,8 @@ def start(
         _write(directory, data)
         env = {
             key: os.environ[key]
-            for key in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR")
+            for key in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR",
+                        "DISPATCHER_STATE_DIR", "DISPATCHER_DB_PATH", "DISPATCHER_EVENTS_PATH")
             if key in os.environ
         }
         env.update({
