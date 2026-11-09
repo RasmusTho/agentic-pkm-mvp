@@ -78,10 +78,13 @@ def _write(directory: Path, data: dict[str, Any]) -> None:
 
 def _identity(pid: int) -> tuple[str, str] | None:
     """Return process start time and command, excluding dead/zombie processes."""
-    result = subprocess.run(
-        ["ps", "-ww", "-p", str(pid), "-o", "stat=", "-o", "lstart=", "-o", "command="],
-        capture_output=True, text=True, check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "stat=", "-o", "lstart=", "-o", "command="],
+            capture_output=True, text=True, check=False, timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ServiceError("Cannot inspect recorded process") from exc
     if result.returncode == 1 and not result.stdout.strip():
         return None
     if result.returncode != 0:

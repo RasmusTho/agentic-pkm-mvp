@@ -484,7 +484,7 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
 
 
 def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[str, Any]) -> dict[str, Any]:
-    """Report bounded evidence without turning incomplete visibility into a stopped verdict."""
+    """Collect bounded, read-only evidence without inferring that unknown execution stopped."""
     observation: dict[str, Any] = {
         "continuation": "blocked",
         "execution": {"status": "unknown", "reason": "Native execution and detached descendants are not tracked"},
@@ -492,37 +492,47 @@ def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[s
         "worktree": {"status": "unknown"},
         "publication": {"status": "unknown"},
     }
+    deadline = time.monotonic() + 15
+
+    def remaining(limit: float) -> float:
+        seconds = deadline - time.monotonic()
+        if seconds <= 0:
+            raise TimeoutError("recovery observation deadline reached")
+        return min(limit, seconds)
+
     server_dir = directory / "server"
     try:
-        if not server_dir.is_dir():
-            raise ValueError("service state is unavailable")
-        service_data = service.status(server_dir)
-        server = service_data.get("state")
-        if service_data.get("status") == "running" and isinstance(server, dict):
-            root_pid = server["pid"]
-            result = subprocess.run(
-                ["ps", "-axo", "pid=,ppid=,pgid=,lstart=,stat="],
-                capture_output=True, text=True, check=True, timeout=5,
-            )
-            rows: dict[int, dict[str, Any]] = {}
-            for line in result.stdout.splitlines():
-                fields = line.split()
-                if len(fields) != 9:
-                    raise ValueError("invalid process snapshot")
-                pid, ppid, pgid = map(int, fields[:3])
-                rows[pid] = {"pid": pid, "parent_pid": ppid, "process_group": pgid,
-                             "started": " ".join(fields[3:8]), "state": fields[8]}
-            if (root_pid not in rows or rows[root_pid]["started"] != server.get("started")
-                    or service.status(server_dir).get("status") != "running"):
-                raise ValueError("service identity changed")
-            owned = {root_pid}
-            while True:
-                expanded = owned | {pid for pid, row in rows.items() if row["parent_pid"] in owned}
-                if expanded == owned:
-                    break
-                owned = expanded
-            observation["execution"]["observed_descendants"] = [rows[pid] for pid in sorted(owned - {root_pid})]
-            observation["execution"]["visibility"] = "point-in-time descendants only; detached work may be missing"
+        server = service._read(server_dir) if server_dir.is_dir() else None
+        if (not isinstance(server, dict) or service._status(server) != "running"
+                or server.get("workspace") != state.get("worktree") or server.get("port") != state.get("port")):
+            raise ValueError("recorded service does not match the delivery")
+        root_pid = server["pid"]
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,pgid=,lstart=,stat="],
+            capture_output=True, text=True, check=True, timeout=remaining(2),
+        )
+        rows: dict[int, dict[str, Any]] = {}
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) != 9:
+                raise ValueError("invalid process snapshot")
+            pid, ppid, pgid = map(int, fields[:3])
+            rows[pid] = {"pid": pid, "parent_pid": ppid, "process_group": pgid,
+                         "started": " ".join(fields[3:8]), "state": fields[8]}
+        after = service._read(server_dir)
+        identity_keys = ("pid", "started", "marker", "workspace", "port")
+        if (root_pid not in rows or rows[root_pid]["started"] != server.get("started")
+                or not isinstance(after, dict) or service._status(after) != "running"
+                or any(after.get(k) != server.get(k) for k in identity_keys)):
+            raise ValueError("service identity changed")
+        owned = {root_pid}
+        while True:
+            expanded = owned | {pid for pid, row in rows.items() if row["parent_pid"] in owned}
+            if expanded == owned:
+                break
+            owned = expanded
+        observation["execution"]["observed_descendants"] = [rows[pid] for pid in sorted(owned - {root_pid})]
+        observation["execution"]["visibility"] = "point-in-time descendants only; detached work may be missing"
     except (service.ServiceError, OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         pass
 
@@ -541,7 +551,7 @@ def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[s
                 if child_id != child or child_id in seen:
                     raise ValueError("invalid delegated conversation identity")
                 seen.add(child_id)
-                code, detail = _http(state["port"], key, "GET", f"/conversations/{child_id}")
+                code, detail = _http(state["port"], key, "GET", f"/conversations/{child_id}", timeout=remaining(3))
                 if (code != 200 or not isinstance(detail, dict) or str(detail.get("id")) != child_id
                         or detail.get("parent_conversation_id") != parent_id
                         or not isinstance(detail.get("workspace"), dict)
@@ -554,26 +564,62 @@ def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[s
             observation["delegated_work"]["openhands_conversations"] = details
         except (DeliveryError, OSError, ValueError, KeyError, TypeError, AttributeError):
             observation["delegated_work"]["openhands_readback"] = "unknown"
+
+    env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG") if key in os.environ}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_OPTIONAL_LOCKS="0", LC_ALL="C")
+    def git(cwd: Path, *args: str) -> str:
+        command = ["git", "--no-replace-objects", "-C", str(cwd), "-c", "core.fsmonitor=false",
+                   "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", *args]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=True,
+                                    env=env, timeout=remaining(2))
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DeliveryError("Recovery Git readback is unavailable") from exc
+        return result.stdout
+
     try:
         worktree = Path(state["worktree"]).resolve(strict=True)
-        root = _run(["git", "--no-optional-locks", "--no-replace-objects", "-C", str(worktree), "rev-parse", "--show-toplevel"]).stdout.strip()
-        branch = _run(["git", "--no-optional-locks", "--no-replace-objects", "-C", str(worktree), "branch", "--show-current"]).stdout.strip()
-        head = _run(["git", "--no-optional-locks", "--no-replace-objects", "-C", str(worktree), "rev-parse", "HEAD"]).stdout.strip()
-        dirty = _run(["git", "--no-optional-locks", "--no-replace-objects", "-C", str(worktree), "status", "--porcelain=v1", "-z"]).stdout
-        if (Path(root).resolve(strict=True) != worktree or branch != state["branch"]
-                or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head)):
+        repo = Path(state["root"]).resolve(strict=True)
+        config = git(worktree, "config", "--local", "--no-includes", "--name-only", "--list").splitlines()
+        if any(key.startswith(("filter.", "include.", "includeif.", "core.fsmonitor", "extensions.worktreeconfig"))
+               for key in config):
+            raise ValueError("executable or included Git configuration is unsupported")
+        root = git(worktree, "rev-parse", "--show-toplevel").strip()
+        branch = git(worktree, "branch", "--show-current").strip()
+        head = git(worktree, "rev-parse", "HEAD").strip()
+        common = Path(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()).resolve(strict=True)
+        repo_common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()).resolve(strict=True)
+        registered = git(repo, "worktree", "list", "--porcelain", "-z")
+        records = [part.split("\0") for part in registered.split("\0\0") if part]
+        if (Path(root).resolve(strict=True) != worktree or common != repo_common or branch != state["branch"]
+                or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head)
+                or sum(f"worktree {worktree}" in record and f"branch refs/heads/{branch}" in record
+                       for record in records) != 1):
             raise ValueError("worktree identity mismatch")
+        dirty = git(worktree, "status", "--porcelain=v1", "-z")
         observation["worktree"] = {"status": "observed", "branch": branch, "head": head,
                                    "dirty": bool(dirty), "status_sha256": _sha(dirty),
                                    "note": "Point-in-time readback; unverified execution may still change it"}
         if state.get("repository") == REPOSITORY:
-            prs = publication._read_pr_history(DraftOnlyExecutor(publication.SubprocessExecutor(timeout_seconds=10)),
+            prs = publication._read_pr_history(publication.SubprocessExecutor(timeout_seconds=remaining(3)),
                                                worktree, REPOSITORY, branch)
-            observation["publication"] = {"status": "ambiguous" if len(prs) > 1 else "observed", "matching_prs": [
-                {"number": pr.get("number"), "state": pr.get("state"), "draft": pr.get("draft"),
-                 "head": (pr.get("head") or {}).get("sha") if isinstance(pr.get("head"), dict) else None}
-                for pr in prs
-            ]}
+            matches = []
+            for pr in prs:
+                head_data, base_data = pr.get("head"), pr.get("base")
+                if (type(pr.get("number")) is not int or pr["number"] <= 0
+                        or type(pr.get("draft")) is not bool or pr.get("state") not in {"open", "closed"}
+                        or not isinstance(head_data, dict) or head_data.get("ref") != branch
+                        or not isinstance(head_data.get("repo"), dict)
+                        or head_data["repo"].get("full_name") != REPOSITORY
+                        or not isinstance(base_data, dict) or not isinstance(base_data.get("repo"), dict)
+                        or base_data["repo"].get("full_name") != REPOSITORY
+                        or not isinstance(head_data.get("sha"), str)
+                        or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head_data["sha"])):
+                    raise ValueError("PR identity is unavailable")
+                matches.append({"number": pr["number"], "state": pr["state"], "draft": pr["draft"],
+                                "head": head_data["sha"]})
+            observation["publication"] = {"status": "ambiguous" if len(matches) > 1 else "observed",
+                                          "matching_prs": matches}
     except (DeliveryError, publication.PublicationRefusal, publication.PublicationCommandError,
             OSError, KeyError, TypeError, ValueError):
         pass

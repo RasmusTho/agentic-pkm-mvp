@@ -211,6 +211,12 @@ def test_process_identity_parses_ps_and_refuses_inspection_errors(monkeypatch):
     )
     with pytest.raises(service.ServiceError, match="inspect"):
         service._identity(123)
+    def timeout(command, **kwargs):
+        assert kwargs["timeout"] == 2
+        raise subprocess.TimeoutExpired(command, 2)
+    monkeypatch.setattr(service.subprocess, "run", timeout)
+    with pytest.raises(service.ServiceError, match="inspect"):
+        service._identity(123)
 
 
 def test_stop_timeout_preserves_running_state(tmp_path, monkeypatch):

@@ -66,12 +66,38 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
         execution = recovery.get("execution")
         if isinstance(execution, dict) and isinstance(execution.get("observed_descendants"), list):
             fields.append(f"Visible descendant processes: {len(execution['observed_descendants'])}; visibility is incomplete.")
+        else:
+            fields.append("Process readback is unavailable; execution status is unknown.")
         worktree = recovery.get("worktree")
         if isinstance(worktree, dict) and worktree.get("status") == "observed" and type(worktree.get("dirty")) is bool:
             fields.append("Worktree snapshot: " + ("changed." if worktree["dirty"] else "clean."))
+        else:
+            fields.append("Worktree readback is unavailable.")
+        delegated = recovery.get("delegated_work")
+        conversations = delegated.get("openhands_conversations") if isinstance(delegated, dict) else None
+        known_statuses = {"running", "idle", "paused", "finished", "error", "stuck", "waiting_for_confirmation"}
+        if isinstance(conversations, list) and all(
+            isinstance(item, dict) and isinstance(item.get("status"), str) and item["status"] in known_statuses
+            for item in conversations
+        ):
+            active = sum(item["status"] == "running" for item in conversations)
+            fields.append(f"OpenHands child conversations: {len(conversations)} observed, {active} running; native child processes remain unverified.")
+        else:
+            fields.append("OpenHands child conversation readback is unavailable.")
         pr_readback = recovery.get("publication")
         if isinstance(pr_readback, dict) and pr_readback.get("status") == "ambiguous":
             fields.append("Publication readback is ambiguous; no new PR may be created.")
+        elif isinstance(pr_readback, dict) and pr_readback.get("status") == "observed":
+            matches = pr_readback.get("matching_prs")
+            if isinstance(matches, list) and not matches:
+                fields.append("No matching PR was found in GitHub readback.")
+            elif isinstance(matches, list) and len(matches) == 1 and isinstance(matches[0], dict):
+                pr_item = matches[0]
+                if type(pr_item.get("number")) is int and pr_item["number"] > 0 and type(pr_item.get("draft")) is bool:
+                    label = "Draft PR" if pr_item["draft"] else "Non-draft PR"
+                    fields.append(f"{label}: https://github.com/RasmusTho/agentic-pkm-mvp/pull/{pr_item['number']}")
+        else:
+            fields.append("GitHub PR readback is unavailable; do not assume a PR was not created.")
     if action == "cancel":
         fields.append("Delegated-process cancellation has not been verified.")
     if result.get("conversation_readback_error") or result.get("service_status_error"):

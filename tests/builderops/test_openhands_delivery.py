@@ -251,11 +251,13 @@ def test_interrupted_recovery_observes_processes_children_worktree_and_pr_withou
     head = git("rev-parse", "HEAD").stdout.strip()
     child = "11111111-1111-4111-8111-111111111111"
     parent_id = "22222222-2222-4222-8222-222222222222"
-    state = {"worktree": str(worktree), "branch": "codex/issue-123", "repository": delivery.REPOSITORY,
-             "conversation_id": parent_id, "port": 8123}
-    server = {"pid": 12345, "started": "Mon Nov 9 20:24:07 2026"}
+    state = {"worktree": str(worktree), "root": str(worktree), "branch": "codex/issue-123",
+             "repository": delivery.REPOSITORY, "conversation_id": parent_id, "port": 8123}
+    server = {"pid": 12345, "started": "Mon Nov 9 20:24:07 2026", "marker": "test-marker",
+              "workspace": str(worktree), "port": 8123}
     (tmp_path / "server").mkdir()
-    monkeypatch.setattr(delivery.service, "status", lambda *args: {"status": "running", "state": server})
+    monkeypatch.setattr(delivery.service, "_read", lambda *args: server)
+    monkeypatch.setattr(delivery.service, "_status", lambda *args: "running")
     monkeypatch.setattr(delivery, "_server_key", lambda *args: "test-key")
     reads = []
     def http(port, key, method, path, *args, **kwargs):
@@ -265,7 +267,9 @@ def test_interrupted_recovery_observes_processes_children_worktree_and_pr_withou
                      "sub_conversation_ids": []}
     monkeypatch.setattr(delivery, "_http", http)
     monkeypatch.setattr(delivery.publication, "_read_pr_history", lambda *args: [
-        {"number": 42, "state": "open", "draft": True, "head": {"sha": head}},
+        {"number": 42, "state": "open", "draft": True,
+         "head": {"sha": head, "ref": "codex/issue-123", "repo": {"full_name": delivery.REPOSITORY}},
+         "base": {"repo": {"full_name": delivery.REPOSITORY}}},
     ])
     real_run = subprocess.run
     def run(command, **kwargs):
@@ -285,12 +289,32 @@ def test_interrupted_recovery_observes_processes_children_worktree_and_pr_withou
     assert result["publication"]["matching_prs"][0]["number"] == 42
     assert reads == [("GET", f"/conversations/{child}")]
     monkeypatch.setattr(delivery.publication, "_read_pr_history", lambda *args: [
-        {"number": 42, "state": "open", "draft": True, "head": {"sha": head}},
-        {"number": 43, "state": "open", "draft": True, "head": {"sha": head}},
+        {"number": 42, "state": "open", "draft": True,
+         "head": {"sha": head, "ref": "codex/issue-123", "repo": {"full_name": delivery.REPOSITORY}},
+         "base": {"repo": {"full_name": delivery.REPOSITORY}}},
+        {"number": 43, "state": "open", "draft": False,
+         "head": {"sha": head, "ref": "codex/issue-123", "repo": {"full_name": delivery.REPOSITORY}},
+         "base": {"repo": {"full_name": delivery.REPOSITORY}}},
     ])
     ambiguous = delivery._recovery_observation(tmp_path, state, {"sub_conversation_ids": []})
     assert ambiguous["publication"]["status"] == "ambiguous"
     assert ambiguous["continuation"] == "blocked"
+    monkeypatch.setattr(delivery.service, "_read", lambda *args: {**server, "workspace": "/unrelated"})
+    wrong_server = delivery._recovery_observation(tmp_path, state, {"sub_conversation_ids": []})
+    assert "observed_descendants" not in wrong_server["execution"]
+    other_repo = tmp_path / "other-repo"
+    other_repo.mkdir()
+    subprocess.run(["git", "-C", str(other_repo), "init"], capture_output=True, check=True)
+    wrong_repo = delivery._recovery_observation(tmp_path, {**state, "root": str(other_repo)},
+                                                 {"sub_conversation_ids": []})
+    assert wrong_repo["worktree"]["status"] == "unknown"
+    marker = tmp_path / "hook-ran"
+    hook = tmp_path / "fsmonitor-hook"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    hook.chmod(0o755)
+    git("config", "--local", "core.fsmonitor", str(hook))
+    configured = delivery._recovery_observation(tmp_path, state, {"sub_conversation_ids": []})
+    assert configured["worktree"]["status"] == "unknown" and not marker.exists()
 
 
 def test_start_refuses_base_change_after_environment_preflight(orchestration):

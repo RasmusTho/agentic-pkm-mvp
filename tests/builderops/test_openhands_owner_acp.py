@@ -94,6 +94,19 @@ def test_status_reports_unverified_recovery_without_disclosing_process_details()
     assert "12345" not in result
 
 
+def test_status_reports_live_children_and_existing_pr_in_recovery():
+    result = owner._summary("status", 42, {"state": {"phase": "interrupted"}, "recovery": {
+        "continuation": "blocked", "delegated_work": {"openhands_conversations": [
+            {"id": "private-id", "status": "running"}, {"id": "another-id", "status": "paused"}]},
+        "publication": {"status": "observed", "matching_prs": [{"number": 77, "draft": False}]},
+    }})
+    assert "2 observed, 1 running" in result and "native child processes remain unverified" in result
+    assert "Non-draft PR: https://github.com/RasmusTho/agentic-pkm-mvp/pull/77" in result
+    assert "private-id" not in result
+    unknown = owner._summary("status", 42, {"recovery": {"continuation": "blocked", "publication": {"status": "unknown"}}})
+    assert "GitHub PR readback is unavailable" in unknown
+
+
 def test_status_shows_published_pr_and_ci_without_raw_state():
     result = owner._summary("status", 42, {"state": {"full_publication": {"pr_number": 123}},
         "watcher": {"status": "finished", "phase": "published", "ci": {"status": "passed", "head": "a" * 40}}})
