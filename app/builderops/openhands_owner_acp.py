@@ -60,6 +60,18 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
         head = ci.get("head")
         revision = head if isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40,64}", head) else "unknown"
         fields.append(f"Recorded CI: {ci['status']} (head {revision}); request a fresh check for current status.")
+    recovery = result.get("recovery")
+    if isinstance(recovery, dict) and recovery.get("continuation") == "blocked":
+        fields.append("Continuation is blocked: previous execution and delegated work are not verified stopped.")
+        execution = recovery.get("execution")
+        if isinstance(execution, dict) and isinstance(execution.get("observed_descendants"), list):
+            fields.append(f"Visible descendant processes: {len(execution['observed_descendants'])}; visibility is incomplete.")
+        worktree = recovery.get("worktree")
+        if isinstance(worktree, dict) and worktree.get("status") == "observed" and type(worktree.get("dirty")) is bool:
+            fields.append("Worktree snapshot: " + ("changed." if worktree["dirty"] else "clean."))
+        pr_readback = recovery.get("publication")
+        if isinstance(pr_readback, dict) and pr_readback.get("status") == "ambiguous":
+            fields.append("Publication readback is ambiguous; no new PR may be created.")
     if action == "cancel":
         fields.append("Delegated-process cancellation has not been verified.")
     if result.get("conversation_readback_error") or result.get("service_status_error"):
@@ -119,6 +131,8 @@ def run_command(entry: Path, message: str) -> str:
             "Issue does not have exactly agent:ready as its agent state":
                 "The Issue is not ready for factory pickup.",
             "Issue is not open": "The Issue is not open.",
+            "Continuation unavailable: previous execution and delegated work have not been independently reconciled; the recorded task and workspace are preserved":
+                "Continuation is blocked until previous execution and delegated work are reconciled. The task and workspace are preserved.",
             "Existing branch, worktree or PR requires reconciliation":
                 "Existing work needs reconciliation before starting.",
             "Another delivery is active or unresolved; inspect it before starting":

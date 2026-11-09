@@ -483,6 +483,103 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
         }
 
 
+def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[str, Any]) -> dict[str, Any]:
+    """Report bounded evidence without turning incomplete visibility into a stopped verdict."""
+    observation: dict[str, Any] = {
+        "continuation": "blocked",
+        "execution": {"status": "unknown", "reason": "Native execution and detached descendants are not tracked"},
+        "delegated_work": {"status": "unknown", "reason": "Native delegated processes are not tracked"},
+        "worktree": {"status": "unknown"},
+        "publication": {"status": "unknown"},
+    }
+    server_dir = directory / "server"
+    try:
+        if not server_dir.is_dir():
+            raise ValueError("service state is unavailable")
+        service_data = service.status(server_dir)
+        server = service_data.get("state")
+        if service_data.get("status") == "running" and isinstance(server, dict):
+            root_pid = server["pid"]
+            result = subprocess.run(
+                ["ps", "-axo", "pid=,ppid=,pgid=,lstart=,stat="],
+                capture_output=True, text=True, check=True, timeout=5,
+            )
+            rows: dict[int, dict[str, Any]] = {}
+            for line in result.stdout.splitlines():
+                fields = line.split()
+                if len(fields) != 9:
+                    raise ValueError("invalid process snapshot")
+                pid, ppid, pgid = map(int, fields[:3])
+                rows[pid] = {"pid": pid, "parent_pid": ppid, "process_group": pgid,
+                             "started": " ".join(fields[3:8]), "state": fields[8]}
+            if (root_pid not in rows or rows[root_pid]["started"] != server.get("started")
+                    or service.status(server_dir).get("status") != "running"):
+                raise ValueError("service identity changed")
+            owned = {root_pid}
+            while True:
+                expanded = owned | {pid for pid, row in rows.items() if row["parent_pid"] in owned}
+                if expanded == owned:
+                    break
+                owned = expanded
+            observation["execution"]["observed_descendants"] = [rows[pid] for pid in sorted(owned - {root_pid})]
+            observation["execution"]["visibility"] = "point-in-time descendants only; detached work may be missing"
+    except (service.ServiceError, OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        pass
+
+    children = parent.get("sub_conversation_ids")
+    if isinstance(children, list):
+        try:
+            key = _server_key(directory, state)
+            queue = [(state["conversation_id"], child) for child in children]
+            seen: set[str] = {state["conversation_id"]}
+            details: list[dict[str, str]] = []
+            while queue:
+                if len(seen) > 32:
+                    raise ValueError("too many delegated conversations")
+                parent_id, child = queue.pop(0)
+                child_id = str(uuid.UUID(child))
+                if child_id != child or child_id in seen:
+                    raise ValueError("invalid delegated conversation identity")
+                seen.add(child_id)
+                code, detail = _http(state["port"], key, "GET", f"/conversations/{child_id}")
+                if (code != 200 or not isinstance(detail, dict) or str(detail.get("id")) != child_id
+                        or detail.get("parent_conversation_id") != parent_id
+                        or not isinstance(detail.get("workspace"), dict)
+                        or detail["workspace"].get("working_dir") != state["worktree"]
+                        or not isinstance(detail.get("execution_status"), str)
+                        or not isinstance(detail.get("sub_conversation_ids"), list)):
+                    raise ValueError("delegated conversation readback unavailable")
+                details.append({"id": child_id, "parent_id": parent_id, "status": detail["execution_status"]})
+                queue.extend((child_id, nested) for nested in detail["sub_conversation_ids"])
+            observation["delegated_work"]["openhands_conversations"] = details
+        except (DeliveryError, OSError, ValueError, KeyError, TypeError, AttributeError):
+            observation["delegated_work"]["openhands_readback"] = "unknown"
+    try:
+        worktree = Path(state["worktree"]).resolve(strict=True)
+        root = _run(["git", "--no-optional-locks", "--no-replace-objects", "-C", str(worktree), "rev-parse", "--show-toplevel"]).stdout.strip()
+        branch = _run(["git", "--no-optional-locks", "--no-replace-objects", "-C", str(worktree), "branch", "--show-current"]).stdout.strip()
+        head = _run(["git", "--no-optional-locks", "--no-replace-objects", "-C", str(worktree), "rev-parse", "HEAD"]).stdout.strip()
+        dirty = _run(["git", "--no-optional-locks", "--no-replace-objects", "-C", str(worktree), "status", "--porcelain=v1", "-z"]).stdout
+        if (Path(root).resolve(strict=True) != worktree or branch != state["branch"]
+                or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head)):
+            raise ValueError("worktree identity mismatch")
+        observation["worktree"] = {"status": "observed", "branch": branch, "head": head,
+                                   "dirty": bool(dirty), "status_sha256": _sha(dirty),
+                                   "note": "Point-in-time readback; unverified execution may still change it"}
+        if state.get("repository") == REPOSITORY:
+            prs = publication._read_pr_history(DraftOnlyExecutor(publication.SubprocessExecutor(timeout_seconds=10)),
+                                               worktree, REPOSITORY, branch)
+            observation["publication"] = {"status": "ambiguous" if len(prs) > 1 else "observed", "matching_prs": [
+                {"number": pr.get("number"), "state": pr.get("state"), "draft": pr.get("draft"),
+                 "head": (pr.get("head") or {}).get("sha") if isinstance(pr.get("head"), dict) else None}
+                for pr in prs
+            ]}
+    except (DeliveryError, publication.PublicationRefusal, publication.PublicationCommandError,
+            OSError, KeyError, TypeError, ValueError):
+        pass
+    return observation
+
+
 def status(directory: Path) -> dict[str, Any]:
     """Read atomic state without waiting for a long-running delivery operation."""
     try:
@@ -501,6 +598,7 @@ def status(directory: Path) -> dict[str, Any]:
         except (service.ServiceError, OSError) as exc:
             result["service_status_error"] = str(exc)
     if state["phase"] in {"creating_conversation", "active", "interrupting", "interrupted", "resuming"}:
+        data: dict[str, Any] = {}
         try:
             data = _conversation(directory, state)
         except DeliveryError as exc:
@@ -508,6 +606,8 @@ def status(directory: Path) -> dict[str, Any]:
         else:
             result["conversation_status"] = data.get("execution_status")
             result["sub_conversation_ids"] = data.get("sub_conversation_ids")
+        if state["phase"] in {"interrupting", "interrupted", "resuming"}:
+            result["recovery"] = _recovery_observation(directory, state, data)
     refreshed = _state(directory)
     if refreshed != state:
         return {"state": refreshed, "snapshot_notice": "Delivery state changed during status; retry for live readback"}
@@ -554,13 +654,14 @@ def resume(directory: Path) -> dict[str, Any]:
         observed = _conversation(directory, state)
         if observed.get("execution_status") != "paused":
             raise DeliveryError("Only an observed paused conversation can be resumed")
-        key = _server_key(directory, state)
-        _save(directory, state, "resuming")
-        code, _ = _http(state["port"], key, "POST", f"/conversations/{state['conversation_id']}/run")
-        if code != 200:
-            raise DeliveryError(f"Resume outcome uncertain (HTTP {code})")
-        _save(directory, state, "active")
-        return {"state": state}
+        # OpenHands reports the conversation state, not whether the previous
+        # native command and its descendants can still write. Until the runtime
+        # can establish those identities and reconcile effects, replaying the
+        # interrupted prompt can duplicate partially completed work.
+        raise DeliveryError(
+            "Continuation unavailable: previous execution and delegated work have not been "
+            "independently reconciled; the recorded task and workspace are preserved"
+        )
 
 
 class DraftOnlyExecutor:

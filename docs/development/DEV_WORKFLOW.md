@@ -143,8 +143,14 @@ recorded Canvas (if present) and backend while retaining session data. It does n
 delegated-process cancellation. To restore that backend for conversation readback or publication,
 use `start` again with the same Issue, installation, repository and roots. It reuses the recorded
 workspace, port, key and session; it does not claim the Issue again or resume an agent turn.
-An interrupted turn still requires the separate `resume` command. The retained recovery settings
-contain a sensitive ACP session identifier and must remain private.
+`resume` currently refuses an interrupted turn: paused conversation status alone does not establish
+that the earlier native command and delegated work have stopped or that their effects are reconciled.
+Keep the recorded workspace and session for inspection; no continuation prompt or replay is sent.
+For an interrupted run, `status` reports a point-in-time view of visible descendants, the worktree
+and matching draft PRs where available. The process view can omit detached work and does not prove
+termination; conversation status, an empty process snapshot and a clean worktree are not recovery
+approval. GitHub or local readback failures remain unknown. The retained recovery settings contain
+a sensitive ACP session identifier and must remain private.
 
 For a finished conversation on a clean committed worktree, use `verify` with the same Issue and
 roots. It rereads the recorded Issue contract and runs concrete `tests/...py` pytest targets in the

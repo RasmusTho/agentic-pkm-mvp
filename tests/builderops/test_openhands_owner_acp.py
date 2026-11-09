@@ -83,6 +83,17 @@ def test_owner_timeout_stops_the_started_process_group(monkeypatch):
     assert calls == [(1234, owner.signal.SIGTERM), (1234, owner.signal.SIGKILL)]
 
 
+def test_status_reports_unverified_recovery_without_disclosing_process_details():
+    result = owner._summary("status", 42, {"state": {"phase": "interrupted"}, "recovery": {
+        "continuation": "blocked", "execution": {"observed_descendants": [{"pid": 12345}]},
+        "worktree": {"status": "observed", "dirty": True}, "publication": {"status": "ambiguous"},
+    }})
+    assert "Continuation is blocked" in result
+    assert "Visible descendant processes: 1; visibility is incomplete" in result
+    assert "Worktree snapshot: changed" in result and "Publication readback is ambiguous" in result
+    assert "12345" not in result
+
+
 def test_status_shows_published_pr_and_ci_without_raw_state():
     result = owner._summary("status", 42, {"state": {"full_publication": {"pr_number": 123}},
         "watcher": {"status": "finished", "phase": "published", "ci": {"status": "passed", "head": "a" * 40}}})

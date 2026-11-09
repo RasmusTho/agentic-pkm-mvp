@@ -231,7 +231,66 @@ def test_start_claims_then_starts_workspace_bound_conversation_and_prevents_repl
     assert len(events) == before
     assert delivery.status(kwargs["directory"])["conversation_status"] == "running"
     assert delivery.cancel(kwargs["directory"])["state"]["phase"] == "interrupted"
-    assert delivery.resume(kwargs["directory"])["state"]["phase"] == "active"
+    before = len(events)
+    with pytest.raises(delivery.DeliveryError, match="previous execution and delegated work"):
+        delivery.resume(kwargs["directory"])
+    assert delivery.service._read(kwargs["directory"])["phase"] == "interrupted"
+    assert not any(event[0] == "POST" and event[1].endswith("/run") for event in events[before:])
+
+
+def test_interrupted_recovery_observes_processes_children_worktree_and_pr_without_assuming_stop(tmp_path, monkeypatch):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    def git(*args):
+        return subprocess.run(["git", "-C", str(worktree), *args], capture_output=True, text=True, check=True)
+    git("init", "-b", "codex/issue-123")
+    (worktree / "fixture.txt").write_text("before\n")
+    git("add", "fixture.txt")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "base")
+    (worktree / "fixture.txt").write_text("partially changed\n")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    child = "11111111-1111-4111-8111-111111111111"
+    parent_id = "22222222-2222-4222-8222-222222222222"
+    state = {"worktree": str(worktree), "branch": "codex/issue-123", "repository": delivery.REPOSITORY,
+             "conversation_id": parent_id, "port": 8123}
+    server = {"pid": 12345, "started": "Mon Nov 9 20:24:07 2026"}
+    (tmp_path / "server").mkdir()
+    monkeypatch.setattr(delivery.service, "status", lambda *args: {"status": "running", "state": server})
+    monkeypatch.setattr(delivery, "_server_key", lambda *args: "test-key")
+    reads = []
+    def http(port, key, method, path, *args, **kwargs):
+        reads.append((method, path))
+        return 200, {"id": child, "parent_conversation_id": parent_id,
+                     "workspace": {"working_dir": str(worktree)}, "execution_status": "running",
+                     "sub_conversation_ids": []}
+    monkeypatch.setattr(delivery, "_http", http)
+    monkeypatch.setattr(delivery.publication, "_read_pr_history", lambda *args: [
+        {"number": 42, "state": "open", "draft": True, "head": {"sha": head}},
+    ])
+    real_run = subprocess.run
+    def run(command, **kwargs):
+        if command[0] == "ps":
+            return subprocess.CompletedProcess(command, 0,
+                "12345 1 12345 Mon Nov 9 20:24:07 2026 Ss\n"
+                "12346 12345 12346 Mon Nov 9 20:24:08 2026 S\n")
+        return real_run(command, **kwargs)
+    monkeypatch.setattr(delivery.subprocess, "run", run)
+    result = delivery._recovery_observation(tmp_path, state, {"sub_conversation_ids": [child]})
+    assert result["continuation"] == "blocked"
+    assert result["execution"]["status"] == "unknown"
+    assert result["execution"]["observed_descendants"][0]["pid"] == 12346
+    assert result["delegated_work"]["status"] == "unknown"
+    assert result["delegated_work"]["openhands_conversations"][0]["status"] == "running"
+    assert result["worktree"]["dirty"] is True and result["worktree"]["head"] == head
+    assert result["publication"]["matching_prs"][0]["number"] == 42
+    assert reads == [("GET", f"/conversations/{child}")]
+    monkeypatch.setattr(delivery.publication, "_read_pr_history", lambda *args: [
+        {"number": 42, "state": "open", "draft": True, "head": {"sha": head}},
+        {"number": 43, "state": "open", "draft": True, "head": {"sha": head}},
+    ])
+    ambiguous = delivery._recovery_observation(tmp_path, state, {"sub_conversation_ids": []})
+    assert ambiguous["publication"]["status"] == "ambiguous"
+    assert ambiguous["continuation"] == "blocked"
 
 
 def test_start_refuses_base_change_after_environment_preflight(orchestration):
