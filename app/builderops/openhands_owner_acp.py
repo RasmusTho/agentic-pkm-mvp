@@ -16,7 +16,7 @@ import socket
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import acp
 from acp.schema import AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse, PromptResponse
@@ -149,14 +149,14 @@ class OwnerAgent:
         self.client = client
 
     async def initialize(self, protocol_version: int, **kwargs: Any) -> InitializeResponse:
-        return InitializeResponse(protocolVersion=acp.PROTOCOL_VERSION,
-                                  agentCapabilities=AgentCapabilities(loadSession=True))
+        return InitializeResponse(protocol_version=acp.PROTOCOL_VERSION,
+                                  agent_capabilities=AgentCapabilities(load_session=True))
 
     async def new_session(self, cwd: str, **kwargs: Any) -> NewSessionResponse:
         if self.session_id is not None:
             raise ValueError("Only one owner control session is supported")
         self.session_id = str(uuid.uuid4())
-        return NewSessionResponse(sessionId=self.session_id)
+        return NewSessionResponse(session_id=self.session_id)
 
     async def load_session(self, cwd: str, session_id: str, **kwargs: Any) -> LoadSessionResponse:
         if self.session_id is not None or str(uuid.UUID(session_id)) != session_id:
@@ -180,7 +180,7 @@ class OwnerAgent:
                     await task
                     raise
         await self.client.session_update(session_id, acp.update_agent_message_text(response))
-        return PromptResponse(stopReason="end_turn")
+        return PromptResponse(stop_reason="end_turn")
 
     async def cancel(self, session_id: str, **kwargs: Any) -> None:
         # A start may already have external effects. Its recorded state must be
@@ -194,7 +194,8 @@ def main() -> None:
     args = parser.parse_args()
     if not args.entry.is_absolute() or not args.entry.is_file() or not os.access(args.entry, os.X_OK):
         raise SystemExit("An absolute executable factory entry is required")
-    asyncio.run(acp.run_agent(OwnerAgent(args.entry)))
+    # The SDK's Protocol includes optional methods this agent does not advertise.
+    asyncio.run(acp.run_agent(cast(acp.Agent, OwnerAgent(args.entry))))
 
 
 if __name__ == "__main__":
