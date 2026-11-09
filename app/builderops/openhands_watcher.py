@@ -501,8 +501,15 @@ def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: P
         except BlockingIOError:
             return
         watcher = service._read(watch_dir) or {"version": 1, "status": "running", "phase": "watching"}
+        interrupted_failure = (
+            watcher.get("status") == "failed" and watcher.get("phase") == "watching"
+            and watcher.get("reason") in {
+                "Run is interrupted or its state requires inspection",
+                "Watcher does not match an active authorized delivery",
+            }
+        )
         if watcher.get("status") == "finished" or (
-            watcher.get("status") == "failed" and watcher.get("phase") != "ci_wait"
+            watcher.get("status") == "failed" and watcher.get("phase") != "ci_wait" and not interrupted_failure
         ):
             return
         if watcher.get("phase") in {"staging", "committing", "repair_sending"}:
@@ -518,8 +525,8 @@ def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: P
                 state = delivery._state(directory)
                 if (state.get("auto_finish") is not True or state.get("issue") != issue
                         or state.get("root") != str(repo) or Path(state["worktree"]).parent != worktree_root
-                        or state.get("phase") != "active"):
-                    raise delivery.DeliveryError("Watcher does not match an active authorized delivery")
+                        or state.get("phase") not in {"active", "interrupting", "interrupted", "resuming"}):
+                    raise delivery.DeliveryError("Watcher does not match an authorized delivery")
             keeper = _LeaseKeeper(state, watch_dir)
             try:
                 keeper.start()
@@ -528,6 +535,8 @@ def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: P
                 service._write(keeper.heartbeat_dir, {"version": 1, "status": "failed", "reason": keeper.error})
                 raise delivery.DeliveryError("Lease renewal failed; reconcile the recorded claim") from exc
             watcher["status"] = "running"
+            if interrupted_failure:
+                watcher.pop("reason", None)
             service._write(watch_dir, watcher)
             guarded = _GuardedExecutor(keeper)
             if watcher.get("phase") == "ci_wait":
@@ -554,33 +563,35 @@ def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: P
                             "pickup_receipt", "conversation_id", "port", "issue_body_sha256",
                         )):
                             raise delivery.DeliveryError("Recorded delivery identity changed during watching")
-                        if state.get("phase") != "active":
-                            raise delivery.DeliveryError("Run is interrupted or its state requires inspection")
-                        try:
-                            observed = delivery._conversation(directory, state)
-                        except delivery.DeliveryError:
-                            read_failures += 1
-                            if read_failures >= 3:
-                                watcher.update(status="pending", reason="Conversation readback unavailable after three attempts")
-                                service._write(watch_dir, watcher)
-                                return
-                            time.sleep(POLL_SECONDS)
-                            continue
-                        read_failures = 0
-                        if watcher.get("phase") == "repair_sent":
-                            complete = _repair_event(directory, state, watcher, observed)
-                            if observed.get("execution_status") == "finished" and not complete:
-                                raise delivery.DeliveryError("Repair completion cannot be verified")
-                        else:
-                            complete = observed.get("execution_status") == "finished"
-                        if complete:
-                            delivery._finished_run(directory)
-                            break
-                        if observed.get("execution_status") not in {"idle", "running"}:
-                            raise delivery.DeliveryError("Worker is not running or finished; inspect its state")
-                        if watcher.get("phase") == "publishing":
-                            raise delivery.DeliveryError("Recorded publication is not associated with a finished worker")
-                    if watcher.get("phase") != "repair_sent":
+                        phase = state.get("phase")
+                        if phase not in {"active", "interrupting", "interrupted", "resuming"}:
+                            raise delivery.DeliveryError("Run state requires inspection")
+                        if phase == "active":
+                            try:
+                                observed = delivery._conversation(directory, state)
+                            except delivery.DeliveryError:
+                                read_failures += 1
+                                if read_failures >= 3:
+                                    watcher.update(status="pending", reason="Conversation readback unavailable after three attempts")
+                                    service._write(watch_dir, watcher)
+                                    return
+                                time.sleep(POLL_SECONDS)
+                                continue
+                            read_failures = 0
+                            if watcher.get("phase") == "repair_sent":
+                                complete = _repair_event(directory, state, watcher, observed)
+                                if observed.get("execution_status") == "finished" and not complete:
+                                    raise delivery.DeliveryError("Repair completion cannot be verified")
+                            else:
+                                complete = observed.get("execution_status") == "finished"
+                            if complete:
+                                delivery._finished_run(directory)
+                                break
+                            if observed.get("execution_status") not in {"idle", "running"}:
+                                raise delivery.DeliveryError("Worker is not running or finished; inspect its state")
+                            if watcher.get("phase") == "publishing":
+                                raise delivery.DeliveryError("Recorded publication is not associated with a finished worker")
+                    if phase == "active" and watcher.get("phase") != "repair_sent":
                         watcher.update(status="running", phase="watching")
                     service._write(watch_dir, watcher)
                     time.sleep(POLL_SECONDS)

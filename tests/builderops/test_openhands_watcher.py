@@ -253,6 +253,48 @@ def test_watcher_commits_scoped_changes_and_runs_finish_once(authorized_run, mon
     assert len(finished) == 1 and sum("commit" in call for call in calls) == 1
 
 
+@pytest.mark.parametrize("initial_phase", ["interrupting", "interrupted", "resuming"])
+def test_watcher_waits_for_resumed_delivery_and_finishes_once(authorized_run, monkeypatch, initial_phase):
+    directory, worktree, state, _, runner, _ = authorized_run
+    service._write(directory, {**state, "phase": initial_phase})
+    polls = []
+    observations = []
+
+    def resume_on_poll(seconds):
+        polls.append(seconds)
+        assert not runner.committed
+        service._write(directory, state)
+
+    monkeypatch.setattr(watcher.time, "sleep", resume_on_poll)
+    monkeypatch.setattr(delivery, "_conversation", lambda *args: observations.append("active") or {
+        "execution_status": "finished",
+    })
+    finished = []
+    monkeypatch.setattr(factory, "_finish", lambda *args, **kwargs: finished.append(True) or {
+        "pr_number": 1234, "commit_sha": "b" * 40, "checks": {},
+    })
+    watcher.run(Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
+    assert len(polls) == 1 and observations == ["active"]
+    assert runner.commits == 1 and finished == [True]
+    assert watcher.status(directory)["status"] == "finished"
+
+
+@pytest.mark.parametrize("reason", [
+    "Run is interrupted or its state requires inspection",
+    "Watcher does not match an active authorized delivery",
+])
+def test_watcher_recovers_legacy_interruption_failure_after_identity_check(authorized_run, monkeypatch, reason):
+    directory, worktree, state, _, runner, _ = authorized_run
+    watch_dir = directory / "watcher"
+    watch_dir.mkdir(mode=0o700)
+    service._write(watch_dir, {"version": 1, "status": "failed", "phase": "watching", "reason": reason})
+    monkeypatch.setattr(factory, "_finish", lambda *args, **kwargs: {
+        "pr_number": 1234, "commit_sha": "b" * 40, "checks": {},
+    })
+    watcher.run(Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
+    assert runner.commits == 1 and watcher.status(directory)["status"] == "finished"
+
+
 def test_watcher_accepts_explicit_empty_risk_assessment(authorized_run, monkeypatch):
     directory, worktree, state, handoff, _, _ = authorized_run
     handoff["risk_surfaces"] = []
