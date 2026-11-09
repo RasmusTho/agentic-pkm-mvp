@@ -137,6 +137,11 @@ class DeliveryInputFence:
         if scope.get("type") != "websocket":
             await self.app(scope, receive, send)
             return
+        if not re.fullmatch(r"/sockets/(?:session|events)/[0-9a-fA-F-]{32,36}", scope.get("path", "")):
+            # The bash socket and app-backend bridges can launch work without
+            # a conversation run; they are not part of the delivery route.
+            await send({"type": "websocket.close", "code": 1008})
+            return
         held: int | None = None
 
         async def fenced_receive() -> dict[str, Any]:

@@ -123,10 +123,26 @@ def test_already_connected_websocket_cannot_send_after_interrupt(tmp_path: Path)
             allow_second.set()
             seen.append(await next_frame)
         await DeliveryInputFence(app_with_interrupt, str(tmp_path), "/work")(
-            {"type": "websocket", "path": "/api/session/id"}, receive, send)
+            {"type": "websocket", "path": "/sockets/session/11111111-1111-4111-8111-111111111111"}, receive, send)
         assert seen[-1] == {"type": "websocket.disconnect", "code": 1008}
         assert sent == [{"type": "websocket.close", "code": 1008}]
         assert all(m.get("text") != "replay" for m in seen)
+    asyncio.run(run())
+
+
+def test_unsupported_worker_websockets_do_not_launch_commands(tmp_path: Path):
+    async def run():
+        handled, sent = [], []
+        async def app(scope, receive, send):
+            handled.append(True)
+        async def receive():
+            return {"type": "websocket.connect"}
+        async def send(message):
+            sent.append(message)
+        fence = DeliveryInputFence(app, str(tmp_path), "/work")
+        for path in ("/sockets/bash-events", "/app-backends/other"):
+            await fence({"type": "websocket", "path": path}, receive, send)
+        assert not handled and sent == [{"type": "websocket.close", "code": 1008}] * 2
     asyncio.run(run())
 
 
