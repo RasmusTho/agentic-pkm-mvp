@@ -135,3 +135,11 @@ def test_effective_configuration_refuses_hidden_external_tools_and_wrong_auth() 
         verify_effective_config({**config, "mcp_servers": {"unknown": {}}}, {"type": "chatgpt"}, allowed_read_roots=())
     with pytest.raises(PolicyRefusal, match="effective_permissions_mismatch"):
         verify_effective_config({**config, "permissions": {PROFILE: {"filesystem": {":workspace_roots": "write", "/": "read"}, "network": {"enabled": False}}}}, {"type": "chatgpt"}, allowed_read_roots=())
+
+
+def test_owner_control_backend_refuses_native_codex(monkeypatch, capsys):
+    from app.builderops import openhands_proxy
+
+    monkeypatch.setenv("OPENHANDS_FACTORY_CONTROL_ONLY", "1")
+    assert openhands_proxy.main() == 2
+    assert "authorize an Issue" in capsys.readouterr().err

@@ -13,11 +13,50 @@ BOOTSTRAP = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
              "runpy.run_module('app.builderops.openhands_owner_acp',run_name='__main__')")
 
 
-def attach(install: Path, directory: Path, host_issue: int) -> dict[str, Any]:
+def ensure_profile(install: Path, directory: Path, host: dict[str, Any]) -> None:
+    """Select a model-free ACP profile so Canvas enables its conversation input."""
+    key = delivery._server_key(directory, host)
+    python = str((install / "venv/bin/python").absolute())
+    source = str(Path(__file__).resolve().parents[2])
+    entry = str((install / "bin/openhands").resolve(strict=True))
+    expected = {"agent_kind": "acp", "acp_server": "custom", "acp_model": None,
+                "acp_command": python, "acp_args": ["-I", "-c", BOOTSTRAP, source, "--entry", entry],
+                "mcp_server_refs": [], "secret_refs": [], "integration_refs": []}
+    path = "/agent-profiles/builder-control"
+    code, data = delivery._http(host["port"], key, "GET", path)
+    if code == 404:
+        code, _ = delivery._http(host["port"], key, "POST", path, expected)
+        if code not in {200, 201}:
+            raise delivery.DeliveryError("Owner profile creation is uncertain; inspect it before retry")
+        code, data = delivery._http(host["port"], key, "GET", path)
+    profile = data.get("profile") if isinstance(data, dict) else None
+    if code != 200 or not isinstance(profile, dict) or any(profile.get(k) != v for k, v in expected.items()):
+        raise delivery.DeliveryError("Owner profile does not match the model-free control agent")
+    ident = profile.get("id")
+    try:
+        if not isinstance(ident, str) or str(uuid.UUID(ident)) != ident:
+            raise ValueError("invalid profile id")
+    except ValueError as exc:
+        raise delivery.DeliveryError("Owner profile identity is invalid") from exc
+    code, settings = delivery._http(host["port"], key, "GET", "/settings")
+    if code != 200 or not isinstance(settings, dict):
+        raise delivery.DeliveryError("Owner profile selection is unavailable")
+    if settings.get("active_agent_profile_id") != ident:
+        code, _ = delivery._http(host["port"], key, "POST", f"/agent-profiles/{ident}/activate")
+        if code != 200:
+            raise delivery.DeliveryError("Owner profile selection is uncertain; inspect it before retry")
+        code, settings = delivery._http(host["port"], key, "GET", "/settings")
+        if code != 200 or not isinstance(settings, dict) or settings.get("active_agent_profile_id") != ident:
+            raise delivery.DeliveryError("Owner profile selection could not be verified")
+
+
+def attach(install: Path, directory: Path, host_issue: int | None) -> dict[str, Any]:
     """Create or find the same control conversation without another model request."""
-    host = delivery._state(directory)
-    if host.get("issue") != host_issue or not isinstance(host.get("worktree"), str):
-        raise delivery.DeliveryError("Owner control requires the recorded host Issue")
+    host = delivery._state(directory) if host_issue is not None else service._read(directory)
+    if (not isinstance(host, dict) or not isinstance(host.get("worktree"), str)
+            or (host_issue is not None and host.get("issue") != host_issue)
+            or (host_issue is None and host.get("kind") != "openhands_owner_service.v1")):
+        raise delivery.DeliveryError("Owner control requires a recorded host service")
     workspace = str(Path(host["worktree"]).resolve(strict=True))
     key = delivery._server_key(directory, host)
     entry = (install / "bin/openhands").resolve(strict=True)

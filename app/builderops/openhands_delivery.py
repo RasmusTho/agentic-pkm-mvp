@@ -314,7 +314,7 @@ def _conversation(directory: Path, state: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _task_prompt(plan: dict[str, Any], *, auto_finish: bool = False) -> str:
+def _task_prompt(plan: dict[str, Any], *, auto_finish: bool = False, test_python: Path | None = None) -> str:
     issue = plan["issue"]
     instructions = "\n\n".join(
         f"### {path}\n{entry['content']}" for path, entry in plan["instructions"].items()
@@ -343,6 +343,9 @@ def _task_prompt(plan: dict[str, Any], *, auto_finish: bool = False) -> str:
         "commit, push, publish, merge, access credentials, or make external effects. "
         "The delivery host handles publication and independent verification.\n\n"
         f"{handoff}"
+        + (f"Use the prepared test interpreter {test_python} for the task's tests. "
+           "Do not install packages or access the network.\n\n" if test_python else "")
+        +
         f"## Full issue contract\n{issue['body']}\n\n"
         f"## Repository builder instructions\n{instructions}"
     )
@@ -350,7 +353,8 @@ def _task_prompt(plan: dict[str, Any], *, auto_finish: bool = False) -> str:
 
 def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch: str,
           worktree: Path, python: Path, port: int, settings_file: Path,
-          node: Path, acp: Path, *, auto_finish: bool = False) -> dict[str, Any]:
+          node: Path, acp: Path, *, auto_finish: bool = False, test_python: Path | None = None,
+          test_environment_lock_sha256: str | None = None, expected_base: str | None = None) -> dict[str, Any]:
     if issue != authorized_issue or issue <= 0:
         raise DeliveryError("Explicit authorization must name the selected issue")
     if not 1 <= port <= 65535:
@@ -361,6 +365,8 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
         if service._read(directory) is not None:
             raise DeliveryError("A delivery is already recorded; inspect it before retry")
         plan = preview(root, issue, branch, worktree)
+        if expected_base is not None and plan["base_commit"] != expected_base:
+            raise DeliveryError("Default branch changed after environment preflight; retry admission")
         if any(plan["destination_collisions"].values()) or plan["matching_prs"]:
             raise DeliveryError("Existing branch, worktree or PR requires reconciliation")
         root = root.resolve(strict=True)
@@ -383,7 +389,7 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
         finally:
             Path(temp_name).unlink(missing_ok=True)
         session_id = str(uuid.uuid4())
-        prompt = _task_prompt(plan, auto_finish=auto_finish)
+        prompt = _task_prompt(plan, auto_finish=auto_finish, test_python=test_python)
         state: dict[str, Any] = {
             "version": 1, "kind": "openhands_delivery_run.v1", "issue": issue,
             "repository": REPOSITORY, "root": str(root), "branch": branch,
@@ -393,6 +399,10 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
             "conversation_id": session_id, "port": port,
             "auto_finish": auto_finish,
         }
+        if test_python is not None:
+            if not test_environment_lock_sha256 or not re.fullmatch(r"[0-9a-f]{64}", test_environment_lock_sha256):
+                raise DeliveryError("Prepared test environment lock identity is required")
+            state["test_environment_lock_sha256"] = test_environment_lock_sha256
         git = ["git", "--no-replace-objects", "-C", str(root)]
         _save(directory, state, "creating_worktree")
         _effect([*git, "worktree", "add", "-b", branch, str(worktree), plan["base_commit"]])

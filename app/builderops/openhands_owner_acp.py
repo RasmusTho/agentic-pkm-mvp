@@ -115,6 +115,7 @@ def run_command(entry: Path, message: str) -> str:
         return f"Issue #{issue}: outcome is uncertain. Use `status #{issue}` before retrying."
     if result.returncode:
         diagnostics = {
+            "No valid delivery state in this directory": "No run is recorded for this Issue.",
             "Issue does not have exactly agent:ready as its agent state":
                 "The Issue is not ready for factory pickup.",
             "Issue is not open": "The Issue is not open.",

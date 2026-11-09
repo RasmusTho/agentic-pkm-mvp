@@ -234,6 +234,14 @@ def test_start_claims_then_starts_workspace_bound_conversation_and_prevents_repl
     assert delivery.resume(kwargs["directory"])["state"]["phase"] == "active"
 
 
+def test_start_refuses_base_change_after_environment_preflight(orchestration):
+    kwargs, events, _ = orchestration
+    with pytest.raises(delivery.DeliveryError, match="Default branch changed"):
+        delivery.start(**kwargs, expected_base="0" * 40)
+    assert events == []
+    assert delivery.service._read(kwargs["directory"]) is None
+
+
 def test_uncertain_create_is_recorded_and_never_relaunched(orchestration):
     kwargs, events, http = orchestration
     http["fail_create"] = True

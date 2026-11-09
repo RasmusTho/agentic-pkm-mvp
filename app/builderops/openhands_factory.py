@@ -292,6 +292,7 @@ def _python_framework_traversal_roots(python_root: Path, *, platform: str | None
 
 def _settings(
     install: Path, state: Path, node: Path, codex: Path, repo: Path, worktree: Path,
+    test_python: Path | None = None,
 ) -> dict[str, Any]:
     python = install / "venv/bin/python"
     acp = install / "acp/node_modules/.bin/codex-acp"
@@ -321,6 +322,8 @@ def _settings(
         install / "venv", install / "acp", python_root,
         node.resolve().parent, codex.resolve().parent,
     ]
+    if test_python is not None:
+        read_paths.append(test_python.parent.parent)
     if (install / "canvas").is_dir():
         read_paths.append(install / "canvas")
     roots = list(dict.fromkeys([*(str(path.resolve()) for path in read_paths),
@@ -371,8 +374,7 @@ def _ui_route(install: Path, state_dir: Path, result: dict[str, Any]) -> dict[st
 
 
 def _ui(install: Path, directory: Path, issue: int, action: str, port: int, open_browser: bool) -> dict[str, Any]:
-    launcher = install / "bin/openhands_canvas.py"
-    if not launcher.is_file():
+    if not (install / "bin/openhands_canvas.py").is_file():
         raise delivery.DeliveryError(
             "Canvas launcher is missing; install the independently reviewed #6602 candidate "
             "as <install-root>/bin/openhands_canvas.py (see owner instructions)"
@@ -380,6 +382,17 @@ def _ui(install: Path, directory: Path, issue: int, action: str, port: int, open
     state = delivery._state(directory)
     if state.get("issue") != issue:
         raise delivery.DeliveryError("Recorded delivery does not match the selected issue")
+    return _canvas(install, directory, state, action, port, open_browser)
+
+
+def _canvas(install: Path, directory: Path, state: dict[str, Any], action: str,
+            port: int, open_browser: bool) -> dict[str, Any]:
+    launcher = install / "bin/openhands_canvas.py"
+    if not launcher.is_file():
+        raise delivery.DeliveryError(
+            "Canvas launcher is missing; install the independently reviewed #6602 candidate "
+            "as <install-root>/bin/openhands_canvas.py (see owner instructions)"
+        )
     command = [str(install / "venv/bin/python"), str(launcher), action,
                "--state-dir", str(directory / "canvas")]
     if action == "start":
@@ -423,6 +436,70 @@ def _ui(install: Path, directory: Path, issue: int, action: str, port: int, open
             raise delivery.DeliveryError("Canvas status is uncertain; inspect its local state")
         ui = {"status": "running", "url": match.group(1)}
     return {"state": state, "ui": ui}
+
+
+def _owner_service(install: Path, state_root: Path, repo: Path, action: str,
+                   port: int, ui_port: int, open_browser: bool) -> dict[str, Any]:
+    """Provide a model-free control conversation independent of worker sessions."""
+    from app.builderops import openhands_owner
+
+    directory = state_root / "owner"
+    with service._locked(directory):
+        state = service._read(directory)
+        if state is None:
+            if action != "start":
+                return {"status": "stopped"}
+            workspace = directory / "workspace"
+            workspace.mkdir(mode=0o700, exist_ok=True)
+            settings = _settings(install, directory, _executable("node"), _executable("codex"), repo, workspace)
+            settings_path = directory / "settings.json"
+            fd = os.open(settings_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as stream:
+                json.dump(settings, stream, sort_keys=True)
+            state = {"version": 1, "kind": "openhands_owner_service.v1", "worktree": str(workspace), "port": port}
+            service._write(directory, state)
+        if (state.get("kind") != "openhands_owner_service.v1"
+                or state.get("worktree") != str(directory / "workspace") or type(state.get("port")) is not int):
+            raise delivery.DeliveryError("Owner service state is invalid")
+        observed = service.status(directory / "server")
+        if action == "stop":
+            _canvas(install, directory, state, "stop", ui_port, False)
+            if observed["status"] == "running":
+                service.stop(directory / "server")
+            elif observed["status"] != "stopped":
+                raise delivery.DeliveryError("Owner service state is uncertain")
+            return {"status": "stopped"}
+        if action == "status":
+            return {"status": observed["status"], "ui": _canvas(install, directory, state, "status", ui_port, False)["ui"]}
+        if state["port"] != port:
+            raise delivery.DeliveryError("Owner service is bound to another port")
+        if observed["status"] == "stopped":
+            service.start(directory / "server", install / "venv/bin/python", Path(state["worktree"]),
+                          port, directory / "settings.json", control_only=True)
+        elif observed["status"] != "running":
+            raise delivery.DeliveryError("Owner service state is uncertain")
+        else:
+            server = observed.get("state")
+            if (not isinstance(server, dict) or server.get("control_only") is not True
+                    or server.get("workspace") != state["worktree"] or server.get("port") != port
+                    or server.get("python") != str(install / "venv/bin/python")
+                    or server.get("settings_file") != str(directory / "settings.json")):
+                raise delivery.DeliveryError("Running owner service does not match the recorded control-only backend")
+        deadline = time.monotonic() + 90
+        while True:
+            try:
+                key = delivery._server_key(directory, state)
+                delivery._http(port, key, "GET", "/conversations")
+                break
+            except delivery.DeliveryError:
+                if time.monotonic() >= deadline:
+                    raise delivery.DeliveryError("Owner service did not become ready")
+                time.sleep(0.5)
+        openhands_owner.ensure_profile(install, directory, state)
+        control = openhands_owner.attach(install, directory, None)
+        canvas = _canvas(install, directory, state, "start", ui_port, open_browser)["ui"]
+        control["url"] = f"{canvas['url']}/conversations/{control['conversation_id']}?backend=default-local"
+        return control
 
 
 def _private_read(path: Path) -> bytes:
@@ -509,6 +586,9 @@ def _restart(install: Path, directory: Path, issue: int, repo: Path, worktree_ro
         state = delivery._state(directory)
         shutdown = state.get("factory_shutdown")
         workspace = state.get("worktree")
+        publication_state = state.get("full_publication")
+        if isinstance(publication_state, dict) and publication_state.get("state") == "draft_published":
+            raise delivery.DeliveryError("Published worker sessions cannot be restarted; use owner control")
         if (state.get("issue") != issue or state.get("root") != str(repo)
                 or not isinstance(workspace, str) or Path(workspace).parent != worktree_root
                 or not isinstance(shutdown, dict) or shutdown.get("state") not in {"stopped", "starting"}
@@ -732,6 +812,19 @@ def _verify(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
             raise delivery.DeliveryError("Recorded backend settings are unavailable")
         _private_read(settings_path)
         settings = service._settings(settings_path)
+        test_python = install / "venv/bin/python"
+        if "test_environment_lock_sha256" in state:
+            from app.builderops import openhands_test_environment as test_environment
+
+            lock = test_environment.LOCK.read_bytes()
+            if hashlib.sha256(lock).hexdigest() != state["test_environment_lock_sha256"]:
+                raise delivery.DeliveryError("Recorded test environment lock changed")
+            test_python = test_environment.environment(install, lock)
+            if str(test_python.parent.parent.resolve()) not in settings["sandbox_read_roots"]:
+                raise delivery.DeliveryError("Recorded test environment is outside the worker sandbox")
+            test_environment.check_requirements(lock, {
+                name: (worktree / name).read_text() for name in ("requirements.txt", "dev-requirements.txt")
+            })
         raw_targets = []
         unresolved = []
         for index, item in enumerate(items, 1):
@@ -751,7 +844,7 @@ def _verify(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
                 unresolved.append({"target": raw, "reason": "Not a concrete local pytest target"})
                 continue
             log = attempt_dir / f"target-{index:03d}.log"
-            command = _verification_command(settings, worktree, temp_dir, install / "venv/bin/python", target)
+            command = _verification_command(settings, worktree, temp_dir, test_python, target)
             exit_code = _run_verify_command(command, worktree, temp_dir, log)
             log_bytes = log.read_bytes()
             try:
@@ -759,7 +852,7 @@ def _verify(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
             except UnicodeDecodeError:
                 source = None
             entry = {"target": target, "head_sha": head, "exit_code": exit_code,
-                     "command": [str(install / "venv/bin/python"), "-m", "pytest", "-q", "-v",
+                     "command": [str(test_python), "-m", "pytest", "-q", "-v",
                                  "--basetemp", str(temp_dir / "pytest"), target],
                      "runner": "codex sandbox: builder_factory",
                      "evidence": {"path": str(log), "sha256": hashlib.sha256(log_bytes).hexdigest()}}
@@ -1061,8 +1154,9 @@ def _check_serial_admission(state_root: Path, selected_issue: int) -> None:
                      and publication_state.get("state") == "draft_published"
                      and type(publication_state.get("pr_number")) is int
                      and publication_state["pr_number"] > 0)
-        inactive = (observed.get("service_status") == "running"
-                    and observed.get("conversation_status") == "finished")
+        # A finished conversation on a live server can accept a new direct turn.
+        # It must be stopped before another issue is admitted.
+        inactive = False
         if observed.get("service_status") == "stopped":
             try:
                 server = service.status(directory / "server").get("state")
@@ -1081,10 +1175,24 @@ def _check_serial_admission(state_root: Path, selected_issue: int) -> None:
             raise delivery.DeliveryError("Another delivery is active or unresolved; inspect it before starting")
 
 
+def _test_environment_for_base(install: Path, repo: Path, base: str) -> tuple[Path, str]:
+    from app.builderops import openhands_test_environment as test_environment
+
+    lock = test_environment.LOCK.read_bytes()
+    test_python = test_environment.environment(install, lock)
+    manifests = {
+        name: delivery._run(["git", "--no-replace-objects", "-C", str(repo),
+                             "show", f"{base}:{name}"]).stdout
+        for name in ("requirements.txt", "dev-requirements.txt")
+    }
+    test_environment.check_requirements(lock, manifests)
+    return test_python, hashlib.sha256(lock).hexdigest()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("start", "status", "cancel", "resume", "stop", "ui", "control", "verify", "review", "finish", "watch"))
-    parser.add_argument("--issue", type=int, required=True, help="Issue explicitly authorized for start")
+    parser.add_argument("command", choices=("start", "status", "cancel", "resume", "stop", "ui", "control", "owner", "verify", "review", "finish", "watch"))
+    parser.add_argument("--issue", type=int, help="Issue explicitly authorized for start")
     parser.add_argument("--install-root", type=Path, required=True)
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--worktree-root", type=Path, required=True)
@@ -1100,12 +1208,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workflow-review-receipt", type=Path)
     args = parser.parse_args(argv)
     try:
-        if args.issue <= 0:
+        if args.command != "owner" and (args.issue is None or args.issue <= 0):
             raise delivery.DeliveryError("Issue must be a positive integer")
         install = _absolute_directory(args.install_root, "Installation root")
         state_root = _absolute_directory(args.state_root, "State root")
         worktree_root = _absolute_directory(args.worktree_root, "Worktree root")
         repo = _absolute_directory(args.repo_root, "Repository root")
+        if args.command == "owner":
+            result = _owner_service(install, state_root, repo, args.ui_action, args.port, args.ui_port, args.open)
+            print(json.dumps(result, indent=2))
+            return 0
         directory = state_root / f"issue-{args.issue}"
         from app.builderops import openhands_watcher as watcher
 
@@ -1119,10 +1231,11 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps(result, indent=2))
                     return 0
                 _check_serial_admission(state_root, args.issue)
-                _refresh_base(repo)
+                base = _refresh_base(repo)
+                test_python, test_lock_sha256 = _test_environment_for_base(install, repo, base)
                 node, codex = _executable("node"), _executable("codex")
                 worktree = worktree_root / f"issue-{args.issue}-openhands"
-                settings = _settings(install, directory, node, codex, repo, worktree)
+                settings = _settings(install, directory, node, codex, repo, worktree, test_python)
                 fd, filename = tempfile.mkstemp(prefix=".openhands-settings-", dir=state_root)
                 try:
                     with os.fdopen(fd, "w") as stream:
@@ -1131,7 +1244,8 @@ def main(argv: list[str] | None = None) -> int:
                         directory, repo, args.issue, args.issue, f"codex/issue-{args.issue}-openhands",
                         worktree, install / "venv/bin/python",
                         args.port, Path(filename), node, install / "acp/node_modules/.bin/codex-acp",
-                        auto_finish=True,
+                        auto_finish=True, test_python=test_python,
+                        test_environment_lock_sha256=test_lock_sha256, expected_base=base,
                     )
                     watcher.launch(install, directory, args.issue, repo, worktree_root)
                     result["watcher"] = {"status": "pending", "reason": "Watcher launch requested"}

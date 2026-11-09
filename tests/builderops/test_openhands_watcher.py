@@ -111,6 +111,7 @@ def authorized_run(tmp_path, monkeypatch):
     monkeypatch.setattr(delivery, "_finished_run", lambda *args: state)
     monkeypatch.setattr(delivery, "_full_claim_readback", lambda *args: calls.append(("claim-readback",)))
     monkeypatch.setattr(factory, "_candidate_head", lambda *args: runner.head)
+    monkeypatch.setattr(factory, "_stop", lambda *args: calls.append(("worker-stopped",)))
 
     class Keeper:
         def __init__(self, state, watch_dir):

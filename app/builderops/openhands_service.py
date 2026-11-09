@@ -191,7 +191,8 @@ def _session_key(directory: Path) -> str:
 
 
 def start(
-    directory: Path, python: Path, workspace: Path, port: int, settings_file: Path
+    directory: Path, python: Path, workspace: Path, port: int, settings_file: Path,
+    *, control_only: bool = False,
 ) -> dict[str, Any]:
     python = python.absolute()
     workspace = workspace.resolve(strict=True)
@@ -210,7 +211,7 @@ def start(
         data: dict[str, Any] = {
             "version": 1, "state": "starting", "marker": marker,
             "python": str(python), "workspace": str(workspace), "port": port,
-            "settings_file": str(settings_file.absolute()),
+            "settings_file": str(settings_file.absolute()), "control_only": control_only,
         }
         # A crash during launch remains ambiguous and blocks automatic replay.
         _write(directory, data)
@@ -240,6 +241,8 @@ def start(
             "OH_SESSION_API_KEYS_0": session_key,
             "OH_TELEMETRY_CONSENT": "denied",
         })
+        if control_only:
+            env["OPENHANDS_FACTORY_CONTROL_ONLY"] = "1"
         if settings.get("resume_thread_id"):
             env["OPENHANDS_FACTORY_RESUME_THREAD"] = settings["resume_thread_id"]
         command = [
@@ -290,7 +293,7 @@ def stop(directory: Path, timeout: float = 5.0) -> dict[str, Any]:
             if _status(data) != "running":
                 raise ServiceError("Process identity changed; no signal sent")
             if pidfd is not None:
-                signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+                getattr(signal, "pidfd_send_signal")(pidfd, signal.SIGTERM)
             else:
                 os.kill(pid, signal.SIGTERM)
         except OSError as exc:

@@ -19,7 +19,8 @@ ladder, or carrier command as workflow logic.
 
 When the owner explicitly selects the experimental OpenHands factory, use
 `docs/development/DEV_WORKFLOW.md :: OpenHands factory owner trial` for its current entry and
-recovery path. Its existence does not make it the default or establish qualification.
+recovery path, including its independent owner service and prepared test environment. Its existence
+does not make it the default or establish qualification.
 
 Set `REPO` to the explicitly intended `owner/repo` before any GitHub lifecycle command. A
 checkout remote is only a convenience for deriving that value; it is not authority to act on the

@@ -69,10 +69,10 @@ def _recorded_run(install, state_root, worktrees, *, conversation="finished"):
 @pytest.mark.parametrize("watch_status,phase,conversation,allowed", [
     ("running", "watching", "running", False),
     ("pending", "ci_wait", "finished", False),
-    ("finished", "published", "finished", True),
+    ("finished", "published", "finished", False),
     ("finished", "published", "running", False),
     ("finished", "published", None, False),
-    ("not_started", None, "finished", True),
+    ("not_started", None, "finished", False),
     ("not_started", None, "running", False),
 ])
 def test_serial_admission_requires_prior_delivery_to_be_terminal(
@@ -121,10 +121,20 @@ def test_serial_admission_accepts_a_verified_stopped_legacy_session(tmp_path, mo
     assert verified == [(state, "finished")]
 
 
+def test_published_worker_cannot_restart(tmp_path):
+    directory = tmp_path / "issue-41"
+    directory.mkdir(mode=0o700)
+    service._write(directory, {"version": 1, "kind": "openhands_delivery_run.v1",
+                               "full_publication": {"state": "draft_published"}})
+    with pytest.raises(delivery.DeliveryError, match="Published worker sessions cannot be restarted"):
+        factory._restart(tmp_path, directory, 41, tmp_path, tmp_path)
+
+
 def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys):
     from app.builderops import openhands_watcher as watcher
 
     install, state, worktrees = _installation(tmp_path)
+    monkeypatch.setattr(factory, "_test_environment_for_base", lambda *args: (install / "venv/bin/python", "a" * 64))
     (install / "canvas").mkdir()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(factory, "_base_config", lambda repo: None)
@@ -140,7 +150,7 @@ def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monke
     monkeypatch.setattr(factory, "_python_framework_traversal_roots",
                         lambda root: traversal_roots(root, platform="darwin"))
     refreshed = []
-    monkeypatch.setattr(factory, "_refresh_base", lambda repo: refreshed.append(repo))
+    monkeypatch.setattr(factory, "_refresh_base", lambda repo: refreshed.append(repo) or "b" * 40)
     node = Path(__import__("sys").executable)
     monkeypatch.setattr(factory, "_executable", lambda name: node)
     monkeypatch.setattr(factory.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(
@@ -150,12 +160,13 @@ def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monke
     captured = {}
 
     def start(directory, repo, issue, authorized, branch, worktree, python, port, settings, node, acp,
-              *, auto_finish):
+              *, auto_finish, test_python, test_environment_lock_sha256, expected_base):
         assert refreshed == [repo]
         captured.update(directory=directory, repo=repo, issue=issue, authorized=authorized,
                         branch=branch, worktree=worktree, python=python, port=port,
                         settings=delivery._validate_executables(python, node, acp, settings),
-                        settings_path=settings, auto_finish=auto_finish)
+                        settings_path=settings, auto_finish=auto_finish, test_python=test_python,
+                        test_environment_lock_sha256=test_environment_lock_sha256, expected_base=expected_base)
         return {"state": {"port": port}, "conversation_status": "running"}
 
     monkeypatch.setattr(delivery, "start", start)
@@ -221,6 +232,7 @@ def test_homebrew_framework_traversal_roots_are_bounded_and_portable(tmp_path):
 
 def test_owner_rejects_wrong_codex_version_before_delivery(tmp_path, monkeypatch, capsys):
     install, state, worktrees = _installation(tmp_path)
+    monkeypatch.setattr(factory, "_test_environment_for_base", lambda *args: (install / "venv/bin/python", "a" * 64))
     monkeypatch.setattr(factory, "_refresh_base", lambda repo: None)
     monkeypatch.setattr(factory, "_executable", lambda name: Path(__import__("sys").executable))
     monkeypatch.setattr(factory.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(

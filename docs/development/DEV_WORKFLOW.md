@@ -36,29 +36,30 @@ worktree. It fails if the network is unavailable, the default branch is not `mai
 do not match, or updating the tracking ref would not be a fast-forward; it does not use the
 factory checkout's `HEAD` as the base.
 
+The installer also installs the Canvas launcher at the reviewed #6602 revision and checks its
+SHA-256; if that Git object is absent locally it retrieves the same pinned file from GitHub. An
+existing launcher with different contents is left in place and setup stops for inspection.
+
 The installer creates a private state directory and a short owner entry point bound to this factory
-checkout and the chosen roots. The current experimental Canvas route attaches a deterministic
-control conversation to an already running factory Issue backend and Canvas. Once that backend and
-Canvas are running, create or recover the conversation once with:
+checkout and the chosen roots. The experimental Canvas route uses a dedicated model-free owner
+service, independent of a worker Issue or its conversation. Start or restore it with:
 
 ```sh
-/absolute/install/root/bin/openhands control --issue 123
+/absolute/install/root/bin/openhands owner --ui-action start --port 8765 --ui-port 3001
 ```
 
 Open the returned Canvas URL. In **Builder control**, enter `start #456` to authorize that one
 Issue and its draft PR, or `status #456`, `cancel #456`, `resume #456`, or `stop #456` for the
 recorded run. This conversation is a command bridge and makes no model request; the task itself
 still uses the guarded native Codex session. No backlog scanner is enabled. The control session
-currently depends on its host Issue backend and Canvas staying available; it is a trial route, not
-an adopted default. A new start or resume is refused until earlier recorded deliveries reach a known
-published terminal state and their conversations are inactive; inspect an active or uncertain earlier
-run first. Direct turns submitted to older worker conversations in Canvas bypass this admission check,
-so the serial behavior has not been fully established. If the control is unavailable,
-restore that recorded host session with `start --issue
-123`, start its Canvas with `ui --issue 123 --ui-action start`, then run `control --issue 123`
-again. Stop the host with `stop --issue 123` only after its conversation is finished or cancelled;
-this makes the attached control unavailable. Roll back to the previous operation by continuing to
-use the existing CLI; retain the recorded sessions and draft PRs.
+is a trial route, not an adopted default. Use `owner --ui-action status` and
+`owner --ui-action stop` for that service; restarting it uses its recorded backend port and retained
+conversation. The owner service refuses native Codex launches; tasks start on their own worker backend.
+A new start or resume is refused while an earlier worker backend is running or its delivery is
+unresolved. After publication the watcher stops the finished worker backend; published worker sessions
+cannot be restarted. Existing live older workers must be inspected and stopped before another admission.
+These mechanisms do not yet establish delegated-process cancellation. Roll back to the existing CLI
+if needed; retain recorded sessions and draft PRs.
 
 The CLI remains available directly. Replace the example paths and explicitly authorized Issue:
 
@@ -71,8 +72,12 @@ derives its pinned ACP and isolated service configuration; model selection stays
 `gpt-6.1-terra` with subscription authentication, with no provider or model fallback. `cancel`
 interrupts the conversation; it does not establish that delegated processes have stopped. For a
 new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Test
-targets currently use the factory Python environment; automatic provisioning of task dependencies
-is not implemented, so missing repository packages can still require intervention. The
+targets use the separately prepared, hash-locked test environment on macOS arm64 with Python 3.12.
+Setup downloads only hash-verified binary wheels, then installs and checks them without network access.
+Before admission the factory checks the default branch's declared requirements against that lock;
+uncovered dependencies stop the task before claim. An interrupted preparation is retained for inspection,
+not silently replaced. The lock is specific to this host platform and does not resolve new dependencies.
+Older recorded runs retain their original test interpreter. The
 worker is instructed to leave a private ignored `.codex-tmp/openhands-finish.json` with its proposed
 title, body fields, risk classification and exact changed paths. After observing the finished
 conversation and children, the watcher checks the claim, branch/worktree gate, handoff and actual

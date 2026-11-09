@@ -202,6 +202,9 @@ class GuardedProxy:
 
 
 def main() -> int:
+    if os.environ.get("OPENHANDS_FACTORY_CONTROL_ONLY") == "1":
+        print("Owner control cannot launch a worker; authorize an Issue in Builder control", file=sys.stderr)
+        return 2
     if sys.argv[1:] != ["app-server"]:
         print("factory guard requires app-server", file=sys.stderr)
         return 2
