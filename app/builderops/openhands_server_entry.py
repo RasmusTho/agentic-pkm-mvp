@@ -71,8 +71,19 @@ class DeliveryInputFence:
                     return
                 await self._refuse_http(send)
                 return
-            if method in {"GET", "HEAD", "OPTIONS"}:
+            if method == "OPTIONS":
                 await self.app(scope, receive, send)
+                return
+            if method in {"GET", "HEAD"}:
+                # OpenHands has GET endpoints which execute Git or write
+                # archives. Only the delivery's conversation readbacks are
+                # needed on a worker backend.
+                conversation = r"/api/conversations/[0-9a-fA-F-]{32,36}"
+                if (path == "/api/conversations" or re.fullmatch(
+                        conversation + r"(?:/events(?:/[A-Za-z0-9_-]{1,128})?)?", path)):
+                    await self.app(scope, receive, send)
+                    return
+                await self._refuse_http(send)
                 return
             if method == "POST" and re.fullmatch(r"/api/conversations/[0-9a-fA-F-]{32,36}/interrupt", path):
                 try:

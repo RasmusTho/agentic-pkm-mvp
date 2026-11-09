@@ -28,14 +28,17 @@ def test_http_blocks_direct_run_and_events_after_interrupt(tmp_path: Path):
         await fence({"type": "http", "method": "POST", "path": base + "/run"}, receive, send)
         await fence({"type": "http", "method": "POST", "path": base + "/goal"}, receive, send)
         await fence({"type": "http", "method": "POST", "path": "/api/bash/execute_bash_command"}, receive, send)
+        await fence({"type": "http", "method": "GET", "path": "/api/file/archive"}, receive, send)
         service._write(tmp_path, {**state, "phase": "interrupted"})
         for path in (base + "/run", base + "/events"):
             await fence({"type": "http", "method": "POST", "path": path}, receive, send)
         interrupt_path = "/api/conversations/11111111-1111-4111-8111-111111111111/interrupt"
         await fence({"type": "http", "method": "POST", "path": interrupt_path}, receive, send)
         await fence({"type": "http", "method": "POST", "path": "/api/app-backends/name/interrupt"}, receive, send)
-        assert handled == [base + "/run", interrupt_path]
-        assert [r["status"] for r in responses if r["type"] == "http.response.start"] == [409] * 5
+        await fence({"type": "http", "method": "GET", "path": base + "/events/search"}, receive, send)
+        await fence({"type": "http", "method": "GET", "path": "/api/file/archive"}, receive, send)
+        assert handled == [base + "/run", interrupt_path, base + "/events/search"]
+        assert [r["status"] for r in responses if r["type"] == "http.response.start"] == [409] * 7
     asyncio.run(run())
 
 
