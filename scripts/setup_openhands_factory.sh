@@ -37,7 +37,8 @@ args = ["env", f"PYTHONPATH={source}", str(install / "venv/bin/python"),
         "-m", "app.builderops.openhands_factory", "--install-root", str(install),
         "--state-root", str(install / "runs"), "--worktree-root", str(worktrees)]
 entry = install / "bin/openhands"
-entry.write_text("#!/bin/sh\nexec " + " ".join(map(shlex.quote, args)) + ' "$@"\n')
+entry.write_text("#!/bin/sh\ncd " + shlex.quote(str(source)) + " || exit 1\nexec "
+                 + " ".join(map(shlex.quote, args)) + ' "$@"\n')
 entry.chmod(0o755)
 PY
 printf 'Installed OpenHands components in %s\n' "$factory_dir"
