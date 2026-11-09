@@ -208,6 +208,28 @@ def test_ci_wait_resumes_without_repeating_publication(authorized_run, monkeypat
     assert runner.commits == 0
 
 
+def test_shutdown_failure_after_publication_resumes_ci_without_republishing(authorized_run, monkeypatch):
+    directory, worktree, state, _, runner, _ = authorized_run
+    calls = []
+    monkeypatch.setattr(factory, "_finish", lambda *args, **kwargs: calls.append("published") or {
+        "pr_number": 1234, "commit_sha": "b" * 40, "checks": {},
+    })
+
+    def stop(*args):
+        calls.append("stop")
+        if calls.count("stop") == 1:
+            raise delivery.DeliveryError("Interrupted shutdown")
+
+    monkeypatch.setattr(factory, "_stop", stop)
+    args = (Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
+    watcher.run(*args)
+    assert watcher.status(directory)["phase"] == "ci_wait"
+    assert watcher.status(directory)["status"] == "pending"
+    watcher.run(*args)
+    assert watcher.status(directory)["status"] == "finished"
+    assert calls == ["published", "stop", "stop"] and runner.commits == 1
+
+
 def test_watcher_commits_scoped_changes_and_runs_finish_once(authorized_run, monkeypatch):
     directory, worktree, state, handoff, runner, calls = authorized_run
     finished = []

@@ -15,6 +15,8 @@ command -v npm >/dev/null
 command -v codex >/dev/null
 mkdir -p "$factory_dir/acp" "$factory_dir/canvas" "$factory_dir/bin" "$worktree_dir"
 mkdir -m 700 -p "$factory_dir/runs"
+mkdir -m 700 -p "$factory_dir/setup-home"
+clean_env=(env -i "PATH=$PATH" "HOME=$factory_dir/setup-home" "TMPDIR=$factory_dir/setup-home" LANG=C)
 
 # The Canvas launcher belongs to the separately reviewed #6602 candidate.
 # Pin its exact contents until that candidate is integrated into this checkout.
@@ -46,16 +48,16 @@ fi
 }
 
 if [[ ! -x "$factory_dir/venv/bin/python" ]]; then
-  uv venv --python 3.12 "$factory_dir/venv"
+  (cd "$factory_dir" && "${clean_env[@]}" uv venv --no-config --python 3.12 "$factory_dir/venv")
 fi
-uv pip install --python "$factory_dir/venv/bin/python" \
-  'openhands-agent-server==1.60.1' 'openhands-sdk==1.60.1' \
-  'openhands-tools==1.60.1' 'agent-client-protocol==0.12.1' \
-  'psycopg[binary]==3.2.10'
-npm install --prefix "$factory_dir/acp" --save-exact --ignore-scripts \
-  '@agentclientprotocol/codex-acp@2.2.2'
-npm install --prefix "$factory_dir/canvas" --save-exact --ignore-scripts \
-  '@openhands/agent-canvas@1.37.0'
+"${clean_env[@]}" /usr/bin/curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+  'https://files.pythonhosted.org/packages/b3/0d/bf0567477f7281d9a3926c582bfef21bff7498fc0ffd3e9de21811896a0b/func_timeout-4.3.5.tar.gz' \
+  > "$factory_dir/setup-home/func_timeout-4.3.5.tar.gz"
+"${clean_env[@]}" "$factory_dir/venv/bin/python" -I -S "$source_dir/scripts/openhands_build_func_timeout.py" "$factory_dir"
+(cd "$factory_dir" && "${clean_env[@]}" npm install --prefix "$factory_dir/acp" --save-exact --ignore-scripts \
+  --no-audit --no-fund --registry=https://registry.npmjs.org/ '@agentclientprotocol/codex-acp@2.2.2')
+(cd "$factory_dir" && "${clean_env[@]}" npm install --prefix "$factory_dir/canvas" --save-exact --ignore-scripts \
+  --no-audit --no-fund --registry=https://registry.npmjs.org/ '@openhands/agent-canvas@1.37.0')
 PYTHONPATH="$source_dir" "$factory_dir/venv/bin/python" -m app.builderops.openhands_test_environment "$factory_dir"
 "$factory_dir/venv/bin/python" - "$factory_dir" "$source_dir" "$worktree_dir" <<'PY'
 from pathlib import Path

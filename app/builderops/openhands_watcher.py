@@ -531,6 +531,9 @@ def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: P
             service._write(watch_dir, watcher)
             guarded = _GuardedExecutor(keeper)
             if watcher.get("phase") == "ci_wait":
+                # Reconcile the recorded published candidate before CI, even
+                # if a prior process stopped between recording and shutdown.
+                factory._stop(install, directory, issue)
                 ci = _wait_for_ci(state, watcher, watch_dir, keeper, delivery.DraftOnlyExecutor(guarded))
                 watcher.update(status="finished" if ci["status"] == "passed" else ci["status"],
                                phase="published" if ci["status"] == "passed" else "ci_wait",
@@ -599,12 +602,12 @@ def run(install: Path, directory: Path, issue: int, repo: Path, worktree_root: P
                         continue
                     raise
                 keeper.check()
-                # A finished worker conversation can otherwise accept a direct new
-                # turn outside admission. Owner control runs on its own backend.
-                factory._stop(install, directory, issue)
                 watcher.update(status="running", phase="ci_wait", pr_number=result["pr_number"],
                                head=result["commit_sha"], checks=result["checks"])
                 service._write(watch_dir, watcher)
+                # Record the publication before stopping the worker, so a crash
+                # during shutdown can resume CI without creating another PR.
+                factory._stop(install, directory, issue)
                 ci = _wait_for_ci(state, watcher, watch_dir, keeper, delivery.DraftOnlyExecutor(guarded))
                 watcher.update(status="finished" if ci["status"] == "passed" else ci["status"],
                                phase="published" if ci["status"] == "passed" else "ci_wait",

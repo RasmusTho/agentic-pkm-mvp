@@ -244,6 +244,20 @@ def test_owner_rejects_wrong_codex_version_before_delivery(tmp_path, monkeypatch
     assert service._read(state / "issue-123") is None
 
 
+def test_occupied_worker_port_is_refused_before_claim(tmp_path, monkeypatch, capsys):
+    import socket
+
+    install, state, worktrees = _installation(tmp_path)
+    monkeypatch.setattr(factory, "_refresh_base", lambda *args: pytest.fail("refreshed after port refusal"))
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        port = server.getsockname()[1]
+        assert factory.main(["start", "--issue", "123", "--port", str(port), "--install-root", str(install),
+                             "--state-root", str(state), "--worktree-root", str(worktrees)]) == 1
+    assert "Worker port is unavailable" in capsys.readouterr().err
+    assert service._read(state / "issue-123") is None
+
+
 @pytest.mark.parametrize("platform", ["darwin", "linux"])
 def test_python_library_discovery_limits_access_to_linked_sqlite_and_ssl_dirs(tmp_path, monkeypatch, platform):
     python_root = tmp_path / "python"

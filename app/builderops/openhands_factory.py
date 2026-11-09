@@ -11,6 +11,7 @@ import re
 import selectors
 import signal
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -825,6 +826,7 @@ def _verify(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
             test_environment.check_requirements(lock, {
                 name: (worktree / name).read_text() for name in ("requirements.txt", "dev-requirements.txt")
             })
+            test_environment.check_project(lock, (worktree / "pyproject.toml").read_text())
         raw_targets = []
         unresolved = []
         for index, item in enumerate(items, 1):
@@ -1183,10 +1185,21 @@ def _test_environment_for_base(install: Path, repo: Path, base: str) -> tuple[Pa
     manifests = {
         name: delivery._run(["git", "--no-replace-objects", "-C", str(repo),
                              "show", f"{base}:{name}"]).stdout
-        for name in ("requirements.txt", "dev-requirements.txt")
+        for name in ("requirements.txt", "dev-requirements.txt", "pyproject.toml")
     }
+    test_environment.check_project(lock, manifests.pop("pyproject.toml"))
     test_environment.check_requirements(lock, manifests)
     return test_python, hashlib.sha256(lock).hexdigest()
+
+
+def _check_worker_port(port: int) -> None:
+    if not 1 <= port <= 65535:
+        raise delivery.DeliveryError("Worker port must be 1–65535")
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", port))
+    except OSError as exc:
+        raise delivery.DeliveryError("Worker port is unavailable; choose another before starting") from exc
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1197,7 +1210,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--worktree-root", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, default=FACTORY_ROOT)
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int)
     parser.add_argument("--ui-action", choices=("start", "status", "stop"), default="start")
     parser.add_argument("--ui-port", type=int, default=3001)
     parser.add_argument("--open", action="store_true", help="open Canvas when starting the UI")
@@ -1207,6 +1220,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--risk-surface", action="append", default=[], choices=sorted(publication.RISK_SURFACES))
     parser.add_argument("--workflow-review-receipt", type=Path)
     args = parser.parse_args(argv)
+    if args.port is None:
+        args.port = 8766 if args.command == "owner" else 8765
     try:
         if args.command != "owner" and (args.issue is None or args.issue <= 0):
             raise delivery.DeliveryError("Issue must be a positive integer")
@@ -1231,6 +1246,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps(result, indent=2))
                     return 0
                 _check_serial_admission(state_root, args.issue)
+                _check_worker_port(args.port)
                 base = _refresh_base(repo)
                 test_python, test_lock_sha256 = _test_environment_for_base(install, repo, base)
                 node, codex = _executable("node"), _executable("codex")

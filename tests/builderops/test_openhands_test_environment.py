@@ -34,6 +34,15 @@ def test_preflight_rejects_unprepared_extras():
         environment.check_requirements(LOCK, {"requirements.txt": "pytest[new-extra]==9.0.3"})
 
 
+def test_project_dependencies_are_checked_independently_from_requirements():
+    project = '[project]\nrequires-python = ">=3.12"\ndependencies = ["pytest==9.0.3"]\n'
+    environment.check_project(LOCK, project)
+    with pytest.raises(delivery.DeliveryError, match="does not cover pyproject.toml"):
+        environment.check_project(LOCK, project.replace("9.0.3", "8.0.0"))
+    with pytest.raises(delivery.DeliveryError, match="Python version"):
+        environment.check_project(LOCK, project.replace(">=3.12", ">=99"))
+
+
 def test_incomplete_preparation_cannot_be_used(tmp_path, monkeypatch):
     monkeypatch.setattr(environment, "_platform", lambda: None)
     path = tmp_path / "test-environments" / hashlib.sha256(LOCK).hexdigest()

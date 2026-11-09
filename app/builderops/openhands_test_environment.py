@@ -14,9 +14,11 @@ import platform
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from packaging.requirements import Requirement
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
 from app.builderops import openhands_delivery as delivery
@@ -58,6 +60,21 @@ def check_requirements(lock: bytes, manifests: dict[str, str]) -> None:
                                and pins.get("psycopg-binary") == version))
             if req.url or not supported_extra or version is None or not req.specifier.contains(version, prereleases=True):
                 raise delivery.DeliveryError(f"Prepared test environment does not cover {name}: {line}")
+
+
+def check_project(lock: bytes, content: str) -> None:
+    """Check the runtime dependencies declared independently in pyproject.toml."""
+    try:
+        project = tomllib.loads(content)["project"]
+        dependencies = project["dependencies"]
+        requires_python = project["requires-python"]
+        if (not isinstance(dependencies, list) or not all(isinstance(item, str) for item in dependencies)
+                or not isinstance(requires_python, str)
+                or not SpecifierSet(requires_python).contains(platform.python_version(), prereleases=True)):
+            raise ValueError("unsupported project metadata")
+    except (KeyError, TypeError, ValueError, InvalidSpecifier) as exc:
+        raise delivery.DeliveryError("Cannot validate project dependencies or Python version") from exc
+    check_requirements(lock, {"pyproject.toml": "\n".join(dependencies)})
 
 
 def _platform() -> None:

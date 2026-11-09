@@ -29,7 +29,7 @@ not Product/Runtime behavior or evidence of a shipped deterministic orchestrator
 The local OpenHands delivery entry point is an experimental, explicitly authorized single-Issue
 path. It does not establish factory qualification or authorize merge or release. Install the pinned
 components with `scripts/setup_openhands_factory.sh /absolute/install/root /absolute/worktree/root`;
-the second argument is optional and defaults to `worktrees` under the install root. Node and Codex must be
+the second argument is optional and defaults to `worktrees` under the install root. `uv`, Node and Codex must be
 on `PATH`, with Codex CLI 0.167.0 and the existing ChatGPT subscription login. Start fetches
 `origin/main` and verifies it against the remote's current default-branch SHA before preparing a
 worktree. It fails if the network is unavailable, the default branch is not `main`, the SHAs
@@ -38,20 +38,27 @@ factory checkout's `HEAD` as the base.
 
 The installer also installs the Canvas launcher at the reviewed #6602 revision and checks its
 SHA-256; if that Git object is absent locally it retrieves the same pinned file from GitHub. An
-existing launcher with different contents is left in place and setup stops for inspection.
+existing launcher with different contents is left in place and setup stops for inspection. The
+OpenHands bootstrap builds its pinned `func-timeout` source in a separate filesystem sandbox without
+the host home or Git metadata; the remaining bootstrap packages use wheels. Package tools use a
+private setup home. The test lock below is independent of this bootstrap.
 
 The installer creates a private state directory and a short owner entry point bound to this factory
 checkout and the chosen roots. The experimental Canvas route uses a dedicated model-free owner
 service, independent of a worker Issue or its conversation. Start or restore it with:
 
 ```sh
-/absolute/install/root/bin/openhands owner --ui-action start --port 8765 --ui-port 3001
+/absolute/install/root/bin/openhands owner --ui-action start --port 8766 --ui-port 3001
 ```
 
 Open the returned Canvas URL. In **Builder control**, enter `start #456` to authorize that one
 Issue and its draft PR, or `status #456`, `cancel #456`, `resume #456`, or `stop #456` for the
 recorded run. This conversation is a command bridge and makes no model request; the task itself
 still uses the guarded native Codex session. No backlog scanner is enabled. The control session
+uses a model-free native ACP profile. A browser connecting to this Canvas origin for the first time
+may ask for the local session key from `<install-root>/runs/owner/server/session-api-key`; retain it
+privately. This is one-time browser setup, not a model or provider credential.
+The control session
 is a trial route, not an adopted default. Use `owner --ui-action status` and
 `owner --ui-action stop` for that service; restarting it uses its recorded backend port and retained
 conversation. The owner service refuses native Codex launches; tasks start on their own worker backend.
@@ -74,9 +81,12 @@ interrupts the conversation; it does not establish that delegated processes have
 new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Test
 targets use the separately prepared, hash-locked test environment on macOS arm64 with Python 3.12.
 Setup downloads only hash-verified binary wheels, then installs and checks them without network access.
-Before admission the factory checks the default branch's declared requirements against that lock;
+Before admission the factory checks the default branch's runtime project dependencies and the two
+requirements files against that lock;
 uncovered dependencies stop the task before claim. An interrupted preparation is retained for inspection,
 not silently replaced. The lock is specific to this host platform and does not resolve new dependencies.
+It does not install the optional `dev` or `browser` extras from `pyproject.toml`; tasks needing
+packages outside the two locked requirements files need a separately prepared environment.
 Older recorded runs retain their original test interpreter. The
 worker is instructed to leave a private ignored `.codex-tmp/openhands-finish.json` with its proposed
 title, body fields, risk classification and exact changed paths. After observing the finished
