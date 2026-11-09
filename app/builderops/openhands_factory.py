@@ -1076,8 +1076,7 @@ def _check_serial_admission(state_root: Path, selected_issue: int) -> None:
             except (delivery.DeliveryError, service.ServiceError, OSError, ValueError):
                 inactive = False
         terminal_watcher = watch.get("status") == "finished" and watch.get("phase") == "published"
-        terminal_legacy = (watch.get("status") == "not_started"
-                           and observed.get("conversation_status") == "finished")
+        terminal_legacy = watch.get("status") == "not_started" and inactive
         if not published or not inactive or not (terminal_watcher or terminal_legacy):
             raise delivery.DeliveryError("Another delivery is active or unresolved; inspect it before starting")
 

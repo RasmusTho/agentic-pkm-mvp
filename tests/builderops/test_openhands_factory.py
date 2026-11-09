@@ -101,6 +101,26 @@ def test_serial_admission_ignores_a_confirmed_pre_state_refusal(tmp_path):
     factory._check_serial_admission(tmp_path, 43)
 
 
+def test_serial_admission_accepts_a_verified_stopped_legacy_session(tmp_path, monkeypatch):
+    from app.builderops import openhands_watcher as watcher
+
+    prior = tmp_path / "issue-41"
+    prior.mkdir()
+    settings = prior / "settings.json"
+    worktree = str(tmp_path / "worktree")
+    state = {"worktree": worktree, "full_publication": {"state": "draft_published", "pr_number": 42}}
+    monkeypatch.setattr(delivery, "status", lambda path: {"state": state, "service_status": "stopped"})
+    monkeypatch.setattr(watcher, "status", lambda path: {"status": "not_started"})
+    monkeypatch.setattr(service, "status", lambda path: {"state": {"settings_file": str(settings),
+                                                                   "workspace": worktree}})
+    monkeypatch.setattr(service, "_settings", lambda path: {})
+    verified = []
+    monkeypatch.setattr(factory, "_persisted_session", lambda config, observed, expected:
+                        verified.append((observed, expected)) or "thread")
+    factory._check_serial_admission(tmp_path, 43)
+    assert verified == [(state, "finished")]
+
+
 def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys):
     from app.builderops import openhands_watcher as watcher
 
