@@ -1,5 +1,6 @@
 import io
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from app.builderops.openhands_policy import (
     verify_thread_response,
 )
 from app.builderops.openhands_proxy import GuardedProxy
+from app.builderops import openhands_service as service
 
 
 def test_model_rejection_preserves_the_existing_proxy_session(tmp_path: Path) -> None:
@@ -31,6 +33,54 @@ def test_model_rejection_preserves_the_existing_proxy_session(tmp_path: Path) ->
     assert rejected["id"] == 1 and rejected["error"]["message"] == "model_not_permitted"
     assert forwarded["id"] == 2 and forwarded["params"]["model"] == MODEL
     assert forwarded["params"]["threadId"] == "main"
+
+
+def test_delivery_proxy_blocks_replay_after_interrupt(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(mode=0o700)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state = {"version": 1, "kind": "openhands_delivery_run.v1", "worktree": str(workspace), "phase": "active"}
+    service._write(state_dir, state)
+    child = SimpleNamespace(stdin=io.BytesIO(), stdout=io.BytesIO())
+    output = io.BytesIO()
+    proxy = GuardedProxy(child, workspace, output, allowed_read_roots=(), delivery_state_dir=state_dir)
+    proxy._preflight = "ok"
+    proxy._threads.add("main")
+    request = {"id": 1, "method": "turn/start", "params": {"threadId": "main", "input": []}}
+    proxy.receive_client(request)
+    before = child.stdin.getvalue()
+    assert json.loads(before)["id"] == 1
+    for index, update in enumerate(({"phase": "interrupting"}, {"phase": "interrupted"},
+                                    {"phase": "resuming"}, {"worktree": str(tmp_path)}), 2):
+        service._write(state_dir, {**state, **update})
+        proxy.receive_client({**request, "id": index})
+        assert child.stdin.getvalue() == before
+    refusals = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert len(refusals) == 4
+    assert all(item["error"]["message"] == "delivery_continuation_unverified" for item in refusals)
+
+
+def test_cancel_fence_orders_a_waiting_turn_after_persisted_interrupt(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(mode=0o700)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state = {"version": 1, "kind": "openhands_delivery_run.v1", "worktree": str(workspace), "phase": "active"}
+    service._write(state_dir, state)
+    child = SimpleNamespace(stdin=io.BytesIO(), stdout=io.BytesIO())
+    output = io.BytesIO()
+    proxy = GuardedProxy(child, workspace, output, allowed_read_roots=(), delivery_state_dir=state_dir)
+    proxy._preflight = "ok"
+    proxy._threads.add("main")
+    with service._locked(state_dir / "execution-fence"):
+        thread = threading.Thread(target=proxy.receive_client, args=({
+            "id": 1, "method": "turn/start", "params": {"threadId": "main", "input": []}},))
+        thread.start()
+        service._write(state_dir, {**state, "phase": "interrupting"})
+    thread.join(timeout=2)
+    assert not thread.is_alive() and not child.stdin.getvalue()
+    assert json.loads(output.getvalue())["error"]["message"] == "delivery_continuation_unverified"
 
 
 def test_title_helper_is_refused_without_poisoning_the_next_turn(tmp_path: Path) -> None:

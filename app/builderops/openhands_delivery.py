@@ -485,15 +485,20 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
 
 def _bounded_recovery_child(port: int, key: str, child_id: str, timeout: float) -> tuple[int, Any]:
     """Read a local child response with a hard process deadline and bounded body."""
-    script = (
-        "import json,sys,urllib.request,urllib.error; "
-        "v=json.load(sys.stdin); "
-        "r=urllib.request.Request('http://127.0.0.1:%d/api/conversations/%s'%(v['port'],v['id']),"
-        "headers={'X-Session-API-Key':v['key']}); "
-        "o=urllib.request.build_opener(urllib.request.ProxyHandler({})); "
-        "x=o.open(r,timeout=v['timeout']); b=x.read(262145); "
-        "assert len(b)<=262144; print(json.dumps({'status':x.status,'body':json.loads(b)}))"
-    )
+    script = """import json, sys, urllib.request
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+v = json.load(sys.stdin)
+request = urllib.request.Request(
+    'http://127.0.0.1:%d/api/conversations/%s' % (v['port'], v['id']),
+    headers={'X-Session-API-Key': v['key']})
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+response = opener.open(request, timeout=v['timeout'])
+body = response.read(262145)
+assert len(body) <= 262144
+print(json.dumps({'status': response.status, 'body': json.loads(body)}))
+"""
     try:
         proc = subprocess.run(
             [sys.executable, "-I", "-c", script],
@@ -586,7 +591,17 @@ def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[s
     children = parent.get("sub_conversation_ids")
     if isinstance(children, list):
         try:
-            key = _server_key(directory, state)
+            child_server = service._read(server_dir)
+            if (not isinstance(child_server, dict) or service._status(child_server) != "running"
+                    or child_server.get("workspace") != state.get("worktree")
+                    or child_server.get("port") != state.get("port")):
+                raise ValueError("recorded child server is unavailable")
+            key = service._session_key(server_dir)
+            confirmed_server = service._read(server_dir)
+            if (not isinstance(confirmed_server, dict) or service._status(confirmed_server) != "running"
+                    or any(confirmed_server.get(k) != child_server.get(k)
+                           for k in ("pid", "started", "marker", "workspace", "port"))):
+                raise ValueError("recorded child server changed")
             queue = [(state["conversation_id"], child) for child in children]
             seen: set[str] = {state["conversation_id"]}
             details: list[dict[str, str]] = []
@@ -657,6 +672,7 @@ def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[s
                 head_data, base_data = pr.get("head"), pr.get("base")
                 if (type(pr.get("number")) is not int or pr["number"] <= 0
                         or type(pr.get("draft")) is not bool or pr.get("state") not in {"open", "closed"}
+                        or (pr.get("merged_at") is not None and not isinstance(pr.get("merged_at"), str))
                         or not isinstance(head_data, dict) or head_data.get("ref") != branch
                         or not isinstance(head_data.get("repo"), dict)
                         or head_data["repo"].get("full_name") != REPOSITORY
@@ -666,7 +682,7 @@ def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[s
                         or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head_data["sha"])):
                     raise ValueError("PR identity is unavailable")
                 matches.append({"number": pr["number"], "state": pr["state"], "draft": pr["draft"],
-                                "head": head_data["sha"]})
+                                "merged": pr.get("merged_at") is not None, "head": head_data["sha"]})
             observation["publication"] = {"status": "ambiguous" if len(matches) > 1 else "observed",
                                           "matching_prs": matches}
     except (DeliveryError, publication.PublicationRefusal, publication.PublicationCommandError,
@@ -724,7 +740,8 @@ def cancel(directory: Path) -> dict[str, Any]:
         if observed.get("execution_status") != "running":
             raise DeliveryError("Conversation is not running; no interrupt sent")
         key = _server_key(directory, state)
-        _save(directory, state, "interrupting")
+        with service._locked(directory / "execution-fence"):
+            _save(directory, state, "interrupting")
         code, _ = _http(state["port"], key, "POST", f"/conversations/{state['conversation_id']}/interrupt")
         if code != 200:
             raise DeliveryError(f"Interrupt outcome uncertain (HTTP {code})")

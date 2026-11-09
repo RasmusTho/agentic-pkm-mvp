@@ -344,8 +344,16 @@ def test_interrupted_recovery_observes_processes_children_worktree_and_pr_withou
 
 
 def test_recovery_child_readback_has_hard_time_and_size_limits():
+    redirected = []
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if self.path.endswith("/redirect-target"):
+                redirected.append(True)
+            if self.path.endswith("/redirect"):
+                self.send_response(302)
+                self.send_header("Location", "/redirect-target")
+                self.end_headers()
+                return
             assert self.headers.get("X-Session-API-Key") == "test-key"
             if self.path.endswith("/slow"):
                 self.send_response(200)
@@ -373,6 +381,9 @@ def test_recovery_child_readback_has_hard_time_and_size_limits():
         assert delivery._bounded_recovery_child(port, "test-key", "normal", 2) == (200, {"id": "child"})
         with pytest.raises(delivery.DeliveryError, match="readback unavailable"):
             delivery._bounded_recovery_child(port, "test-key", "large", 2)
+        with pytest.raises(delivery.DeliveryError, match="readback unavailable"):
+            delivery._bounded_recovery_child(port, "test-key", "redirect", 2)
+        assert not redirected
         started = time.monotonic()
         with pytest.raises(delivery.DeliveryError, match="readback unavailable"):
             delivery._bounded_recovery_child(port, "test-key", "slow", 0.2)

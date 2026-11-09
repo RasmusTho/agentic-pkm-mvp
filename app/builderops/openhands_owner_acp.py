@@ -95,8 +95,11 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
                 fields.append("No matching PR was found in GitHub readback.")
             elif isinstance(matches, list) and len(matches) == 1 and isinstance(matches[0], dict):
                 pr_item = matches[0]
-                if type(pr_item.get("number")) is int and pr_item["number"] > 0 and type(pr_item.get("draft")) is bool:
-                    label = "Draft PR" if pr_item["draft"] else "Non-draft PR"
+                if (type(pr_item.get("number")) is int and pr_item["number"] > 0
+                        and type(pr_item.get("draft")) is bool and type(pr_item.get("merged")) is bool
+                        and pr_item.get("state") in {"open", "closed"}):
+                    label = ("Merged PR" if pr_item["merged"] else "Closed PR" if pr_item["state"] == "closed"
+                             else "Open draft PR" if pr_item["draft"] else "Open PR")
                     fields.append(f"{label}: https://github.com/RasmusTho/agentic-pkm-mvp/pull/{pr_item['number']}")
         else:
             fields.append("GitHub PR readback is unavailable; do not assume a PR was not created.")

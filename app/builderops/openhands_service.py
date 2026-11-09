@@ -246,6 +246,12 @@ def start(
         })
         if control_only:
             env["OPENHANDS_FACTORY_CONTROL_ONLY"] = "1"
+        else:
+            delivery_state = _read(directory.parent)
+            if delivery_state and delivery_state.get("kind") == "openhands_delivery_run.v1":
+                if delivery_state.get("worktree") != str(workspace):
+                    raise ServiceError("Delivery state does not match the worker workspace")
+                env["OPENHANDS_FACTORY_DELIVERY_DIR"] = str(directory.parent)
         if settings.get("resume_thread_id"):
             env["OPENHANDS_FACTORY_RESUME_THREAD"] = settings["resume_thread_id"]
         command = [

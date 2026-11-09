@@ -31,7 +31,7 @@ class GuardedProxy:
     def __init__(
         self, child: subprocess.Popen[bytes], workspace: Path, output: BinaryIO,
         *, allowed_read_roots: tuple[str, ...], resume_thread_id: str | None = None,
-        workspace_writable: bool = True,
+        workspace_writable: bool = True, delivery_state_dir: Path | None = None,
     ):
         if child.stdin is None or child.stdout is None:
             raise ValueError("child must have piped stdin and stdout")
@@ -41,6 +41,7 @@ class GuardedProxy:
         self.allowed_read_roots = allowed_read_roots
         self.resume_thread_id = resume_thread_id
         self.workspace_writable = workspace_writable
+        self.delivery_state_dir = delivery_state_dir
         self._write_lock = threading.Lock()
         self._output_lock = threading.Lock()
         self._condition = threading.Condition()
@@ -104,10 +105,28 @@ class GuardedProxy:
                                            resume_thread_id=self.resume_thread_id)
                 if request_id is not None:
                     self._pending[request_id] = str(method)
-            self._to_child(prepared)
+            if method in {"turn/start", "turn/steer"} and self.delivery_state_dir is not None:
+                # Serialize forwarding with cancellation's persisted intent.
+                # The status file is outside the worker's writable workspace.
+                from app.builderops import openhands_service as service
+
+                try:
+                    with service._locked(self.delivery_state_dir / "execution-fence"):
+                        state = service._read(self.delivery_state_dir)
+                        if (not state or state.get("kind") != "openhands_delivery_run.v1"
+                                or state.get("worktree") != str(self.workspace)
+                                or state.get("phase") not in {"creating_conversation", "active"}):
+                            raise PolicyRefusal("delivery_continuation_unverified")
+                        self._to_child(prepared)
+                except (service.ServiceError, OSError, ValueError) as exc:
+                    raise PolicyRefusal("delivery_continuation_unverified") from exc
+            else:
+                self._to_child(prepared)
             if method == "initialized":
                 self._start_preflight()
         except PolicyRefusal as exc:
+            with self._condition:
+                self._pending.pop(request_id, None)
             self._refuse(request_id, str(exc))
 
     def _preflight_result(self, message: dict[str, Any]) -> None:
@@ -223,6 +242,8 @@ def main() -> int:
         child, workspace, sys.stdout.buffer, allowed_read_roots=tuple(read_roots),
         resume_thread_id=os.environ.get("OPENHANDS_FACTORY_RESUME_THREAD") or None,
         workspace_writable=os.environ.get("OPENHANDS_FACTORY_READ_ONLY") != "1",
+        delivery_state_dir=(Path(os.environ["OPENHANDS_FACTORY_DELIVERY_DIR"])
+                            if os.environ.get("OPENHANDS_FACTORY_DELIVERY_DIR") else None),
     ).run(sys.stdin.buffer)
 
 
