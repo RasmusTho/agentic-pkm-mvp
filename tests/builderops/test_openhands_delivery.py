@@ -411,6 +411,19 @@ def test_recovery_does_not_create_missing_key(tmp_path, monkeypatch):
     assert not (server_dir / "session-api-key").exists()
 
 
+def test_model_free_owner_retains_its_existing_control_service_key(tmp_path, monkeypatch):
+    server_dir = tmp_path / "server"
+    server_dir.mkdir(mode=0o700)
+    key = delivery.service._session_key(server_dir)
+    state = {"kind": "openhands_owner_service.v1", "worktree": "/owner", "port": 8123}
+    server = {"workspace": "/owner", "port": 8123, "control_only": True}
+    monkeypatch.setattr(delivery.service, "status", lambda *_: {"status": "running", "state": server})
+    assert delivery._server_key(tmp_path, state) == key
+    assert not isinstance(delivery._server_key(tmp_path, state), delivery._BoundWorkerKey)
+    with pytest.raises(delivery.DeliveryError, match="identity challenge"):
+        delivery._server_key(tmp_path, {**state, "kind": "openhands_delivery_run.v1"})
+
+
 def test_worker_key_is_sent_only_to_peer_that_proves_possession():
     received_keys = []
     prove = {"enabled": True}

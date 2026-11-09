@@ -279,6 +279,10 @@ def _server_key(directory: Path, state: dict[str, Any]) -> str:
         raise DeliveryError("Recorded service or workspace cannot be verified")
     if not (server_dir / "session-api-key").is_file():
         raise DeliveryError("Recorded service session key is unavailable")
+    if state.get("kind") == "openhands_owner_service.v1" and server.get("control_only") is True:
+        # The separate model-free owner backend predates the worker challenge
+        # and is not a delivery worker. Preserve its existing session route.
+        return service._session_key(server_dir, create=False)
     if server.get("delivery_identity_challenge") is not True:
         raise DeliveryError("Recorded worker lacks the verified identity challenge")
     return _BoundWorkerKey(service._session_key(server_dir, create=False))

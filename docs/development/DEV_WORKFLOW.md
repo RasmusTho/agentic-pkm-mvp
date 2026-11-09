@@ -86,6 +86,12 @@ after interruption and prove possession of the recorded session key on the same 
 the factory sends it. This is
 a partial mitigation, not a verified recovery procedure, and does not retrofit a backend that is
 already running. Preserve its state and inspect it rather than replaying the task.
+For a legacy worker without the identity challenge, the factory will not send its session key to
+an unverified listener. Inspect the exact recorded service with
+`python3 -m app.builderops.openhands_service --state-dir <recorded-run>/server status`; an explicit
+legacy shutdown can use the same command with `stop`. This stops only the identity-checked service
+process. It does not prove native or delegated work has stopped, so retain the run as unresolved
+and do not start conflicting work solely because the service stopped.
 For a
 new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Test
 targets use the separately prepared, hash-locked test environment on macOS arm64 with Python 3.12.
