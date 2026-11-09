@@ -206,7 +206,7 @@ def _settings(
         ('model', '"gpt-6.1-terra"'), ('model_provider', '"openai"'),
         ('chatgpt_base_url', '"https://chatgpt.com/backend-api/"'),
         ('approval_policy', '"never"'), ('web_search', '"disabled"'),
-        ('features.multi_agent', 'false'), ('features.js_repl', 'false'),
+        ('features.apps', 'false'), ('features.multi_agent', 'false'), ('features.js_repl', 'false'),
         ('features.hooks', 'false'), ('features.skill_mcp_dependency_install', 'false'),
         ('notify', '[]'),
         ('permissions.builder_factory.network.enabled', 'false'),

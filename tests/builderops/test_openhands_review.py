@@ -30,7 +30,7 @@ for line in sys.stdin:
         filesystem.update({root: "read" for root in roots})
         config = {"model": "gpt-6.1-terra", "model_provider": "openai",
                   "chatgpt_base_url": "https://chatgpt.com/backend-api/",
-                  "features": {"multi_agent": False, "js_repl": False, "hooks": False,
+                  "features": {"apps": False, "multi_agent": False, "js_repl": False, "hooks": False,
                                "skill_mcp_dependency_install": False}, "web_search": "disabled",
                   "permissions": {"builder_factory": {"filesystem": filesystem, "network": {"enabled": False}}}}
         send({"id": request_id, "result": {"config": config}})

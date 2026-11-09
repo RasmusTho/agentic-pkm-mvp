@@ -115,7 +115,7 @@ def verify_effective_config(
         raise PolicyRefusal("provider_route_not_verified")
     features = _object(config.get("features") or {})
     if any(features.get(name) is not False for name in (
-        "multi_agent", "js_repl", "hooks", "skill_mcp_dependency_install"
+        "apps", "multi_agent", "js_repl", "hooks", "skill_mcp_dependency_install"
     )):
         raise PolicyRefusal("uncontrolled_execution_features")
     if config.get("notify") or config.get("web_search") != "disabled":

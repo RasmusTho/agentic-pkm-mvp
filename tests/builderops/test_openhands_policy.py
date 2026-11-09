@@ -99,13 +99,15 @@ def test_effective_configuration_refuses_hidden_external_tools_and_wrong_auth() 
         "model": MODEL,
         "model_provider": "openai",
         "chatgpt_base_url": "https://chatgpt.com/backend-api/",
-        "features": {"multi_agent": False, "js_repl": False, "hooks": False, "skill_mcp_dependency_install": False},
+        "features": {"apps": False, "multi_agent": False, "js_repl": False, "hooks": False, "skill_mcp_dependency_install": False},
         "web_search": "disabled",
         "plugins": {"known": {"enabled": False}},
         "mcp_servers": {"known": {"enabled": False}},
         "permissions": {PROFILE: {"filesystem": {":minimal": "read", ":workspace_roots": "write"}, "network": {"enabled": False}}},
     }
     verify_effective_config(config, {"type": "chatgpt"}, allowed_read_roots=())
+    with pytest.raises(PolicyRefusal, match="uncontrolled_execution_features"):
+        verify_effective_config({**config, "features": {**config["features"], "apps": True}}, {"type": "chatgpt"}, allowed_read_roots=())
     with pytest.raises(PolicyRefusal, match="subscription_auth_not_verified"):
         verify_effective_config(config, {"type": "apiKey"}, allowed_read_roots=())
     with pytest.raises(PolicyRefusal, match="uncontrolled_external_tools"):
