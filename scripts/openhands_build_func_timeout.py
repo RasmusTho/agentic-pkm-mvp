@@ -14,6 +14,17 @@ import sys
 from pathlib import Path
 
 
+def validate_read_roots(roots: list[str], install: Path, host_home: Path, source: Path) -> None:
+    for raw in roots:
+        path = Path(raw)
+        for candidate in (path, path.resolve(strict=True)):
+            if (candidate == Path("/") or candidate == host_home or candidate in host_home.parents
+                    or candidate == source or candidate in source.parents or source in candidate.parents
+                    or candidate == install or candidate in install.parents
+                    or candidate.name == ".git" or (candidate / ".git").exists()):
+                raise SystemExit("OpenHands bootstrap read root overlaps host, repository or installation state")
+
+
 def main() -> None:
     if sys.platform != "darwin" or platform.machine() != "arm64" or sys.version_info[:2] != (3, 12):
         raise SystemExit("OpenHands bootstrap requires macOS arm64 and Python 3.12")
@@ -67,6 +78,7 @@ def main() -> None:
                 if not directory.is_dir() or directory == Path.home() or "lib" not in directory.parts:
                     raise SystemExit("Python library directory is unavailable")
                 roots.append(str(directory))
+    validate_read_roots(roots, install, host_home, source)
     entries = ['":minimal"="read"', '":workspace_roots"="write"']
     entries += [json.dumps(root) + '="read"' for root in dict.fromkeys(roots)]
     entries.append(json.dumps(str(venv)) + '="write"')

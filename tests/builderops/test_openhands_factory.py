@@ -174,6 +174,52 @@ def test_worker_stop_reconciles_process_lost_after_signal(tmp_path, monkeypatch)
     assert service._read(directory)["factory_shutdown"]["state"] == "stopped"
 
 
+def test_owner_stop_reconciles_interrupted_backend_shutdown(tmp_path, monkeypatch):
+    root = tmp_path / "runs"
+    directory = root / "owner"
+    server = directory / "server"
+    server.mkdir(mode=0o700, parents=True)
+    root.chmod(0o700)
+    directory.chmod(0o700)
+    workspace = str(directory / "workspace")
+    service._write(directory, {"version": 1, "kind": "openhands_owner_service.v1", "worktree": workspace,
+                               "port": 8123, "ui_port": 3001})
+    service._write(server, {"version": 1, "state": "stopping", "pid": 123, "marker": "unique",
+                            "started": "old", "port": 8123, "workspace": workspace, "control_only": True,
+                            "python": str(tmp_path / "venv/bin/python"),
+                            "settings_file": str(directory / "settings.json")})
+    monkeypatch.setattr(service, "_identity", lambda pid: None)
+    monkeypatch.setattr(service.os, "kill", lambda *args: pytest.fail("must not signal a missing process"))
+    monkeypatch.setattr(factory, "_canvas", lambda *args: {"ui": {"status": "stopped"}})
+    assert factory._owner_service(tmp_path, root, tmp_path, "stop", None, None, False)["status"] == "stopped"
+    assert service._read(server)["state"] == "stopped"
+
+
+def test_owner_restart_reuses_recorded_ports(tmp_path, monkeypatch):
+    from app.builderops import openhands_owner
+
+    root = tmp_path / "runs"
+    directory = root / "owner"
+    workspace = directory / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    root.chmod(0o700)
+    directory.chmod(0o700)
+    service._write(directory, {"version": 1, "kind": "openhands_owner_service.v1", "worktree": str(workspace),
+                               "port": 8123, "ui_port": 8124})
+    monkeypatch.setattr(service, "status", lambda *args: {"status": "stopped"})
+    starts = []
+    monkeypatch.setattr(service, "start", lambda *args, **kwargs: starts.append(args))
+    monkeypatch.setattr(delivery, "_server_key", lambda *args: "private")
+    monkeypatch.setattr(delivery, "_http", lambda *args: (200, {}))
+    monkeypatch.setattr(openhands_owner, "ensure_profile", lambda *args: None)
+    monkeypatch.setattr(openhands_owner, "attach", lambda *args: {"conversation_id": "control"})
+    canvas_ports = []
+    monkeypatch.setattr(factory, "_canvas", lambda install, directory, state, action, port, opened:
+                        canvas_ports.append(port) or {"ui": {"url": "http://127.0.0.1:8124"}})
+    factory._owner_service(tmp_path, root, tmp_path, "start", None, None, False)
+    assert starts[0][3] == 8123 and canvas_ports == [8124]
+
+
 def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys):
     from app.builderops import openhands_watcher as watcher
 

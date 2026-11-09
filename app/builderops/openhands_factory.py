@@ -445,7 +445,7 @@ def _canvas(install: Path, directory: Path, state: dict[str, Any], action: str,
 
 
 def _owner_service(install: Path, state_root: Path, repo: Path, action: str,
-                   port: int, ui_port: int, open_browser: bool) -> dict[str, Any]:
+                   port: int | None, ui_port: int | None, open_browser: bool) -> dict[str, Any]:
     """Provide a model-free control conversation independent of worker sessions."""
     from app.builderops import openhands_owner
 
@@ -455,6 +455,8 @@ def _owner_service(install: Path, state_root: Path, repo: Path, action: str,
         if state is None:
             if action != "start":
                 return {"status": "stopped"}
+            port = 8766 if port is None else port
+            ui_port = 3001 if ui_port is None else ui_port
             if (service._read(directory / "server") is not None
                     or service._read(directory / "owner-control") is not None):
                 raise delivery.DeliveryError("Owner initialization state is uncertain; inspect it before starting")
@@ -471,12 +473,25 @@ def _owner_service(install: Path, state_root: Path, repo: Path, action: str,
                 os.replace(temp_name, settings_path)
             finally:
                 Path(temp_name).unlink(missing_ok=True)
-            state = {"version": 1, "kind": "openhands_owner_service.v1", "worktree": str(workspace), "port": port}
+            state = {"version": 1, "kind": "openhands_owner_service.v1", "worktree": str(workspace),
+                     "port": port, "ui_port": ui_port}
             service._write(directory, state)
         if (state.get("kind") != "openhands_owner_service.v1"
                 or state.get("worktree") != str(directory / "workspace") or type(state.get("port")) is not int):
             raise delivery.DeliveryError("Owner service state is invalid")
+        port = state["port"] if port is None else port
+        ui_port = state.get("ui_port", 3001) if ui_port is None else ui_port
+        if type(ui_port) is not int or not 1 <= ui_port <= 65535:
+            raise delivery.DeliveryError("Owner Canvas port is invalid")
         observed = service.status(directory / "server")
+        server = observed.get("state")
+        if (observed["status"] == "stale" and isinstance(server, dict)
+                and server.get("state") == "stopping" and server.get("control_only") is True
+                and server.get("workspace") == state["worktree"] and server.get("port") == state["port"]
+                and server.get("python") == str(install / "venv/bin/python")
+                and server.get("settings_file") == str(directory / "settings.json")):
+            service.stop(directory / "server")
+            observed = service.status(directory / "server")
         if action == "stop":
             _canvas(install, directory, state, "stop", ui_port, False)
             if observed["status"] == "running":
@@ -488,6 +503,9 @@ def _owner_service(install: Path, state_root: Path, repo: Path, action: str,
             return {"status": observed["status"], "ui": _canvas(install, directory, state, "status", ui_port, False)["ui"]}
         if state["port"] != port:
             raise delivery.DeliveryError("Owner service is bound to another port")
+        if state.get("ui_port") != ui_port:
+            state["ui_port"] = ui_port
+            service._write(directory, state)
         if observed["status"] == "stopped":
             service.start(directory / "server", install / "venv/bin/python", Path(state["worktree"]),
                           port, directory / "settings.json", control_only=True)
@@ -1232,7 +1250,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, default=FACTORY_ROOT)
     parser.add_argument("--port", type=int)
     parser.add_argument("--ui-action", choices=("start", "status", "stop"), default="start")
-    parser.add_argument("--ui-port", type=int, default=3001)
+    parser.add_argument("--ui-port", type=int)
     parser.add_argument("--open", action="store_true", help="open Canvas when starting the UI")
     parser.add_argument("--authorize-publication", action="store_true", help="authorize draft publication for finish")
     parser.add_argument("--title", help="draft PR title for finish")
@@ -1240,8 +1258,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--risk-surface", action="append", default=[], choices=sorted(publication.RISK_SURFACES))
     parser.add_argument("--workflow-review-receipt", type=Path)
     args = parser.parse_args(argv)
-    if args.port is None:
-        args.port = 8766 if args.command == "owner" else 8765
+    if args.command != "owner":
+        args.port = 8765 if args.port is None else args.port
+        args.ui_port = 3001 if args.ui_port is None else args.ui_port
     try:
         if args.command != "owner" and (args.issue is None or args.issue <= 0):
             raise delivery.DeliveryError("Issue must be a positive integer")

@@ -60,7 +60,7 @@ may ask for the local session key from `<install-root>/runs/owner/server/session
 privately. This is one-time browser setup, not a model or provider credential.
 The control session
 is a trial route, not an adopted default. Use `owner --ui-action status` and
-`owner --ui-action stop` for that service; restarting it uses its recorded backend port and retained
+`owner --ui-action stop` for that service; restarting it uses its recorded backend and Canvas ports and retained
 conversation. The owner service refuses native Codex launches; tasks start on their own worker backend.
 A new start or resume is refused while an earlier worker backend is running or its delivery is
 unresolved. After publication the watcher stops the finished worker backend; published worker sessions
