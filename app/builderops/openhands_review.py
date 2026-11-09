@@ -203,6 +203,7 @@ def run_review(
     roots = settings["sandbox_read_roots"]
     env = {key: os.environ[key] for key in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR") if key in os.environ}
     env.update(PYTHONPATH=str(Path(__file__).resolve().parents[2]), GIT_OPTIONAL_LOCKS="0",
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                OPENHANDS_FACTORY_WORKSPACE=str(workspace), OPENHANDS_CODEX_BINARY=settings["codex_binary"],
                OPENHANDS_CODEX_CONFIG_ARGS=json.dumps(_read_only_args(settings)),
                OPENHANDS_FACTORY_READ_ROOTS=json.dumps(roots), OPENHANDS_FACTORY_READ_ONLY="1")

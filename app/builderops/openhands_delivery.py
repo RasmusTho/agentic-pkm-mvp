@@ -312,16 +312,35 @@ def _conversation(directory: Path, state: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _task_prompt(plan: dict[str, Any]) -> str:
+def _task_prompt(plan: dict[str, Any], *, auto_finish: bool = False) -> str:
     issue = plan["issue"]
     instructions = "\n\n".join(
         f"### {path}\n{entry['content']}" for path, entry in plan["instructions"].items()
     )
+    handoff = ""
+    if auto_finish:
+        handoff = (
+            "Before finishing, write .codex-tmp/openhands-finish.json as a private mode 0600 "
+            "file (create .codex-tmp if needed). It is an ignored local handoff, not a commit. "
+            "Use exactly this JSON object: version=1, issue=<issue number>, title=<concise PR "
+            "title>, paths=<array of every changed repository-relative path>, risk_surfaces=<an "
+            "array chosen from auth, security, data, migration, concurrency, external-api, "
+            "credential-durability, state-machine>, and body=<PR body inputs>. If no listed risk "
+            "applies, use an empty array instead of inventing one. Body must have "
+            "summary (nonempty array), sbs_impact (object containing primary_subsystem, "
+            "secondary_subsystems, write_class, persistence_impact, derived_rebuildable_impact, "
+            "new_or_changed_contract, owner_doc_impact, transition_debt_impact, boundary_risk), "
+            "owner_doc_resolution (none or updated), builderops_records, and builderops_reason. "
+            "Use the issue contract and actual changes. Do not include claim data, review or test "
+            "verdicts, publication instructions, or unrelated paths. The host independently "
+            "checks the changed paths, tests, review and publication gates.\n\n"
+        )
     return (
         f"Implement {plan['repository']} issue #{issue['number']}: {issue['title']}.\n"
         "You are a bounded worker. Work only in the assigned workspace. Do not claim, "
         "commit, push, publish, merge, access credentials, or make external effects. "
-        "The delivery owner handles publication and independent verification.\n\n"
+        "The delivery host handles publication and independent verification.\n\n"
+        f"{handoff}"
         f"## Full issue contract\n{issue['body']}\n\n"
         f"## Repository builder instructions\n{instructions}"
     )
@@ -329,7 +348,7 @@ def _task_prompt(plan: dict[str, Any]) -> str:
 
 def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch: str,
           worktree: Path, python: Path, port: int, settings_file: Path,
-          node: Path, acp: Path) -> dict[str, Any]:
+          node: Path, acp: Path, *, auto_finish: bool = False) -> dict[str, Any]:
     if issue != authorized_issue or issue <= 0:
         raise DeliveryError("Explicit authorization must name the selected issue")
     if not 1 <= port <= 65535:
@@ -362,7 +381,7 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
         finally:
             Path(temp_name).unlink(missing_ok=True)
         session_id = str(uuid.uuid4())
-        prompt = _task_prompt(plan)
+        prompt = _task_prompt(plan, auto_finish=auto_finish)
         state: dict[str, Any] = {
             "version": 1, "kind": "openhands_delivery_run.v1", "issue": issue,
             "repository": REPOSITORY, "root": str(root), "branch": branch,
@@ -370,6 +389,7 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
             "issue_body_sha256": plan["issue"]["body_sha256"], "prompt_sha256": _sha(prompt),
             "session_id": session_id, "agent_id": f"openhands-{session_id}",
             "conversation_id": session_id, "port": port,
+            "auto_finish": auto_finish,
         }
         git = ["git", "--no-replace-objects", "-C", str(root)]
         _save(directory, state, "creating_worktree")
@@ -446,7 +466,8 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
             )
         return {
             "state": state, "conversation_status": execution_status,
-            "note": "Lease and worktree heartbeats are not automated; maintain them during the run.",
+            "note": ("Watcher launch is separate; check its lease-heartbeat status." if auto_finish else
+                     "Lease and worktree heartbeats are not automated; maintain them during the run."),
         }
 
 
@@ -798,7 +819,7 @@ def _full_evidence(
             or receipt.get("head_sha") != head or receipt.get("base_sha") != base):
         raise DeliveryError("Full-path evidence does not bind the current issue and candidate")
     risks = receipt.get("risk_surfaces")
-    if (not isinstance(risks, list) or not risks or any(not isinstance(r, str) for r in risks)
+    if (not isinstance(risks, list) or any(not isinstance(r, str) for r in risks)
             or len(set(risks)) != len(risks) or set(risks) - publication.RISK_SURFACES):
         raise DeliveryError("Full-path evidence does not contain the applicable risk classification")
     source_digests = []
@@ -811,6 +832,8 @@ def _full_evidence(
         fallback and receipt.get("stateful_fallback_matrix_complete") is not True
     ):
         raise DeliveryError("Stateful fallback requires its executable boundary matrix")
+    if fallback and not risks:
+        raise DeliveryError("Stateful fallback requires an applicable risk surface")
     review = receipt.get("review")
     if (not isinstance(review, dict) or review.get("verdict") != "pass"
             or review.get("head_sha") != head
@@ -1220,7 +1243,7 @@ def publish_full(
             raise DeliveryError("PR body does not match the recorded implementation run")
         body_values.update(issue_number=state["issue"], pickup_receipt=state["pickup_receipt"])
         if body_values.get("final_review_rounds") != 1:
-            raise DeliveryError("High-risk delivery must declare one independent final review round")
+            raise DeliveryError("Full publication requires one independent final review round")
         body = generate_pr_body_from_mapping(body_values)
         authority = resolve_native_issue_authority(body)
         if (authority is None or authority.governing_issue != state["issue"]
@@ -1358,7 +1381,7 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser.add_argument("--risk-assessment-complete", action="store_true")
     plan_parser.add_argument("--review-gate-complete", action="store_true")
     full_parser = commands.add_parser(
-        "publish-full", help="Publish a committed, independently reviewed high-risk draft",
+        "publish-full", help="Publish a committed, independently reviewed draft",
         description=publish_full.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     full_parser.add_argument("--state-dir", type=Path, required=True)

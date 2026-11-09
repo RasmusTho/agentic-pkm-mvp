@@ -220,6 +220,8 @@ def start(
             if key in os.environ
         }
         env.update({
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
             "CODEX_PATH": settings["guard_executable"],
             "OPENHANDS_FACTORY_PYTHON": str(python),
             # The execution boundary comes from the installed factory, not

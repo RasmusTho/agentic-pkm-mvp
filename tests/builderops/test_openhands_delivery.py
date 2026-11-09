@@ -568,6 +568,128 @@ def test_full_path_publishes_reviewed_candidate_as_draft_and_reconciles(high_ris
     assert sum(call[:3] == ("gh", "pr", "create") for call in executor.calls) == 1
 
 
+@pytest.mark.parametrize("review_status", ["pass", "unresolved"])
+def test_low_risk_finish_uses_independent_evidence_and_existing_publisher(
+    high_risk_publication, monkeypatch, review_status,
+):
+    from app.builderops import openhands_factory as factory
+
+    state_dir, body, executor, _, evidence = high_risk_publication
+    state = delivery._state(state_dir)
+    worktree = Path(state["worktree"])
+    head, base = evidence["head_sha"], evidence["base_sha"]
+    monkeypatch.setattr(factory, "_candidate_head", lambda *args: head)
+    monkeypatch.setattr(factory, "_verify", lambda *args: {
+        "status": "passed", "head_sha": head, "failed": [], "unresolved": [],
+        "verification": evidence["verification"],
+    })
+    reviews = []
+
+    def review(*args):
+        reviews.append(args)
+        return {"status": review_status, "head_sha": head, "base_sha": base, "review": evidence["review"]}
+
+    monkeypatch.setattr(factory, "_review", review)
+    args = (ROOT, state_dir, state["issue"], ROOT, worktree.parent,
+            "Add deterministic publication adapter", body, [], None)
+    if review_status == "unresolved":
+        with pytest.raises(factory.FinishEvidenceError, match="Independent review"):
+            factory._finish(*args, executor=executor)
+        assert not any(call[:2] == ("git", "push") or call[:3] == ("gh", "pr", "create")
+                       or (call[:2] == ("gh", "api") and "POST" in call) for call in executor.calls)
+        assert reviews[0][-3] == []
+        return
+    result = factory._finish(*args, executor=executor)
+    assert result["draft"] is True and result["pr_number"] == 6000
+    assert reviews[0][-3] == []
+    receipt = json.loads(Path(result["evidence_file"]).read_text())
+    assert receipt["risk_surfaces"] == [] and receipt["review"]["verdict"] == "pass"
+    gate = next(call for call in executor.calls if any("review_before_ci_gate.py" in item for item in call))
+    assert "--risk-assessment-complete" in gate and "--review-gate-complete" in gate
+    assert "--risk-surface" not in gate
+    monkeypatch.setattr(factory, "_verify", lambda *args: pytest.fail("repeated verification"))
+    monkeypatch.setattr(factory, "_review", lambda *args: pytest.fail("repeated review"))
+    assert factory._finish(*args, executor=executor)["pr_number"] == 6000
+    assert sum(call[:3] == ("gh", "pr", "create") for call in executor.calls) == 1
+
+
+@pytest.mark.parametrize("risks", [None, ["unknown"], ["auth", "auth"]])
+def test_full_path_still_rejects_missing_or_invalid_risk_assessment(high_risk_publication, risks):
+    state_dir, body, executor, evidence_file, evidence = high_risk_publication
+    evidence["risk_surfaces"] = risks
+    evidence_file.write_text(json.dumps(evidence))
+    with pytest.raises(delivery.DeliveryError, match="risk classification"):
+        delivery.publish_full(state_dir, ["feature.txt"], "Add deterministic publication adapter",
+                              body, evidence_file, executor=executor)
+    assert not any(call[:2] == ("git", "push") or call[:3] == ("gh", "pr", "create")
+                   or (call[:2] == ("gh", "api") and "POST" in call) for call in executor.calls)
+
+
+def test_empty_risk_does_not_bypass_stateful_fallback_gate(high_risk_publication):
+    state_dir, body, executor, evidence_file, evidence = high_risk_publication
+    evidence.update(risk_surfaces=[], stateful_fallback=True, stateful_fallback_matrix_complete=True)
+    evidence_file.write_text(json.dumps(evidence))
+    with pytest.raises(delivery.DeliveryError, match="Stateful fallback requires an applicable risk surface"):
+        delivery.publish_full(state_dir, ["feature.txt"], "Add deterministic publication adapter",
+                              body, evidence_file, executor=executor)
+    assert not any(call[:2] == ("git", "push") or call[:3] == ("gh", "pr", "create")
+                   or (call[:2] == ("gh", "api") and "POST" in call) for call in executor.calls)
+
+
+def test_finish_replays_existing_full_publication_with_original_private_evidence(
+    high_risk_publication, monkeypatch,
+):
+    from app.builderops import openhands_factory as factory
+
+    state_dir, body, executor, evidence_file, evidence = high_risk_publication
+    evidence_file.chmod(0o600)
+    title = "Add deterministic publication adapter"
+    delivery.publish_full(state_dir, ["feature.txt"], title, body, evidence_file, executor=executor)
+    state = delivery._state(state_dir)
+    worktree = Path(state["worktree"])
+    monkeypatch.setattr(factory, "_candidate_head", lambda *args: evidence["head_sha"])
+    monkeypatch.setattr(factory, "_verify", lambda *args: pytest.fail("repeated verification"))
+    monkeypatch.setattr(factory, "_review", lambda *args: pytest.fail("repeated review"))
+    monkeypatch.setattr(delivery.publication, "SubprocessExecutor", lambda: executor)
+
+    def finish(chosen_title=title, chosen_body=body, risks=None):
+        return factory._finish(ROOT, state_dir, state["issue"], ROOT, worktree.parent,
+                               chosen_title, chosen_body, risks or evidence["risk_surfaces"], None)
+
+    calls_before = len(executor.calls)
+    result = finish()
+    assert result["pr_number"] == 6000 and result["commit_sha"] == evidence["head_sha"]
+    replay_calls = executor.calls[calls_before:]
+    assert any("/check-runs" in arg for call in replay_calls for arg in call)
+    assert not any(call[:3] == ("gh", "pr", "create") or call[:2] == ("git", "push")
+                   or call[:6] == ("gh", "api", "--hostname", "github.com", "--method", "PATCH")
+                   for call in replay_calls)
+    with pytest.raises(delivery.DeliveryError):
+        finish(chosen_title="Different title")
+    with pytest.raises(delivery.DeliveryError):
+        finish(chosen_body={**body, "summary": ["Different body"]})
+    with pytest.raises(delivery.DeliveryError, match="inputs changed"):
+        finish(risks=["auth"])
+    evidence_file.chmod(0o644)
+    with pytest.raises(delivery.DeliveryError, match="safely read"):
+        finish()
+    evidence_file.chmod(0o600)
+    symlink = state_dir / "evidence-link.json"
+    symlink.symlink_to(evidence_file)
+    state = delivery._state(state_dir)
+    state["full_publication"]["evidence_file"] = str(symlink)
+    delivery.service._write(state_dir, state)
+    with pytest.raises(delivery.DeliveryError, match="safely read"):
+        finish()
+    worker_file = worktree / "evidence.json"
+    worker_file.write_text(evidence_file.read_text())
+    worker_file.chmod(0o600)
+    state["full_publication"]["evidence_file"] = str(worker_file)
+    delivery.service._write(state_dir, state)
+    with pytest.raises(delivery.DeliveryError, match="outside the worker worktree"):
+        finish()
+
+
 @pytest.fixture
 def reviewed_draft_update(high_risk_publication, monkeypatch):
     from tests.scripts.test_publication import COMMIT_SHA

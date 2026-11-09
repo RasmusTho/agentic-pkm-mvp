@@ -83,6 +83,48 @@ def test_start_assembles_loopback_server_and_sanitizes_environment(
         service.start(state_dir, python, workspace, 8123, settings_file)
 
 
+def test_worker_and_verifiers_disable_host_git_config(tmp_path, monkeypatch, settings_file):
+    from app.builderops import openhands_delivery as delivery
+    from app.builderops import openhands_factory as factory
+    from app.builderops import openhands_review as review
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/unwanted/host-gitconfig")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "0")
+    captured = {}
+
+    def launch(command, **kwargs):
+        captured.update(command=command, env=kwargs["env"])
+        return SimpleNamespace(pid=12345)
+
+    with monkeypatch.context() as context:
+        context.setattr(service.subprocess, "Popen", launch)
+        context.setattr(service, "_identity", lambda pid: ("start", captured["command"][2]))
+        service.start(tmp_path / "host", Path(os.sys.executable), workspace, 8123, settings_file)
+    probe = "import os; print(os.environ['GIT_CONFIG_GLOBAL'] + '|' + os.environ['GIT_CONFIG_NOSYSTEM'])"
+    worker = subprocess.run([os.sys.executable, "-c", delivery._ACP_BOOTSTRAP,
+                             os.sys.executable, "-c", probe], env=captured["env"],
+                            capture_output=True, text=True, check=True)
+    assert worker.stdout.strip() == f"{os.devnull}|1"
+    log = tmp_path / "verification.log"
+    assert factory._run_verify_command([os.sys.executable, "-c", probe], workspace, tmp_path, log) == 0
+    assert f"{os.devnull}|1" in log.read_text()
+
+    def review_launch(command, **kwargs):
+        captured["review_env"] = kwargs["env"]
+        raise OSError("test stops before launching reviewer")
+
+    settings = {"codex_binary": os.sys.executable, "sandbox_read_roots": [str(tmp_path)],
+                "codex_config_args": ["-c", 'permissions.builder_factory.filesystem={":minimal"="read"}']}
+    with monkeypatch.context() as context:
+        context.setattr(review.subprocess, "Popen", review_launch)
+        with pytest.raises(review.ReviewError, match="Cannot start guarded reviewer"):
+            review.run_review(Path(os.sys.executable), settings, workspace, "a" * 40, "review", "worker")
+    assert captured["review_env"]["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert captured["review_env"]["GIT_CONFIG_NOSYSTEM"] == "1"
+
+
 def test_status_and_stop_refuse_stale_or_reused_pid(tmp_path, monkeypatch, settings_file):
     service._write(tmp_path, {"version": 1, "state": "running", "pid": 123, "marker": "unique", "started": "old"})
     monkeypatch.setattr(service, "_identity", lambda pid: ("new", "unrelated process"))

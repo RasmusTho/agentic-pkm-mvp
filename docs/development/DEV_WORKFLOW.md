@@ -46,10 +46,33 @@ checkout and the chosen roots. Replace the example paths and the explicitly auth
 Use the same entry point with `status`, `cancel`, `resume`, or `stop` in place of `start`. The command
 derives its pinned ACP and isolated service configuration; model selection stays on
 `gpt-6.1-terra` with subscription authentication, with no provider or model fallback. `cancel`
-interrupts the conversation; it does not establish that delegated processes have stopped. Lease
-and worktree heartbeats are not automated, so the operator must maintain them. Preserve state and
-reconcile an interrupted or uncertain start before retrying. Publication remains a separate
-host-side operation through `openhands_delivery` and its applicable repository gates.
+interrupts the conversation; it does not establish that delegated processes have stopped. For a
+new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. The
+worker is instructed to leave a private ignored `.codex-tmp/openhands-finish.json` with its proposed
+title, body fields, risk classification and exact changed paths. After observing the finished
+conversation and children, the watcher checks the claim, branch/worktree gate, handoff and actual
+change set, commits the scoped changes locally with hooks and signing disabled, and invokes the
+existing `finish` verification, independent review and draft publication path. The review assesses
+the declared risk against the actual change. Worker claims are not test or review evidence.
+
+`status` includes the watcher's `running`, `finished`, `pending` or `failed` state; a launch request
+alone is not proof it started. A healthy active task has no fixed delivery deadline. The watcher
+retries an unavailable conversation readback at most three times. It independently checks the live
+Issue and recorded claim and renews the same unexpired dispatcher lease and worktree registration
+while watching, testing, reviewing and publishing. Renewal runs at most 30 minutes apart and sooner
+when the observed remaining lease time requires it. Dispatcher-backed renewal uses the existing
+holder heartbeat and checks its result against the recorded claim; a label-only fallback has no
+dispatcher lease and keeps its existing weaker
+coordination semantics. The heartbeat status and expiry are visible through `status`; a failed or
+uncertain renewal stops subsequent guarded commands and leaves the run pending. An effect already
+in flight requires the existing readback and reconciliation. A lost process or uncertain
+publication is retained as pending. After inspection, `watch` with the same Issue and roots can
+restart a stopped watcher; a kernel lock prevents concurrent watcher effects, and publication uses the existing
+reconciliation. An interruption while staging or committing is always pending for manual index and
+branch inspection and is not automatically repeated. Older runs without the recorded automatic
+authorization remain manual. The watcher does not restart itself after a host reboot; an expired
+dispatcher lease cannot be revived by its heartbeat. Preserve state and reconcile an interrupted or uncertain
+start before retrying.
 
 `stop` first checks that the recorded conversation is finished or has been interrupted through
 `cancel`, then records the existing ACP session and service settings privately and stops the
@@ -73,15 +96,56 @@ Use `review` with the same Issue and roots to run an independent native Codex re
 finished, committed candidate. The separate reviewer uses the guarded ChatGPT/Terra preflight and
 a read-only workspace profile; it records the structured verdict and actual response privately,
 bound to the exact candidate SHA. Refusals, failures, changed candidates and ambiguous output are
-unresolved. Its `review` entry and `verify` entries can be combined with the declared risk and
-other required evidence for `publish-full`; they do not replace the applicable review-repair or
-mechanism-convergence workflow.
+unresolved. The separate `verify` and `review` commands remain available for diagnosis.
+
+For an explicitly authorized publication, `finish` runs both steps for the finished, clean committed
+candidate, assembles their exact-head evidence and invokes the existing `publish-full` draft workflow:
+
+```sh
+/absolute/install/root/bin/openhands finish --issue 123 --authorize-publication \
+  --title 'Describe the change' --body-input-json /absolute/host/pr-body-inputs.json \
+  --risk-surface auth
+```
+
+Provide the existing PR body generator's implementation-lane JSON inputs, including its SBS impact,
+owner-doc and BuilderOps fields and `final_review_rounds: 1`. The recorded claim supplies the Issue
+and pickup receipt. Supply every applicable `--risk-surface`; omit it when no listed surface applies.
+The independent reviewer checks the risk assessment even when no surfaces are declared. This route
+still uses the existing review and publication gates for the candidate's actual paths and risks.
+When the existing review gate requires a workflow review receipt, pass its host-side path with
+`--workflow-review-receipt`. Finish derives the candidate paths from committed history, preserves
+its private assembled receipt, and delegates claim, risk, issue, draft, check readback and ambiguous
+effect reconciliation to the existing publisher. A retry of an already recorded `publish-full`
+publication uses its original private host-side evidence, including when it was created outside
+`finish`; changed inputs or uncertain effects may require reconciliation. Failed or unresolved
+tests or review refuse publication. This does not establish passing CI, qualification,
+or completion of review-repair and mechanism-convergence obligations.
+
+The separate manual `finish` route still requires the operator to supply title, body inputs and risk
+classification. Automatic runs stop for malformed or missing handoffs, unsupported Verify targets,
+missing special review evidence, failed tests or review, and uncertain effects; they do not repair
+those cases. Finish does not assemble the stateful-fallback matrix; use the existing full publication
+route when that exception is required. Host-reboot recovery remains manual, so this is not yet
+unattended end to end.
 
 The launcher reads the applicable host and planned-worktree Codex TOML configuration to disable
 inherited MCP servers and plugins by name; it does not copy their configuration values. The service
 uses the `HOME`-based Codex configuration, and its effective-configuration preflight still refuses
 an enabled external tool or an unverified subscription/model before a worker turn. If configuration
 cannot be inspected, start fails and the operator must resolve the local configuration first.
+
+For a new run, the launcher also inspects the installed Python interpreter's `_sqlite3` and `_ssl`
+extensions. It uses `otool` on macOS or `ldd` on Linux to identify linked SQLite, SSL and crypto
+libraries, and grants their non-system library directories read-only access in the worker, verifier
+and reviewer profiles. Both the linked directory and its resolved directory are included when they
+differ; system libraries remain under the minimal profile. Missing inspection tools, unresolved
+library paths or inaccessible dependencies fail start rather than broadening access. For a macOS
+Python framework in a Homebrew `Cellar`, the profile also includes that Python version's package
+directory and the same Homebrew prefix's `opt` directory when present, for interpreter and library
+symlink traversal. Other Python layouts do not receive those Homebrew traversal roots. A stopped
+run retains its original settings and does not silently gain new sandbox roots on restart.
+The worker, test verifier and independent reviewer run Git with global and system configuration
+disabled; repository-local Git configuration remains in effect.
 
 For the owner interface, install the independently reviewed `scripts/openhands_canvas.py` from
 the #6602 candidate as `/absolute/install/root/bin/openhands_canvas.py`, retaining its source and

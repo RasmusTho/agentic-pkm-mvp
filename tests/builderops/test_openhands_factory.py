@@ -67,33 +67,49 @@ def _recorded_run(install, state_root, worktrees, *, conversation="finished"):
 
 
 def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys):
+    from app.builderops import openhands_watcher as watcher
+
     install, state, worktrees = _installation(tmp_path)
     (install / "canvas").mkdir()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(factory, "_base_config", lambda repo: None)
+    library_root = tmp_path / "linked-libraries"
+    library_root.mkdir()
+    monkeypatch.setattr(factory, "_python_library_roots", lambda *args: [str(library_root)])
+    package_root = tmp_path / "brew/Cellar/python@3.12/3.12.12"
+    python_root = package_root / "Frameworks/Python.framework/Versions/3.12"
+    python_root.mkdir(parents=True)
+    opt_root = tmp_path / "brew/opt"
+    opt_root.mkdir()
+    traversal_roots = factory._python_framework_traversal_roots
+    monkeypatch.setattr(factory, "_python_framework_traversal_roots",
+                        lambda root: traversal_roots(root, platform="darwin"))
     refreshed = []
     monkeypatch.setattr(factory, "_refresh_base", lambda repo: refreshed.append(repo))
     node = Path(__import__("sys").executable)
     monkeypatch.setattr(factory, "_executable", lambda name: node)
     monkeypatch.setattr(factory.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(
-        a[0], 0, factory.CODEX_VERSION + "\n" if a[0][-1] == "--version" else str(tmp_path), ""))
+        a[0], 0, factory.CODEX_VERSION + "\n" if a[0][-1] == "--version" else str(python_root), ""))
     monkeypatch.setattr(delivery, "_run", lambda command: subprocess.CompletedProcess(
         command, 0, delivery.SERVER_VERSION + "\n", ""))
     captured = {}
 
-    def start(directory, repo, issue, authorized, branch, worktree, python, port, settings, node, acp):
+    def start(directory, repo, issue, authorized, branch, worktree, python, port, settings, node, acp,
+              *, auto_finish):
         assert refreshed == [repo]
         captured.update(directory=directory, repo=repo, issue=issue, authorized=authorized,
                         branch=branch, worktree=worktree, python=python, port=port,
                         settings=delivery._validate_executables(python, node, acp, settings),
-                        settings_path=settings)
+                        settings_path=settings, auto_finish=auto_finish)
         return {"state": {"port": port}, "conversation_status": "running"}
 
     monkeypatch.setattr(delivery, "start", start)
+    monkeypatch.setattr(watcher, "launch", lambda *args: captured.update(watcher_started=True))
     assert factory.main(["start", "--issue", "123", "--install-root", str(install),
                          "--state-root", str(state), "--worktree-root", str(worktrees)]) == 0
     result = json.loads(capsys.readouterr().out)
     assert captured["issue"] == captured["authorized"] == 123
+    assert captured["auto_finish"] is True and captured["watcher_started"] is True
     assert captured["branch"] == "codex/issue-123-openhands"
     assert captured["worktree"] == worktrees / "issue-123-openhands"
     assert captured["python"] == install / "venv/bin/python"
@@ -107,13 +123,45 @@ def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monke
     assert profile["network"]["enabled"] is False
     assert str((install / "canvas").resolve()) in settings["sandbox_read_roots"]
     assert profile["filesystem"][str((install / "canvas").resolve())] == "read"
+    assert profile["filesystem"][str(library_root)] == "read"
+    assert profile["filesystem"][str(package_root)] == "read"
+    assert profile["filesystem"][str(opt_root)] == "read"
     assert profile["filesystem"] == {
         ":minimal": "read", ":workspace_roots": "write",
         **{root: "read" for root in settings["sandbox_read_roots"]},
     }
     assert settings["conversations_path"] == str(state / "issue-123/conversations")
+    verify_command = factory._verification_command(settings, worktrees, tmp_path, captured["python"],
+                                                   "tests/test_feature.py::test_ok")
+    verify_config = tomllib.loads("\n".join(verify_command[3:verify_command.index("-P"):2]))
+    assert verify_config["permissions"]["builder_factory"]["filesystem"][str(library_root)] == "read"
+    assert verify_config["permissions"]["builder_factory"]["filesystem"][str(package_root)] == "read"
+    assert verify_config["permissions"]["builder_factory"]["filesystem"][str(opt_root)] == "read"
+    review_config = tomllib.loads("\n".join(factory.review._read_only_args(settings)[1::2]))
+    assert review_config["permissions"]["builder_factory"]["filesystem"][str(library_root)] == "read"
+    assert review_config["permissions"]["builder_factory"]["filesystem"][str(package_root)] == "read"
+    assert review_config["permissions"]["builder_factory"]["filesystem"][str(opt_root)] == "read"
     assert result["owner_ui"]["agent_server"] == "http://127.0.0.1:8765"
     assert result["owner_ui"]["session_key_file"].endswith("/server/session-api-key")
+
+
+def test_homebrew_framework_traversal_roots_are_bounded_and_portable(tmp_path):
+    prefix = tmp_path / "custom-prefix"
+    package = prefix / "Cellar/python@3.12/3.12.12"
+    root = package / "Frameworks/Python.framework/Versions/3.12"
+    root.mkdir(parents=True)
+    opt = prefix / "opt"
+    opt.mkdir()
+    assert factory._python_framework_traversal_roots(root, platform="darwin") == [str(package), str(opt)]
+    assert factory._python_framework_traversal_roots(root, platform="linux") == []
+    assert factory._python_framework_traversal_roots(tmp_path / "other/Python.framework/Versions/3.12",
+                                                     platform="darwin") == []
+    other = tmp_path / "separate/Cellar/python@3.12/3.12.12/Frameworks/Python.framework/Versions/3.12"
+    other.mkdir(parents=True)
+    assert factory._python_framework_traversal_roots(other, platform="darwin") == [str(other.parent.parent.parent.parent)]
+    (tmp_path / "separate/opt").symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(delivery.DeliveryError, match="not a directory"):
+        factory._python_framework_traversal_roots(other, platform="darwin")
 
 
 def test_owner_rejects_wrong_codex_version_before_delivery(tmp_path, monkeypatch, capsys):
@@ -127,6 +175,106 @@ def test_owner_rejects_wrong_codex_version_before_delivery(tmp_path, monkeypatch
                          "--state-root", str(state), "--worktree-root", str(worktrees)]) == 1
     assert "Native Codex" in capsys.readouterr().err
     assert service._read(state / "issue-123") is None
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_python_library_discovery_limits_access_to_linked_sqlite_and_ssl_dirs(tmp_path, monkeypatch, platform):
+    python_root = tmp_path / "python"
+    extension_dir = python_root / "lib-dynload"
+    extension_dir.mkdir(parents=True)
+    sqlite_extension = extension_dir / "_sqlite3.so"
+    ssl_extension = extension_dir / "_ssl.so"
+    sqlite_extension.touch()
+    ssl_extension.touch()
+    suffixes = (".dylib", ".3.dylib", ".3.dylib") if platform == "darwin" else (".so.0", ".so.3", ".so.3")
+    real_sqlite = tmp_path / "cellar/sqlite/lib"
+    real_ssl = tmp_path / "cellar/openssl/lib"
+    real_sqlite.mkdir(parents=True)
+    real_ssl.mkdir(parents=True)
+    names = ["libsqlite3" + suffixes[0], "libssl" + suffixes[1], "libcrypto" + suffixes[2]]
+    (real_sqlite / names[0]).touch()
+    for name in names[1:]:
+        (real_ssl / name).touch()
+    alias_sqlite = tmp_path / "opt/sqlite/lib"
+    alias_ssl = tmp_path / "opt/openssl/lib"
+    alias_sqlite.parent.mkdir(parents=True)
+    alias_ssl.parent.mkdir(parents=True)
+    alias_sqlite.symlink_to(real_sqlite, target_is_directory=True)
+    alias_ssl.symlink_to(real_ssl, target_is_directory=True)
+    paths = [alias_sqlite / names[0], alias_ssl / names[1], alias_ssl / names[2]]
+    monkeypatch.setenv("OPENAI_API_KEY", "do-not-inherit")
+    monkeypatch.setattr(factory.shutil, "which", lambda name: "/usr/bin/" + name)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        if "-I" in command:
+            output = json.dumps({"machine": "arm64", "origins": {
+                "_sqlite3": str(sqlite_extension), "_ssl": str(ssl_extension)}})
+        else:
+            dependencies = paths[:1] if command[-1] == str(sqlite_extension) else paths[1:]
+            if platform == "darwin":
+                header = command[-1] + (" (architecture arm64):\n" if dependencies == paths[:1] else ":\n")
+                output = header + "".join(
+                    f"\t{path} (compatibility version 1.0.0, current version 1.0.0)\n" for path in dependencies
+                ) + "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1.0.0)\n"
+            else:
+                output = "".join(f"\t{path.name} => {path} (0x123)\n" for path in dependencies)
+                output += "\tlibunrelated.so.1 => /outside/lib/libunrelated.so.1 (0x123)\n"
+
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(factory.subprocess, "run", run)
+    roots = factory._python_library_roots(python_root / "bin/python", python_root, platform=platform)
+    assert roots == [str(alias_sqlite), str(real_sqlite), str(alias_ssl), str(real_ssl)]
+    if platform == "darwin":
+        assert all(command[1:3] == ["-arch", "arm64"] for command, _ in calls[1:])
+    assert all("OPENAI_API_KEY" not in kwargs["env"] for _, kwargs in calls)
+    assert all("/outside/lib" != root for root in roots)
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_python_library_discovery_refuses_unresolved_dependency(tmp_path, monkeypatch, platform):
+    python_root = tmp_path / "python"
+    python_root.mkdir()
+    extension = python_root / "_ssl.so"
+    extension.touch()
+    monkeypatch.setattr(factory.shutil, "which", lambda name: "/usr/bin/otool")
+
+    def run(command, **kwargs):
+        if "-I" in command:
+            output = json.dumps({"machine": "arm64", "origins": {"_sqlite3": None, "_ssl": str(extension)}})
+        elif platform == "darwin":
+            output = f"{extension}:\n\t@rpath/libssl.3.dylib (compatibility version 3.0.0, current version 3.0.0)\n"
+        else:
+            output = "libssl.so.3 => not found\n"
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(factory.subprocess, "run", run)
+    with pytest.raises(delivery.DeliveryError, match="safely inspect"):
+        factory._python_library_roots(python_root / "bin/python", python_root, platform=platform)
+
+
+def test_python_library_discovery_fails_closed_if_tool_or_extension_is_untrusted(tmp_path, monkeypatch):
+    python_root = tmp_path / "python"
+    python_root.mkdir()
+    extension = python_root / "_ssl.so"
+    extension.touch()
+    monkeypatch.setattr(factory.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(
+        command, 0, json.dumps({"machine": "arm64", "origins": {"_sqlite3": None, "_ssl": str(extension)}}), ""))
+    monkeypatch.setattr(factory.shutil, "which", lambda name: None)
+    with pytest.raises(delivery.DeliveryError, match="otool is required"):
+        factory._python_library_roots(python_root / "bin/python", python_root, platform="darwin")
+    monkeypatch.setattr(factory.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(
+        command, 0, json.dumps({"machine": "arm64", "origins": {"_sqlite3": None, "_ssl": "built-in"}}), ""))
+    assert factory._python_library_roots(python_root / "bin/python", python_root, platform="darwin") == []
+    monkeypatch.setattr(factory.shutil, "which", lambda name: "/usr/bin/otool")
+    external = tmp_path / "external.so"
+    external.touch()
+    monkeypatch.setattr(factory.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(
+        command, 0, json.dumps({"machine": "arm64", "origins": {"_sqlite3": None, "_ssl": str(external)}}), ""))
+    with pytest.raises(delivery.DeliveryError, match="safely inspect"):
+        factory._python_library_roots(python_root / "bin/python", python_root, platform="darwin")
 
 
 def test_owner_status_and_cancel_use_recorded_run(tmp_path, monkeypatch, capsys):
@@ -444,6 +592,52 @@ def test_verification_runner_captures_exit_and_drops_api_key(tmp_path, monkeypat
     assert "exited 120 without output" in empty_log.read_text()
 
 
+def test_verify_distinguishes_identical_one_pass_outputs_for_full_evidence(tmp_path, monkeypatch):
+    import sys
+
+    install, state_root, worktrees = _installation(tmp_path)
+    directory, state, server, _, _ = _recorded_run(install, state_root, worktrees)
+    worktree = Path(state["worktree"])
+    (worktree / "tests").mkdir()
+    (worktree / "tests/test_feature.py").write_text("# selected targets\n")
+    targets = ["tests/test_feature.py::test_one", "tests/test_feature.py::test_two"]
+    issue_body = "## Acceptance Criteria\n" + "".join(
+        f"- [ ] Behavior.\n  - Verify: `{target}`\n" for target in targets
+    )
+    head, base = "a" * 40, "b" * 40
+    state.update(branch="codex/issue-123-openhands", issue_body_sha256=delivery._sha(issue_body))
+    monkeypatch.setattr(delivery, "_finished_run", lambda path: state)
+    monkeypatch.setattr(factory, "_candidate_head", lambda *args: head)
+    monkeypatch.setattr(service, "status", lambda path: {"status": "running", "state": server})
+    monkeypatch.setattr(service, "_settings", lambda path: {})
+    monkeypatch.setattr(delivery, "_json_result", lambda command: {
+        "number": 123, "state": "OPEN", "body": issue_body,
+        "url": f"https://github.com/{delivery.REPOSITORY}/issues/123",
+    })
+    monkeypatch.setattr(factory, "_verification_command", lambda settings, tree, temp, python, target:
+                        [sys.executable, "-c", "print('1 passed in 0.1s')", target])
+    result = factory._verify(install, directory, 123, factory.FACTORY_ROOT, worktrees)
+    assert result["status"] == "passed"
+    entries = result["verification"]
+    assert [entry["target"] for entry in entries] == targets
+    assert entries[0]["evidence"]["sha256"] != entries[1]["evidence"]["sha256"]
+    for target, entry in zip(targets, entries):
+        assert Path(entry["evidence"]["path"]).read_text() == (
+            f"[verification runner] Target: {target}\n1 passed in 0.1s\n"
+        )
+    review = directory / "review.txt"
+    review.write_text(f"Reviewed {head}\n")
+    receipt = directory / "combined.json"
+    receipt.write_text(json.dumps({
+        "version": 1, "repository": delivery.REPOSITORY, "issue": 123,
+        "head_sha": head, "base_sha": base, "risk_surfaces": ["auth"],
+        "review": {"reviewer": "independent", "verdict": "pass", "head_sha": head,
+                   "blocking_findings": [], "evidence": {"path": str(review)}},
+        "verification": entries,
+    }))
+    assert delivery._full_evidence(receipt, state, head, base, issue_body)[0]["verification"] == entries
+
+
 def test_verification_refuses_a_dirty_candidate(tmp_path, monkeypatch):
     def run(command):
         if "--show-toplevel" in command:
@@ -522,8 +716,81 @@ def test_owner_review_records_independent_candidate_evidence(tmp_path, monkeypat
             receipt = directory / "publication-evidence.json"
             receipt.write_text(json.dumps(publication_evidence))
             assert delivery._full_evidence(receipt, state, head, base, body)[0]["review"] == entry
+            monkeypatch.setattr(factory, "_candidate_head", lambda path, branch: head)
+            result = factory._review(install, directory, 123, factory.FACTORY_ROOT, worktrees,
+                                     [], "Feature", {"summary": ["Implemented behavior"]})
+            assert result["status"] == "pass"
+            assert "declared risk surfaces none" in captured["prompt"]
+            assert "unresolved if they omit any applicable risk" in captured["prompt"]
     else:
         assert output["review"] is None
+
+
+@pytest.mark.parametrize("outcome", ["pass", "failed", "unresolved", "review_failed", "review_unresolved", "stale"])
+def test_finish_assembles_exact_evidence_and_refuses_incomplete_results(tmp_path, monkeypatch, capsys, outcome):
+    install, state_root, worktrees = _installation(tmp_path)
+    directory, state, _, _, _ = _recorded_run(install, state_root, worktrees)
+    body = "## Acceptance Criteria\n- [ ] Works.\n  - Verify: `tests/test_feature.py::test_ok`\n"
+    head, base = "a" * 40, "b" * 40
+    state.update(branch="codex/issue-123-openhands", repository=delivery.REPOSITORY,
+                 issue_body_sha256=delivery._sha(body))
+    service._write(directory, state)
+    monkeypatch.setattr(delivery, "_finished_run", lambda path: state)
+    monkeypatch.setattr(factory, "_candidate_head", lambda *args: head)
+    test_log = directory / "test.log"
+    test_log.write_text("1 passed in 0.1s\n")
+    review_log = directory / "review.txt"
+    review_log.write_text(f"Reviewed {head}\n")
+    verification = {"status": outcome if outcome in {"failed", "unresolved"} else "passed",
+                    "head_sha": head, "failed": [], "unresolved": [],
+                    "verification": [{"target": "tests/test_feature.py::test_ok", "result": "pass",
+                                      "head_sha": head, "evidence": {"path": str(test_log)}}]}
+    review_entry = {"reviewer": "native-codex-gpt-6.1-terra-independent", "verdict": "pass",
+                    "head_sha": head, "blocking_findings": [], "evidence": {"path": str(review_log)}}
+    independent = {"status": {"review_failed": "findings", "review_unresolved": "unresolved"}.get(outcome, "pass"),
+                   "head_sha": "c" * 40 if outcome == "stale" else head,
+                   "base_sha": base, "review": review_entry}
+    monkeypatch.setattr(factory, "_verify", lambda *args: verification)
+    monkeypatch.setattr(factory, "_review", lambda *args: independent)
+    monkeypatch.setattr(factory.publication, "_candidate_paths", lambda *args: {"feature.py"})
+    calls = []
+
+    def publish(directory_arg, paths, title, body_inputs, evidence_file):
+        evidence, _ = delivery._full_evidence(evidence_file, state, head, base, body)
+        calls.append((paths, title, body_inputs, evidence_file, evidence))
+        return {"draft": True, "commit_sha": head}
+
+    monkeypatch.setattr(delivery, "publish_full", publish)
+    inputs = tmp_path / "body.json"
+    inputs.write_text(json.dumps({"lane": "implementation", "final_review_rounds": 1}))
+    args = ["finish", "--issue", "123", "--install-root", str(install), "--state-root", str(state_root),
+            "--worktree-root", str(worktrees), "--authorize-publication", "--title", "Feature",
+            "--body-input-json", str(inputs), "--risk-surface", "auth"]
+    code = factory.main(args)
+    output = capsys.readouterr()
+    if outcome != "pass":
+        assert code == 1 and not calls and "publication refused" in output.err
+        return
+    assert code == 0 and json.loads(output.out)["commit_sha"] == head
+    paths, title, body_inputs, evidence_file, evidence = calls[0]
+    assert paths == ["feature.py"] and title == "Feature" and body_inputs["final_review_rounds"] == 1
+    assert evidence["review"] == review_entry and evidence["verification"] == verification["verification"]
+    assert os.stat(evidence_file).st_mode & 0o777 == 0o600
+    state["full_publication"] = {"candidate": {"head": head}, "evidence_file": str(evidence_file)}
+    monkeypatch.setattr(factory, "_verify", lambda *args: pytest.fail("reran verification on retry"))
+    monkeypatch.setattr(factory, "_review", lambda *args: pytest.fail("reran review on retry"))
+    assert factory.main(args) == 0
+    assert calls[1][3] == evidence_file
+    assert factory.main(args[:-1] + ["security"]) == 1
+    assert "inputs changed" in capsys.readouterr().err and len(calls) == 2
+
+
+def test_finish_requires_explicit_publication_authority(tmp_path, monkeypatch, capsys):
+    install, state_root, worktrees = _installation(tmp_path)
+    monkeypatch.setattr(factory, "_finish", lambda *args: pytest.fail("finish was called"))
+    assert factory.main(["finish", "--issue", "123", "--install-root", str(install),
+                         "--state-root", str(state_root), "--worktree-root", str(worktrees)]) == 1
+    assert "--authorize-publication" in capsys.readouterr().err
 
 
 def test_inherited_tools_are_disabled_by_name_without_copying_values(tmp_path, monkeypatch):
@@ -539,6 +806,7 @@ def test_inherited_tools_are_disabled_by_name_without_copying_values(tmp_path, m
     (worktrees / ".codex/config.toml").write_text('[mcp_servers.parent]\nurl = "private-url"\n')
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(factory, "_base_config", lambda repo: b'[plugins."project@catalog"]\nenabled=true\n')
+    monkeypatch.setattr(factory, "_python_library_roots", lambda *args: [])
     monkeypatch.setattr(factory.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(
         a[0], 0, factory.CODEX_VERSION if a[0][-1] == "--version" else str(tmp_path), ""))
     executable = Path(__import__("sys").executable)
