@@ -23,6 +23,7 @@ from packaging.utils import canonicalize_name
 
 from app.builderops import openhands_delivery as delivery
 from app.builderops import openhands_factory as factory
+from scripts.openhands_native_libraries import python_binary_roots
 
 LOCK = factory.FACTORY_ROOT / "config/builderops/openhands-test-macos-arm64-py312.lock"
 LINE = re.compile(r"([A-Za-z0-9][A-Za-z0-9_.-]*)==([A-Za-z0-9][A-Za-z0-9_.+-]*) --hash=sha256:([0-9a-f]{64})")
@@ -118,7 +119,7 @@ def prepare(install: Path) -> Path:
     prefix_output = subprocess.check_output([str(base), "-I", "-S", "-c", "import sys;print(sys.base_prefix)"], text=True)
     prefix = Path(prefix_output.strip()).resolve(strict=True)
     roots = [str(prefix), *factory._python_framework_traversal_roots(prefix),
-             *factory._python_library_roots(base, prefix)]
+             *factory._python_library_roots(base, prefix), *python_binary_roots(base, prefix)]
     entries = ['":minimal"="read"', '":workspace_roots"="read"']
     entries += [json.dumps(path) + '="read"' for path in dict.fromkeys(roots)]
     entries.append(json.dumps(str(directory)) + '="write"')

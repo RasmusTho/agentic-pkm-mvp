@@ -155,6 +155,16 @@ def test_owner_recovers_pre_state_settings_without_external_effects(tmp_path, mo
     assert result["conversation_id"] == "control"
 
 
+@pytest.mark.parametrize("port,ui_port", [(0, 3001), (65536, 3001), (8766, 8766)])
+def test_owner_invalid_ports_leave_no_persisted_state(tmp_path, monkeypatch, port, ui_port):
+    root = tmp_path / "runs"
+    root.mkdir(mode=0o700)
+    monkeypatch.setattr(factory, "_settings", lambda *args: pytest.fail("configured invalid ports"))
+    with pytest.raises(delivery.DeliveryError, match="valid and distinct"):
+        factory._owner_service(tmp_path, root, tmp_path, "start", port, ui_port, False)
+    assert service._read(root / "owner") is None
+
+
 def test_worker_stop_reconciles_process_lost_after_signal(tmp_path, monkeypatch):
     directory = tmp_path / "issue-123"
     server = directory / "server"

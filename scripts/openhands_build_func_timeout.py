@@ -20,8 +20,9 @@ def validate_read_roots(roots: list[str], install: Path, host_home: Path, source
         for candidate in (path, path.resolve(strict=True)):
             if (candidate == Path("/") or candidate == host_home or candidate in host_home.parents
                     or candidate == source or candidate in source.parents or source in candidate.parents
-                    or candidate == install or candidate in install.parents
-                    or candidate.name == ".git" or (candidate / ".git").exists()):
+                    or candidate == install or candidate in install.parents or install in candidate.parents
+                    or candidate.name == ".git"
+                    or any((ancestor / ".git").exists() for ancestor in (candidate, *candidate.parents))):
                 raise SystemExit("OpenHands bootstrap read root overlaps host, repository or installation state")
 
 

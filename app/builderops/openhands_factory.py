@@ -457,6 +457,8 @@ def _owner_service(install: Path, state_root: Path, repo: Path, action: str,
                 return {"status": "stopped"}
             port = 8766 if port is None else port
             ui_port = 3001 if ui_port is None else ui_port
+            if not 1 <= port <= 65535 or not 1 <= ui_port <= 65535 or port == ui_port:
+                raise delivery.DeliveryError("Owner backend and Canvas ports must be valid and distinct")
             if (service._read(directory / "server") is not None
                     or service._read(directory / "owner-control") is not None):
                 raise delivery.DeliveryError("Owner initialization state is uncertain; inspect it before starting")

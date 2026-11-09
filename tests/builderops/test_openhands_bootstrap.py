@@ -14,7 +14,9 @@ def test_bootstrap_read_roots_refuse_home_repo_and_install(tmp_path):
     safe = home / "python/lib"
     safe.mkdir(parents=True)
     validate_read_roots([str(safe)], install, home, source)
-    for path in (tmp_path, home, source, install):
+    nested_state = install / "runs"
+    nested_state.mkdir()
+    for path in (tmp_path, home, source, install, nested_state):
         with pytest.raises(SystemExit, match="overlaps"):
             validate_read_roots([str(path)], install, home, source)
 
@@ -24,5 +26,8 @@ def test_bootstrap_read_roots_refuse_other_git_checkout(tmp_path):
     for path in (home, source, install, checkout):
         path.mkdir()
     (checkout / ".git").mkdir()
-    with pytest.raises(SystemExit, match="overlaps"):
-        validate_read_roots([str(checkout)], install, home, source)
+    nested = checkout / "tools"
+    nested.mkdir()
+    for path in (checkout, nested):
+        with pytest.raises(SystemExit, match="overlaps"):
+            validate_read_roots([str(path)], install, home, source)
