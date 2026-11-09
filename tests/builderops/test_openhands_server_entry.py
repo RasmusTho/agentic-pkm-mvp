@@ -28,9 +28,68 @@ def test_http_blocks_direct_run_and_events_after_interrupt(tmp_path: Path):
         service._write(tmp_path, {**state, "phase": "interrupted"})
         for path in ("/api/conversations/id/run", "/api/conversations/id/events"):
             await fence({"type": "http", "method": "POST", "path": path}, receive, send)
-        await fence({"type": "http", "method": "POST", "path": "/api/conversations/id/interrupt"}, receive, send)
-        assert handled == ["/api/conversations/id/run", "/api/conversations/id/interrupt"]
-        assert [r["status"] for r in responses if r["type"] == "http.response.start"] == [409, 409]
+        interrupt_path = "/api/conversations/11111111-1111-4111-8111-111111111111/interrupt"
+        await fence({"type": "http", "method": "POST", "path": interrupt_path}, receive, send)
+        await fence({"type": "http", "method": "POST", "path": "/api/app-backends/name/interrupt"}, receive, send)
+        assert handled == ["/api/conversations/id/run", interrupt_path]
+        assert [r["status"] for r in responses if r["type"] == "http.response.start"] == [409, 409, 409]
+    asyncio.run(run())
+
+
+def test_disconnected_http_client_does_not_release_fence_before_handler_finishes(tmp_path: Path):
+    async def run():
+        state = {"version": 1, "kind": "openhands_delivery_run.v1", "worktree": "/work", "phase": "active"}
+        service._write(tmp_path, state)
+        started, finish, changed = asyncio.Event(), asyncio.Event(), threading.Event()
+        async def app(scope, receive, send):
+            started.set()
+            await finish.wait()
+        async def receive():
+            return {"type": "http.request", "body": b""}
+        async def send(message):
+            pass
+        def interrupt():
+            with service._locked(tmp_path / "input-fence"):
+                changed.set()
+        client = asyncio.create_task(DeliveryInputFence(app, str(tmp_path), "/work")(
+            {"type": "http", "method": "POST", "path": "/api/conversations/id/events"}, receive, send))
+        await started.wait()
+        client.cancel()
+        try:
+            await client
+        except asyncio.CancelledError:
+            pass
+        waiter = asyncio.create_task(asyncio.to_thread(interrupt))
+        await asyncio.sleep(0.05)
+        assert not changed.is_set()
+        finish.set()
+        await waiter
+        assert changed.is_set()
+    asyncio.run(run())
+
+
+def test_stalled_request_body_does_not_hold_cancellation_fence(tmp_path: Path):
+    async def run():
+        state = {"version": 1, "kind": "openhands_delivery_run.v1", "worktree": "/work", "phase": "active"}
+        service._write(tmp_path, state)
+        entered, finish = asyncio.Event(), asyncio.Event()
+        handled, sent = [], []
+        async def app(scope, receive, send):
+            handled.append(True)
+        async def receive():
+            entered.set()
+            await finish.wait()
+            return {"type": "http.request", "body": b""}
+        async def send(message):
+            sent.append(message)
+        request = asyncio.create_task(DeliveryInputFence(app, str(tmp_path), "/work")(
+            {"type": "http", "method": "POST", "path": "/api/conversations/id/events"}, receive, send))
+        await entered.wait()
+        with service._locked(tmp_path / "input-fence", timeout=0.1):
+            service._write(tmp_path, {**state, "phase": "interrupted"})
+        finish.set()
+        await request
+        assert not handled and sent[0]["status"] == 409
     asyncio.run(run())
 
 

@@ -1,9 +1,12 @@
 import json
+import hashlib
+import hmac
 import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -273,7 +276,7 @@ def test_interrupted_recovery_observes_processes_children_worktree_and_pr_withou
     state = {"worktree": str(worktree), "root": str(worktree), "branch": "codex/issue-123",
              "repository": delivery.REPOSITORY, "conversation_id": parent_id, "port": 8123}
     server = {"pid": 12345, "started": "Mon Nov 9 20:24:07 2026", "marker": "test-marker",
-              "workspace": str(worktree), "port": 8123}
+              "workspace": str(worktree), "port": 8123, "delivery_identity_challenge": True}
     (tmp_path / "server").mkdir()
     monkeypatch.setattr(delivery.service, "_read", lambda *args: server)
     monkeypatch.setattr(delivery.service, "_status", lambda *args: "running")
@@ -400,12 +403,51 @@ def test_recovery_does_not_create_missing_key(tmp_path, monkeypatch):
     server_dir = tmp_path / "server"
     server_dir.mkdir()
     state = {"worktree": "/worktree", "port": 8123}
-    server = {"workspace": "/worktree", "port": 8123}
+    server = {"workspace": "/worktree", "port": 8123, "delivery_identity_challenge": True}
     monkeypatch.setattr(delivery.service, "_read", lambda *_: server)
     monkeypatch.setattr(delivery.service, "_status", lambda *_: "running")
     with pytest.raises(delivery.service.ServiceError):
         delivery._recovery_server_key(tmp_path, state)
     assert not (server_dir / "session-api-key").exists()
+
+
+def test_worker_key_is_sent_only_to_peer_that_proves_possession():
+    received_keys = []
+    prove = {"enabled": True}
+    key = "private-test-key"
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path == "/api/_builder_identity":
+                nonce = parse_qs(parsed.query)["nonce"][0]
+                digest = hmac.new(key.encode(), nonce.encode(), hashlib.sha256).hexdigest() if prove["enabled"] else "0" * 64
+                body = digest.encode()
+            else:
+                received_keys.append(self.headers.get("X-Session-API-Key"))
+                body = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        bound = delivery._BoundWorkerKey(key)
+        assert delivery._http(port, bound, "GET", "/conversations/example", timeout=2) == (200, {"ok": True})
+        assert received_keys == [key]
+        prove["enabled"] = False
+        with pytest.raises(delivery.DeliveryError, match="identity or API readback unavailable"):
+            delivery._http(port, bound, "GET", "/conversations/example", timeout=2)
+        assert received_keys == [key]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_start_refuses_base_change_after_environment_preflight(orchestration):

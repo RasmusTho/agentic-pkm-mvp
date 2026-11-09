@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import hashlib
+import hmac
 import os
+import re
 import stat
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 from app.builderops import openhands_service as service
 
@@ -54,20 +58,74 @@ class DeliveryInputFence:
         if scope.get("type") == "http":
             method = scope.get("method", "")
             path = scope.get("path", "")
-            if method in {"GET", "HEAD", "OPTIONS"} or (method == "POST" and path.endswith("/interrupt")):
+            if method == "GET" and path == "/api/_builder_identity":
+                query = parse_qs(scope.get("query_string", b"").decode("ascii", errors="ignore"))
+                nonce = query.get("nonce", [])
+                key = os.environ.get("OH_SESSION_API_KEYS_0", "")
+                if len(nonce) == 1 and re.fullmatch(r"[0-9a-f]{64}", nonce[0]) and key:
+                    digest = hmac.new(key.encode(), nonce[0].encode(), hashlib.sha256).hexdigest()
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": [(b"content-type", b"text/plain"), (b"cache-control", b"no-store")]})
+                    await send({"type": "http.response.body", "body": digest.encode()})
+                    return
+                await self._refuse_http(send)
+                return
+            if method in {"GET", "HEAD", "OPTIONS"}:
                 await self.app(scope, receive, send)
+                return
+            if method == "POST" and re.fullmatch(r"/api/conversations/[0-9a-fA-F-]{32,36}/interrupt", path):
+                try:
+                    state = service._read(self.directory)
+                    if (state and state.get("kind") == "openhands_delivery_run.v1"
+                            and state.get("worktree") == self.workspace
+                            and state.get("phase") in {"interrupting", "interrupted"}):
+                        await self.app(scope, receive, send)
+                        return
+                except (OSError, ValueError, service.ServiceError):
+                    pass
+                await self._refuse_http(send)
+                return
+            # Do not hold the cancellation fence while a client slowly uploads a body.
+            messages: list[dict[str, Any]] = []
+            size = 0
+            try:
+                while True:
+                    message = await asyncio.wait_for(receive(), timeout=5)
+                    if message.get("type") != "http.request":
+                        return
+                    size += len(message.get("body", b""))
+                    if size > 4 * 1024 * 1024:
+                        raise ValueError("Request body is too large")
+                    messages.append(message)
+                    if not message.get("more_body", False):
+                        break
+            except (asyncio.TimeoutError, ValueError):
+                await self._refuse_http(send)
                 return
             try:
                 fd = await self._acquire()
             except (OSError, ValueError, service.ServiceError):
-                await send({"type": "http.response.start", "status": 409,
-                            "headers": [(b"content-type", b"application/json")]})
-                await send({"type": "http.response.body", "body": b'{"detail":"delivery_continuation_unverified"}'})
+                await self._refuse_http(send)
                 return
+            async def buffered_receive() -> dict[str, Any]:
+                if messages:
+                    return messages.pop(0)
+                return await receive()
+            task = asyncio.create_task(self.app(scope, buffered_receive, send))
             try:
-                await self.app(scope, receive, send)
+                await asyncio.shield(task)
             finally:
-                os.close(fd)
+                # A disconnected client must not release the fence while an
+                # upstream executor thread is still processing its message.
+                # If upstream itself is cancelled, keep the fence until this
+                # service exits: the executor's outcome is then unknown.
+                def release(done: asyncio.Task[Any]) -> None:
+                    if not done.cancelled():
+                        os.close(fd)
+                if task.done():
+                    release(task)
+                else:
+                    task.add_done_callback(release)
             return
         if scope.get("type") != "websocket":
             await self.app(scope, receive, send)
@@ -89,11 +147,26 @@ class DeliveryInputFence:
                 return {"type": "websocket.disconnect", "code": 1008}
             return message
 
-        try:
-            await self.app(scope, fenced_receive, send)
-        finally:
-            if held is not None:
-                os.close(held)
+        async def serve_socket() -> None:
+            nonlocal held
+            try:
+                await self.app(scope, fenced_receive, send)
+            except asyncio.CancelledError:
+                # The upstream executor may still have the last message.
+                held = None  # Retain the open descriptor until service exit.
+                raise
+            finally:
+                if held is not None:
+                    os.close(held)
+
+        task = asyncio.create_task(serve_socket())
+        await asyncio.shield(task)
+
+    @staticmethod
+    async def _refuse_http(send: Any) -> None:
+        await send({"type": "http.response.start", "status": 409,
+                    "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": b'{"detail":"delivery_continuation_unverified"}'})
 
 
 def main() -> None:

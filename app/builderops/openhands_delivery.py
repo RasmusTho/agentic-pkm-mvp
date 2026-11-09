@@ -58,6 +58,10 @@ class DeliveryError(RuntimeError):
     """Preparation or execution cannot safely proceed."""
 
 
+class _BoundWorkerKey(str):
+    """Require a worker to prove key possession on the same TCP connection."""
+
+
 def _run(
     command: list[str], *, allowed: tuple[int, ...] = (0,)
 ) -> subprocess.CompletedProcess[str]:
@@ -275,12 +279,55 @@ def _server_key(directory: Path, state: dict[str, Any]) -> str:
         raise DeliveryError("Recorded service or workspace cannot be verified")
     if not (server_dir / "session-api-key").is_file():
         raise DeliveryError("Recorded service session key is unavailable")
-    return service._session_key(server_dir, create=False)
+    if server.get("delivery_identity_challenge") is not True:
+        raise DeliveryError("Recorded worker lacks the verified identity challenge")
+    return _BoundWorkerKey(service._session_key(server_dir, create=False))
+
+
+def _worker_http(port: int, key: str, method: str, path: str, payload: Any, timeout: float) -> tuple[int, Any]:
+    """Authenticate the worker before sending its key on the same socket."""
+    script = """import hashlib, hmac, http.client, json, secrets, sys
+v=json.load(sys.stdin)
+c=http.client.HTTPConnection('127.0.0.1',v['port'],timeout=v['timeout'])
+nonce=secrets.token_hex(32)
+c.request('GET','/api/_builder_identity?nonce='+nonce)
+r=c.getresponse()
+digest=r.read(256).decode('ascii')
+expected=hmac.new(v['key'].encode(),nonce.encode(),hashlib.sha256).hexdigest()
+if r.status != 200 or not hmac.compare_digest(digest,expected) or c.sock is None:
+    raise ValueError('worker identity not established')
+peer=c.sock
+body=None if v['payload'] is None else json.dumps(v['payload']).encode()
+if c.sock is not peer:
+    raise ValueError('worker connection changed')
+c.request(v['method'],'/api'+v['path'],body=body,headers={'X-Session-API-Key':v['key'],'Content-Type':'application/json'})
+r=c.getresponse()
+data=r.read(4194305)
+if len(data)>4194304:
+    raise ValueError('worker response too large')
+print(json.dumps({'status':r.status,'body':json.loads(data) if data else None}))
+"""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", script],
+            input=json.dumps({"port": port, "key": key, "method": method, "path": path,
+                              "payload": payload, "timeout": timeout}),
+            text=True, capture_output=True, check=True, timeout=timeout,
+            env={name: os.environ[name] for name in ("PATH", "LANG") if name in os.environ},
+        )
+        data = json.loads(result.stdout)
+        if not isinstance(data, dict) or type(data.get("status")) is not int:
+            raise ValueError("invalid worker response")
+        return data["status"], data.get("body")
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+        raise DeliveryError("Worker identity or API readback unavailable") from exc
 
 
 def _http(
     port: int, key: str, method: str, path: str, payload: Any = None, *, timeout: float = 5
 ) -> tuple[int, Any]:
+    if isinstance(key, _BoundWorkerKey):
+        return _worker_http(port, key, method, path, payload, timeout)
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/api{path}", data=data, method=method,
@@ -489,6 +536,8 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
 
 def _bounded_recovery_child(port: int, key: str, child_id: str, timeout: float) -> tuple[int, Any]:
     """Read a local child response with a hard process deadline and bounded body."""
+    if isinstance(key, _BoundWorkerKey):
+        return _worker_http(port, key, "GET", f"/conversations/{child_id}", None, timeout)
     script = """import json, sys, urllib.request
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -525,10 +574,13 @@ def _recovery_server_key(directory: Path, state: dict[str, Any]) -> str:
     if (not isinstance(observed, dict) or service._status(observed) != "running"
             or observed.get("workspace") != state.get("worktree") or observed.get("port") != state.get("port")):
         raise DeliveryError("Recorded recovery service is unavailable")
-    key = service._session_key(server_dir, create=False)
+    if observed.get("delivery_identity_challenge") is not True:
+        raise DeliveryError("Recorded worker lacks the verified identity challenge")
+    key = _BoundWorkerKey(service._session_key(server_dir, create=False))
     confirmed = service._read(server_dir)
     if (not isinstance(confirmed, dict) or service._status(confirmed) != "running"
-            or any(confirmed.get(k) != observed.get(k) for k in ("pid", "started", "marker", "workspace", "port"))):
+            or any(confirmed.get(k) != observed.get(k) for k in
+                   ("pid", "started", "marker", "workspace", "port", "delivery_identity_challenge"))):
         raise DeliveryError("Recorded recovery service changed")
     return key
 
@@ -763,9 +815,12 @@ def cancel(directory: Path) -> dict[str, Any]:
         if observed.get("execution_status") != "running":
             raise DeliveryError("Conversation is not running; no interrupt sent")
         key = _server_key(directory, state)
-        with service._locked(directory / "input-fence"):
-            with service._locked(directory / "execution-fence"):
-                _save(directory, state, "interrupting")
+        try:
+            with service._locked(directory / "input-fence", timeout=5):
+                with service._locked(directory / "execution-fence", timeout=5):
+                    _save(directory, state, "interrupting")
+        except service.ServiceError as exc:
+            raise DeliveryError("Cannot interrupt while delivery input is still being processed") from exc
         code, _ = _http(state["port"], key, "POST", f"/conversations/{state['conversation_id']}/interrupt")
         if code != 200:
             raise DeliveryError(f"Interrupt outcome uncertain (HTTP {code})")

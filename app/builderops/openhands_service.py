@@ -38,14 +38,25 @@ class ServiceError(RuntimeError):
 
 
 @contextlib.contextmanager
-def _locked(directory: Path) -> Iterator[None]:
+def _locked(directory: Path, *, timeout: float | None = None) -> Iterator[None]:
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = directory.lstat()
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
             or stat.S_IMODE(info.st_mode) & 0o077):
         raise ServiceError("State directory must be private and owned by the current user")
     with (directory / "service.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        if timeout is None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as exc:
+                    if time.monotonic() >= deadline:
+                        raise ServiceError("Delivery input is still being processed") from exc
+                    time.sleep(0.05)
         yield
 
 
@@ -253,6 +264,8 @@ def start(
                 if delivery_state.get("worktree") != str(workspace):
                     raise ServiceError("Delivery state does not match the worker workspace")
                 env["OPENHANDS_FACTORY_DELIVERY_DIR"] = str(directory.parent)
+                data["delivery_identity_challenge"] = True
+                _write(directory, data)
         if settings.get("resume_thread_id"):
             env["OPENHANDS_FACTORY_RESUME_THREAD"] = settings["resume_thread_id"]
         entry = ("app.builderops.openhands_server_entry"
