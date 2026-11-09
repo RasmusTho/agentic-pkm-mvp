@@ -483,8 +483,9 @@ def _owner_service(install: Path, state_root: Path, repo: Path, action: str,
             raise delivery.DeliveryError("Owner service state is invalid")
         port = state["port"] if port is None else port
         ui_port = state.get("ui_port", 3001) if ui_port is None else ui_port
-        if type(ui_port) is not int or not 1 <= ui_port <= 65535:
-            raise delivery.DeliveryError("Owner Canvas port is invalid")
+        if (type(port) is not int or not 1 <= port <= 65535 or type(ui_port) is not int
+                or not 1 <= ui_port <= 65535 or port == ui_port):
+            raise delivery.DeliveryError("Owner backend and Canvas ports must be valid and distinct")
         observed = service.status(directory / "server")
         server = observed.get("state")
         if (observed["status"] == "stale" and isinstance(server, dict)

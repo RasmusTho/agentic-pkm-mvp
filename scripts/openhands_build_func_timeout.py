@@ -15,15 +15,41 @@ from pathlib import Path
 
 
 def validate_read_roots(roots: list[str], install: Path, host_home: Path, source: Path) -> None:
+    scanned: set[Path] = set()
+
+    def fail_walk(error: OSError) -> None:
+        raise error
+
+    def inside_checkout(candidate: Path) -> bool:
+        for ancestor in (candidate, *candidate.parents):
+            if not (ancestor / ".git").exists():
+                continue
+            relative = candidate.relative_to(ancestor)
+            # Homebrew's prefix is itself a Git checkout, but installed formula
+            # directories and opt links are separate package data, not its repo.
+            if (relative.parts and relative.parts[0] in {"Cellar", "opt"}
+                    and (ancestor / "Cellar").is_dir() and (ancestor / "opt").is_dir()):
+                continue
+            return True
+        return False
+
     for raw in roots:
         path = Path(raw)
         for candidate in (path, path.resolve(strict=True)):
             if (candidate == Path("/") or candidate == host_home or candidate in host_home.parents
                     or candidate == source or candidate in source.parents or source in candidate.parents
                     or candidate == install or candidate in install.parents or install in candidate.parents
-                    or candidate.name == ".git"
-                    or any((ancestor / ".git").exists() for ancestor in (candidate, *candidate.parents))):
+                    or candidate.name == ".git" or inside_checkout(candidate)):
                 raise SystemExit("OpenHands bootstrap read root overlaps host, repository or installation state")
+            if candidate in scanned:
+                continue
+            scanned.add(candidate)
+            try:
+                for _, directories, files in os.walk(candidate, followlinks=False, onerror=fail_walk):
+                    if ".git" in directories or ".git" in files:
+                        raise SystemExit("OpenHands bootstrap read root contains a Git checkout")
+            except OSError as exc:
+                raise SystemExit("Cannot inspect OpenHands bootstrap read root") from exc
 
 
 def main() -> None:

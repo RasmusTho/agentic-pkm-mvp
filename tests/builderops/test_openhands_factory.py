@@ -230,6 +230,20 @@ def test_owner_restart_reuses_recorded_ports(tmp_path, monkeypatch):
     assert starts[0][3] == 8123 and canvas_ports == [8124]
 
 
+def test_owner_rejects_colliding_canvas_port_without_changing_saved_state(tmp_path, monkeypatch):
+    root = tmp_path / "runs"
+    directory = root / "owner"
+    directory.mkdir(mode=0o700, parents=True)
+    root.chmod(0o700)
+    original = {"version": 1, "kind": "openhands_owner_service.v1", "worktree": str(directory / "workspace"),
+                "port": 8123, "ui_port": 8124}
+    service._write(directory, original)
+    monkeypatch.setattr(service, "start", lambda *args, **kwargs: pytest.fail("started on invalid ports"))
+    with pytest.raises(delivery.DeliveryError, match="valid and distinct"):
+        factory._owner_service(tmp_path, root, tmp_path, "start", None, 8123, False)
+    assert service._read(directory) == original
+
+
 def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys):
     from app.builderops import openhands_watcher as watcher
 
