@@ -54,7 +54,7 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
     if isinstance(reason, str) and len(reason) <= 240 and re.fullmatch(r"[A-Za-z0-9 .,;:_#()/-]+", reason):
         fields.append(f"Detail: {reason}.")
     if type(pr) is int and pr > 0:
-        fields.append(f"Draft PR: https://github.com/RasmusTho/agentic-pkm-mvp/pull/{pr}")
+        fields.append(f"Recorded PR: https://github.com/RasmusTho/agentic-pkm-mvp/pull/{pr}")
     ci = watcher.get("ci")
     if isinstance(ci, dict) and isinstance(ci.get("status"), str):
         head = ci.get("head")

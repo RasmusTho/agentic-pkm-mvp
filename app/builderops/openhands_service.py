@@ -162,19 +162,20 @@ def _settings(path: Path) -> dict[str, Any]:
     return data
 
 
-def _session_key(directory: Path) -> str:
+def _session_key(directory: Path, *, create: bool = True) -> str:
     """Create once, or reuse only an owner-private, regular key file."""
     path = directory / "session-api-key"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(path, flags, 0o600)
-    except FileExistsError:
-        pass
-    else:
-        with os.fdopen(fd, "w") as stream:
-            stream.write(secrets.token_urlsafe(32) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
+    if create:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(secrets.token_urlsafe(32) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
     try:
         fd = os.open(
             path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_NONBLOCK

@@ -275,7 +275,7 @@ def _server_key(directory: Path, state: dict[str, Any]) -> str:
         raise DeliveryError("Recorded service or workspace cannot be verified")
     if not (server_dir / "session-api-key").is_file():
         raise DeliveryError("Recorded service session key is unavailable")
-    return service._session_key(server_dir)
+    return service._session_key(server_dir, create=False)
 
 
 def _http(
@@ -286,7 +286,11 @@ def _http(
         f"http://127.0.0.1:{port}/api{path}", data=data, method=method,
         headers={"X-Session-API-Key": key, "Content-Type": "application/json"},
     )
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req: Any, fp: Any, code: Any, msg: Any, headers: Any, newurl: Any) -> None:
+            return None
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
         with opener.open(request, timeout=timeout) as response:
             status, body = response.status, response.read()
@@ -514,6 +518,33 @@ print(json.dumps({'status': response.status, 'body': json.loads(body)}))
         raise DeliveryError("Delegated conversation readback unavailable") from exc
 
 
+def _recovery_server_key(directory: Path, state: dict[str, Any]) -> str:
+    """Read an existing key and a stable service identity without lifecycle locks."""
+    server_dir = directory / "server"
+    observed = service._read(server_dir)
+    if (not isinstance(observed, dict) or service._status(observed) != "running"
+            or observed.get("workspace") != state.get("worktree") or observed.get("port") != state.get("port")):
+        raise DeliveryError("Recorded recovery service is unavailable")
+    key = service._session_key(server_dir, create=False)
+    confirmed = service._read(server_dir)
+    if (not isinstance(confirmed, dict) or service._status(confirmed) != "running"
+            or any(confirmed.get(k) != observed.get(k) for k in ("pid", "started", "marker", "workspace", "port"))):
+        raise DeliveryError("Recorded recovery service changed")
+    return key
+
+
+def _recovery_conversation(directory: Path, state: dict[str, Any]) -> dict[str, Any]:
+    key = _recovery_server_key(directory, state)
+    code, data = _bounded_recovery_child(state["port"], key, state["conversation_id"], 5)
+    if code != 200 or not isinstance(data, dict):
+        raise DeliveryError("Recovery conversation readback unavailable")
+    workspace = data.get("workspace")
+    if (str(data.get("id")) != state["conversation_id"] or not isinstance(workspace, dict)
+            or workspace.get("working_dir") != state["worktree"]):
+        raise DeliveryError("Recovery conversation identity or workspace mismatch")
+    return data
+
+
 def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[str, Any]) -> dict[str, Any]:
     """Collect bounded, read-only evidence without inferring that unknown execution stopped."""
     observation: dict[str, Any] = {
@@ -591,17 +622,7 @@ def _recovery_observation(directory: Path, state: dict[str, Any], parent: dict[s
     children = parent.get("sub_conversation_ids")
     if isinstance(children, list):
         try:
-            child_server = service._read(server_dir)
-            if (not isinstance(child_server, dict) or service._status(child_server) != "running"
-                    or child_server.get("workspace") != state.get("worktree")
-                    or child_server.get("port") != state.get("port")):
-                raise ValueError("recorded child server is unavailable")
-            key = service._session_key(server_dir)
-            confirmed_server = service._read(server_dir)
-            if (not isinstance(confirmed_server, dict) or service._status(confirmed_server) != "running"
-                    or any(confirmed_server.get(k) != child_server.get(k)
-                           for k in ("pid", "started", "marker", "workspace", "port"))):
-                raise ValueError("recorded child server changed")
+            key = _recovery_server_key(directory, state)
             queue = [(state["conversation_id"], child) for child in children]
             seen: set[str] = {state["conversation_id"]}
             details: list[dict[str, str]] = []
@@ -705,13 +726,15 @@ def status(directory: Path) -> dict[str, Any]:
     server_dir = directory / "server"
     if server_dir.is_dir():
         try:
-            result["service_status"] = service.status(server_dir)["status"]
+            result["service_status"] = service._status(service._read(server_dir))
         except (service.ServiceError, OSError) as exc:
             result["service_status_error"] = str(exc)
     if state["phase"] in {"creating_conversation", "active", "interrupting", "interrupted", "resuming"}:
         data: dict[str, Any] = {}
         try:
-            data = _conversation(directory, state)
+            data = (_recovery_conversation(directory, state)
+                    if state["phase"] in {"interrupting", "interrupted", "resuming"}
+                    else _conversation(directory, state))
         except (DeliveryError, service.ServiceError) as exc:
             result["conversation_readback_error"] = str(exc)
         else:

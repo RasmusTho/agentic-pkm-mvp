@@ -57,8 +57,8 @@ def test_recovery_status_survives_service_inspection_failure(tmp_path, monkeypat
     delivery.service._write(directory, state)
     def unavailable(*args, **kwargs):
         raise delivery.service.ServiceError("Cannot inspect recorded process")
-    monkeypatch.setattr(delivery.service, "status", unavailable)
-    monkeypatch.setattr(delivery, "_conversation", unavailable)
+    monkeypatch.setattr(delivery.service, "_status", unavailable)
+    monkeypatch.setattr(delivery, "_recovery_conversation", unavailable)
     result = delivery.status(directory)
     assert result["state"] == state
     assert result["recovery"]["continuation"] == "blocked"
@@ -279,7 +279,7 @@ def test_interrupted_recovery_observes_processes_children_worktree_and_pr_withou
     monkeypatch.setattr(delivery.service, "_status", lambda *args: "running")
     monkeypatch.setattr(delivery.service, "_identity", lambda pid: (
         "Mon Nov 9 20:24:07 2026" if pid == 12345 else "Mon Nov 9 20:24:08 2026", "redacted"))
-    monkeypatch.setattr(delivery, "_server_key", lambda *args: "test-key")
+    monkeypatch.setattr(delivery.service, "_session_key", lambda *args, **kwargs: "test-key")
     reads = []
     child_workspace = {"path": str(worktree)}
     def child_read(port, key, child_id, timeout):
@@ -384,6 +384,8 @@ def test_recovery_child_readback_has_hard_time_and_size_limits():
         with pytest.raises(delivery.DeliveryError, match="readback unavailable"):
             delivery._bounded_recovery_child(port, "test-key", "redirect", 2)
         assert not redirected
+        status, _ = delivery._http(port, "test-key", "GET", "/conversations/redirect", timeout=2)
+        assert status == 302 and not redirected
         started = time.monotonic()
         with pytest.raises(delivery.DeliveryError, match="readback unavailable"):
             delivery._bounded_recovery_child(port, "test-key", "slow", 0.2)
@@ -392,6 +394,18 @@ def test_recovery_child_readback_has_hard_time_and_size_limits():
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_recovery_does_not_create_missing_key(tmp_path, monkeypatch):
+    server_dir = tmp_path / "server"
+    server_dir.mkdir()
+    state = {"worktree": "/worktree", "port": 8123}
+    server = {"workspace": "/worktree", "port": 8123}
+    monkeypatch.setattr(delivery.service, "_read", lambda *_: server)
+    monkeypatch.setattr(delivery.service, "_status", lambda *_: "running")
+    with pytest.raises(delivery.service.ServiceError):
+        delivery._recovery_server_key(tmp_path, state)
+    assert not (server_dir / "session-api-key").exists()
 
 
 def test_start_refuses_base_change_after_environment_preflight(orchestration):
