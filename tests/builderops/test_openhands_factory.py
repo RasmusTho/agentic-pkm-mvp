@@ -244,6 +244,19 @@ def test_owner_rejects_colliding_canvas_port_without_changing_saved_state(tmp_pa
     assert service._read(directory) == original
 
 
+def test_owner_can_inspect_and_stop_a_previously_colliding_port(tmp_path, monkeypatch):
+    root = tmp_path / "runs"
+    directory = root / "owner"
+    directory.mkdir(mode=0o700, parents=True)
+    root.chmod(0o700)
+    service._write(directory, {"version": 1, "kind": "openhands_owner_service.v1",
+                               "worktree": str(directory / "workspace"), "port": 8123, "ui_port": 8123})
+    monkeypatch.setattr(service, "status", lambda *args: {"status": "stopped"})
+    monkeypatch.setattr(factory, "_canvas", lambda *args: {"ui": {"status": "stopped", "url": None}})
+    assert factory._owner_service(tmp_path, root, tmp_path, "status", None, None, False)["status"] == "stopped"
+    assert factory._owner_service(tmp_path, root, tmp_path, "stop", None, None, False)["status"] == "stopped"
+
+
 def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys):
     from app.builderops import openhands_watcher as watcher
 
