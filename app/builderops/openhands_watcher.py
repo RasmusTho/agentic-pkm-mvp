@@ -22,7 +22,9 @@ from app.builderops import openhands_factory as factory
 from app.builderops import openhands_service as service
 from app.builderops import publication
 from app.dispatcher import leases
-from app.dispatcher.cli import _make_store
+from app.dispatcher.config import load_paths
+from app.dispatcher.events import JsonlEventWriter
+from app.dispatcher.store import SqliteStore
 from scripts import agent_worktree
 from scripts.pr_body_generator import generate_pr_body_from_mapping
 
@@ -30,6 +32,11 @@ HANDOFF = ".codex-tmp/openhands-finish.json"
 BODY_FIELDS = frozenset({"summary", "sbs_impact", "owner_doc_resolution", "builderops_records", "builderops_reason"})
 POLL_SECONDS = 10
 MAX_HEARTBEAT_INTERVAL = 30 * 60
+
+
+def _make_store() -> SqliteStore:
+    paths = load_paths()
+    return SqliteStore(db_path=paths.db_path, event_writer=JsonlEventWriter(paths.events_path))
 
 
 def launch(install: Path, directory: Path, issue: int, repo: Path, worktree_root: Path) -> None:
