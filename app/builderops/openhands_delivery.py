@@ -272,7 +272,7 @@ def _state(directory: Path) -> dict[str, Any]:
 
 def _server_key(directory: Path, state: dict[str, Any]) -> str:
     server_dir = directory / "server"
-    observed = service.status(server_dir)
+    observed = service.status(server_dir, timeout=5)
     server = observed.get("state")
     if (observed.get("status") != "running" or not isinstance(server, dict)
             or server.get("workspace") != state["worktree"] or server.get("port") != state["port"]):

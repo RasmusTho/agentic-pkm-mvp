@@ -435,11 +435,28 @@ def test_model_free_owner_retains_its_existing_control_service_key(tmp_path, mon
     key = delivery.service._session_key(server_dir)
     state = {"kind": "openhands_owner_service.v1", "worktree": "/owner", "port": 8123}
     server = {"workspace": "/owner", "port": 8123, "control_only": True}
-    monkeypatch.setattr(delivery.service, "status", lambda *_: {"status": "running", "state": server})
+    monkeypatch.setattr(delivery.service, "status", lambda *_, **__: {"status": "running", "state": server})
     assert delivery._server_key(tmp_path, state) == key
     assert not isinstance(delivery._server_key(tmp_path, state), delivery._BoundWorkerKey)
     with pytest.raises(delivery.DeliveryError, match="identity challenge"):
         delivery._server_key(tmp_path, {**state, "kind": "openhands_delivery_run.v1"})
+
+
+def test_worker_readback_returns_when_service_lifecycle_lock_is_held(tmp_path):
+    directory = tmp_path / "run"
+    server_dir = directory / "server"
+    server_dir.mkdir(mode=0o700, parents=True)
+    outcome = []
+    def readback():
+        try:
+            delivery._server_key(directory, {"worktree": "/work", "port": 8123})
+        except delivery.service.ServiceError as exc:
+            outcome.append(str(exc))
+    with delivery.service._locked(server_dir):
+        worker = threading.Thread(target=readback)
+        worker.start()
+        worker.join(timeout=7)
+        assert not worker.is_alive() and outcome == ["Delivery input is still being processed"]
 
 
 def test_worker_key_is_sent_only_to_peer_that_proves_possession():

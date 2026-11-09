@@ -123,8 +123,8 @@ def _status(data: dict[str, Any] | None) -> str:
     return "running"
 
 
-def status(directory: Path) -> dict[str, Any]:
-    with _locked(directory):
+def status(directory: Path, *, timeout: float | None = None) -> dict[str, Any]:
+    with _locked(directory, timeout=timeout):
         data = _read(directory)
         return {"status": _status(data), "state": data}
 
