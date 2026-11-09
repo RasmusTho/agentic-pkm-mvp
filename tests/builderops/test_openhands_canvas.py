@@ -73,6 +73,60 @@ def test_port_probe_with_recent_connection_and_active_listener():
     canvas.ensure_port_free(port)
 
 
+@pytest.mark.parametrize(
+    ("marker_status", "marker_body", "ready"),
+    [
+        (200, b"unrelated listener", False),
+        (503, b"different service", False),
+        (503, b"Service Unavailable (no backend configured for this route) extra", False),
+        (503, b"Service Unavailable (no backend configured for this route)", False),
+        (503, b"Service Unavailable (no backend configured for this route)", True),
+    ],
+)
+def test_readiness_requires_marker_response(monkeypatch, marker_status, marker_body, ready):
+    marker = "/__owner_canvas_" + "a" * 32
+    requests = []
+
+    class Process:
+        polls = 0
+
+        def poll(self):
+            self.polls += 1
+            return None if self.polls == 1 or ready else 1
+
+    class Response:
+        def __init__(self, path):
+            self.status = 200 if path == "/" else marker_status
+
+        def read(self, size):
+            return marker_body[:size]
+
+    class Connection:
+        def __init__(self, host, port, timeout):
+            assert (host, port, timeout) == ("127.0.0.1", 3001, 0.2)
+
+        def request(self, method, path):
+            assert method == "GET"
+            self.path = path
+            requests.append(path)
+
+        def getresponse(self):
+            return Response(self.path)
+
+        def close(self):
+            pass
+
+    # A failed marker probe is followed by the server child exiting.
+    monkeypatch.setattr(canvas.http.client, "HTTPConnection", Connection)
+    monkeypatch.setattr(canvas.time, "sleep", lambda _: None)
+    if ready:
+        canvas.wait_ready(Process(), 3001, marker)
+    else:
+        with pytest.raises(canvas.CanvasError, match="exited before becoming ready"):
+            canvas.wait_ready(Process(), 3001, marker)
+    assert requests == ["/", marker]
+
+
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     package = tmp_path / "package"
@@ -136,7 +190,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(canvas.subprocess, "Popen", Process)
     monkeypatch.setattr(canvas, "supervisor_request", request)
     monkeypatch.setattr(canvas.select, "select", lambda r, w, x, timeout: (r, [], []))
-    monkeypatch.setattr(canvas, "wait_ready", lambda process, port: None)
+    monkeypatch.setattr(canvas, "wait_ready", lambda process, port, marker: None)
     monkeypatch.setattr(canvas, "ensure_port_free", lambda port: None)
     args = ["--package-dir", str(package), "--backend", "http://127.0.0.1:8000",
             "--key-file", str(key_file), "--state-dir", str(state_dir)]
@@ -275,14 +329,14 @@ def test_invalid_state_refuses_stop(setup, capsys):
 
 
 def test_failed_start_cleans_up_and_can_retry(setup, monkeypatch):
-    def failed_ready(process, port):
+    def failed_ready(process, port, marker):
         raise canvas.CanvasError("not ready")
 
     monkeypatch.setattr(canvas, "wait_ready", failed_ready)
     assert canvas.main(["start", *setup.args]) == 1
     assert not setup.running
     assert not (setup.state / "server.json").exists()
-    monkeypatch.setattr(canvas, "wait_ready", lambda process, port: None)
+    monkeypatch.setattr(canvas, "wait_ready", lambda process, port, marker: None)
     assert canvas.main(["start", *setup.args]) == 0
     assert len(setup.launches) == 2
 
@@ -393,7 +447,7 @@ def test_assembled_launcher_with_real_supervisor(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(canvas.subprocess, "Popen", observe)
     # Only network effects are substituted; supervisor and CLI remain real.
     monkeypatch.setattr(canvas, "ensure_port_free", lambda port: None)
-    monkeypatch.setattr(canvas, "wait_ready", lambda process, port: None)
+    monkeypatch.setattr(canvas, "wait_ready", lambda process, port, marker: None)
     monkeypatch.setattr(canvas, "verify_backend_key", lambda backend, key: None)
     try:
         assert canvas.main(["start", *args]) == 0

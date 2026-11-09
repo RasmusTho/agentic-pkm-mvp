@@ -250,9 +250,10 @@ def supervise(control: Path, marker: str, command: list[str]) -> int:
             os.close(control_fd)
 
 
-def wait_ready(process: subprocess.Popen, port: int) -> None:
+def wait_ready(process: subprocess.Popen, port: int, marker: str) -> None:
     # Give a failed bind time to surface before probing the port.
     time.sleep(0.2)
+    marker_body = b"Service Unavailable (no backend configured for this route)"
     for _ in range(50):
         if process.poll() is not None:
             raise CanvasError("Canvas server exited before becoming ready")
@@ -261,8 +262,14 @@ def wait_ready(process: subprocess.Popen, port: int) -> None:
             connection.request("GET", "/")
             response = connection.getresponse()
             if response.status == 200:
-                return
-        except OSError:
+                connection.close()
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=0.2)
+                connection.request("GET", marker)
+                response = connection.getresponse()
+                if (response.status == 503 and response.read(len(marker_body) + 1) == marker_body
+                        and process.poll() is None):
+                    return
+        except (OSError, http.client.HTTPException):
             pass
         finally:
             connection.close()
@@ -365,7 +372,7 @@ def start(args, state_path: Path) -> str:
                  "server": str(server), "url": url, "backend": backend,
                  "key_fingerprint": hashlib.sha256(key.encode("utf-8")).hexdigest()}
         write_state(state_path, state)
-        wait_ready(process, args.port)
+        wait_ready(process, args.port, marker)
         if supervisor_request(state_path, state, "status") != "running":
             raise CanvasError("Canvas server exited before becoming ready")
     except Exception:
