@@ -255,9 +255,11 @@ def start(
                 env["OPENHANDS_FACTORY_DELIVERY_DIR"] = str(directory.parent)
         if settings.get("resume_thread_id"):
             env["OPENHANDS_FACTORY_RESUME_THREAD"] = settings["resume_thread_id"]
+        entry = ("app.builderops.openhands_server_entry"
+                 if env.get("OPENHANDS_FACTORY_DELIVERY_DIR") else "openhands.agent_server.__main__")
         command = [
             str(python), "-c",
-            f"from openhands.agent_server.__main__ import main; main() # {marker}",
+            f"from {entry} import main; main() # {marker}",
             "--host", "127.0.0.1", "--port", str(port),
         ]
         try:

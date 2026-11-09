@@ -763,8 +763,9 @@ def cancel(directory: Path) -> dict[str, Any]:
         if observed.get("execution_status") != "running":
             raise DeliveryError("Conversation is not running; no interrupt sent")
         key = _server_key(directory, state)
-        with service._locked(directory / "execution-fence"):
-            _save(directory, state, "interrupting")
+        with service._locked(directory / "input-fence"):
+            with service._locked(directory / "execution-fence"):
+                _save(directory, state, "interrupting")
         code, _ = _http(state["port"], key, "POST", f"/conversations/{state['conversation_id']}/interrupt")
         if code != 200:
             raise DeliveryError(f"Interrupt outcome uncertain (HTTP {code})")
