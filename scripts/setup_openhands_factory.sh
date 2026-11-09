@@ -10,12 +10,26 @@ fi
 factory_dir="$1"
 worktree_dir="${2:-$factory_dir/worktrees}"
 source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+host_home="${HOME:?Host home is required}"
 command -v uv >/dev/null
 command -v npm >/dev/null
 command -v codex >/dev/null
+/usr/bin/python3 - "$factory_dir" "$host_home" "$source_dir" <<'PY'
+from pathlib import Path
+import sys
+install, home, source = (Path(value).resolve() for value in sys.argv[1:])
+if (install == home or install in home.parents or install == source
+        or install in source.parents or source in install.parents):
+    raise SystemExit("OpenHands installation overlaps the host home or source repository")
+PY
 mkdir -p "$factory_dir/acp" "$factory_dir/canvas" "$factory_dir/bin" "$worktree_dir"
 mkdir -m 700 -p "$factory_dir/runs"
 mkdir -m 700 -p "$factory_dir/setup-home"
+[[ ! -L "$factory_dir/setup-home" && -d "$factory_dir/setup-home" ]] || {
+  printf 'OpenHands setup home must be a directory, not a link\n' >&2
+  exit 1
+}
+chmod 700 "$factory_dir/setup-home"
 clean_env=(env -i "PATH=$PATH" "HOME=$factory_dir/setup-home" "TMPDIR=$factory_dir/setup-home" LANG=C)
 
 # The Canvas launcher belongs to the separately reviewed #6602 candidate.
@@ -53,7 +67,8 @@ fi
 "${clean_env[@]}" /usr/bin/curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
   'https://files.pythonhosted.org/packages/b3/0d/bf0567477f7281d9a3926c582bfef21bff7498fc0ffd3e9de21811896a0b/func_timeout-4.3.5.tar.gz' \
   > "$factory_dir/setup-home/func_timeout-4.3.5.tar.gz"
-"${clean_env[@]}" "$factory_dir/venv/bin/python" -I -S "$source_dir/scripts/openhands_build_func_timeout.py" "$factory_dir"
+"${clean_env[@]}" "$factory_dir/venv/bin/python" -I -S "$source_dir/scripts/openhands_build_func_timeout.py" \
+  "$factory_dir" "$host_home" "$source_dir"
 (cd "$factory_dir" && "${clean_env[@]}" npm install --prefix "$factory_dir/acp" --save-exact --ignore-scripts \
   --no-audit --no-fund --registry=https://registry.npmjs.org/ '@agentclientprotocol/codex-acp@2.2.2')
 (cd "$factory_dir" && "${clean_env[@]}" npm install --prefix "$factory_dir/canvas" --save-exact --ignore-scripts \

@@ -281,9 +281,18 @@ def stop(directory: Path, timeout: float = 5.0) -> dict[str, Any]:
         current = _status(data)
         if current == "stopped":
             return {"status": current, "state": data}
+        if (current == "stale" and isinstance(data, dict) and data.get("state") == "stopping"
+                and type(data.get("pid")) is int and data["pid"] > 1 and _identity(data["pid"]) is None):
+            # A prior stop persisted intent before signalling and the exact PID
+            # no longer exists. No signal or repeated external effect is needed.
+            data["state"] = "stopped"
+            _write(directory, data)
+            return {"status": "stopped", "state": data}
         if current != "running" or data is None:
             raise ServiceError("Cannot stop: lifecycle state is stale; no signal sent")
         pid = data["pid"]
+        data["state"] = "stopping"
+        _write(directory, data)
         # The random command marker and start time guard against PID reuse. On Linux,
         # a pidfd also binds the eventual signal to the checked process instance.
         pidfd = None

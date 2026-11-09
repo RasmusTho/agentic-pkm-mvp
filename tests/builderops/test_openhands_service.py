@@ -151,6 +151,26 @@ def test_stop_checks_identity_and_persists_stopped(tmp_path, monkeypatch):
     assert service.status(tmp_path)["status"] == "stopped"
 
 
+def test_stop_recovers_when_process_dies_before_stop_readback(tmp_path, monkeypatch):
+    service._write(tmp_path, {"version": 1, "state": "running", "pid": 123,
+                              "marker": "unique", "started": "old"})
+    alive = [True]
+    monkeypatch.setattr(service, "_identity", lambda pid: ("old", "unique") if alive[0] else None)
+    monkeypatch.delattr(service.os, "pidfd_open", raising=False)
+
+    def interrupt_after_signal(pid, sig):
+        alive[0] = False
+        raise SystemExit("interrupted after signal")
+
+    monkeypatch.setattr(service.os, "kill", interrupt_after_signal)
+    with pytest.raises(SystemExit):
+        service.stop(tmp_path)
+    assert service._read(tmp_path)["state"] == "stopping"
+    assert service.status(tmp_path)["status"] == "stale"
+    assert service.stop(tmp_path)["status"] == "stopped"
+    assert service._read(tmp_path)["state"] == "stopped"
+
+
 def test_launch_failure_is_stopped_but_ambiguous_identity_is_stale(
     tmp_path, monkeypatch, settings_file
 ):

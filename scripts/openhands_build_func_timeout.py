@@ -18,6 +18,15 @@ def main() -> None:
     if sys.platform != "darwin" or platform.machine() != "arm64" or sys.version_info[:2] != (3, 12):
         raise SystemExit("OpenHands bootstrap requires macOS arm64 and Python 3.12")
     install = Path(sys.argv[1]).resolve(strict=True)
+    host_home = Path(sys.argv[2]).resolve(strict=True)
+    source = Path(sys.argv[3]).resolve(strict=True)
+    if (install == host_home or install in host_home.parents or install == source
+            or install in source.parents or source in install.parents):
+        raise SystemExit("OpenHands installation overlaps the host home or source repository")
+    home = install / "setup-home"
+    venv = install / "venv"
+    if home.is_symlink() or venv.is_symlink() or not home.is_dir() or not venv.is_dir():
+        raise SystemExit("OpenHands bootstrap directories are unavailable or linked")
     sdist = install / "setup-home/func_timeout-4.3.5.tar.gz"
     python = install / "venv/bin/python"
     uv = Path(shutil.which("uv") or "").resolve(strict=True)
@@ -27,7 +36,10 @@ def main() -> None:
     if hashlib.sha256(sdist.read_bytes()).hexdigest() != "74cd3c428ec94f4edfba81f9b2f14904846d5ffccc27c92433b8b5939b5575dd":
         raise SystemExit("OpenHands bootstrap source hash does not match")
     prefix = Path(sys.base_prefix).resolve(strict=True)
-    roots = [str(prefix), str(uv.parent)]
+    sys.path.insert(0, str(source))
+    from scripts.openhands_native_libraries import python_binary_roots
+
+    roots = [str(prefix), str(uv.parent), *python_binary_roots(python, prefix)]
     framework = prefix.parent.parent
     if framework.name == "Python.framework" and framework.parent.name == "Frameworks":
         package = framework.parent.parent
@@ -57,10 +69,10 @@ def main() -> None:
                 roots.append(str(directory))
     entries = ['":minimal"="read"', '":workspace_roots"="write"']
     entries += [json.dumps(root) + '="read"' for root in dict.fromkeys(roots)]
+    entries.append(json.dumps(str(venv)) + '="write"')
     profile = "permissions.openhands_bootstrap.filesystem={" + ",".join(entries) + "}"
-    home = install / "setup-home"
     command = [codex, "sandbox", "-c", "permissions.openhands_bootstrap.network.enabled=true",
-               "-c", profile, "-P", "openhands_bootstrap", "-C", str(install), "--", "/usr/bin/env", "-i",
+               "-c", profile, "-P", "openhands_bootstrap", "-C", str(home), "--", "/usr/bin/env", "-i",
                "PATH=/usr/bin:/bin", f"HOME={home}", f"TMPDIR={home}", str(uv), "pip", "install",
                "--no-config", "--index-url", "https://pypi.org/simple", "--python", str(python)]
     outer_env = {key: os.environ[key] for key in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR") if key in os.environ}

@@ -26,6 +26,7 @@ from app.builderops import openhands_delivery as delivery
 from app.builderops import openhands_review as review
 from app.builderops import openhands_service as service
 from app.builderops import publication
+from scripts.openhands_native_libraries import python_binary_roots
 from scripts.validate_issue_readiness import _declared_verify_targets, _extract_acceptance_items, extract_sections
 
 FACTORY_ROOT = Path(__file__).resolve().parents[2]
@@ -327,9 +328,13 @@ def _settings(
         read_paths.append(test_python.parent.parent)
     if (install / "canvas").is_dir():
         read_paths.append(install / "canvas")
-    roots = list(dict.fromkeys([*(str(path.resolve()) for path in read_paths),
-                                *_python_framework_traversal_roots(python_root),
-                                *_python_library_roots(python, python_root)]))
+    try:
+        roots = list(dict.fromkeys([*(str(path.resolve()) for path in read_paths),
+                                    *_python_framework_traversal_roots(python_root),
+                                    *_python_library_roots(python, python_root),
+                                    *python_binary_roots(python, python_root)]))
+    except RuntimeError as exc:
+        raise delivery.DeliveryError(str(exc)) from exc
     entries = ",".join(f"{json.dumps(path)}=\"read\"" for path in roots)
     config = [
         ('model', '"gpt-6.1-terra"'), ('model_provider', '"openai"'),
@@ -450,13 +455,22 @@ def _owner_service(install: Path, state_root: Path, repo: Path, action: str,
         if state is None:
             if action != "start":
                 return {"status": "stopped"}
+            if (service._read(directory / "server") is not None
+                    or service._read(directory / "owner-control") is not None):
+                raise delivery.DeliveryError("Owner initialization state is uncertain; inspect it before starting")
             workspace = directory / "workspace"
             workspace.mkdir(mode=0o700, exist_ok=True)
             settings = _settings(install, directory, _executable("node"), _executable("codex"), repo, workspace)
             settings_path = directory / "settings.json"
-            fd = os.open(settings_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w") as stream:
-                json.dump(settings, stream, sort_keys=True)
+            fd, temp_name = tempfile.mkstemp(prefix=".settings-", dir=directory)
+            try:
+                with os.fdopen(fd, "w") as stream:
+                    json.dump(settings, stream, sort_keys=True)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temp_name, settings_path)
+            finally:
+                Path(temp_name).unlink(missing_ok=True)
             state = {"version": 1, "kind": "openhands_owner_service.v1", "worktree": str(workspace), "port": port}
             service._write(directory, state)
         if (state.get("kind") != "openhands_owner_service.v1"
@@ -655,6 +669,13 @@ def _stop(install: Path, directory: Path, issue: int) -> dict[str, Any]:
         observed = service.status(directory / "server")
         server = observed.get("state")
         status = observed.get("status")
+        prior = state.get("factory_shutdown")
+        if (status in {"stale", "running"} and isinstance(server, dict) and server.get("state") == "stopping"
+                and server.get("port") == state.get("port") and server.get("workspace") == state.get("worktree")
+                and isinstance(prior, dict) and prior.get("state") == "stopping"
+                and prior.get("conversation_status") in {"finished", "paused"}):
+            service.stop(directory / "server")
+            status = service.status(directory / "server")["status"]
         if status == "running":
             if (not isinstance(server, dict) or server.get("port") != state.get("port")
                     or server.get("workspace") != state.get("worktree")):
@@ -668,7 +689,6 @@ def _stop(install: Path, directory: Path, issue: int) -> dict[str, Any]:
             state["factory_shutdown"] = _capture_recovery(install, directory, state, server, conversation, live)
             service._write(directory, state)
         elif status == "stopped":
-            prior = state.get("factory_shutdown")
             if (not isinstance(prior, dict) or prior.get("state") not in {"stopping", "stopped"}
                     or prior.get("conversation_status") not in {"finished", "paused"}):
                 raise delivery.DeliveryError("Backend is stopped but conversation completion is unverified")

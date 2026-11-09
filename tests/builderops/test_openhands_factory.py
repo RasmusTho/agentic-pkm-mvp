@@ -130,6 +130,50 @@ def test_published_worker_cannot_restart(tmp_path):
         factory._restart(tmp_path, directory, 41, tmp_path, tmp_path)
 
 
+def test_owner_recovers_pre_state_settings_without_external_effects(tmp_path, monkeypatch):
+    from app.builderops import openhands_owner
+
+    root = tmp_path / "runs"
+    root.mkdir(mode=0o700)
+    directory = root / "owner"
+    directory.mkdir(mode=0o700)
+    (directory / "settings.json").write_text('{"incomplete": true}')
+    monkeypatch.setattr(factory, "_executable", lambda name: Path("/executable"))
+    monkeypatch.setattr(factory, "_settings", lambda *args: {"fixed": "settings"})
+    monkeypatch.setattr(service, "status", lambda path: {"status": "stopped"})
+    starts = []
+    monkeypatch.setattr(service, "start", lambda *args, **kwargs: starts.append((args, kwargs)))
+    monkeypatch.setattr(delivery, "_server_key", lambda *args: "private")
+    monkeypatch.setattr(delivery, "_http", lambda *args: (200, {}))
+    monkeypatch.setattr(openhands_owner, "ensure_profile", lambda *args: None)
+    monkeypatch.setattr(openhands_owner, "attach", lambda *args: {"conversation_id": "control"})
+    monkeypatch.setattr(factory, "_canvas", lambda *args: {"ui": {"url": "http://127.0.0.1:3001"}})
+    result = factory._owner_service(tmp_path, root, tmp_path, "start", 8766, 3001, False)
+    assert json.loads((directory / "settings.json").read_text()) == {"fixed": "settings"}
+    assert service._read(directory)["kind"] == "openhands_owner_service.v1"
+    assert len(starts) == 1 and starts[0][1]["control_only"] is True
+    assert result["conversation_id"] == "control"
+
+
+def test_worker_stop_reconciles_process_lost_after_signal(tmp_path, monkeypatch):
+    directory = tmp_path / "issue-123"
+    server = directory / "server"
+    server.mkdir(mode=0o700, parents=True)
+    directory.chmod(0o700)
+    worktree = str(tmp_path / "worktree")
+    service._write(directory, {"version": 1, "kind": "openhands_delivery_run.v1", "issue": 123,
+                               "port": 8123, "worktree": worktree,
+                               "factory_shutdown": {"state": "stopping", "conversation_status": "finished"}})
+    service._write(server, {"version": 1, "state": "stopping", "pid": 123, "marker": "unique",
+                            "started": "old", "port": 8123, "workspace": worktree})
+    monkeypatch.setattr(service, "_identity", lambda pid: None)
+    monkeypatch.setattr(service.os, "kill", lambda *args: pytest.fail("must not signal a missing process"))
+    result = factory._stop(tmp_path, directory, 123)
+    assert result["backend_status"] == "stopped"
+    assert service._read(server)["state"] == "stopped"
+    assert service._read(directory)["factory_shutdown"]["state"] == "stopped"
+
+
 def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys):
     from app.builderops import openhands_watcher as watcher
 
@@ -141,6 +185,7 @@ def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monke
     library_root = tmp_path / "linked-libraries"
     library_root.mkdir()
     monkeypatch.setattr(factory, "_python_library_roots", lambda *args: [str(library_root)])
+    monkeypatch.setattr(factory, "python_binary_roots", lambda *args: [])
     package_root = tmp_path / "brew/Cellar/python@3.12/3.12.12"
     python_root = package_root / "Frameworks/Python.framework/Versions/3.12"
     python_root.mkdir(parents=True)
@@ -891,6 +936,7 @@ def test_inherited_tools_are_disabled_by_name_without_copying_values(tmp_path, m
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(factory, "_base_config", lambda repo: b'[plugins."project@catalog"]\nenabled=true\n')
     monkeypatch.setattr(factory, "_python_library_roots", lambda *args: [])
+    monkeypatch.setattr(factory, "python_binary_roots", lambda *args: [])
     monkeypatch.setattr(factory.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(
         a[0], 0, factory.CODEX_VERSION if a[0][-1] == "--version" else str(tmp_path), ""))
     executable = Path(__import__("sys").executable)
