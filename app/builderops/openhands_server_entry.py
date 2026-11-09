@@ -10,6 +10,7 @@ import asyncio
 import fcntl
 import hashlib
 import hmac
+import json
 import os
 import re
 import stat
@@ -152,6 +153,16 @@ class DeliveryInputFence:
             message = await receive()
             if message.get("type") != "websocket.receive":
                 return message
+            # Agent-server consumes these as authentication control frames,
+            # including a redundant frame after header-based authentication.
+            # They are not conversation input and can precede a slow replay.
+            try:
+                value = json.loads(message.get("text") or message.get("bytes") or "")
+                if (isinstance(value, dict) and value.get("type") == "auth"
+                        and set(value) <= {"type", "session_api_key"}):
+                    return message
+            except (TypeError, ValueError, UnicodeError):
+                pass
             try:
                 held = await self._acquire()
             except (OSError, ValueError, service.ServiceError):

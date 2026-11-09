@@ -821,7 +821,9 @@ def cancel(directory: Path) -> dict[str, Any]:
                     _save(directory, state, "interrupting")
         except service.ServiceError as exc:
             raise DeliveryError("Cannot interrupt while delivery input is still being processed") from exc
-        code, _ = _http(state["port"], key, "POST", f"/conversations/{state['conversation_id']}/interrupt")
+        # The upstream handler can wait five seconds for ACP cancellation;
+        # include time for the identity handshake and transport as well.
+        code, _ = _http(state["port"], key, "POST", f"/conversations/{state['conversation_id']}/interrupt", timeout=15)
         if code != 200:
             raise DeliveryError(f"Interrupt outcome uncertain (HTTP {code})")
         try:

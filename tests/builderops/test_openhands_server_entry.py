@@ -146,6 +146,32 @@ def test_unsupported_worker_websockets_do_not_launch_commands(tmp_path: Path):
     asyncio.run(run())
 
 
+def test_websocket_auth_frame_does_not_block_cancellation_during_replay(tmp_path: Path):
+    async def run():
+        state = {"version": 1, "kind": "openhands_delivery_run.v1", "worktree": "/work", "phase": "active"}
+        service._write(tmp_path, state)
+        replay_started, finish = asyncio.Event(), asyncio.Event()
+        incoming = iter([{"type": "websocket.connect"},
+                         {"type": "websocket.receive", "text": '{"type":"auth","session_api_key":"test"}'}])
+        async def app(scope, receive, send):
+            await receive()
+            await receive()
+            replay_started.set()
+            await finish.wait()
+        async def receive():
+            return next(incoming)
+        async def send(message):
+            pass
+        task = asyncio.create_task(DeliveryInputFence(app, str(tmp_path), "/work")(
+            {"type": "websocket", "path": "/sockets/events/11111111-1111-4111-8111-111111111111"}, receive, send))
+        await replay_started.wait()
+        with service._locked(tmp_path / "input-fence", timeout=0.1):
+            service._write(tmp_path, {**state, "phase": "interrupting"})
+        finish.set()
+        await task
+    asyncio.run(run())
+
+
 def test_cancellation_waits_for_an_admitted_input(tmp_path: Path):
     async def run():
         state = {"version": 1, "kind": "openhands_delivery_run.v1", "worktree": "/work", "phase": "active"}
