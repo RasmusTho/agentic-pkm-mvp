@@ -63,11 +63,14 @@ def test_validate_reads_canonical_prompts(monkeypatch, tmp_path: Path) -> None:
     assert any(issue["code"] == "prompts.invalid" for issue in response.json()["issues"])
 
 
-def test_validate_reports_unclosed_prompt_front_matter(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "text", ["---\nname: incomplete\n", "---\nname: incomplete---suffix\n", "---\n---suffix\n"]
+)
+def test_validate_reports_unclosed_prompt_front_matter(monkeypatch, tmp_path: Path, text: str) -> None:
     vault = _configure_vault(monkeypatch, tmp_path)
     monkeypatch.setenv("VAULT_ROOT", str(vault))
     prompt_path = vault / "settings" / "prompts" / "ask.md"
-    prompt_path.write_text("---\nname: incomplete\n", encoding="utf-8")
+    prompt_path.write_text(text, encoding="utf-8")
 
     response = TestClient(app).get("/api/settings/validate")
 
@@ -83,10 +86,11 @@ def test_validate_reports_unclosed_prompt_front_matter(monkeypatch, tmp_path: Pa
         resolve_ask_system_prompt(vault)
 
 
-def test_ask_prompt_resolves_with_front_matter(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("metadata", ["name: ask\n---", "name: ask---suffix\n---  "])
+def test_ask_prompt_resolves_with_front_matter(monkeypatch, tmp_path: Path, metadata: str) -> None:
     vault = _configure_vault(monkeypatch, tmp_path)
     (vault / "settings" / "prompts" / "ask.md").write_text(
-        "---\nname: ask\n---\nUse this prompt.\n", encoding="utf-8"
+        f"---\n{metadata}\nUse this prompt.\n", encoding="utf-8"
     )
 
     assert resolve_ask_system_prompt(vault) == ("Use this prompt.", "vault-shared:prompts/ask.md")

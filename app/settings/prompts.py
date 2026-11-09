@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from app.settings.locations import canonical_settings_root
@@ -15,10 +16,10 @@ ASK_PROMPT_RELATIVE_PATH = Path("prompts") / "ask.md"
 def _markdown_body(text: str) -> str:
     """Return prompt Markdown without optional YAML front matter."""
     if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) != 3:
+        closing = re.compile(r"^---[ \t]*\r?$", re.MULTILINE).search(text, 3)
+        if closing is None:
             raise ValueError("prompt front matter is unclosed")
-        text = parts[2]
+        text = text[closing.end():]
     return text.strip()
 
 
