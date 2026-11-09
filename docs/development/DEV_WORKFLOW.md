@@ -78,6 +78,15 @@ Use the same entry point with `status`, `cancel`, `resume`, or `stop` in place o
 derives its pinned ACP and isolated service configuration; model selection stays on
 `gpt-6.1-terra` with subscription authentication, with no provider or model fallback. `cancel`
 interrupts the conversation; it does not establish that delegated processes have stopped. For a
+previously interrupted delivery, `resume` currently refuses continuation because native and
+delegated execution cannot yet be proven stopped. `status` reports available task-scoped observations
+of the recorded service, worktree and publication, with unknowns retained; a paused conversation is
+not proof that the underlying work has ended. New worker backends refuse further delivery inputs
+after interruption and prove possession of the recorded session key on the same connection before
+the factory sends it. This is
+a partial mitigation, not a verified recovery procedure, and does not retrofit a backend that is
+already running. Preserve its state and inspect it rather than replaying the task.
+For a
 new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Test
 targets use the separately prepared, hash-locked test environment on macOS arm64 with Python 3.12.
 Setup downloads only hash-verified binary wheels, then installs and checks them without network access.
