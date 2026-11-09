@@ -17,6 +17,7 @@ from tests.scripts.test_publication import BODY_INPUTS
 
 REAL_KEEPER = watcher._LeaseKeeper
 REAL_WAIT_FOR_CI = watcher._wait_for_ci
+REAL_CONVERSATION = delivery._conversation
 
 
 def test_authorized_worker_prompt_requests_only_local_handoff():
@@ -522,6 +523,20 @@ def test_watcher_stops_after_bounded_readback_failures(authorized_run, monkeypat
         raise delivery.DeliveryError("readback unavailable")
 
     monkeypatch.setattr(delivery, "_conversation", unavailable)
+    monkeypatch.setattr(watcher.time, "sleep", lambda seconds: None)
+    watcher.run(Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
+    assert len(attempts) == 3 and watcher.status(directory)["status"] == "pending"
+    assert not runner.committed and not calls
+
+
+def test_watcher_retries_service_lock_timeouts_as_readback_failures(authorized_run, monkeypatch):
+    directory, worktree, state, _, runner, calls = authorized_run
+    attempts = []
+    def busy(*args, **kwargs):
+        attempts.append(True)
+        raise service.ServiceError("Delivery input is still being processed")
+    monkeypatch.setattr(delivery, "_conversation", REAL_CONVERSATION)
+    monkeypatch.setattr(service, "status", busy)
     monkeypatch.setattr(watcher.time, "sleep", lambda seconds: None)
     watcher.run(Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
     assert len(attempts) == 3 and watcher.status(directory)["status"] == "pending"

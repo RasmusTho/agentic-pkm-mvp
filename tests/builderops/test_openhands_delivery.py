@@ -450,13 +450,13 @@ def test_worker_readback_returns_when_service_lifecycle_lock_is_held(tmp_path):
     def readback():
         try:
             delivery._server_key(directory, {"worktree": "/work", "port": 8123})
-        except delivery.service.ServiceError as exc:
+        except delivery.DeliveryError as exc:
             outcome.append(str(exc))
     with delivery.service._locked(server_dir):
         worker = threading.Thread(target=readback)
         worker.start()
         worker.join(timeout=7)
-        assert not worker.is_alive() and outcome == ["Delivery input is still being processed"]
+        assert not worker.is_alive() and outcome == ["Recorded service readback unavailable"]
 
 
 def test_worker_key_is_sent_only_to_peer_that_proves_possession():
