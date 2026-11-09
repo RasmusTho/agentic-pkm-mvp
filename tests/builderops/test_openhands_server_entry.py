@@ -27,7 +27,7 @@ def test_http_blocks_direct_run_and_events_after_interrupt(tmp_path: Path):
         base = "/api/conversations/11111111-1111-4111-8111-111111111111"
         await fence({"type": "http", "method": "POST", "path": base + "/run"}, receive, send)
         await fence({"type": "http", "method": "POST", "path": base + "/goal"}, receive, send)
-        await fence({"type": "http", "method": "POST", "path": "/api/execute_bash_command"}, receive, send)
+        await fence({"type": "http", "method": "POST", "path": "/api/bash/execute_bash_command"}, receive, send)
         service._write(tmp_path, {**state, "phase": "interrupted"})
         for path in (base + "/run", base + "/events"):
             await fence({"type": "http", "method": "POST", "path": path}, receive, send)
