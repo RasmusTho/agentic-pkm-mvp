@@ -556,6 +556,22 @@ def resume(directory: Path) -> dict[str, Any]:
             raise DeliveryError("Only an observed paused conversation can be resumed")
         key = _server_key(directory, state)
         _save(directory, state, "resuming")
+        # The interrupted tool may have completed only some of its effects. Queue a
+        # recovery instruction before allowing the retained agent turn to continue.
+        # Persist the uncertain phase first: if the response is lost, do not blindly
+        # append the message again or restart the conversation.
+        prompt = (
+            "The previous action was interrupted and may have partially completed. "
+            "Before repeating any action, inspect the workspace and relevant effects, "
+            "reconcile what already happened, and perform only the remaining work. "
+            "If the effects cannot be determined, report uncertainty instead of repeating the action."
+        )
+        code, response = _http(
+            state["port"], key, "POST", f"/conversations/{state['conversation_id']}/events",
+            {"role": "user", "content": [{"type": "text", "text": prompt}], "run": False},
+        )
+        if code != 200 or not isinstance(response, dict) or response.get("success") is not True:
+            raise DeliveryError("Recovery instruction outcome uncertain; inspect before retry")
         code, _ = _http(state["port"], key, "POST", f"/conversations/{state['conversation_id']}/run")
         if code != 200:
             raise DeliveryError(f"Resume outcome uncertain (HTTP {code})")

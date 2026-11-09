@@ -232,6 +232,30 @@ def test_start_claims_then_starts_workspace_bound_conversation_and_prevents_repl
     assert delivery.status(kwargs["directory"])["conversation_status"] == "running"
     assert delivery.cancel(kwargs["directory"])["state"]["phase"] == "interrupted"
     assert delivery.resume(kwargs["directory"])["state"]["phase"] == "active"
+    recovery, resumed = [event for event in events if event[0] == "POST"][-2:]
+    assert recovery[1].endswith("/events") and recovery[2]["run"] is False
+    assert "inspect the workspace and relevant effects" in recovery[2]["content"][0]["text"]
+    assert resumed[1].endswith("/run")
+
+
+def test_resume_preserves_uncertain_recovery_message_without_running_or_repeating(orchestration, monkeypatch):
+    kwargs, events, _ = orchestration
+    delivery.start(**kwargs)
+    delivery.cancel(kwargs["directory"])
+    request = delivery._http
+
+    def uncertain(port, key, method, path, *args, **kwargs):
+        if method == "POST" and path.endswith("/events"):
+            return 503, None
+        return request(port, key, method, path, *args, **kwargs)
+
+    monkeypatch.setattr(delivery, "_http", uncertain)
+    with pytest.raises(delivery.DeliveryError, match="Recovery instruction outcome uncertain"):
+        delivery.resume(kwargs["directory"])
+    assert delivery.service._read(kwargs["directory"])["phase"] == "resuming"
+    assert not any(event[0] == "POST" and event[1].endswith("/run") for event in events)
+    with pytest.raises(delivery.DeliveryError, match="previously interrupted"):
+        delivery.resume(kwargs["directory"])
 
 
 def test_start_refuses_base_change_after_environment_preflight(orchestration):
