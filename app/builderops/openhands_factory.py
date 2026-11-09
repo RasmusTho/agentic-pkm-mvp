@@ -734,7 +734,7 @@ def _verify(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
         test_python = install / "venv/bin/python"  # Historical runs retain their original interpreter.
         test_environment = state.get("test_environment")
         if test_environment is not None:
-            expected_python = directory / "test-venv/bin/python"
+            expected_python = directory / "test-setup/venv/bin/python"
             manifests = test_environment.get("manifests") if isinstance(test_environment, dict) else None
             if (not isinstance(test_environment, dict) or test_environment.get("python") != str(expected_python)
                     or not expected_python.is_file() or not isinstance(manifests, dict)

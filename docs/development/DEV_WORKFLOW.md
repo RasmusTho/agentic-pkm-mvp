@@ -68,8 +68,9 @@ derives its pinned ACP and isolated service configuration; model selection stays
 interrupts the conversation; it does not establish that delegated processes have stopped. For a
 new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Before
 starting the worker, the host uses `uv` and that Issue's checked-out `requirements.txt` and
-`dev-requirements.txt` to create a separate per-run Python environment. Setup strips inherited
-credentials and installs only binary wheels, without running source-package build backends. Its resolved packages are
+`dev-requirements.txt` to create a separate per-run Python environment. Setup uses a separate OS
+sandbox, an empty home and a minimal environment, reads the task workspace, writes only its private
+setup directory, permits network for package downloads and installs only binary wheels. Its resolved packages are
 recorded in the private run directory, and verification refuses changed requirement manifests.
 This leaves the OpenHands runtime environment separate. The worker is told the test interpreter's
 path; historical runs without this environment retain their original interpreter. The

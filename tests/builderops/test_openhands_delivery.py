@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -213,35 +214,52 @@ def test_test_environment_installs_repo_manifests_and_records_exact_resolution(t
     calls = []
 
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-setup")
+    uv = tmp_path / "uv"
+    uv.touch()
+    monkeypatch.setattr(delivery.shutil, "which", lambda name: str(uv))
 
-    def run(command, **kwargs):
+    def run(command, cwd, env, timeout):
         calls.append(command)
-        assert "OPENAI_API_KEY" not in kwargs["env"]
+        assert cwd == worktree and timeout in {60, 900}
+        assert "OPENAI_API_KEY" not in env
         return subprocess.CompletedProcess(command, 0, "example==1.0\n", "")
 
-    monkeypatch.setattr(delivery.subprocess, "run", run)
-    result = delivery._prepare_test_environment(directory, worktree, Path("/runtime/bin/python"))
-    assert calls[0][:5] == ["uv", "venv", "--no-config", "--python", "/runtime/bin/python"]
-    assert calls[1][3:6] == ["--no-config", "--only-binary", ":all:"]
+    monkeypatch.setattr(delivery, "_run_setup_command", run)
+    result = delivery._prepare_test_environment(directory, worktree, Path("/runtime/bin/python"),
+                                                {"codex_binary": "/codex", "sandbox_read_roots": []})
+    assert calls[0][:2] == ["/codex", "sandbox"]
+    assert 'permissions.builder_setup.network.enabled=true' in calls[0]
+    assert any('":workspace_roots"="read"' in part for part in calls[0])
+    assert calls[0][-6:] == [str(uv), "venv", "--no-config", "--python", "/runtime/bin/python",
+                             str(directory / "test-setup/venv")]
+    assert calls[1][calls[1].index("--no-config"):][:3] == ["--no-config", "--only-binary", ":all:"]
     assert calls[1][-4:] == ["-r", str(worktree / "requirements.txt"),
                              "-r", str(worktree / "dev-requirements.txt")]
-    assert calls[2][1:3] == ["pip", "freeze"]
+    assert calls[2][calls[2].index(str(uv)) + 1:][:2] == ["pip", "freeze"]
     assert Path(result["frozen"]).read_text() == "example==1.0\n"
     assert result["frozen_sha256"] == delivery._sha("example==1.0\n")
     assert set(result["manifests"]) == {"requirements.txt", "dev-requirements.txt"}
 
 
+def test_setup_timeout_stops_the_command(tmp_path):
+    import sys
+
+    with pytest.raises(delivery.DeliveryError, match="setup timed out"):
+        delivery._run_setup_command([sys.executable, "-c", "import time; time.sleep(30)"],
+                                    tmp_path, {"PATH": os.environ.get("PATH", "")}, 1)
+
+
 def test_automatic_start_prepares_tests_before_starting_worker(orchestration, monkeypatch):
     kwargs, events, _ = orchestration
 
-    def prepare(directory, worktree, python):
+    def prepare(directory, worktree, python, settings):
         events.append(("test-setup", str(worktree)))
-        return {"python": str(directory / "test-venv/bin/python")}
+        return {"python": str(directory / "test-setup/venv/bin/python")}
 
     monkeypatch.setattr(delivery, "_prepare_test_environment", prepare)
     monkeypatch.setattr(delivery, "_include_read_root", lambda settings, path: settings)
     result = delivery.start(**kwargs, auto_finish=True)
-    assert result["state"]["test_environment"]["python"].endswith("/test-venv/bin/python")
+    assert result["state"]["test_environment"]["python"].endswith("/test-setup/venv/bin/python")
     assert next(i for i, x in enumerate(events) if x[0] == "test-setup") < next(
         i for i, x in enumerate(events) if x[0] == "service"
     )

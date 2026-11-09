@@ -13,6 +13,8 @@ import json
 import math
 import os
 import re
+import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -359,28 +361,69 @@ def _task_prompt(plan: dict[str, Any], *, auto_finish: bool = False,
     )
 
 
-def _prepare_test_environment(directory: Path, worktree: Path, python: Path) -> dict[str, Any]:
+def _run_setup_command(command: list[str], worktree: Path, env: dict[str, str],
+                       timeout: int) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(command, cwd=worktree, env=env, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               text=True, start_new_session=True)
+    try:
+        output, _ = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+        raise DeliveryError("Repository test environment setup timed out; inspect the retained run") from exc
+    return subprocess.CompletedProcess(command, process.returncode, output, "")
+
+
+def _prepare_test_environment(directory: Path, worktree: Path, python: Path,
+                              settings: dict[str, Any]) -> dict[str, Any]:
     """Install the checked-out project's test dependencies outside the agent runtime."""
     manifests = [worktree / "requirements.txt", worktree / "dev-requirements.txt"]
     if any(not path.is_file() or path.is_symlink() for path in manifests):
         raise DeliveryError("Repository test requirements are unavailable")
-    environment = directory / "test-venv"
-    if environment.exists() or environment.is_symlink():
+    setup = directory / "test-setup"
+    environment = setup / "venv"
+    if setup.exists() or setup.is_symlink():
         raise DeliveryError("Test environment already exists; reconcile before continuing")
     try:
+        setup.mkdir(mode=0o700)
+        home = setup / "home"
+        home.mkdir(mode=0o700)
+        executable = shutil.which("uv")
+        if executable is None:
+            raise DeliveryError("uv is unavailable for repository test setup")
+        uv = Path(executable).resolve(strict=True)
+        roots = list(settings["sandbox_read_roots"])
+        roots.append(str(uv.parent))
+        entries = ['":minimal"="read"', '":workspace_roots"="read"']
+        entries.extend(f'{json.dumps(root)}="read"' for root in dict.fromkeys(roots))
+        entries.append(f'{json.dumps(str(setup))}="write"')
+        filesystem = "permissions.builder_setup.filesystem={" + ",".join(entries) + "}"
+        sandbox = [settings["codex_binary"], "sandbox", "-c", "permissions.builder_setup.network.enabled=true",
+                   "-c", filesystem, "-P", "builder_setup", "-C", str(worktree), "--",
+                   "/usr/bin/env", "-i", f"HOME={home}", f"TMPDIR={home}", "PATH=/usr/bin:/bin"]
         hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in manifests}
         commands = [
-            ["uv", "venv", "--no-config", "--python", str(python), str(environment)],
-            ["uv", "pip", "install", "--no-config", "--only-binary", ":all:",
+            [str(uv), "venv", "--no-config", "--python", str(python), str(environment)],
+            [str(uv), "pip", "install", "--no-config", "--only-binary", ":all:",
              "--python", str(environment / "bin/python"),
              "-r", str(manifests[0]), "-r", str(manifests[1])],
-            ["uv", "pip", "freeze", "--no-config", "--python", str(environment / "bin/python")],
+            [str(uv), "pip", "freeze", "--no-config", "--python", str(environment / "bin/python")],
         ]
         env = {key: os.environ[key] for key in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR")
                if key in os.environ}
-        for command in commands:
-            result = subprocess.run(command, cwd=worktree, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, check=False, timeout=900, env=env)
+        for command, timeout in zip(commands, (60, 900, 60)):
+            result = _run_setup_command([*sandbox, *command], worktree, env, timeout)
             if result.returncode:
                 raise DeliveryError("Repository test environment setup failed; inspect the installation")
         if any(hashlib.sha256(path.read_bytes()).hexdigest() != hashes[path.name] for path in manifests):
@@ -430,7 +473,7 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
         finally:
             Path(temp_name).unlink(missing_ok=True)
         session_id = str(uuid.uuid4())
-        test_python = directory / "test-venv/bin/python" if auto_finish else None
+        test_python = directory / "test-setup/venv/bin/python" if auto_finish else None
         prompt = _task_prompt(plan, auto_finish=auto_finish, test_python=test_python)
         state: dict[str, Any] = {
             "version": 1, "kind": "openhands_delivery_run.v1", "issue": issue,
@@ -472,9 +515,16 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
                 or current_issue.get("body") != plan["issue"]["body"]):
             raise DeliveryError("Issue contract changed after claim; reconcile before continuing")
         if auto_finish:
+            state["setup_status"] = "running"
             _save(directory, state, "preparing_tests")
-            state["test_environment"] = _prepare_test_environment(directory, worktree, python)
-            settings = _include_read_root(settings, directory / "test-venv")
+            try:
+                state["test_environment"] = _prepare_test_environment(directory, worktree, python, settings)
+            except DeliveryError:
+                state["setup_status"] = "failed"
+                _save(directory, state, "preparing_tests")
+                raise
+            state["setup_status"] = "finished"
+            settings = _include_read_root(settings, directory / "test-setup/venv")
             fd, temp_name = tempfile.mkstemp(prefix=".settings-", dir=directory)
             try:
                 with os.fdopen(fd, "w") as stream:
