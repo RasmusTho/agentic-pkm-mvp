@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -1040,6 +1041,15 @@ def _check_serial_admission(state_root: Path, selected_issue: int) -> None:
             continue
         if directory.is_symlink() or not directory.is_dir():
             raise delivery.DeliveryError("Another delivery has uncertain state; inspect it before starting")
+        lock_path = directory / "service.lock"
+        if not (directory / "service.json").exists() and lock_path.is_file() and not lock_path.is_symlink():
+            try:
+                with lock_path.open("r+") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    if {path.name for path in directory.iterdir()} == {"service.lock"}:
+                        continue  # Confirmed pre-state refusal: no delivery effect was started.
+            except (OSError, BlockingIOError):
+                pass
         try:
             observed = delivery.status(directory)
             state = observed["state"]
@@ -1049,11 +1059,26 @@ def _check_serial_admission(state_root: Path, selected_issue: int) -> None:
         publication_state = state.get("full_publication")
         published = (isinstance(publication_state, dict)
                      and publication_state.get("state") == "draft_published"
-                     and type(publication_state.get("pr_number")) is int)
+                     and type(publication_state.get("pr_number")) is int
+                     and publication_state["pr_number"] > 0)
+        inactive = (observed.get("service_status") == "running"
+                    and observed.get("conversation_status") == "finished")
+        if observed.get("service_status") == "stopped":
+            try:
+                server = service.status(directory / "server").get("state")
+                raw = server.get("settings_file") if isinstance(server, dict) else None
+                if (not isinstance(server, dict) or not isinstance(raw, str)
+                        or Path(raw) not in {directory / "settings.json", directory / "recovery-settings.json"}
+                        or server.get("workspace") != state.get("worktree")):
+                    raise delivery.DeliveryError("Retained backend identity is unavailable")
+                _persisted_session(service._settings(Path(raw)), state, "finished")
+                inactive = True
+            except (delivery.DeliveryError, service.ServiceError, OSError, ValueError):
+                inactive = False
         terminal_watcher = watch.get("status") == "finished" and watch.get("phase") == "published"
         terminal_legacy = (watch.get("status") == "not_started"
                            and observed.get("conversation_status") == "finished")
-        if not published or not (terminal_watcher or terminal_legacy):
+        if not published or not inactive or not (terminal_watcher or terminal_legacy):
             raise delivery.DeliveryError("Another delivery is active or unresolved; inspect it before starting")
 
 

@@ -75,18 +75,20 @@ def _invoke(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess
     try:
         stdout, stderr = process.communicate(timeout=240)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
+        # Signal before reaping the group leader, so its PID cannot be reused
+        # while a descendant in the same group is still running.
+        for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, sig)
             except ProcessLookupError:
                 pass
-            process.communicate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # Outcome remains uncertain; no retry is performed.
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
         raise
     return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
 

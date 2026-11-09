@@ -51,7 +51,9 @@ recorded run. This conversation is a command bridge and makes no model request; 
 still uses the guarded native Codex session. No backlog scanner is enabled. The control session
 currently depends on its host Issue backend and Canvas staying available; it is a trial route, not
 an adopted default. A new start or resume is refused until earlier recorded deliveries reach a known
-published terminal state; inspect an active or uncertain earlier run first. If it is unavailable,
+published terminal state and their conversations are inactive; inspect an active or uncertain earlier
+run first. Direct turns submitted to older worker conversations in Canvas bypass this admission check,
+so the serial behavior has not been fully established. If the control is unavailable,
 restore that recorded host session with `start --issue
 123`, start its Canvas with `ui --issue 123 --ui-action start`, then run `control --issue 123`
 again. Stop the host with `stop --issue 123` only after its conversation is finished or cancelled;

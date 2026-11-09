@@ -64,6 +64,8 @@ def test_owner_timeout_stops_the_started_process_group(monkeypatch):
     class Process:
         pid = 1234
         count = 0
+        stdout = None
+        stderr = None
 
         def communicate(self, timeout=None):
             self.count += 1
@@ -71,11 +73,14 @@ def test_owner_timeout_stops_the_started_process_group(monkeypatch):
                 raise owner.subprocess.TimeoutExpired("factory", timeout)
             return "", ""
 
+        def wait(self, timeout=None):
+            return 0
+
     monkeypatch.setattr(owner.subprocess, "Popen", lambda *args, **kwargs: Process())
     monkeypatch.setattr(owner.os, "killpg", lambda pid, sig: calls.append((pid, sig)))
     with pytest.raises(owner.subprocess.TimeoutExpired):
         owner._invoke(["factory"], {})
-    assert calls == [(1234, owner.signal.SIGTERM)]
+    assert calls == [(1234, owner.signal.SIGTERM), (1234, owner.signal.SIGKILL)]
 
 
 def test_status_shows_published_pr_and_ci_without_raw_state():

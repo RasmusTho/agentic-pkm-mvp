@@ -69,7 +69,9 @@ def _recorded_run(install, state_root, worktrees, *, conversation="finished"):
 @pytest.mark.parametrize("watch_status,phase,conversation,allowed", [
     ("running", "watching", "running", False),
     ("pending", "ci_wait", "finished", False),
-    ("finished", "published", None, True),
+    ("finished", "published", "finished", True),
+    ("finished", "published", "running", False),
+    ("finished", "published", None, False),
     ("not_started", None, "finished", True),
     ("not_started", None, "running", False),
 ])
@@ -82,7 +84,7 @@ def test_serial_admission_requires_prior_delivery_to_be_terminal(
     prior.mkdir()
     monkeypatch.setattr(delivery, "status", lambda path: {
         "state": {"full_publication": {"state": "draft_published", "pr_number": 42}},
-        "conversation_status": conversation,
+        "conversation_status": conversation, "service_status": "running",
     })
     monkeypatch.setattr(watcher, "status", lambda path: {"status": watch_status, "phase": phase})
     if allowed:
@@ -90,6 +92,13 @@ def test_serial_admission_requires_prior_delivery_to_be_terminal(
     else:
         with pytest.raises(delivery.DeliveryError, match="active or unresolved"):
             factory._check_serial_admission(tmp_path, 43)
+
+
+def test_serial_admission_ignores_a_confirmed_pre_state_refusal(tmp_path):
+    prior = tmp_path / "issue-41"
+    prior.mkdir()
+    (prior / "service.lock").touch()
+    factory._check_serial_admission(tmp_path, 43)
 
 
 def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys):
