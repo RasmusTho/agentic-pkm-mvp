@@ -15,7 +15,10 @@ ASK_PROMPT_RELATIVE_PATH = Path("prompts") / "ask.md"
 def _markdown_body(text: str) -> str:
     """Return prompt Markdown without optional YAML front matter."""
     if text.startswith("---"):
-        _, _, text = text.split("---", 2)
+        parts = text.split("---", 2)
+        if len(parts) != 3:
+            raise ValueError("prompt front matter is unclosed")
+        text = parts[2]
     return text.strip()
 
 
@@ -42,6 +45,6 @@ def validate_canonical_prompts(vault_root: Path | None = None) -> list[str]:
         try:
             if not _markdown_body(prompt_path.read_text(encoding="utf-8")):
                 errors.append(f"{prompt_path.name}: prompt body is empty")
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             errors.append(f"{prompt_path.name}: {exc}")
     return errors

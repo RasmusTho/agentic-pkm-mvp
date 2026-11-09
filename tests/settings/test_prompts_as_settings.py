@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.agents.ask import utils as ask_utils
 from app.api.app import app
 from app.settings import compiler, runtime
 from app.settings.models import DEFAULT_ASK_SYSTEM_PROMPT
+from app.settings.prompts import resolve_ask_system_prompt
 from app.vault.manager import VaultManager
 
 
@@ -59,6 +61,35 @@ def test_validate_reads_canonical_prompts(monkeypatch, tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert any(issue["code"] == "prompts.invalid" for issue in response.json()["issues"])
+
+
+def test_validate_reports_unclosed_prompt_front_matter(monkeypatch, tmp_path: Path) -> None:
+    vault = _configure_vault(monkeypatch, tmp_path)
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    prompt_path = vault / "settings" / "prompts" / "ask.md"
+    prompt_path.write_text("---\nname: incomplete\n", encoding="utf-8")
+
+    response = TestClient(app).get("/api/settings/validate")
+
+    assert response.status_code == 200
+    issues = response.json()["issues"]
+    assert any(
+        issue["code"] == "prompts.invalid"
+        and "ask.md" in issue["message"]
+        and "front matter" in issue["message"]
+        for issue in issues
+    )
+    with pytest.raises(ValueError, match="front matter"):
+        resolve_ask_system_prompt(vault)
+
+
+def test_ask_prompt_resolves_with_front_matter(monkeypatch, tmp_path: Path) -> None:
+    vault = _configure_vault(monkeypatch, tmp_path)
+    (vault / "settings" / "prompts" / "ask.md").write_text(
+        "---\nname: ask\n---\nUse this prompt.\n", encoding="utf-8"
+    )
+
+    assert resolve_ask_system_prompt(vault) == ("Use this prompt.", "vault-shared:prompts/ask.md")
 
 
 def test_loader_removed_once_unused() -> None:
