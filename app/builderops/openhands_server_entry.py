@@ -74,18 +74,20 @@ class DeliveryInputFence:
             if method == "OPTIONS":
                 await self.app(scope, receive, send)
                 return
+            event_read = False
             if method in {"GET", "HEAD"}:
                 # OpenHands has GET endpoints which execute Git or write
                 # archives. Keep the Canvas connection and the delivery's
                 # conversation readbacks available on a worker backend.
                 conversation = r"/api/conversations/[0-9a-fA-F-]{32,36}"
                 if (path in {"/api/conversations", "/api/conversations/search", "/api/settings", "/server_info"}
-                        or re.fullmatch(
-                        conversation + r"(?:/events(?:/[A-Za-z0-9_-]{1,128})?)?", path)):
+                        or re.fullmatch(conversation, path)):
                     await self.app(scope, receive, send)
                     return
-                await self._refuse_http(send)
-                return
+                event_read = bool(re.fullmatch(conversation + r"/events(?:/[A-Za-z0-9_-]{1,128})?", path))
+                if not event_read:
+                    await self._refuse_http(send)
+                    return
             if method == "POST" and re.fullmatch(r"/api/conversations/[0-9a-fA-F-]{32,36}/interrupt", path):
                 try:
                     state = service._read(self.directory)
@@ -101,7 +103,7 @@ class DeliveryInputFence:
             # The delivery path uses only conversation creation and message
             # admission. Other write endpoints can start background work or
             # run a long shell command outside this cancellation boundary.
-            if not (method == "POST" and (path == "/api/conversations" or
+            if not event_read and not (method == "POST" and (path == "/api/conversations" or
                     re.fullmatch(r"/api/conversations/[0-9a-fA-F-]{32,36}/(?:events|run)", path))):
                 await self._refuse_http(send)
                 return
@@ -156,14 +158,17 @@ class DeliveryInputFence:
             await send({"type": "websocket.close", "code": 1008})
             return
         held: int | None = None
+        bootstrapping = False
 
         async def fenced_receive() -> dict[str, Any]:
-            nonlocal held
+            nonlocal held, bootstrapping
             if held is not None:
                 os.close(held)
                 held = None
             message = await receive()
-            if message.get("type") != "websocket.receive":
+            if message.get("type") == "websocket.connect":
+                bootstrapping = True
+            elif message.get("type") != "websocket.receive":
                 return message
             # Agent-server consumes these as authentication control frames,
             # including a redundant frame after header-based authentication.
@@ -172,9 +177,12 @@ class DeliveryInputFence:
                 value = json.loads(message.get("text") or message.get("bytes") or "")
                 if (isinstance(value, dict) and value.get("type") == "auth"
                         and set(value) <= {"type", "session_api_key"}):
-                    return message
+                    bootstrapping = True
+                elif message.get("type") != "websocket.connect":
+                    bootstrapping = False
             except (TypeError, ValueError, UnicodeError):
-                pass
+                if message.get("type") != "websocket.connect":
+                    bootstrapping = False
             try:
                 held = await self._acquire()
             except (OSError, ValueError, service.ServiceError):
@@ -182,10 +190,19 @@ class DeliveryInputFence:
                 return {"type": "websocket.disconnect", "code": 1008}
             return message
 
+        async def fenced_send(message: dict[str, Any]) -> None:
+            nonlocal held, bootstrapping
+            if (bootstrapping and held is not None
+                    and message.get("type") in {"websocket.send", "websocket.close"}):
+                os.close(held)
+                held = None
+                bootstrapping = False
+            await send(message)
+
         async def serve_socket() -> None:
             nonlocal held
             try:
-                await self.app(scope, fenced_receive, send)
+                await self.app(scope, fenced_receive, fenced_send)
             except asyncio.CancelledError:
                 # The upstream executor may still have the last message.
                 held = None  # Retain the open descriptor until service exit.

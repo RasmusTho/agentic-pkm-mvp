@@ -87,7 +87,9 @@ not proof that the underlying work has ended. New worker backends refuse further
 after interruption and prove possession of the recorded session key on the same connection before
 the factory sends it. This is
 a partial mitigation, not a verified recovery procedure, and does not retrofit a backend that is
-already running. Preserve its state and inspect it rather than replaying the task.
+already running. Event-history reads and new worker event connections are also refused after
+interruption because OpenHands can reload an unloaded runtime while handling them. Preserve the
+recorded state and inspect it rather than replaying the task.
 For a legacy worker without the identity challenge, the factory will not send its session key to
 an unverified listener. Inspect the exact recorded service with
 `python3 -m app.builderops.openhands_service --state-dir <recorded-run>/server status`; an explicit
