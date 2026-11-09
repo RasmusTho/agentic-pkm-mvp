@@ -69,6 +69,24 @@ def test_recovery_status_survives_service_inspection_failure(tmp_path, monkeypat
     assert "conversation_readback_error" in result and "service_status_error" in result
 
 
+def test_cancel_returns_when_conversation_creation_holds_delivery_lock(tmp_path):
+    directory = tmp_path / "run"
+    directory.mkdir(mode=0o700)
+    delivery.service._write(directory, {"version": 1, "kind": "openhands_delivery_run.v1", "phase": "creating_conversation"})
+    outcome = []
+    def cancel():
+        try:
+            delivery.cancel(directory)
+        except delivery.service.ServiceError as exc:
+            outcome.append(str(exc))
+    with delivery.service._locked(directory):
+        worker = threading.Thread(target=cancel)
+        worker.start()
+        worker.join(timeout=7)
+        assert not worker.is_alive() and outcome == ["Delivery input is still being processed"]
+        assert delivery.service._read(directory)["phase"] == "creating_conversation"
+
+
 @pytest.fixture
 def readbacks(monkeypatch):
     issue = {

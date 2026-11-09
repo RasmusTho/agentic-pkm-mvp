@@ -805,7 +805,9 @@ def status(directory: Path) -> dict[str, Any]:
 
 
 def cancel(directory: Path) -> dict[str, Any]:
-    with service._locked(directory):
+    # A concurrent start may hold this lock during conversation creation.
+    # Return an unresolved result rather than waiting indefinitely.
+    with service._locked(directory, timeout=5):
         state = _state(directory)
         if state["phase"] not in {"creating_conversation", "active", "interrupting", "interrupted", "resuming"}:
             raise DeliveryError("Conversation outcome is uncertain; inspect before cancellation")
@@ -1757,7 +1759,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise DeliveryError("Publication plan must be a JSON object")
             result = publish(args.state_dir, plan, args.expected_plan_sha256,
                              args.verified_plan_sha256, args.reviewed_plan_sha256)
-    except (DeliveryError, publication.PublicationRefusal, publication.PublicationCommandError,
+    except (DeliveryError, service.ServiceError, publication.PublicationRefusal, publication.PublicationCommandError,
             agent_worktree.WorktreeLifecycleError, service.ServiceError, OSError, ValueError) as exc:
         print(f"openhands-delivery: {exc}", file=sys.stderr)
         return 1

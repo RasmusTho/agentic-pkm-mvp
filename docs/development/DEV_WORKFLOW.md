@@ -77,7 +77,9 @@ The CLI remains available directly. Replace the example paths and explicitly aut
 Use the same entry point with `status`, `cancel`, `resume`, or `stop` in place of `start`. The command
 derives its pinned ACP and isolated service configuration; model selection stays on
 `gpt-6.1-terra` with subscription authentication, with no provider or model fallback. `cancel`
-interrupts the conversation; it does not establish that delegated processes have stopped. For a
+interrupts the conversation; it does not establish that delegated processes have stopped. If the
+run is still admitting input, cancellation can return without sending an interrupt: use `status`
+and retry when admission finishes. For a
 previously interrupted delivery, `resume` currently refuses continuation because native and
 delegated execution cannot yet be proven stopped. `status` reports available task-scoped observations
 of the recorded service, worktree and publication, with unknowns retained; a paused conversation is
