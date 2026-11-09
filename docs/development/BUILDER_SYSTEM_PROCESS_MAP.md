@@ -65,11 +65,14 @@ Start prints the Canvas loopback URL; `--open` also opens it in the browser. The
 use a numeric loopback address, HTTP, and an explicit port. The Canvas listener is restricted to
 `127.0.0.1`. Its official reverse proxy may send forwarded headers; the backend must not grant them
 authentication or identity authority. The session key authenticates the backend, is passed to the
-static server through its environment, and is not saved in launcher state or logs. The private state
-stores a key fingerprint so a repeated start refuses a changed key; stop and start to apply it.
+static server through its environment, and is not saved in launcher state or logs. Before start
+succeeds, the launcher checks the key against the backend's `/api/conversations/search` endpoint
+and confirms that an unauthenticated request is rejected. The private state stores a key fingerprint
+so a repeated start refuses a changed key; stop and start to apply it.
 Canvas runs with its upstream `--auth-required` option: the owner enters the session key in the
-browser's Canvas prompt, which may retain it in browser storage. The served page does not embed
-the key. Stop asks a private local supervisor to terminate only its own unreaped Canvas child; it
+browser's Canvas prompt, which may retain it in browser storage. Enter the same key supplied in the
+private file. The served page does not embed the key. Stop asks a private local supervisor to
+terminate only its own unreaped Canvas child; it
 does not stop the backend. If the supervisor is unavailable or identity does not match, the launcher
 retains state and refuses to guess or signal a PID.
 If startup is interrupted before the process identity is recorded, status reports an unknown

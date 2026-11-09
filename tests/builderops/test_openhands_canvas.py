@@ -86,6 +86,23 @@ def setup(tmp_path, monkeypatch):
     state_dir = tmp_path / "state"
     running = {}
     launches = []
+    requests = []
+    auth = {"accept_key": True, "require_key": True}
+
+    class BackendConnection:
+        def __init__(self, host, port, timeout):
+            assert (host, port, timeout) == ("127.0.0.1", 8000, 5)
+
+        def request(self, method, path, headers):
+            requests.append((method, path, headers))
+            self.has_key = "X-Session-API-Key" in headers
+
+        def getresponse(self):
+            accepted = auth["accept_key"] if self.has_key else not auth["require_key"]
+            return SimpleNamespace(status=200 if accepted else 401)
+
+        def close(self):
+            pass
 
     class Process:
         pid = 54321
@@ -115,6 +132,7 @@ def setup(tmp_path, monkeypatch):
         return "running" if running else "stopped"
 
     monkeypatch.setattr(canvas.shutil, "which", lambda _: "/usr/bin/node")
+    monkeypatch.setattr(canvas.http.client, "HTTPConnection", BackendConnection)
     monkeypatch.setattr(canvas.subprocess, "Popen", Process)
     monkeypatch.setattr(canvas, "supervisor_request", request)
     monkeypatch.setattr(canvas.select, "select", lambda r, w, x, timeout: (r, [], []))
@@ -122,7 +140,8 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(canvas, "ensure_port_free", lambda port: None)
     args = ["--package-dir", str(package), "--backend", "http://127.0.0.1:8000",
             "--key-file", str(key_file), "--state-dir", str(state_dir)]
-    return SimpleNamespace(args=args, state=state_dir, key=key_file, running=running, launches=launches)
+    return SimpleNamespace(args=args, state=state_dir, key=key_file, running=running,
+                           launches=launches, requests=requests, auth=auth)
 
 
 def test_start_status_and_repeat(setup, capsys):
@@ -169,6 +188,10 @@ def test_stop_owns_only_the_canvas_process(setup, capsys):
 
 def test_key_and_loopback_configuration(setup, capsys):
     assert canvas.main(["start", *setup.args]) == 0
+    assert setup.requests == [
+        ("GET", "/api/conversations/search", {"X-Session-API-Key": "test-only-session-key"}),
+        ("GET", "/api/conversations/search", {}),
+    ]
     command, kwargs = setup.launches[0]
     assert kwargs["env"]["SESSION_API_KEY"] == "test-only-session-key"
     assert kwargs["env"]["AGENT_CANVAS_DISABLE_TELEMETRY"] == "1"
@@ -185,6 +208,48 @@ def test_key_and_loopback_configuration(setup, capsys):
     setup.key.chmod(0o644)
     with pytest.raises(canvas.CanvasError):
         canvas.private_file(setup.key)
+
+
+def test_invalid_key_and_unprotected_backend_refuse_start(setup, capsys):
+    setup.auth["accept_key"] = False
+    assert canvas.main(["start", *setup.args]) == 1
+    assert not setup.launches
+    assert not (setup.state / "server.json").exists()
+    assert "backend rejected" in capsys.readouterr().err
+    setup.auth["accept_key"] = True
+    setup.auth["require_key"] = False
+    assert canvas.main(["start", *setup.args]) == 1
+    assert not setup.launches
+    assert "authentication could not be confirmed" in capsys.readouterr().err
+    setup.auth["require_key"] = True
+    assert canvas.main(["start", *setup.args]) == 0
+    setup.auth["accept_key"] = False
+    assert canvas.main(["start", *setup.args]) == 1
+    output = capsys.readouterr()
+    assert "backend rejected" in output.err
+    assert "test-only-session-key" not in output.out + output.err
+    assert len(setup.launches) == 1
+    assert setup.running
+
+
+def test_backend_verification_failure_does_not_expose_key(setup, monkeypatch, capsys):
+    class FailedConnection:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def request(self, *args, **kwargs):
+            raise OSError("test-only-session-key")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(canvas.http.client, "HTTPConnection", FailedConnection)
+    assert canvas.main(["start", *setup.args]) == 1
+    output = capsys.readouterr()
+    assert "could not verify" in output.err
+    assert "test-only-session-key" not in output.out + output.err
+    assert not setup.launches
+    assert not (setup.state / "server.json").exists()
 
 
 def test_documented_cli_help():
@@ -329,6 +394,7 @@ def test_assembled_launcher_with_real_supervisor(tmp_path, monkeypatch, capsys):
     # Only network effects are substituted; supervisor and CLI remain real.
     monkeypatch.setattr(canvas, "ensure_port_free", lambda port: None)
     monkeypatch.setattr(canvas, "wait_ready", lambda process, port: None)
+    monkeypatch.setattr(canvas, "verify_backend_key", lambda backend, key: None)
     try:
         assert canvas.main(["start", *args]) == 0
         assert canvas.main(["status", "--state-dir", str(state_dir)]) == 0

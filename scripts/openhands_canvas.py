@@ -59,6 +59,29 @@ def private_file(path: Path) -> str:
     return key
 
 
+def verify_backend_key(backend: str, key: str) -> None:
+    endpoint = urlsplit(endpoint_url(backend))
+
+    def check(headers: dict[str, str]) -> int:
+        connection = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=5)
+        try:
+            connection.request("GET", "/api/conversations/search", headers=headers)
+            return connection.getresponse().status
+        except (OSError, http.client.HTTPException, ValueError, UnicodeError):
+            raise CanvasError("could not verify session authentication with backend") from None
+        finally:
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+    if check({"X-Session-API-Key": key}) != 200:
+        raise CanvasError("backend rejected session key or verification request")
+    # A 200 with the key is insufficient if the backend does not enforce auth.
+    if check({}) not in (401, 403):
+        raise CanvasError("backend session authentication could not be confirmed")
+
+
 @contextmanager
 def locked_state(path: Path):
     try:
@@ -284,12 +307,14 @@ def start(args, state_path: Path) -> str:
             key = private_file(Path(args.key_file))
             if not secrets.compare_digest(fingerprint, hashlib.sha256(key.encode("utf-8")).hexdigest()):
                 raise CanvasError("session key changed; stop and start Canvas to apply it")
+            verify_backend_key(backend, key)
             return url
         if supervisor_request(state_path, current, "stop") != "stopped":
             raise CanvasError("Canvas did not stop; state retained")
         (state_path.parent / current["control"]).unlink(missing_ok=True)
         state_path.unlink()
     key = private_file(Path(args.key_file))
+    verify_backend_key(backend, key)
     node = shutil.which("node")
     if node is None:
         raise CanvasError("node is required to start Canvas")
