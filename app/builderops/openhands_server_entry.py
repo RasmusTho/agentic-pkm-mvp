@@ -76,10 +76,11 @@ class DeliveryInputFence:
                 return
             if method in {"GET", "HEAD"}:
                 # OpenHands has GET endpoints which execute Git or write
-                # archives. Only the delivery's conversation readbacks are
-                # needed on a worker backend.
+                # archives. Keep the Canvas connection and the delivery's
+                # conversation readbacks available on a worker backend.
                 conversation = r"/api/conversations/[0-9a-fA-F-]{32,36}"
-                if (path == "/api/conversations" or re.fullmatch(
+                if (path in {"/api/conversations", "/api/conversations/search", "/api/settings", "/server_info"}
+                        or re.fullmatch(
                         conversation + r"(?:/events(?:/[A-Za-z0-9_-]{1,128})?)?", path)):
                     await self.app(scope, receive, send)
                     return
