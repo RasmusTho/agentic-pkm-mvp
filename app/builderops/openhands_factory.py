@@ -731,26 +731,6 @@ def _verify(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
             raise delivery.DeliveryError("Recorded backend settings are unavailable")
         _private_read(settings_path)
         settings = service._settings(settings_path)
-        test_python = install / "venv/bin/python"  # Historical runs retain their original interpreter.
-        test_environment = state.get("test_environment")
-        if test_environment is not None:
-            expected_python = directory / "test-setup/venv/bin/python"
-            manifests = test_environment.get("manifests") if isinstance(test_environment, dict) else None
-            if (not isinstance(test_environment, dict) or test_environment.get("python") != str(expected_python)
-                    or not expected_python.is_file() or not isinstance(manifests, dict)
-                    or set(manifests) != {"requirements.txt", "dev-requirements.txt"}):
-                raise delivery.DeliveryError("Recorded repository test environment is unavailable")
-            for name, digest in manifests.items():
-                try:
-                    manifest = worktree / name
-                    if manifest.is_symlink() or not manifest.is_file():
-                        raise OSError("Manifest is not a regular repository file")
-                    actual = hashlib.sha256(manifest.read_bytes()).hexdigest()
-                except OSError as exc:
-                    raise delivery.DeliveryError("Repository test requirements are unavailable") from exc
-                if actual != digest:
-                    raise delivery.DeliveryError("Repository test requirements changed; reconcile test setup")
-            test_python = expected_python
         raw_targets = []
         unresolved = []
         for index, item in enumerate(items, 1):
@@ -770,7 +750,7 @@ def _verify(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
                 unresolved.append({"target": raw, "reason": "Not a concrete local pytest target"})
                 continue
             log = attempt_dir / f"target-{index:03d}.log"
-            command = _verification_command(settings, worktree, temp_dir, test_python, target)
+            command = _verification_command(settings, worktree, temp_dir, install / "venv/bin/python", target)
             exit_code = _run_verify_command(command, worktree, temp_dir, log)
             log_bytes = log.read_bytes()
             try:
@@ -778,7 +758,7 @@ def _verify(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
             except UnicodeDecodeError:
                 source = None
             entry = {"target": target, "head_sha": head, "exit_code": exit_code,
-                     "command": [str(test_python), "-m", "pytest", "-q", "-v",
+                     "command": [str(install / "venv/bin/python"), "-m", "pytest", "-q", "-v",
                                  "--basetemp", str(temp_dir / "pytest"), target],
                      "runner": "codex sandbox: builder_factory",
                      "evidence": {"path": str(log), "sha256": hashlib.sha256(log_bytes).hexdigest()}}

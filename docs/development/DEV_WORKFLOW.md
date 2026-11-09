@@ -66,14 +66,9 @@ Use the same entry point with `status`, `cancel`, `resume`, or `stop` in place o
 derives its pinned ACP and isolated service configuration; model selection stays on
 `gpt-6.1-terra` with subscription authentication, with no provider or model fallback. `cancel`
 interrupts the conversation; it does not establish that delegated processes have stopped. For a
-new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Before
-starting the worker, the host uses `uv` and that Issue's checked-out `requirements.txt` and
-`dev-requirements.txt` to create a separate per-run Python environment. Setup uses a separate OS
-sandbox, an empty home and a minimal environment, reads the task workspace, writes only its private
-setup directory, permits network for package downloads and installs only binary wheels. Its resolved packages are
-recorded in the private run directory, and verification refuses changed requirement manifests.
-This leaves the OpenHands runtime environment separate. The worker is told the test interpreter's
-path; historical runs without this environment retain their original interpreter. The
+new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Test
+targets currently use the factory Python environment; automatic provisioning of task dependencies
+is not implemented, so missing repository packages can still require intervention. The
 worker is instructed to leave a private ignored `.codex-tmp/openhands-finish.json` with its proposed
 title, body fields, risk classification and exact changed paths. After observing the finished
 conversation and children, the watcher checks the claim, branch/worktree gate, handoff and actual
@@ -118,8 +113,10 @@ After publishing, the watcher waits for GitHub checks and independently re-reads
 its current head. It reports a failure as failed, a genuinely incomplete or unavailable result as
 pending, and success only when the recorded current head has passed the check wait. It does not
 yet automatically diagnose or repair a CI-only failure. Enter `watch #456` in the control
-conversation to recheck a pending or rerun CI result; this reuses the same draft instead of
-publishing another one.
+conversation to recheck a pending or rerun CI result while the original delivery lease is active;
+this reuses the same draft instead of publishing another one. After lease expiry, inspect current
+checks directly on the draft PR. A recorded passing result includes the head it covered and is not
+a live status for a subsequently changed head.
 
 `stop` first checks that the recorded conversation is finished or has been interrupted through
 `cancel`, then records the existing ACP session and service settings privately and stops the

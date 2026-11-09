@@ -60,16 +60,17 @@ def test_owner_explains_known_admission_failure_without_echoing_arbitrary_output
 
 def test_status_shows_published_pr_and_ci_without_raw_state():
     result = owner._summary("status", 42, {"state": {"full_publication": {"pr_number": 123}},
-        "watcher": {"status": "finished", "phase": "published", "ci": {"status": "passed"}}})
+        "watcher": {"status": "finished", "phase": "published", "ci": {"status": "passed", "head": "a" * 40}}})
     assert "https://github.com/RasmusTho/agentic-pkm-mvp/pull/123" in result
     assert "CI: passed" in result
+    assert "a" * 40 in result and "Recorded CI" in result
     assert "full_publication" not in result
 
 
 def test_status_surfaces_phase_and_unavailable_readback_without_raw_errors():
-    result = owner._summary("status", 42, {"state": {"phase": "preparing_tests"},
+    result = owner._summary("status", 42, {"state": {"phase": "creating_worktree"},
         "conversation_readback_error": "private detail"})
-    assert "Run phase: preparing_tests" in result
+    assert "Run phase: creating_worktree" in result
     assert "readback is unavailable" in result
     assert "private detail" not in result
 

@@ -44,8 +44,7 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
     fields = [f"Issue #{issue}: {action} request completed."]
     for label, value in (("Conversation", result.get("conversation_status")),
                          ("Service", result.get("service_status")),
-                         ("Run phase", state.get("phase")), ("Test setup", state.get("setup_status")),
-                         ("Delivery", delivery_status),
+                         ("Run phase", state.get("phase")), ("Delivery", delivery_status),
                          ("Watcher phase", watcher.get("phase")),
                          ("Cancellation", result.get("cancel_status"))):
         if isinstance(value, str):
@@ -57,7 +56,9 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
         fields.append(f"Draft PR: https://github.com/RasmusTho/agentic-pkm-mvp/pull/{pr}")
     ci = watcher.get("ci")
     if isinstance(ci, dict) and isinstance(ci.get("status"), str):
-        fields.append(f"CI: {ci['status']}.")
+        head = ci.get("head")
+        revision = head if isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40,64}", head) else "unknown"
+        fields.append(f"Recorded CI: {ci['status']} (head {revision}); request a fresh check for current status.")
     if action == "cancel":
         fields.append("Delegated-process cancellation has not been verified.")
     if result.get("conversation_readback_error") or result.get("service_status_error"):
@@ -85,7 +86,7 @@ def run_command(entry: Path, message: str) -> str:
            "DISPATCHER_STATE_DIR", "DISPATCHER_DB_PATH", "DISPATCHER_EVENTS_PATH") if k in os.environ}
     try:
         result = subprocess.run(args, env=env, stdin=subprocess.DEVNULL, capture_output=True,
-                                text=True, timeout=1800 if action == "start" else 240, check=False)
+                                text=True, timeout=240, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return f"Issue #{issue}: outcome is uncertain. Use `status #{issue}` before retrying."
     if result.returncode:
@@ -95,8 +96,6 @@ def run_command(entry: Path, message: str) -> str:
             "Issue is not open": "The Issue is not open.",
             "Existing branch, worktree or PR requires reconciliation":
                 "Existing work needs reconciliation before starting.",
-            "Repository test environment setup failed; inspect the installation":
-                "Test dependency setup failed; inspect the retained run before retrying.",
         }
         diagnostic = result.stderr.strip().removeprefix("OpenHands factory: ")
         if diagnostic in diagnostics:
