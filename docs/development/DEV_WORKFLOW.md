@@ -62,6 +62,8 @@ The control session
 is a trial route, not an adopted default. Use `owner --ui-action status` and
 `owner --ui-action stop` for that service; restarting it uses its recorded backend and Canvas ports and retained
 conversation. The owner service refuses native Codex launches; tasks start on their own worker backend.
+The older `control --issue <number>` command opens the same independent owner conversation; it does not
+start that Issue. Prior worker-hosted control records are preserved and are not reattached or deleted.
 A new start or resume is refused while an earlier worker backend is running or its delivery is
 unresolved. After publication the watcher stops the finished worker backend; published worker sessions
 cannot be restarted. Existing live older workers must be inspected and stopped before another admission.

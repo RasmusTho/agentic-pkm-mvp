@@ -1261,7 +1261,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--risk-surface", action="append", default=[], choices=sorted(publication.RISK_SURFACES))
     parser.add_argument("--workflow-review-receipt", type=Path)
     args = parser.parse_args(argv)
-    if args.command != "owner":
+    if args.command not in {"owner", "control"}:
         args.port = 8765 if args.port is None else args.port
         args.ui_port = 3001 if args.ui_port is None else args.ui_port
     try:
@@ -1313,15 +1313,12 @@ def main(argv: list[str] | None = None) -> int:
             with service._locked(directory):
                 result = _ui(install, directory, args.issue, args.ui_action, args.ui_port, args.open)
         elif args.command == "control":
-            from app.builderops import openhands_owner
-
-            result = openhands_owner.attach(install, directory, args.issue)
-            try:
-                canvas = _ui(install, directory, args.issue, "status", args.ui_port, False)["ui"]
-                if canvas.get("status") == "running":
-                    result["url"] = f"{canvas['url']}/conversations/{result['conversation_id']}?backend=default-local"
-            except delivery.DeliveryError:
-                result["note"] += " Start Canvas for the host Issue to open this conversation."
+            # Older versions attached a second control conversation to the
+            # worker. Reuse the independent owner instead; leave any old
+            # worker control record untouched for inspection.
+            result = _owner_service(install, state_root, repo, "start", None, args.ui_port, args.open)
+            result["note"] = ("Using the independent owner control. Existing worker control records are preserved; "
+                              "select an authorized issue in this conversation.")
             print(json.dumps(result, indent=2))
             return 0
         elif args.command == "resume":

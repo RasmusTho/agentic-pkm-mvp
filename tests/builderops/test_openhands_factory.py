@@ -155,6 +155,27 @@ def test_owner_recovers_pre_state_settings_without_external_effects(tmp_path, mo
     assert result["conversation_id"] == "control"
 
 
+@pytest.mark.parametrize("ui_port", [None, 8124])
+def test_legacy_control_uses_existing_owner_without_touching_worker_record(tmp_path, monkeypatch, capsys, ui_port):
+    install, runs, worktrees, repo = (tmp_path / name for name in ("install", "runs", "worktrees", "repo"))
+    for path in (install, runs, worktrees, repo):
+        path.mkdir()
+    old_control = runs / "issue-123" / "owner-control"
+    old_control.mkdir(parents=True)
+    (old_control / "service.json").write_text('{"version": 1, "phase": "creating"}')
+    calls = []
+    monkeypatch.setattr(factory, "_owner_service", lambda *args: calls.append(args) or {"url": "owner-url"})
+    args = ["control", "--issue", "123", "--install-root", str(install),
+            "--state-root", str(runs), "--worktree-root", str(worktrees), "--repo-root", str(repo)]
+    if ui_port is not None:
+        args += ["--ui-port", str(ui_port)]
+    result = factory.main(args)
+    assert result == 0
+    assert calls == [(install, runs, repo, "start", None, ui_port, False)]
+    assert "owner-url" in capsys.readouterr().out
+    assert json.loads((old_control / "service.json").read_text()) == {"version": 1, "phase": "creating"}
+
+
 @pytest.mark.parametrize("port,ui_port", [(0, 3001), (65536, 3001), (8766, 8766)])
 def test_owner_invalid_ports_leave_no_persisted_state(tmp_path, monkeypatch, port, ui_port):
     root = tmp_path / "runs"
