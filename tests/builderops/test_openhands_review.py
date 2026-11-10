@@ -172,6 +172,8 @@ def test_review_environment_does_not_include_api_keys(tmp_path, monkeypatch):
     'Insufficient evidence is available to assess the change.',
     'I am unsure whether the section satisfies the contract.',
     'The target remains unverified despite the change.',
+    'I cannot independently verify the document content.',
+    'The document has not been reviewed against the contract.',
 ])
 def test_document_pass_rejects_explicit_uncertainty(rationale):
     head = 'a' * 40

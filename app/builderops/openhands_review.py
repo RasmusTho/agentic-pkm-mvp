@@ -191,11 +191,11 @@ def _parse_result(text: str, head: str, doc_targets: list[str] | None = None) ->
                        for item in checks)
                 or sorted(item["target"] for item in checks) != sorted(doc_targets)):
             raise ReviewError("Reviewer document writeback results are incomplete or mismatched")
-        # Detect explicit uncertainty; this cannot prove that a rationale is substantively correct.
+        # This incomplete check detects explicit uncertainty; it cannot prove semantic correctness.
         uncertain = re.compile(
             r"(?i)\b(?:cannot|can't|could not|did not|unable to|un(?:able|willing) to)\s+"
-            r"(?:review|inspect|verify|assess|confirm|determine|read|check)\b"
-            r"|\b(?:not|never)\s+(?:reviewed|inspected|verified|assessed|confirmed|checked|available)\b"
+            r"(?:independently\s+)?(?:review|inspect|verify|assess|confirm|determine|read|check)\b"
+            r"|\b(?:not|never)\s+(?:been\s+)?(?:reviewed|inspected|verified|assessed|confirmed|checked|available)\b"
             r"|\b(?:insufficient|missing|unavailable|inadequate)\s+(?:evidence|information|content)\b"
             r"|\b(?:uncertain|unsure|unknown|unverified|unresolved)\b"
         )
