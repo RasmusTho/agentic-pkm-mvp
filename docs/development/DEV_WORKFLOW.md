@@ -24,6 +24,252 @@ minimal coordinator dispatches each bug to its own end-to-end Codex task/session
 worktree, with serial implementation as the default. This is Builder System transition guidance,
 not Product/Runtime behavior or evidence of a shipped deterministic orchestrator.
 
+## OpenHands factory owner trial
+
+The local OpenHands delivery entry point is an experimental, explicitly authorized single-Issue
+path. It does not establish factory qualification or authorize merge or release. Install the pinned
+components with `scripts/setup_openhands_factory.sh /absolute/install/root /absolute/worktree/root`;
+the second argument is optional and defaults to `worktrees` under the install root. `uv`, Node and Codex must be
+on `PATH`, with Codex CLI 0.167.0 and the existing ChatGPT subscription login. Start fetches
+`origin/main` and verifies it against the remote's current default-branch SHA before preparing a
+worktree. It fails if the network is unavailable, the default branch is not `main`, the SHAs
+do not match, or updating the tracking ref would not be a fast-forward; it does not use the
+factory checkout's `HEAD` as the base.
+
+The installer also installs the Canvas launcher at the reviewed #6602 revision and checks its
+SHA-256; if that Git object is absent locally it retrieves the same pinned file from GitHub. An
+existing launcher with different contents is left in place and setup stops for inspection. The
+OpenHands bootstrap builds its pinned `func-timeout` source in a separate filesystem sandbox without
+the host home or Git metadata; the remaining bootstrap packages use wheels. Package tools use a
+private setup home. The test lock below is independent of this bootstrap.
+
+The installer creates a private state directory and a short owner entry point bound to this factory
+checkout and the chosen roots. The experimental Canvas route uses a dedicated model-free owner
+service, independent of a worker Issue or its conversation. Start or restore it with:
+
+```sh
+/absolute/install/root/bin/openhands owner --ui-action start --port 8766 --ui-port 3001
+```
+
+Open the returned Canvas URL. In **Builder control**, enter `start #456` to authorize that one
+Issue and its draft PR, or `status #456`, `cancel #456`, `resume #456`, or `stop #456` for the
+recorded run. This conversation is a command bridge and makes no model request; the task itself
+still uses the guarded native Codex session. No backlog scanner is enabled. The control session
+uses a model-free native ACP profile. A browser connecting to this Canvas origin for the first time
+may ask for the local session key from `<install-root>/runs/owner/server/session-api-key`; retain it
+privately. This is one-time browser setup, not a model or provider credential.
+The control session
+is a trial route, not an adopted default. Use `owner --ui-action status` and
+`owner --ui-action stop` for that service; restarting it uses its recorded backend and Canvas ports and retained
+conversation. The owner service refuses native Codex launches; tasks start on their own worker backend.
+The older `control --issue <number>` command opens the same independent owner conversation once the
+owner has been set up; it does not start that Issue. It uses the recorded owner UI port. If the owner
+has not been set up, start it with `owner --ui-action start`; an explicit `--ui-port` can avoid a port
+already used by a worker Canvas. Prior worker-hosted control records are preserved and are not reattached
+or deleted.
+A new start or resume is refused while an earlier worker backend is running or its delivery is
+unresolved. After publication the watcher stops the finished worker backend; published worker sessions
+cannot be restarted. Existing live older workers must be inspected and stopped before another admission.
+These mechanisms do not yet establish delegated-process cancellation. Roll back to the existing CLI
+if needed; retain recorded sessions and draft PRs.
+
+The CLI remains available directly. Replace the example paths and explicitly authorized Issue:
+
+```sh
+/absolute/install/root/bin/openhands start --issue 123 --port 8765
+```
+
+Use the same entry point with `status`, `cancel`, `resume`, or `stop` in place of `start`. The `status`
+command also reads current GitHub checks for a recorded draft when its PR and commit identity can be
+verified. This is a point-in-time observation, not a merge decision; unavailable or changed readback
+is reported as unknown. It does not restart the worker or watcher.
+The owner control process uses the existing GitHub CLI login in its home directory; it does not
+forward GitHub token or configuration environment variables. A login available only through those
+variables can work in a direct CLI but remains unavailable in the owner view.
+The entry point derives its pinned ACP and isolated service configuration; model selection stays on
+`gpt-6.1-terra` with subscription authentication, with no provider or model fallback. `cancel`
+interrupts the conversation; it does not establish that delegated processes have stopped. If the
+run is still admitting input, cancellation can return without sending an interrupt: use `status`
+and retry when admission finishes. For a
+previously interrupted delivery, `resume` currently refuses continuation because native and
+delegated execution cannot yet be proven stopped. `status` reports available task-scoped observations
+of the recorded service, worktree and publication, with unknowns retained; a paused conversation is
+not proof that the underlying work has ended. New worker backends refuse further delivery inputs
+after interruption and prove possession of the recorded session key on the same connection before
+the factory sends it. This is
+a partial mitigation, not a verified recovery procedure, and does not retrofit a backend that is
+already running. Event-history reads and new worker event connections are also refused after
+interruption because OpenHands can reload an unloaded runtime while handling them. Preserve the
+recorded state and inspect it rather than replaying the task.
+For a legacy worker without the identity challenge, the factory will not send its session key to
+an unverified listener. Inspect the exact recorded service with
+`python3 -m app.builderops.openhands_service --state-dir <recorded-run>/server status`; an explicit
+legacy shutdown can use the same command with `stop`. This stops only the identity-checked service
+process. It does not prove native or delegated work has stopped, so retain the run as unresolved
+and do not start conflicting work solely because the service stopped.
+For a
+new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Test
+targets use the separately prepared, hash-locked test environment on macOS arm64 with Python 3.12.
+Setup downloads only hash-verified binary wheels, then installs and checks them without network access.
+Before admission the factory checks the default branch's runtime project dependencies and the two
+requirements files against that lock;
+uncovered dependencies stop the task before claim. An interrupted preparation is retained for inspection,
+not silently replaced. The lock is specific to this host platform and does not resolve new dependencies.
+It does not install the optional `dev` or `browser` extras from `pyproject.toml`; tasks needing
+packages outside the two locked requirements files need a separately prepared environment.
+Older recorded runs retain their original test interpreter. The
+worker is instructed to leave a private ignored `.codex-tmp/openhands-finish.json` with its proposed
+title, body fields, risk classification and exact changed paths. After observing the finished
+conversation and children, the watcher checks the claim, branch/worktree gate, handoff and actual
+change set, commits the scoped changes locally with hooks and signing disabled, and invokes the
+existing `finish` verification, independent review and draft publication path. The review assesses
+the declared risk against the actual change. Worker claims are not test or review evidence.
+
+For one actionable test failure or structured review finding, the watcher can send bounded actual
+feedback to the same recorded conversation. The worker updates the private handoff with only the
+repair paths, which must be a subset of the originally recorded paths. It must preserve the Issue's
+exclusions and existing behavior outside the authorized fix, choose the smallest in-scope fix,
+and leave a required contract expansion unresolved. Review and repair assess the Issue's acceptance
+examples and regressions without making unchanged, out-of-scope improvements blockers by themselves.
+After checking the message,
+session and finished conversation, the watcher commits the additive repair through the same gates
+and reruns verification and independent review. A second failure, an unavailable or non-actionable
+review, unresolved test targets, or an out-of-scope repair stops for inspection. If message delivery
+is ambiguous, the recorded `repair_sending` phase is pending and is never automatically resent.
+
+For a canonical document-writeback Verify target, `finish` requires the target to be a changed
+regular file in the exact candidate and an explicit semantic pass from the independent reviewer.
+The file or heading alone is not a pass; unsupported targets and uncertain assessments remain
+unresolved. Review evidence is stored in private host state outside the worker workspace. As with
+the existing publication path, manually supplied host evidence is trusted and is not authenticated
+against a malicious user on the same host. Automatic repair of document-bearing review findings is
+not yet supported.
+
+`status` includes the watcher's `running`, `finished`, `pending` or `failed` state; a launch request
+alone is not proof it started. Status reads the atomically retained delivery state without waiting
+for a long-running review; if that state changes during live readback it reports the new state and
+asks for a retry. A healthy active task has no fixed delivery deadline. The watcher
+retries an unavailable conversation readback at most three times. It independently checks the live
+Issue and recorded claim and renews the same unexpired dispatcher lease and worktree registration
+while watching, testing, reviewing and publishing. Renewal runs at most 30 minutes apart and sooner
+when the observed remaining lease time requires it. Dispatcher-backed renewal uses the existing
+holder heartbeat and checks its result against the recorded claim; a label-only fallback has no
+dispatcher lease and keeps its existing weaker
+coordination semantics. The heartbeat status and expiry are visible through `status`; a failed or
+uncertain renewal stops subsequent guarded commands and leaves the run pending. An effect already
+in flight requires the existing readback and reconciliation. A lost process or uncertain
+publication is retained as pending. After inspection, `watch` with the same Issue and roots can
+restart a stopped watcher; a kernel lock prevents concurrent watcher effects, and publication uses the existing
+reconciliation. An interruption while staging or committing is always pending for manual index and
+branch inspection and is not automatically repeated. Older runs without the recorded automatic
+authorization remain manual. The watcher does not restart itself after a host reboot; an expired
+dispatcher lease cannot be revived by its heartbeat. Preserve state and reconcile an interrupted or uncertain
+start before retrying.
+
+After publishing, the watcher waits for GitHub checks and independently re-reads the draft PR and
+its current head. It reports a failure as failed, a genuinely incomplete or unavailable result as
+pending, and success only when the recorded current head has passed the check wait. It does not
+yet automatically diagnose or repair a CI-only failure. Enter `watch #456` in the control
+conversation to recheck a pending or rerun CI result while the original delivery lease is active;
+this reuses the same draft instead of publishing another one. After lease expiry, inspect current
+checks directly on the draft PR. A recorded passing result includes the head it covered and is not
+a live status for a subsequently changed head.
+
+`stop` first checks that the recorded conversation is finished or has been interrupted through
+`cancel`, then records the existing ACP session and service settings privately and stops the
+recorded Canvas (if present) and backend while retaining session data. It does not verify
+delegated-process cancellation. To restore that backend for conversation readback or publication,
+use `start` again with the same Issue, installation, repository and roots. It reuses the recorded
+workspace, port, key and session; it does not claim the Issue again or resume an agent turn.
+`resume` currently refuses an interrupted turn: paused conversation status alone does not establish
+that the earlier native command and delegated work have stopped or that their effects are reconciled.
+Keep the recorded workspace and session for inspection; no continuation prompt or replay is sent.
+For an interrupted run, `status` reports a point-in-time view of visible descendants, the worktree
+and matching draft PRs where available. The process view can omit detached work and does not prove
+termination; conversation status, an empty process snapshot and a clean worktree are not recovery
+approval. GitHub or local readback failures remain unknown. The retained recovery settings contain
+a sensitive ACP session identifier and must remain private.
+
+For a finished conversation on a clean committed worktree, use `verify` with the same Issue and
+roots. It rereads the recorded Issue contract and runs concrete `tests/...py` pytest targets in the
+retained Codex sandbox profile, capturing output and exit status in a private verification
+directory. The JSON result binds the evidence to `HEAD` and lists passing, failing and unresolved
+targets. Canonical document-writeback targets remain pending independent review; other document
+anchors, arbitrary commands and unmapped targets remain unresolved. Standalone `verify` exits
+nonzero unless verification passes, including when document review is pending. This is test
+evidence, not independent review or publication authority. Some tests need facilities excluded by the
+sandbox, such as network access; their actual results remain visible in the private logs.
+
+Use `review` with the same Issue and roots to run an independent native Codex review of the
+finished, committed candidate. The separate reviewer uses the guarded ChatGPT/Terra preflight and
+a read-only workspace profile; it records the structured verdict and actual response privately,
+bound to the exact candidate SHA. Refusals, failures, changed candidates and ambiguous output are
+unresolved. The separate `verify` and `review` commands remain available for diagnosis.
+
+For an explicitly authorized publication, `finish` runs both steps for the finished, clean committed
+candidate, assembles their exact-head evidence and invokes the existing `publish-full` draft workflow:
+
+```sh
+/absolute/install/root/bin/openhands finish --issue 123 --authorize-publication \
+  --title 'Describe the change' --body-input-json /absolute/host/pr-body-inputs.json \
+  --risk-surface auth
+```
+
+Provide the existing PR body generator's implementation-lane JSON inputs, including its SBS impact,
+owner-doc and BuilderOps fields and `final_review_rounds: 1`. The recorded claim supplies the Issue
+and pickup receipt. Supply every applicable `--risk-surface`; omit it when no listed surface applies.
+The independent reviewer checks the risk assessment even when no surfaces are declared. This route
+still uses the existing review and publication gates for the candidate's actual paths and risks.
+When the existing review gate requires a workflow review receipt, pass its host-side path with
+`--workflow-review-receipt`. Finish derives the candidate paths from committed history, preserves
+its private assembled receipt, and delegates claim, risk, issue, draft, check readback and ambiguous
+effect reconciliation to the existing publisher. A retry of an already recorded `publish-full`
+publication uses its original private host-side evidence, including when it was created outside
+`finish`; changed inputs or uncertain effects may require reconciliation. Failed or unresolved
+tests or review refuse publication. This does not establish passing CI, qualification,
+or completion of review-repair and mechanism-convergence obligations.
+
+The separate manual `finish` route still requires the operator to supply title, body inputs and risk
+classification. Automatic runs stop for malformed or missing handoffs, unsupported Verify targets,
+missing special review evidence, repeated or non-actionable failures, and uncertain effects.
+Finish does not assemble the stateful-fallback matrix; use the existing full publication
+route when that exception is required. Host-reboot recovery remains manual, so this is not yet
+unattended end to end.
+
+The launcher reads the applicable host and planned-worktree Codex TOML configuration to disable
+inherited MCP servers and plugins by name; it does not copy their configuration values. The service
+uses the `HOME`-based Codex configuration, and its effective-configuration preflight still refuses
+an enabled external tool or an unverified subscription/model before a worker turn. If configuration
+cannot be inspected, start fails and the operator must resolve the local configuration first.
+
+For a new run, the launcher also inspects the installed Python interpreter's `_sqlite3` and `_ssl`
+extensions. It uses `otool` on macOS or `ldd` on Linux to identify linked SQLite, SSL and crypto
+libraries, and grants their non-system library directories read-only access in the worker, verifier
+and reviewer profiles. Both the linked directory and its resolved directory are included when they
+differ; system libraries remain under the minimal profile. Missing inspection tools, unresolved
+library paths or inaccessible dependencies fail start rather than broadening access. For a macOS
+Python framework in a Homebrew `Cellar`, the profile also includes that Python version's package
+directory and the same Homebrew prefix's `opt` directory when present, for interpreter and library
+symlink traversal. Other Python layouts do not receive those Homebrew traversal roots. A stopped
+run retains its original settings and does not silently gain new sandbox roots on restart.
+The worker, test verifier and independent reviewer run Git with global and system configuration
+disabled; repository-local Git configuration remains in effect.
+
+For the owner interface, install the independently reviewed `scripts/openhands_canvas.py` from
+the #6602 candidate as `/absolute/install/root/bin/openhands_canvas.py`, retaining its source and
+commit receipt. #6602 is a draft and this launcher is not yet merged. Start the installed official
+Agent Canvas against the recorded service using the same paths and Issue:
+
+```sh
+/absolute/install/root/bin/openhands ui --issue 123 --ui-port 3001 --open
+```
+
+`--open` is optional; omit it to use the returned loopback URL manually. The UI port defaults to
+3001 and must differ from the backend port. Use `ui --ui-action status` or `ui --ui-action stop`
+with the same Issue and roots to inspect or stop Canvas without stopping the backend. The command
+passes the private session-key file path to the launcher; never print or copy its contents into
+logs or PRs.
+
 ## Planning vocabulary and lightweight breakdown
 
 Use these terms consistently across specifications, skills, and issues:

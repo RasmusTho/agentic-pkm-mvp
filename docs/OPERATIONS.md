@@ -27,6 +27,8 @@ TypeSafe DEV actual-consumer evidence: the [2026-10-21 Product receipt and exter
 Use this document as the operator-facing starting point for runtime operations.
 
 Specialized companion documents:
+- [Builder development workflow](development/DEV_WORKFLOW.md) - the local OpenHands owner route
+  under development in #6600; this is not a production runtime operation.
 - `docs/HEALTH.md` - health CLI behavior and runtime health contract
 - `docs/OBSERVABILITY.md` - runtime observability signals, counters, and span/log contracts
 - `docs/INFRASTRUCTURE.md` - application Compose fallback and local observability reference

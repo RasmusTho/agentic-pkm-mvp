@@ -1,0 +1,241 @@
+import asyncio
+import json
+import os
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import acp
+import pytest
+
+from app.builderops import openhands_delivery as delivery
+from app.builderops import openhands_owner as owner_setup
+from app.builderops import openhands_owner_acp as owner
+
+
+def test_owner_distinguishes_fresh_ci_from_recorded_status():
+    head = "a" * 40
+    summary = owner._summary("status", 42, {"watcher": {"ci": {"status": "pending", "head": head}},
+                                            "live_ci": {"status": "checks_successful", "head": head,
+                                                        "pr_number": 77}})
+    assert "Recorded CI: pending" in summary
+    assert "Current GitHub draft PR #77: observed checks successful" in summary
+    assert "not a merge verdict" in summary
+    assert "Current GitHub checks are unavailable" in owner._summary("status", 42, {"live_ci": {"status": "unavailable"}})
+
+
+@pytest.mark.parametrize("message", ["start 1; start 2", "start 1 and 2", "start 0", "start -1", "delete 3", "start 4\nstatus 5"])
+def test_owner_requires_one_explicit_issue_command(tmp_path, monkeypatch, message):
+    monkeypatch.setattr(owner, "_invoke", lambda *args, **kwargs: pytest.fail("unexpected effect"))
+    assert "one explicit Issue command" in owner.run_command(tmp_path / "entry", message)
+
+
+def test_owner_calls_only_factory_and_does_not_forward_provider_keys(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setenv("OPENAI_API_KEY", "not-forwarded")
+    monkeypatch.setattr(owner, "_port", lambda: 18650)
+
+    def execute(args, env):
+        calls.append((args, env))
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"conversation_status": "running"}))
+
+    monkeypatch.setattr(owner, "_invoke", execute)
+    result = owner.run_command(tmp_path / "openhands", "/start #42")
+    assert calls[0][0] == [str(tmp_path / "openhands"), "start", "--issue", "42", "--port", "18650"]
+    assert "OPENAI_API_KEY" not in calls[0][1]
+    assert "Conversation: running" in result
+
+
+def test_uncertain_start_is_not_retried(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(owner, "_port", lambda: 18650)
+
+    def timed_out(*args, **kwargs):
+        calls.append(args)
+        raise owner.subprocess.TimeoutExpired(args[0], 240)
+
+    monkeypatch.setattr(owner, "_invoke", timed_out)
+    assert "status #42" in owner.run_command(tmp_path / "openhands", "start 42")
+    assert len(calls) == 1
+
+
+def test_owner_explains_known_admission_failure_without_echoing_arbitrary_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(owner, "_port", lambda: 18650)
+    monkeypatch.setattr(owner, "_invoke", lambda *args, **kwargs: SimpleNamespace(
+        returncode=1, stderr="OpenHands factory: Issue does not have exactly agent:ready as its agent state"))
+    assert "not ready" in owner.run_command(tmp_path / "entry", "start #42")
+    monkeypatch.setattr(owner, "_invoke", lambda *args, **kwargs: SimpleNamespace(
+        returncode=1, stderr="untrusted output must not be echoed"))
+    assert "untrusted" not in owner.run_command(tmp_path / "entry", "start #42")
+
+
+def test_owner_timeout_stops_the_started_process_group(monkeypatch):
+    calls = []
+
+    class Process:
+        pid = 1234
+        count = 0
+        stdout = None
+        stderr = None
+
+        def communicate(self, timeout=None):
+            self.count += 1
+            if self.count == 1:
+                raise owner.subprocess.TimeoutExpired("factory", timeout)
+            return "", ""
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(owner.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(owner.os, "killpg", lambda pid, sig: calls.append((pid, sig)))
+    with pytest.raises(owner.subprocess.TimeoutExpired):
+        owner._invoke(["factory"], {})
+    assert calls == [(1234, owner.signal.SIGTERM), (1234, owner.signal.SIGKILL)]
+
+
+def test_status_reports_unverified_recovery_without_disclosing_process_details():
+    result = owner._summary("status", 42, {"state": {"phase": "interrupted"}, "recovery": {
+        "continuation": "blocked", "execution": {"candidate_descendant_count": 1},
+        "worktree": {"status": "observed", "dirty": True}, "publication": {"status": "ambiguous"},
+    }})
+    assert "Continuation is blocked" in result
+    assert "Candidate descendant processes: 1; ancestry and visibility are incomplete" in result
+    assert "Worktree snapshot: changed" in result and "Publication readback is ambiguous" in result
+    assert "12345" not in result
+
+
+def test_status_reports_live_children_and_existing_pr_in_recovery():
+    result = owner._summary("status", 42, {"state": {"phase": "interrupted"}, "recovery": {
+        "continuation": "blocked", "delegated_work": {"openhands_conversations": [
+            {"id": "private-id", "status": "running"}, {"id": "another-id", "status": "paused"}]},
+        "publication": {"status": "observed", "matching_prs": [{"number": 77, "draft": False, "state": "open", "merged": False}]},
+    }})
+    assert "2 observed, 1 running" in result and "Native child processes remain unverified" in result
+    assert "Open PR: https://github.com/RasmusTho/agentic-pkm-mvp/pull/77" in result
+    assert "private-id" not in result
+    for pr_state, merged, expected in (("closed", False, "Closed PR"), ("closed", True, "Merged PR")):
+        closed = owner._summary("status", 42, {"recovery": {"continuation": "blocked", "publication": {
+            "status": "observed", "matching_prs": [{"number": 77, "draft": True, "state": pr_state, "merged": merged}]}}})
+        assert expected in closed and "Open draft PR" not in closed
+    unknown = owner._summary("status", 42, {"recovery": {"continuation": "blocked", "publication": {"status": "unknown"}}})
+    assert "GitHub PR readback is unavailable" in unknown
+
+
+def test_recorded_publication_does_not_assert_pr_is_currently_draft():
+    result = owner._summary("status", 42, {"state": {"full_publication": {"pr_number": 77}},
+        "watcher": {"status": "not_started"}, "recovery": {"continuation": "blocked", "publication": {
+            "status": "observed", "matching_prs": [{"number": 77, "draft": False, "state": "closed", "merged": True}]}}})
+    assert "Delivery: publication recorded" in result
+    assert "Merged PR" in result and "draft published" not in result
+
+
+def test_status_shows_published_pr_and_ci_without_raw_state():
+    result = owner._summary("status", 42, {"state": {"full_publication": {"pr_number": 123}},
+        "watcher": {"status": "finished", "phase": "published", "ci": {"status": "passed", "head": "a" * 40}}})
+    assert "https://github.com/RasmusTho/agentic-pkm-mvp/pull/123" in result
+    assert "CI: passed" in result
+    assert "a" * 40 in result and "Recorded CI" in result
+    assert "full_publication" not in result
+
+
+def test_status_surfaces_phase_and_unavailable_readback_without_raw_errors():
+    result = owner._summary("status", 42, {"state": {"phase": "creating_worktree"},
+        "conversation_readback_error": "private detail"})
+    assert "Run phase: creating_worktree" in result
+    assert "readback is unavailable" in result
+    assert "private detail" not in result
+
+
+def test_real_acp_process_accepts_a_status_command(tmp_path):
+    entry = tmp_path / "factory"
+    entry.write_text('#!/bin/sh\nprintf \'{"conversation_status":"finished"}\\n\'\n')
+    entry.chmod(0o755)
+
+    class Client:
+        def __init__(self):
+            self.messages = []
+
+        def on_connect(self, connection):
+            pass
+
+        async def session_update(self, session_id, update, **kwargs):
+            content = getattr(update, "content", None)
+            if getattr(content, "type", None) == "text":
+                self.messages.append(content.text)
+
+    async def exercise():
+        client = Client()
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(Path(owner.__file__).resolve().parents[2])
+        async with acp.spawn_agent_process(client, sys.executable, "-m", "app.builderops.openhands_owner_acp",
+                                           "--entry", str(entry), env=env) as (connection, _process):
+            initialized = await connection.initialize(protocol_version=acp.PROTOCOL_VERSION)
+            assert initialized.agent_capabilities.load_session
+            session = await connection.new_session(cwd=str(tmp_path))
+            result = await connection.prompt(session_id=session.session_id, prompt=[acp.text_block("status #42")])
+            assert result.stop_reason == "end_turn"
+            assert any("Conversation: finished" in text for text in client.messages)
+
+    asyncio.run(exercise())
+
+
+def test_attach_reuses_the_same_model_free_control_conversation(tmp_path, monkeypatch):
+    install = tmp_path / "install"
+    (install / "bin").mkdir(parents=True)
+    (install / "bin/openhands").write_text("#!/bin/sh\n")
+    directory = tmp_path / "issue"
+    directory.mkdir(mode=0o700)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    host = {"issue": 42, "worktree": str(worktree), "port": 8123}
+    monkeypatch.setattr(delivery, "_state", lambda *args: host)
+    monkeypatch.setattr(delivery, "_server_key", lambda *args: "test-key")
+    calls = []
+    stored = {}
+
+    def request(port, key, method, path, payload=None, **kwargs):
+        calls.append((method, path))
+        if method == "POST":
+            assert payload["autotitle"] is False
+            assert payload["agent_settings"]["acp_server"] == "custom"
+            assert "acp_model" not in payload["agent_settings"]
+            stored.update(id=payload["conversation_id"], workspace=payload["workspace"], title=None,
+                          agent={"kind": "ACPAgent", "acp_server": "custom", "acp_model": None,
+                                 "acp_command": payload["agent_settings"]["acp_command"]})
+            return 201, {}
+        if method == "PATCH":
+            stored["title"] = payload["title"]
+            return 200, {}
+        return 200, stored
+
+    monkeypatch.setattr(delivery, "_http", request)
+    first = owner_setup.attach(install, directory, 42)
+    second = owner_setup.attach(install, directory, 42)
+    assert first["conversation_id"] == second["conversation_id"]
+    assert sum(method == "POST" for method, _ in calls) == 1
+    assert stored["title"] == "Builder control"
+
+
+def test_uncertain_control_creation_is_not_replayed(tmp_path, monkeypatch):
+    install = tmp_path / "install"
+    (install / "bin").mkdir(parents=True)
+    (install / "bin/openhands").write_text("#!/bin/sh\n")
+    directory = tmp_path / "issue"
+    directory.mkdir(mode=0o700)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    monkeypatch.setattr(delivery, "_state", lambda *args: {"issue": 42, "worktree": str(worktree), "port": 8123})
+    monkeypatch.setattr(delivery, "_server_key", lambda *args: "test-key")
+    calls = []
+
+    def request(port, key, method, path, payload=None, **kwargs):
+        calls.append(method)
+        return (500, {}) if method == "POST" else (404, {})
+
+    monkeypatch.setattr(delivery, "_http", request)
+    with pytest.raises(delivery.DeliveryError, match="uncertain"):
+        owner_setup.attach(install, directory, 42)
+    with pytest.raises(delivery.DeliveryError, match="could not be verified"):
+        owner_setup.attach(install, directory, 42)
+    assert calls.count("POST") == 1
