@@ -498,6 +498,8 @@ def test_watcher_repairs_actionable_feedback_once_and_preserves_replay(authorize
     assert "pre-existing behavior as a blocker merely because it could be improved" in prompt
     assert "regressions and failed acceptance criteria within scope" in prompt
     assert "smallest in-scope fix" in prompt and "leave it unresolved" in prompt
+    assert "paths to exactly the files changed or deleted in this repair only" in prompt
+    assert "title and body to truthfully describe the full candidate" in prompt
     assert finish_calls == ["b" * 40, "c" * 40]
     assert result["status"] == ("failed" if mode == "repeated" else "finished")
     watcher.run(*arguments)
@@ -881,3 +883,53 @@ def test_repair_handoff_retains_original_and_expands_risks_and_candidate_paths(a
     assert result["paths"] == ["feature.py", "old.py"]
     assert result["risks"] == ["auth", "data"]
     assert service._read(watch_dir)["original_handoff"] == original
+
+
+def test_real_git_repair_handoff_uses_delta_and_preserves_cumulative_paths(tmp_path, monkeypatch):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+    git("init", "-b", "codex/repair")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.invalid")
+    (repo / ".gitignore").write_text(".codex-tmp/\n")
+    git("add", ".gitignore")
+    git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    (repo / "original.py").write_text("original\n")
+    git("add", "original.py")
+    git("commit", "-m", "original candidate")
+    repair_base = git("rev-parse", "HEAD")
+    (repo / "new.py").write_text("repair\n")
+    local = repo / ".codex-tmp"
+    local.mkdir()
+    receipt = BODY_INPUTS["pickup_receipt"].replace("/tmp/publication-test", str(repo))
+    state = {"issue": 5230, "worktree": str(repo), "branch": "codex/repair", "base_commit": base,
+             "pickup_receipt": receipt}
+    handoff = {"version": 1, "issue": 5230, "title": "Full candidate", "paths": ["new.py"],
+               "risk_surfaces": ["auth", "data"], "body": {key: BODY_INPUTS[key] for key in watcher.BODY_FIELDS}}
+    handoff_file = local / "openhands-finish.json"
+    handoff_file.write_text(json.dumps(handoff))
+    handoff_file.chmod(0o600)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    watch_dir = run_dir / "watcher"
+    watch_dir.mkdir()
+    previous = {"title": "Original", "body": {}, "risks": ["auth"], "paths": ["original.py"]}
+    record = {"version": 1, "phase": "repair_sent", "repair_base": repair_base, "handoff": previous}
+    monkeypatch.setattr(delivery, "_full_claim_readback", lambda *args: None)
+    monkeypatch.setattr(delivery, "_finished_run", lambda *args: state)
+    class LocalGit:
+        def run(self, argv, *, cwd, input_text=None):
+            if str(argv[0]).endswith("agent_workspace_preflight.sh"):
+                return publication.CommandResult(tuple(argv), 0, "", "")
+            assert argv[0] == "git"
+            return publication.SubprocessExecutor().run(argv, cwd=cwd, input_text=input_text)
+    result = watcher._commit(run_dir, state, record, watch_dir, LocalGit())
+    assert result["paths"] == ["new.py", "original.py"]
+    assert result["title"] == "Full candidate" and result["risks"] == ["auth", "data"]
+    assert service._read(watch_dir)["original_handoff"] == previous
+    assert git("status", "--porcelain") == ""

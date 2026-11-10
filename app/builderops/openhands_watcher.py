@@ -515,7 +515,8 @@ def _send_repair(directory: Path, state: dict[str, Any], watcher: dict[str, Any]
               "leave it unresolved and explain rather than implementing the expansion. "
               "Do not claim, commit, push, publish, access credentials, "
               "or make external effects. Change only files necessary for the governing Issue, "
-              "and update the private handoff paths, title and body to truthfully describe the full candidate. "
+              "Set private handoff paths to exactly the files changed or deleted in this repair only; "
+              "set title and body to truthfully describe the full candidate. "
               "Reassess and retain or expand risk surfaces and preserve all Issue exclusions. "
               "The host will independently rerun all tests and review.\n\nFeedback:\n" + feedback)
     if len(prompt.encode("utf-8")) > 32768:
