@@ -187,3 +187,12 @@ def test_document_pass_rejects_explicit_uncertainty(rationale):
         review._parse_result(json.dumps(response), head, [target])
     response['doc_writebacks'][0]['result'] = 'unresolved'
     assert review._parse_result(json.dumps(response), head, [target])['doc_writebacks'][0]['result'] == 'unresolved'
+
+
+def test_document_pass_allows_reviewed_limitation_in_content():
+    head = 'a' * 40
+    target = 'doc writeback at `docs/OWNER.md :: State`'
+    response = {'head_sha': head, 'verdict': 'pass', 'summary': 'Reviewed candidate.', 'findings': [],
+                'doc_writebacks': [{'target': target, 'result': 'pass', 'rationale':
+                    'The State section says recovery is not verified, matching the Issue requirement to document the limitation.'}]}
+    assert review._parse_result(json.dumps(response), head, [target])['verdict'] == 'pass'

@@ -193,11 +193,14 @@ def _parse_result(text: str, head: str, doc_targets: list[str] | None = None) ->
             raise ReviewError("Reviewer document writeback results are incomplete or mismatched")
         # This incomplete check detects explicit uncertainty; it cannot prove semantic correctness.
         uncertain = re.compile(
-            r"(?i)\b(?:cannot|can't|could not|did not|unable to|un(?:able|willing) to)\s+"
+            r"(?i)\b(?:i|we)\s+(?:cannot|can't|could not|did not|am unable to|are unable to)\s+"
             r"(?:independently\s+)?(?:review|inspect|verify|assess|confirm|determine|read|check|access)\b"
-            r"|\b(?:not|never)\s+(?:been\s+)?(?:reviewed|inspected|verified|assessed|confirmed|checked|examined|available)\b"
-            r"|\b(?:insufficient|missing|unavailable|inadequate)\s+(?:evidence|information|content)\b"
-            r"|\b(?:uncertain|unsure|unknown|unverified|unresolved)\b"
+            r"|\b(?:document|section|content|target)\s+(?:was|is|has|has been|remains)\s+"
+            r"(?:not\s+(?:been\s+)?(?:reviewed|inspected|verified|assessed|confirmed|checked|examined)"
+            r"|unverified|unknown|unresolved)\b"
+            r"|\b(?:i am|i'm|we are|we're)\s+(?:uncertain|unsure)\b"
+            r"|\binsufficient\s+evidence\s+(?:is\s+available\s+)?to\s+"
+            r"(?:review|inspect|verify|assess|confirm|determine|read|check)\b"
         )
         if any(item["result"] == "pass" and uncertain.search(item["rationale"]) for item in checks):
             raise ReviewError("Reviewer document writeback pass reports uncertainty or incomplete review")
