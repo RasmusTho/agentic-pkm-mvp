@@ -135,8 +135,9 @@ computes the cumulative candidate paths, and reruns verification and independent
 must preserve Issue exclusions and existing behavior outside the authorized fix, choose the smallest
 in-scope fix, and leave a required contract expansion unresolved. A canonical document-writeback
 target whose file changed is pending until the independent reviewer assesses that exact target against
-the Issue and candidate; a file or heading alone is not a pass. Missing, unsupported or unresolved
-document targets do not automatically trigger repair. Other unknown or
+the Issue and candidate; a file or heading alone is not a pass. When missing test targets trigger
+repair, any pending declared document requirements are included as context and still require that
+independent review. Unsupported or unresolved document targets alone do not trigger repair. Other unknown or
 non-actionable outcomes stop for inspection. A failed/publishing watcher is not automatically
 restarted; a `repair_sending` outcome remains pending and is never automatically resent.
 
