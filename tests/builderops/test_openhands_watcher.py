@@ -933,3 +933,20 @@ def test_real_git_repair_handoff_uses_delta_and_preserves_cumulative_paths(tmp_p
     assert result["title"] == "Full candidate" and result["risks"] == ["auth", "data"]
     assert service._read(watch_dir)["original_handoff"] == previous
     assert git("status", "--porcelain") == ""
+
+
+def test_unresolved_bare_pytest_file_target_is_actionable(authorized_run, monkeypatch):
+    directory, worktree, state, handoff, _, _ = authorized_run
+    body = "## Acceptance Criteria\n- [ ] Coverage\n  - Verify: `tests/test_missing.py`\n"
+    state.update(repository=delivery.REPOSITORY, issue_body_sha256=delivery._sha(body))
+    monkeypatch.setattr(delivery, "_json_result", lambda *args: {
+        "number": state["issue"], "state": "OPEN", "body": body,
+        "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"})
+    error = factory.FinishEvidenceError("unresolved", kind="verification", evidence={
+        "repository": delivery.REPOSITORY, "issue": state["issue"], "head_sha": "b" * 40,
+        "issue_body_sha256": state["issue_body_sha256"], "status": "unresolved", "failed": [],
+        "unresolved": [{"target": "`tests/test_missing.py`", "reason": "Not a concrete local pytest target"}]})
+    assert "tests/test_missing.py" in watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
+    (worktree / "tests").mkdir()
+    (worktree / "tests/test_missing.py").write_text("pass\n")
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None

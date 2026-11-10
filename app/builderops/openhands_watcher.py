@@ -413,7 +413,7 @@ def _repair_feedback(error: factory.FinishEvidenceError, state: dict[str, Any],
                 # Verified runner normalizes backticks for tests that exist.
                 if raw not in declared and f"`{raw}`" not in declared:
                     return None
-                test = re.fullmatch(r"tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*)+", target)
+                test = re.fullmatch(r"tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*)*", target)
                 if test and item.get("reason") == "Not a concrete local pytest target":
                     if factory._pytest_target(raw, worktree) is not None:
                         return None
