@@ -191,6 +191,16 @@ def _parse_result(text: str, head: str, doc_targets: list[str] | None = None) ->
                        for item in checks)
                 or sorted(item["target"] for item in checks) != sorted(doc_targets)):
             raise ReviewError("Reviewer document writeback results are incomplete or mismatched")
+        # Detect explicit uncertainty; this cannot prove that a rationale is substantively correct.
+        uncertain = re.compile(
+            r"(?i)\b(?:cannot|can't|could not|did not|unable to|un(?:able|willing) to)\s+"
+            r"(?:review|inspect|verify|assess|confirm|determine|read|check)\b"
+            r"|\b(?:not|never)\s+(?:reviewed|inspected|verified|assessed|confirmed|checked|available)\b"
+            r"|\b(?:insufficient|missing|unavailable|inadequate)\s+(?:evidence|information|content)\b"
+            r"|\b(?:uncertain|unsure|unknown|unverified|unresolved)\b"
+        )
+        if any(item["result"] == "pass" and uncertain.search(item["rationale"]) for item in checks):
+            raise ReviewError("Reviewer document writeback pass reports uncertainty or incomplete review")
     for item in result["findings"]:
         if (not isinstance(item, dict) or set(item) != {"severity", "description", "file", "line"}
                 or not isinstance(item["severity"], str) or item["severity"] not in {"P0", "P1", "P2", "P3"}

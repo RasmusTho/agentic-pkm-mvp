@@ -1248,7 +1248,9 @@ def test_doc_writeback_requires_exact_review_and_candidate_change(tmp_path, monk
         delivery._full_evidence(receipt_file, state, head, base, body)
     monkeypatch.setattr(delivery, '_candidate_document_is_regular', lambda *args: True)
     for field, value in [('target', target.replace('State', 'Other')), ('result', 'fail'),
-                         ('result', 'unresolved')]:
+                         ('result', 'unresolved'),
+                         ('rationale', 'I cannot inspect the document or verify its content.'),
+                         ('rationale', 'The content is unknown and cannot be confirmed.')]:
         broken = json.loads(json.dumps(result))
         broken['doc_writebacks'][0][field] = value
         review_file.write_text(json.dumps(broken))

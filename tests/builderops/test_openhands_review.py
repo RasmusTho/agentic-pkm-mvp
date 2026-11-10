@@ -164,3 +164,21 @@ def test_review_environment_does_not_include_api_keys(tmp_path, monkeypatch):
                       "Review this candidate", "worker-thread", timeout=10)
     assert "OPENAI_API_KEY" not in captured
     assert captured["OPENHANDS_FACTORY_READ_ONLY"] == "1"
+
+
+@pytest.mark.parametrize('rationale', [
+    'I cannot inspect the document or verify its content.',
+    'The section was not verified against the issue.',
+    'Insufficient evidence is available to assess the change.',
+    'I am unsure whether the section satisfies the contract.',
+    'The target remains unverified despite the change.',
+])
+def test_document_pass_rejects_explicit_uncertainty(rationale):
+    head = 'a' * 40
+    target = 'doc writeback at `docs/OWNER.md :: State`'
+    response = {'head_sha': head, 'verdict': 'pass', 'summary': 'Reviewed candidate.', 'findings': [],
+                'doc_writebacks': [{'target': target, 'result': 'pass', 'rationale': rationale}]}
+    with pytest.raises(review.ReviewError, match='uncertainty or incomplete'):
+        review._parse_result(json.dumps(response), head, [target])
+    response['doc_writebacks'][0]['result'] = 'unresolved'
+    assert review._parse_result(json.dumps(response), head, [target])['doc_writebacks'][0]['result'] == 'unresolved'
