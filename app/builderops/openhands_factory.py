@@ -1048,10 +1048,15 @@ def _review(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
         parsed = None
         reason = None
         try:
-            kwargs = {"doc_targets": doc_targets} if doc_targets else {}
-            parsed, actual_text, thread = review.run_review(
-                install / "venv/bin/python", settings, worktree, head, prompt, worker_id, **kwargs
-            )
+            if doc_targets:
+                parsed, actual_text, thread = review.run_review(
+                    install / "venv/bin/python", settings, worktree, head, prompt, worker_id,
+                    doc_targets=doc_targets,
+                )
+            else:
+                parsed, actual_text, thread = review.run_review(
+                    install / "venv/bin/python", settings, worktree, head, prompt, worker_id,
+                )
             reviewer = "native-codex-gpt-6.1-terra-" + hashlib.sha256(thread.encode()).hexdigest()[:16]
         except review.ReviewError as exc:
             reason = str(exc)

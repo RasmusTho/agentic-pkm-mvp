@@ -260,7 +260,7 @@ def run_review(
             raise ReviewError("Reviewer model or sandbox identity was not verified") from exc
         if thread == worker_session_id:
             raise ReviewError("Reviewer is not independent of the worker session")
-        schema = copy.deepcopy(_SCHEMA)
+        schema: dict[str, Any] = copy.deepcopy(_SCHEMA)
         if doc_targets:
             schema["properties"]["doc_writebacks"] = {"type": "array", "items": {
                 "type": "object", "additionalProperties": False,
