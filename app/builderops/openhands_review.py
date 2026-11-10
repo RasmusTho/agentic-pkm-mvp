@@ -194,8 +194,8 @@ def _parse_result(text: str, head: str, doc_targets: list[str] | None = None) ->
         # This incomplete check detects explicit uncertainty; it cannot prove semantic correctness.
         uncertain = re.compile(
             r"(?i)\b(?:cannot|can't|could not|did not|unable to|un(?:able|willing) to)\s+"
-            r"(?:independently\s+)?(?:review|inspect|verify|assess|confirm|determine|read|check)\b"
-            r"|\b(?:not|never)\s+(?:been\s+)?(?:reviewed|inspected|verified|assessed|confirmed|checked|available)\b"
+            r"(?:independently\s+)?(?:review|inspect|verify|assess|confirm|determine|read|check|access)\b"
+            r"|\b(?:not|never)\s+(?:been\s+)?(?:reviewed|inspected|verified|assessed|confirmed|checked|examined|available)\b"
             r"|\b(?:insufficient|missing|unavailable|inadequate)\s+(?:evidence|information|content)\b"
             r"|\b(?:uncertain|unsure|unknown|unverified|unresolved)\b"
         )

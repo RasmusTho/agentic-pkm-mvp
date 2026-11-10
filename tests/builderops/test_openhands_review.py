@@ -174,6 +174,9 @@ def test_review_environment_does_not_include_api_keys(tmp_path, monkeypatch):
     'The target remains unverified despite the change.',
     'I cannot independently verify the document content.',
     'The document has not been reviewed against the contract.',
+    'I could not access the document or its content.',
+    'The content was not examined against the contract.',
+    'I could not access the document, so its content was not examined.',
 ])
 def test_document_pass_rejects_explicit_uncertainty(rationale):
     head = 'a' * 40
