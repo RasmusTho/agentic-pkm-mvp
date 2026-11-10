@@ -330,8 +330,7 @@ def _commit(directory: Path, state: dict[str, Any], watcher: dict[str, Any], wat
     if repair:
         previous = watcher.get("handoff")
         if (not isinstance(previous, dict) or not isinstance(previous.get("paths"), list)
-                or any(handoff[key] != previous.get(key) for key in ("title", "body", "risks"))
-                or not set(handoff["paths"]).issubset(set(previous["paths"]))):
+                or handoff["risks"] != previous.get("risks")):
             raise delivery.DeliveryError("Repair handoff exceeds or changes the recorded publication scope")
     unstaged, staged, untracked = publication._changed_path_sets(runner, worktree)
     if staged or not (unstaged | untracked) or (unstaged | untracked) != set(handoff["paths"]):
@@ -347,6 +346,8 @@ def _commit(directory: Path, state: dict[str, Any], watcher: dict[str, Any], wat
     if len(attrs) != 3 * len(handoff["paths"]) + 1 or any(attrs[i] not in {"unspecified", "unset"}
                                                             for i in range(2, len(attrs) - 1, 3)):
         raise delivery.DeliveryError("Configured Git filters require manual inspection")
+    if repair:
+        watcher["original_handoff"] = previous
     watcher.update(status="running", phase="staging", handoff=handoff, base=head)
     service._write(watch_dir, watcher)
     publication._checked(runner, ["git", "--literal-pathspecs", "add", "-A", "--", *handoff["paths"]], worktree)
@@ -377,6 +378,50 @@ def _repair_feedback(error: factory.FinishEvidenceError, state: dict[str, Any],
         return None
     worktree = Path(state["worktree"]).resolve(strict=True)
     if error.kind == "verification":
+        if evidence.get("status") == "unresolved":
+            # Only explicit, current issue Verify targets are actionable; infrastructure
+            # failures, stale contracts and ambiguous results must remain unknown.
+            if (evidence.get("repository") != state.get("repository")
+                    or evidence.get("issue") != state.get("issue")
+                    or evidence.get("issue_body_sha256") != state.get("issue_body_sha256")
+                    or evidence.get("failed") != []):
+                return None
+            issue = delivery._json_result(["gh", "issue", "view", str(state["issue"]), "--repo",
+                                           delivery.REPOSITORY, "--json", "number,state,body,url"])
+            if (not isinstance(issue, dict) or issue.get("number") != state["issue"]
+                    or issue.get("state") != "OPEN" or not isinstance(issue.get("body"), str)
+                    or issue.get("url") != f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"
+                    or delivery._sha(issue["body"]) != state["issue_body_sha256"]):
+                return None
+            items = factory._extract_acceptance_items(factory.extract_sections(issue["body"]).get("acceptance criteria"))
+            declared = {target for item in items for target in factory._declared_verify_targets(item)}
+            unresolved = evidence.get("unresolved")
+            if not isinstance(unresolved, list) or not 1 <= len(unresolved) <= 32:
+                return None
+            targets = []
+            for item in unresolved:
+                if not isinstance(item, dict) or not isinstance(item.get("target"), str):
+                    return None
+                raw = item["target"]
+                target = raw.strip().removeprefix("`").removesuffix("`")
+                # Verified runner normalizes backticks for tests that exist.
+                if raw not in declared and f"`{raw}`" not in declared:
+                    return None
+                test = re.fullmatch(r"tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*)+", target)
+                doc = re.fullmatch(r"doc writeback at `docs/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.md :: [A-Za-z0-9 /_-]+`", raw)
+                if test and item.get("reason") == "Not a concrete local pytest target":
+                    if factory._pytest_target(raw, worktree) is not None:
+                        return None
+                elif test and item.get("reason") == "Command failed before test results were established":
+                    if item.get("head_sha") != head or item.get("exit_code") != 4:
+                        return None
+                    _, output = delivery._evidence_artifact(item.get("evidence"), directory, worktree)
+                    if "not found" not in output.lower():
+                        return None
+                elif not (doc and item.get("reason") == "Not a concrete local pytest target"):
+                    return None
+                targets.append(raw)
+            return "Unresolved declared Verify targets (not proof of failure):\n" + "\n".join(targets)
         failures = evidence.get("failed")
         if (evidence.get("status") != "failed" or evidence.get("unresolved") != []
                 or not isinstance(failures, list) or not 1 <= len(failures) <= 4):
@@ -462,9 +507,9 @@ def _send_repair(directory: Path, state: dict[str, Any], watcher: dict[str, Any]
               "and prefer the smallest in-scope fix. If the feedback requires a genuine contract expansion, "
               "leave it unresolved and explain rather than implementing the expansion. "
               "Do not claim, commit, push, publish, access credentials, "
-              "or make external effects. Change only the previously recorded paths: "
-              + json.dumps(handoff["paths"]) + ". Update the existing private handoff paths to exactly "
-              "the files changed by this repair; preserve its title, body and risk surfaces. "
+              "or make external effects. Change only files necessary for the governing Issue, "
+              "and update the private handoff paths, title and body to truthfully describe the full candidate. "
+              "Preserve its risk surfaces and all Issue exclusions. "
               "The host will independently rerun all tests and review.\n\nFeedback:\n" + feedback)
     if len(prompt.encode("utf-8")) > 32768:
         return False
@@ -477,6 +522,10 @@ def _send_repair(directory: Path, state: dict[str, Any], watcher: dict[str, Any]
         )) or factory._candidate_head(Path(state["worktree"]), state["branch"]) != head:
             raise delivery.DeliveryError("Repair target changed before message submission")
         delivery._full_claim_readback(state, runner, Path(state["worktree"]))
+        if current.get("full_publication") is not None:
+            raise delivery.DeliveryError("Publication state exists; reconcile before repair")
+        if publication._read_pr_history(runner, Path(state["worktree"]), delivery.REPOSITORY, state["branch"]):
+            raise delivery.DeliveryError("A PR exists for this branch; reconcile before repair")
         observed = delivery._conversation(directory, state)
         agent = observed.get("agent_state")
         worker_id = agent.get("acp_session_id") if isinstance(agent, dict) else None

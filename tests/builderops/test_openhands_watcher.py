@@ -471,6 +471,7 @@ def test_watcher_repairs_actionable_feedback_once_and_preserves_replay(authorize
 
     monkeypatch.setattr(factory, "_finish", finish)
     monkeypatch.setattr(delivery, "_conversation", conversation)
+    monkeypatch.setattr(publication, "_read_pr_history", lambda *args: [])
     monkeypatch.setattr(delivery, "_server_key", lambda *args: "local-test-key")
     monkeypatch.setattr(delivery, "_http", http)
     arguments = (Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
@@ -819,3 +820,42 @@ def test_watcher_refuses_unscoped_or_ambiguous_work(authorized_run, monkeypatch,
     result = watcher.status(directory)
     assert result["status"] == ("pending" if case == "ambiguous_commit" else "failed")
     assert not runner.committed and not any("add" in call for call in calls)
+
+
+def test_unresolved_feedback_is_bound_to_current_issue_and_safe_targets(authorized_run, monkeypatch):
+    directory, worktree, state, handoff, _, _ = authorized_run
+    body = '## Acceptance Criteria\n- [ ] Behavior\n  - Verify: `tests/test_missing.py::test_behavior`\n- [ ] Docs\n  - Verify: doc writeback at `docs/OWNER.md :: State`\n'
+    state.update(repository=delivery.REPOSITORY, issue_body_sha256=delivery._sha(body))
+    issue = {"number": state["issue"], "state": "OPEN", "body": body,
+             "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"}
+    monkeypatch.setattr(delivery, "_json_result", lambda *args: issue)
+    evidence = {"repository": delivery.REPOSITORY, "issue": state["issue"],
+                "head_sha": "b" * 40, "issue_body_sha256": state["issue_body_sha256"],
+                "status": "unresolved", "failed": [], "unresolved": [
+                    {"target": "`tests/test_missing.py::test_behavior`", "reason": "Not a concrete local pytest target"},
+                    {"target": "doc writeback at `docs/OWNER.md :: State`", "reason": "Not a concrete local pytest target"},
+                ]}
+    error = factory.FinishEvidenceError("unresolved", kind="verification", evidence=evidence)
+    assert "test_missing.py::test_behavior" in watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
+    evidence["unresolved"].append({"target": "tests/injected.py::test_x", "reason": "Not a concrete local pytest target"})
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
+    evidence["unresolved"].pop()
+    issue["body"] += "changed"
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
+    issue["body"] = body
+    evidence["unresolved"][0]["reason"] = "Command unavailable or timed out"
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
+
+
+
+def test_failed_publishing_remains_stopped_without_native_completion_proof(authorized_run, monkeypatch):
+    directory, worktree, state, handoff, runner, _ = authorized_run
+    watch_dir = directory / "watcher"
+    watch_dir.mkdir(mode=0o700)
+    service._write(watch_dir, {"version": 1, "status": "failed", "phase": "publishing",
+                              "head": "b" * 40, "handoff": handoff,
+                              "failed_evidence": {"kind": "verification", "status": "unresolved"}})
+    monkeypatch.setattr(factory, "_finish", lambda *args, **kwargs: pytest.fail("must not restart"))
+    watcher.run(Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
+    assert runner.commits == 0
+    assert watcher.status(directory)["status"] == "failed"
