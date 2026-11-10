@@ -36,6 +36,59 @@ MAX_HEARTBEAT_INTERVAL = 30 * 60
 CI_WAIT_SECONDS = 8100
 
 
+def fresh_ci_status(state: dict[str, Any], recorded: dict[str, Any], repo: Path, issue: int,
+                    executor: publication.CommandExecutor | None = None) -> dict[str, Any]:
+    """Read the recorded draft's current checks without starting a watcher or worker.
+
+    This is a point-in-time observation, not a required-check or merge verdict.
+    Four bounded GitHub GETs have at most three seconds each.
+    """
+    unavailable: dict[str, Any] = {"status": "unavailable"}
+    publication_state = state.get("full_publication")
+    publication_state = publication_state if isinstance(publication_state, dict) else {}
+    pr_number, head = recorded.get("pr_number"), recorded.get("head")
+    branch = state.get("branch")
+    if (state.get("repository") != delivery.REPOSITORY or state.get("root") != str(repo)
+            or state.get("issue") != issue
+            or not isinstance(branch, str) or not branch.startswith("codex/")
+            or type(pr_number) is not int or pr_number <= 0
+            or publication_state.get("pr_number") != pr_number
+            or not isinstance(head, str) or not publication.GIT_SHA_RE.fullmatch(head)):
+        return unavailable
+    candidate = publication_state.get("candidate")
+    if not isinstance(candidate, dict) or candidate.get("head") != head:
+        return unavailable
+    runner = executor or publication.SubprocessExecutor(timeout_seconds=3)
+
+    def draft() -> bool:
+        prs = publication._read_pr_history(runner, repo, delivery.REPOSITORY, branch)
+        return bool(len(prs) == 1 and prs[0].get("number") == pr_number
+                    and prs[0].get("state") == "open" and prs[0].get("draft") is True
+                    and publication._nested(prs[0], "head", "sha") == head
+                    and publication._nested(prs[0], "head", "ref") == branch
+                    and publication._nested(prs[0], "head", "repo", "full_name") == delivery.REPOSITORY
+                    and publication._nested(prs[0], "base", "ref") == "main"
+                    and publication._nested(prs[0], "base", "repo", "full_name") == delivery.REPOSITORY)
+
+    try:
+        if not draft():
+            return unavailable
+        checks = delivery._check_readback(runner, repo, head)
+        if not draft():
+            return unavailable
+        latest = latest_checks_by_name(checks["check_runs"])
+        executed = [check for check in latest if check.get("conclusion") != "skipped"]
+        failed = (any(check["status"] == "completed" and check.get("conclusion") not in TERMINAL_GREEN_CONCLUSIONS
+                      for check in latest) or any(item["state"] in {"failure", "error"} for item in checks["statuses"]))
+        pending = ((not executed and not checks["statuses"]) or any(check["status"] != "completed" for check in latest)
+                   or any(item["state"] not in {"success", "failure", "error"} for item in checks["statuses"]))
+        return {"status": "failed" if failed else "pending" if pending else "checks_successful",
+                "head": head, "pr_number": pr_number}
+    except (delivery.DeliveryError, publication.PublicationRefusal, publication.PublicationCommandError,
+            OSError, ValueError, KeyError, TypeError):
+        return unavailable
+
+
 def _make_store() -> SqliteStore:
     paths = load_paths()
     return SqliteStore(db_path=paths.db_path, event_writer=JsonlEventWriter(paths.events_path))

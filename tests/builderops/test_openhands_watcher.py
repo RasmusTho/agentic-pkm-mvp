@@ -20,6 +20,65 @@ REAL_WAIT_FOR_CI = watcher._wait_for_ci
 REAL_CONVERSATION = delivery._conversation
 
 
+@pytest.mark.parametrize("checks,statuses,expected", [
+    ([{"name": "unit", "status": "completed", "conclusion": "success"}], [], "checks_successful"),
+    ([{"name": "unit", "status": "in_progress", "conclusion": None}], [], "pending"),
+    ([{"name": "unit", "status": "completed", "conclusion": "failure"}], [], "failed"),
+    ([{"name": "unit", "status": "completed", "conclusion": "skipped"}], [], "pending"),
+    ([], [], "pending"),
+    ([], [{"context": "ci", "state": "success"}], "checks_successful"),
+    ([], [{"context": "ci", "state": "failure"}], "failed"),
+    ([{"name": "unit", "status": "completed", "conclusion": "success"}], [{"context": "ci", "state": "pending"}], "pending"),
+])
+def test_fresh_ci_readback_is_head_bound_and_read_only(tmp_path, checks, statuses, expected):
+    head = "a" * 40
+    branch = "codex/issue-123-openhands"
+    state = {"repository": delivery.REPOSITORY, "root": str(tmp_path), "issue": 123, "branch": branch,
+             "full_publication": {"pr_number": 77, "candidate": {"head": head}}}
+    recorded = {"pr_number": 77, "head": head}
+    pr = {"number": 77, "state": "open", "draft": True,
+          "head": {"sha": head, "ref": branch, "repo": {"full_name": delivery.REPOSITORY}},
+          "base": {"ref": "main", "repo": {"full_name": delivery.REPOSITORY}}}
+    class ReadOnly:
+        calls = []
+        def run(self, argv, *, cwd, input_text=None):
+            command = list(argv)
+            self.calls.append(command)
+            assert command[:6] == ["gh", "api", "--hostname", "github.com", "--method", "GET"]
+            endpoint = command[6]
+            if endpoint.endswith("/pulls"):
+                body = [pr]
+            elif endpoint.endswith("/check-runs"):
+                items = [{**check, "head_sha": head, "id": i + 1} for i, check in enumerate(checks)]
+                body = {"total_count": len(items), "check_runs": items}
+            elif endpoint.endswith("/status"):
+                body = {"sha": head, "state": "pending", "total_count": len(statuses), "statuses": statuses}
+            else:
+                pytest.fail("unexpected GitHub endpoint")
+            return publication.CommandResult(tuple(command), 0, json.dumps(body), "")
+    runner = ReadOnly()
+    assert watcher.fresh_ci_status(state, recorded, tmp_path, 123, runner) == {
+        "status": expected, "head": head, "pr_number": 77}
+    assert len(runner.calls) == 4
+
+
+def test_fresh_ci_refuses_pr_head_drift_and_unavailable_readback(tmp_path, monkeypatch):
+    head = "a" * 40
+    branch = "codex/issue-123-openhands"
+    state = {"repository": delivery.REPOSITORY, "root": str(tmp_path), "issue": 123, "branch": branch,
+             "full_publication": {"pr_number": 77, "candidate": {"head": head}}}
+    pr = {"number": 77, "state": "open", "draft": True,
+          "head": {"sha": head, "ref": branch, "repo": {"full_name": delivery.REPOSITORY}},
+          "base": {"ref": "main", "repo": {"full_name": delivery.REPOSITORY}}}
+    snapshots = iter([[pr], [{**pr, "head": {**pr["head"], "sha": "b" * 40}}]])
+    monkeypatch.setattr(publication, "_read_pr_history", lambda *args: next(snapshots))
+    monkeypatch.setattr(delivery, "_check_readback", lambda *args: {"check_runs": [], "statuses": []})
+    assert watcher.fresh_ci_status(state, {"head": head, "pr_number": 77}, tmp_path, 123) == {"status": "unavailable"}
+    monkeypatch.setattr(publication, "_read_pr_history", lambda *args: (_ for _ in ()).throw(OSError("private detail")))
+    assert watcher.fresh_ci_status(state, {"head": head, "pr_number": 77}, tmp_path, 123) == {"status": "unavailable"}
+    assert watcher.fresh_ci_status(state, {"head": head, "pr_number": 78}, tmp_path, 123) == {"status": "unavailable"}
+
+
 def test_authorized_worker_prompt_requests_only_local_handoff():
     plan = {"repository": delivery.REPOSITORY, "issue": {"number": 5230, "title": "Feature",
             "body": "Issue scope"}, "instructions": {"AGENTS.md": {"content": "Instructions"}}}

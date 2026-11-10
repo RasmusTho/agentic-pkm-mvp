@@ -13,6 +13,17 @@ from app.builderops import openhands_owner as owner_setup
 from app.builderops import openhands_owner_acp as owner
 
 
+def test_owner_distinguishes_fresh_ci_from_recorded_status():
+    head = "a" * 40
+    summary = owner._summary("status", 42, {"watcher": {"ci": {"status": "pending", "head": head}},
+                                            "live_ci": {"status": "checks_successful", "head": head,
+                                                        "pr_number": 77}})
+    assert "Recorded CI: pending" in summary
+    assert "Current GitHub draft PR #77: observed checks successful" in summary
+    assert "not a merge verdict" in summary
+    assert "Current GitHub checks are unavailable" in owner._summary("status", 42, {"live_ci": {"status": "unavailable"}})
+
+
 @pytest.mark.parametrize("message", ["start 1; start 2", "start 1 and 2", "start 0", "start -1", "delete 3", "start 4\nstatus 5"])
 def test_owner_requires_one_explicit_issue_command(tmp_path, monkeypatch, message):
     monkeypatch.setattr(owner, "_invoke", lambda *args, **kwargs: pytest.fail("unexpected effect"))

@@ -79,8 +79,14 @@ The CLI remains available directly. Replace the example paths and explicitly aut
 /absolute/install/root/bin/openhands start --issue 123 --port 8765
 ```
 
-Use the same entry point with `status`, `cancel`, `resume`, or `stop` in place of `start`. The command
-derives its pinned ACP and isolated service configuration; model selection stays on
+Use the same entry point with `status`, `cancel`, `resume`, or `stop` in place of `start`. The `status`
+command also reads current GitHub checks for a recorded draft when its PR and commit identity can be
+verified. This is a point-in-time observation, not a merge decision; unavailable or changed readback
+is reported as unknown. It does not restart the worker or watcher.
+The owner control process uses the existing GitHub CLI login in its home directory; it does not
+forward GitHub token or configuration environment variables. A login available only through those
+variables can work in a direct CLI but remains unavailable in the owner view.
+The entry point derives its pinned ACP and isolated service configuration; model selection stays on
 `gpt-6.1-terra` with subscription authentication, with no provider or model fallback. `cancel`
 interrupts the conversation; it does not establish that delegated processes have stopped. If the
 run is still admitting input, cancellation can return without sending an interrupt: use `status`

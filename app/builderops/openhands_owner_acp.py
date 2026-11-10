@@ -60,6 +60,18 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
         head = ci.get("head")
         revision = head if isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40,64}", head) else "unknown"
         fields.append(f"Recorded CI: {ci['status']} (head {revision}); request a fresh check for current status.")
+    live_ci = result.get("live_ci")
+    if isinstance(live_ci, dict):
+        status = live_ci.get("status")
+        head = live_ci.get("head")
+        number = live_ci.get("pr_number")
+        if (status in {"checks_successful", "pending", "failed"} and isinstance(head, str)
+                and re.fullmatch(r"[0-9a-f]{40,64}", head) and type(number) is int and number > 0):
+            label = {"checks_successful": "observed checks successful", "pending": "checks pending",
+                     "failed": "checks failed"}[status]
+            fields.append(f"Current GitHub draft PR #{number}: {label} (head {head}); not a merge verdict.")
+        else:
+            fields.append("Current GitHub checks are unavailable or changed; inspect the PR.")
     recovery = result.get("recovery")
     if isinstance(recovery, dict) and recovery.get("continuation") == "blocked":
         fields.append("Continuation is blocked: previous execution and delegated work are not verified stopped.")
