@@ -330,7 +330,8 @@ def _commit(directory: Path, state: dict[str, Any], watcher: dict[str, Any], wat
     if repair:
         previous = watcher.get("handoff")
         if (not isinstance(previous, dict) or not isinstance(previous.get("paths"), list)
-                or handoff["risks"] != previous.get("risks")):
+                or not isinstance(previous.get("risks"), list)
+                or not set(previous["risks"]).issubset(handoff["risks"])):
             raise delivery.DeliveryError("Repair handoff exceeds or changes the recorded publication scope")
     unstaged, staged, untracked = publication._changed_path_sets(runner, worktree)
     if staged or not (unstaged | untracked) or (unstaged | untracked) != set(handoff["paths"]):
@@ -365,7 +366,12 @@ def _commit(directory: Path, state: dict[str, Any], watcher: dict[str, Any], wat
                                  "commit", "-m", f"Implement issue #{state['issue']}",
                                  "-m", f"Refs #{state['issue']}"], worktree)
     candidate = factory._candidate_head(worktree, state["branch"])
-    watcher.update(phase="publishing", head=candidate)
+    if repair:
+        cumulative = publication._candidate_paths(runner, worktree, state["base_commit"], candidate)
+        if not cumulative:
+            raise delivery.DeliveryError("Repaired candidate has no publication paths")
+        handoff["paths"] = sorted(cumulative)
+    watcher.update(phase="publishing", head=candidate, handoff=handoff)
     service._write(watch_dir, watcher)
     return handoff
 
@@ -408,7 +414,6 @@ def _repair_feedback(error: factory.FinishEvidenceError, state: dict[str, Any],
                 if raw not in declared and f"`{raw}`" not in declared:
                     return None
                 test = re.fullmatch(r"tests/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*)+", target)
-                doc = re.fullmatch(r"doc writeback at `docs/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.md :: [A-Za-z0-9 /_-]+`", raw)
                 if test and item.get("reason") == "Not a concrete local pytest target":
                     if factory._pytest_target(raw, worktree) is not None:
                         return None
@@ -418,7 +423,9 @@ def _repair_feedback(error: factory.FinishEvidenceError, state: dict[str, Any],
                     _, output = delivery._evidence_artifact(item.get("evidence"), directory, worktree)
                     if "not found" not in output.lower():
                         return None
-                elif not (doc and item.get("reason") == "Not a concrete local pytest target"):
+                else:
+                    # Doc writeback has no independent verifier in this factory.
+                    # Sending a worker would only repeat an unresolvable gate.
                     return None
                 targets.append(raw)
             return "Unresolved declared Verify targets (not proof of failure):\n" + "\n".join(targets)
@@ -509,7 +516,7 @@ def _send_repair(directory: Path, state: dict[str, Any], watcher: dict[str, Any]
               "Do not claim, commit, push, publish, access credentials, "
               "or make external effects. Change only files necessary for the governing Issue, "
               "and update the private handoff paths, title and body to truthfully describe the full candidate. "
-              "Preserve its risk surfaces and all Issue exclusions. "
+              "Reassess and retain or expand risk surfaces and preserve all Issue exclusions. "
               "The host will independently rerun all tests and review.\n\nFeedback:\n" + feedback)
     if len(prompt.encode("utf-8")) > 32768:
         return False

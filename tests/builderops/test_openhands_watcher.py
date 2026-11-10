@@ -440,6 +440,8 @@ def test_watcher_repairs_actionable_feedback_once_and_preserves_replay(authorize
 
     def finish(*args, **kwargs):
         finish_calls.append(runner.head)
+        if len(finish_calls) == 2:
+            assert service._read(directory / "watcher")["handoff"]["paths"] == ["added.py", "feature.py"]
         if len(finish_calls) == 1 or mode == "repeated":
             raise failure
         return {"pr_number": 1234, "commit_sha": runner.head, "checks": {}}
@@ -472,6 +474,7 @@ def test_watcher_repairs_actionable_feedback_once_and_preserves_replay(authorize
     monkeypatch.setattr(factory, "_finish", finish)
     monkeypatch.setattr(delivery, "_conversation", conversation)
     monkeypatch.setattr(publication, "_read_pr_history", lambda *args: [])
+    monkeypatch.setattr(publication, "_candidate_paths", lambda *args: {"feature.py", "added.py"})
     monkeypatch.setattr(delivery, "_server_key", lambda *args: "local-test-key")
     monkeypatch.setattr(delivery, "_http", http)
     arguments = (Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
@@ -836,6 +839,8 @@ def test_unresolved_feedback_is_bound_to_current_issue_and_safe_targets(authoriz
                     {"target": "doc writeback at `docs/OWNER.md :: State`", "reason": "Not a concrete local pytest target"},
                 ]}
     error = factory.FinishEvidenceError("unresolved", kind="verification", evidence=evidence)
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
+    evidence["unresolved"].pop()
     assert "test_missing.py::test_behavior" in watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
     evidence["unresolved"].append({"target": "tests/injected.py::test_x", "reason": "Not a concrete local pytest target"})
     assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
@@ -859,3 +864,20 @@ def test_failed_publishing_remains_stopped_without_native_completion_proof(autho
     watcher.run(Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
     assert runner.commits == 0
     assert watcher.status(directory)["status"] == "failed"
+
+
+def test_repair_handoff_retains_original_and_expands_risks_and_candidate_paths(authorized_run, monkeypatch):
+    directory, worktree, state, handoff, runner, _ = authorized_run
+    watch_dir = directory / "watcher"
+    watch_dir.mkdir(mode=0o700)
+    runner.head = "b" * 40
+    runner.commits = 1
+    original = {"title": "Original", "body": {}, "risks": ["auth"], "paths": ["old.py"]}
+    updated = {"title": "Updated", "body": {}, "risks": ["auth", "data"], "paths": ["feature.py"]}
+    monkeypatch.setattr(watcher, "_handoff", lambda *args: updated)
+    monkeypatch.setattr(publication, "_candidate_paths", lambda *args: {"old.py", "feature.py"})
+    record = {"version": 1, "phase": "repair_sent", "repair_base": runner.head, "handoff": original}
+    result = watcher._commit(directory, state, record, watch_dir, runner)
+    assert result["paths"] == ["feature.py", "old.py"]
+    assert result["risks"] == ["auth", "data"]
+    assert service._read(watch_dir)["original_handoff"] == original
