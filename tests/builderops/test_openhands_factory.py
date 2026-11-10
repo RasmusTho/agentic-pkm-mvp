@@ -1218,3 +1218,67 @@ def test_failed_refresh_stops_before_preparing_delivery(tmp_path, monkeypatch, c
     assert "Cannot refresh origin/main" in error
     assert "private network detail" not in error
     assert service._read(state / "issue-123") is None
+
+
+def test_doc_writeback_requires_exact_review_and_candidate_change(tmp_path, monkeypatch):
+    target = 'doc writeback at `docs/OWNER.md :: State`'
+    body = f'## Acceptance Criteria\n- [ ] Updated state.\n  - Verify: {target}\n'
+    head, base = 'a' * 40, 'b' * 40
+    worktree = tmp_path / 'worktree'
+    worktree.mkdir()
+    state = {'worktree': str(worktree), 'issue': 123}
+    review_file = tmp_path / 'review.json'
+    result = {'head_sha': head, 'verdict': 'pass', 'summary': 'Reviewed the change.', 'findings': [],
+              'doc_writebacks': [{'target': target, 'result': 'pass',
+                                   'rationale': 'The state section describes the delivered behavior.'}]}
+    receipt_file = tmp_path / 'receipt.json'
+    receipt = {'version': 1, 'repository': delivery.REPOSITORY, 'issue': 123,
+               'head_sha': head, 'base_sha': base, 'risk_surfaces': [], 'verification': [],
+               'review': {'reviewer': 'independent', 'verdict': 'pass', 'head_sha': head,
+                          'issue_body_sha256': delivery._sha(body), 'blocking_findings': [],
+                          'evidence': {'path': str(review_file)}}}
+    receipt_file.write_text(json.dumps(receipt))
+    monkeypatch.setattr(delivery, '_run', lambda *args, **kwargs:
+                        subprocess.CompletedProcess([], 0, 'docs/OWNER.md\n', ''))
+    review_file.write_text(json.dumps(result))
+    delivery._full_evidence(receipt_file, state, head, base, body)
+    for field, value in [('target', target.replace('State', 'Other')), ('result', 'fail'),
+                         ('result', 'unresolved')]:
+        broken = json.loads(json.dumps(result))
+        broken['doc_writebacks'][0][field] = value
+        review_file.write_text(json.dumps(broken))
+        with pytest.raises(delivery.DeliveryError):
+            delivery._full_evidence(receipt_file, state, head, base, body)
+    review_file.write_text(json.dumps({**result, 'head_sha': 'c' * 40}))
+    with pytest.raises(delivery.DeliveryError):
+        delivery._full_evidence(receipt_file, state, head, base, body)
+    review_file.write_text(json.dumps(result))
+    receipt['review']['issue_body_sha256'] = '0' * 64
+    receipt_file.write_text(json.dumps(receipt))
+    with pytest.raises(delivery.DeliveryError):
+        delivery._full_evidence(receipt_file, state, head, base, body)
+    receipt['review']['issue_body_sha256'] = delivery._sha(body)
+    receipt_file.write_text(json.dumps(receipt))
+    monkeypatch.setattr(delivery, '_run', lambda *args, **kwargs: subprocess.CompletedProcess([], 0, '', ''))
+    with pytest.raises(delivery.DeliveryError):
+        delivery._full_evidence(receipt_file, state, head, base, body)
+
+
+def test_doc_writeback_verification_waits_for_independent_review(tmp_path, monkeypatch):
+    install, state_root, worktrees = _installation(tmp_path)
+    directory, state, server, _, _ = _recorded_run(install, state_root, worktrees)
+    target = 'doc writeback at `docs/OWNER.md :: State`'
+    body = f'## Acceptance Criteria\n- [ ] Updated state.\n  - Verify: {target}\n'
+    head = 'a' * 40
+    state.update(branch='codex/issue-123-openhands', issue_body_sha256=delivery._sha(body))
+    monkeypatch.setattr(delivery, '_finished_run', lambda path: state)
+    monkeypatch.setattr(factory, '_candidate_head', lambda *args: head)
+    monkeypatch.setattr(service, 'status', lambda path: {'status': 'running', 'state': server})
+    monkeypatch.setattr(service, '_settings', lambda path: {})
+    monkeypatch.setattr(delivery, '_json_result', lambda command: {
+        'number': 123, 'state': 'OPEN', 'body': body,
+        'url': f'https://github.com/{delivery.REPOSITORY}/issues/123'})
+    result = factory._verify(install, directory, 123, factory.FACTORY_ROOT, worktrees)
+    assert result['status'] == 'pending_review'
+    assert result['doc_targets'] == [target]
+    assert result['verification'] == []

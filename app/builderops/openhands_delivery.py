@@ -1126,6 +1126,14 @@ def _evidence_artifact(reference: Any, evidence_dir: Path, worktree: Path) -> tu
 
 
 
+def _doc_writeback_path(target: str) -> str | None:
+    """Accept a concrete, repository-relative document and heading declaration."""
+    match = re.fullmatch(r"doc writeback at `((?:docs|\.codex)/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.md) :: ([^`\n]+)`", target)
+    if not match or any(part in {".", ".."} for part in match.group(1).split("/")):
+        return None
+    return match.group(1)
+
+
 def _full_evidence(
     receipt_file: Path, state: dict[str, Any], head: str, base: str, issue_body: str,
 ) -> tuple[dict[str, Any], str]:
@@ -1179,10 +1187,26 @@ def _full_evidence(
         for raw_target in _declared_verify_targets(item):
             quoted = re.fullmatch(r"`([^`]+)`(?:\s+.*)?", raw_target)
             targets.append(quoted[1] if quoted else raw_target)
+    if any(target.startswith("doc writeback at ") and not _doc_writeback_path(target) for target in targets):
+        raise DeliveryError("Document writeback target cannot be resolved for independent review")
+    doc_targets = list(dict.fromkeys(target for target in targets if _doc_writeback_path(target)))
+    if doc_targets:
+        from app.builderops import openhands_review
+        try:
+            parsed_review = openhands_review._parse_result(review_text, head, doc_targets)
+        except openhands_review.ReviewError as exc:
+            raise DeliveryError("Document writeback review source is incomplete or stale") from exc
+        if (review.get("issue_body_sha256") != _sha(issue_body)
+                or parsed_review["verdict"] != "pass"
+                or any(check["result"] != "pass" for check in parsed_review["doc_writebacks"])):
+            raise DeliveryError("Document writeback review did not establish a pass for the current Issue")
+        changed = set(_run(["git", "--no-replace-objects", "-C", str(worktree), "diff", "--name-only", base, head, "--"]).stdout.splitlines())
+        if any(_doc_writeback_path(target) not in changed for target in doc_targets):
+            raise DeliveryError("Document writeback target was not changed in the candidate")
     verification = receipt.get("verification")
-    if not isinstance(verification, list) or not verification:
+    if not isinstance(verification, list) or (not verification and not doc_targets):
         raise DeliveryError("Candidate verification evidence is missing")
-    covered = set()
+    covered = set(doc_targets)
     test_runs: dict[str, tuple[int, set[str]]] = {}
     for entry in verification:
         if (not isinstance(entry, dict) or not isinstance(entry.get("target"), str)

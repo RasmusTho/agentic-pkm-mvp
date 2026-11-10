@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import re
 import selectors
@@ -157,7 +158,7 @@ class _Rpc:
                 return message["result"]
 
 
-def _parse_result(text: str, head: str) -> dict[str, Any]:
+def _parse_result(text: str, head: str, doc_targets: list[str] | None = None) -> dict[str, Any]:
     def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
@@ -170,12 +171,26 @@ def _parse_result(text: str, head: str) -> dict[str, Any]:
         result = json.loads(text, object_pairs_hook=unique_object)
     except ValueError as exc:
         raise ReviewError("Reviewer verdict is not valid JSON") from exc
-    if (not isinstance(result, dict) or set(result) != {"head_sha", "verdict", "summary", "findings"}
+    expected_fields = {"head_sha", "verdict", "summary", "findings"}
+    if doc_targets:
+        expected_fields.add("doc_writebacks")
+    if (not isinstance(result, dict) or set(result) != expected_fields
             or result["head_sha"] != head or not isinstance(result["verdict"], str)
             or result["verdict"] not in {"pass", "findings", "unresolved"}
             or not isinstance(result["summary"], str) or not result["summary"].strip()
             or not isinstance(result["findings"], list)):
         raise ReviewError("Reviewer verdict is incomplete or does not match the candidate")
+    if doc_targets:
+        checks = result["doc_writebacks"]
+        if (not isinstance(checks, list) or len(checks) != len(doc_targets)
+                or any(not isinstance(item, dict) or set(item) != {"target", "result", "rationale"}
+                       or not isinstance(item.get("target"), str)
+                       or not isinstance(item.get("result"), str)
+                       or item["result"] not in {"pass", "fail", "unresolved"}
+                       or not isinstance(item.get("rationale"), str) or len(item["rationale"].strip()) < 20
+                       for item in checks)
+                or sorted(item["target"] for item in checks) != sorted(doc_targets)):
+            raise ReviewError("Reviewer document writeback results are incomplete or mismatched")
     for item in result["findings"]:
         if (not isinstance(item, dict) or set(item) != {"severity", "description", "file", "line"}
                 or not isinstance(item["severity"], str) or item["severity"] not in {"P0", "P1", "P2", "P3"}
@@ -197,7 +212,7 @@ def _parse_result(text: str, head: str) -> dict[str, Any]:
 
 def run_review(
     python: Path, settings: dict[str, Any], workspace: Path, head: str, prompt: str,
-    worker_session_id: str, *, timeout: float = 900,
+    worker_session_id: str, *, timeout: float = 900, doc_targets: list[str] | None = None,
 ) -> tuple[dict[str, Any], str, str]:
     """Return a structured result, the actual response text, and a new thread ID."""
     roots = settings["sandbox_read_roots"]
@@ -245,9 +260,16 @@ def run_review(
             raise ReviewError("Reviewer model or sandbox identity was not verified") from exc
         if thread == worker_session_id:
             raise ReviewError("Reviewer is not independent of the worker session")
+        schema = copy.deepcopy(_SCHEMA)
+        if doc_targets:
+            schema["properties"]["doc_writebacks"] = {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {"target": {"type": "string"}, "result": {"type": "string", "enum": ["pass", "fail", "unresolved"]}, "rationale": {"type": "string"}},
+                "required": ["target", "result", "rationale"]}}
+            schema["required"].append("doc_writebacks")
         rpc.send({"jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": {
             "threadId": thread, "model": policy.MODEL,
-            "input": [{"type": "text", "text": prompt}], "outputSchema": _SCHEMA,
+            "input": [{"type": "text", "text": prompt}], "outputSchema": schema,
         }})
         turn_id = None
         events = []
@@ -282,7 +304,7 @@ def run_review(
                 raise ReviewError("Reviewer final response is missing or ambiguous")
             text = messages[0]["text"]
             try:
-                result = _parse_result(text, head)
+                result = _parse_result(text, head, doc_targets)
             except ReviewError as exc:
                 raise ReviewError(str(exc), response=text) from exc
             return result, text, thread
