@@ -411,6 +411,15 @@ def test_watcher_retries_publication_without_repeating_commit(authorized_run, mo
 @pytest.mark.parametrize("kind", ["review", "verification"])
 def test_watcher_repairs_actionable_feedback_once_and_preserves_replay(authorized_run, monkeypatch, mode, kind):
     directory, worktree, state, _, runner, calls = authorized_run
+    issue_body = "## Acceptance Criteria\n- [ ] Feature\n  - Verify: `tests/test_feature.py::test_bug`\n"
+    state["issue_body_sha256"] = delivery._sha(issue_body)
+    service._write(directory, state)
+    monkeypatch.setattr(delivery, "_json_result", lambda *args: {
+        "number": state["issue"], "state": "OPEN", "body": issue_body,
+        "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"})
+    monkeypatch.setattr(delivery, "_doc_writeback_path", lambda target: None, raising=False)
+    old_parse = factory.review._parse_result
+    monkeypatch.setattr(factory.review, "_parse_result", lambda raw, head, targets: old_parse(raw, head))
     review = {"head_sha": "b" * 40, "verdict": "unresolved", "summary": "A concrete defect needs repair",
               "findings": [{"severity": "P1", "description": "Handle the missing value in this branch.",
                             "file": "feature.py", "line": 3}]}
@@ -978,4 +987,42 @@ def test_missing_selector_diagnostic_must_name_exact_requested_target(authorized
     text = "ERROR: file or directory not found: tests/from-addopts.py\n"
     log.write_text(text)
     entry["evidence"]["sha256"] = hashlib.sha256(text.encode()).hexdigest()
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
+
+
+def test_review_feedback_binds_document_targets_to_current_issue(authorized_run, monkeypatch):
+    directory, _, state, handoff, _, _ = authorized_run
+    target = "doc writeback at `docs/OWNER.md :: State`"
+    body = f"## Acceptance Criteria\n- [ ] Document\n  - Verify: {target}\n"
+    state["issue_body_sha256"] = delivery._sha(body)
+    issue = {"number": state["issue"], "state": "OPEN", "body": body,
+             "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"}
+    monkeypatch.setattr(delivery, "_json_result", lambda *args: issue)
+    monkeypatch.setattr(delivery, "_doc_writeback_path", lambda value: "docs/OWNER.md" if value == target else None,
+                        raising=False)
+    review = {"head_sha": "b" * 40, "verdict": "findings", "summary": "Document needs repair",
+              "findings": [{"severity": "P1", "description": "Correct the stated owner boundary.",
+                            "file": "feature.py", "line": 1}],
+              "doc_writebacks": [{"target": target, "result": "fail", "rationale": "The owner boundary is missing."}]}
+    raw = json.dumps(review)
+    artifact = directory / "review-doc.txt"
+    artifact.write_text(raw)
+    def parse(source, head, targets):
+        parsed = json.loads(source)
+        if targets != [target] or parsed["head_sha"] != head or [x["target"] for x in parsed["doc_writebacks"]] != targets:
+            raise factory.review.ReviewError("mismatch")
+        return parsed
+    monkeypatch.setattr(factory.review, "_parse_result", parse)
+    evidence = {"status": "unresolved", "head_sha": "b" * 40, "reason": None,
+                "review": {"head_sha": "b" * 40, "issue_body_sha256": state["issue_body_sha256"],
+                           "evidence": {"path": str(artifact), "sha256": hashlib.sha256(raw.encode()).hexdigest()}}}
+    error = factory.FinishEvidenceError("review", kind="review", evidence=evidence)
+    assert target in watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
+    issue["body"] += "changed"
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
+    issue["body"] = body
+    review["doc_writebacks"][0]["result"] = "unresolved"
+    raw = json.dumps(review)
+    artifact.write_text(raw)
+    evidence["review"]["evidence"]["sha256"] = hashlib.sha256(raw.encode()).hexdigest()
     assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None

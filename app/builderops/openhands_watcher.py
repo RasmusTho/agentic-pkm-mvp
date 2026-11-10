@@ -459,19 +459,43 @@ def _repair_feedback(error: factory.FinishEvidenceError, state: dict[str, Any],
                 or re.fullmatch(r"[0-9a-f]{64}", reference["sha256"]) is None):
             return None
         _, source = delivery._evidence_artifact(reference, directory, worktree)
+        issue = delivery._json_result(["gh", "issue", "view", str(state["issue"]), "--repo",
+                                       delivery.REPOSITORY, "--json", "number,state,body,url"])
+        if (not isinstance(issue, dict) or issue.get("number") != state.get("issue")
+                or issue.get("state") != "OPEN" or not isinstance(issue.get("body"), str)
+                or issue.get("url") != f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"
+                or delivery._sha(issue["body"]) != state.get("issue_body_sha256")):
+            return None
+        items = factory._extract_acceptance_items(factory.extract_sections(issue["body"]).get("acceptance criteria"))
+        targets = list(dict.fromkeys(target for item in items for target in factory._declared_verify_targets(item)))
+        doc_parser = getattr(delivery, "_doc_writeback_path", None)
+        if doc_parser is None:
+            # Older factory versions cannot establish the final document schema.
+            return None
+        doc_targets = [target for target in targets if doc_parser(target) is not None]
+        if doc_targets and entry.get("issue_body_sha256") != state.get("issue_body_sha256"):
+            return None
         try:
-            parsed = factory.review._parse_result(source, head)
+            parsed = factory.review._parse_result(source, head, doc_targets)
         except factory.review.ReviewError:
             return None
+        if any(item.get("result") == "unresolved" for item in parsed.get("doc_writebacks", [])):
+            return None
         findings = parsed["findings"]
-        if (parsed["verdict"] != evidence["status"] or not 1 <= len(findings) <= 4
+        doc_checks = parsed.get("doc_writebacks", [])
+        verdict_matches = (parsed["verdict"] == evidence["status"] or (
+            evidence["status"] == "unresolved" and parsed["verdict"] == "findings"
+            and any(item.get("result") == "fail" for item in doc_checks)))
+        if (not verdict_matches or not 1 <= len(findings) <= 4
                 or any(len(item["description"]) > 4000 or item["file"] not in handoff["paths"]
                        or re.search(r"(?i)\b(?:cannot|can't|unable to|could not|did not)\s+"
                                     r"(?:review|inspect|verify|assess|determine|confirm)\b|"
                                     r"\binsufficient\s+(?:evidence|information)\b", item["description"])
                        for item in findings)):
             return None
-        return json.dumps({"summary": parsed["summary"][:2000], "findings": findings}, ensure_ascii=True)
+        return json.dumps({"summary": parsed["summary"][:2000], "findings": findings,
+                           "doc_writebacks": [item for item in doc_checks if item.get("result") == "fail"]},
+                          ensure_ascii=True)
     return None
 
 
