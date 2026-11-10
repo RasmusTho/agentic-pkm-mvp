@@ -46,17 +46,18 @@ def fresh_ci_status(state: dict[str, Any], recorded: dict[str, Any], repo: Path,
     unavailable: dict[str, Any] = {"status": "unavailable"}
     publication_state = state.get("full_publication")
     publication_state = publication_state if isinstance(publication_state, dict) else {}
-    pr_number, head = recorded.get("pr_number"), recorded.get("head")
+    candidate = publication_state.get("candidate")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    pr_number = publication_state.get("pr_number")
+    head = candidate.get("head")
     branch = state.get("branch")
     if (state.get("repository") != delivery.REPOSITORY or state.get("root") != str(repo)
             or state.get("issue") != issue
             or not isinstance(branch, str) or not branch.startswith("codex/")
             or type(pr_number) is not int or pr_number <= 0
-            or publication_state.get("pr_number") != pr_number
+            or (recorded.get("pr_number") is not None and recorded.get("pr_number") != pr_number)
+            or (recorded.get("head") is not None and recorded.get("head") != head)
             or not isinstance(head, str) or not publication.GIT_SHA_RE.fullmatch(head)):
-        return unavailable
-    candidate = publication_state.get("candidate")
-    if not isinstance(candidate, dict) or candidate.get("head") != head:
         return unavailable
     runner = executor or publication.SubprocessExecutor(timeout_seconds=3)
 
@@ -75,6 +76,14 @@ def fresh_ci_status(state: dict[str, Any], recorded: dict[str, Any], repo: Path,
             return unavailable
         checks = delivery._check_readback(runner, repo, head)
         if not draft():
+            return unavailable
+        outcomes: dict[str, set[tuple[Any, Any]]] = {}
+        for check in checks["check_runs"]:
+            if check.get("conclusion") != "skipped":
+                outcomes.setdefault(check["name"], set()).add((check["status"], check.get("conclusion")))
+        if any(len(values) > 1 for values in outcomes.values()):
+            # The API does not bind same-named checks to distinct workflows or
+            # reruns here. A newer success cannot prove another run passed.
             return unavailable
         latest = latest_checks_by_name(checks["check_runs"])
         executed = [check for check in latest if check.get("conclusion") != "skipped"]

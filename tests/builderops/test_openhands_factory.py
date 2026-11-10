@@ -206,6 +206,23 @@ def test_legacy_control_rejects_a_different_owner_port(tmp_path, monkeypatch, ca
     assert service._read(owner)["ui_port"] == 8124
 
 
+def test_status_reads_checks_for_manually_published_draft_without_watcher(tmp_path, monkeypatch, capsys):
+    from app.builderops import openhands_watcher
+
+    install, runs, worktrees, repo = (tmp_path / name for name in ("install", "runs", "worktrees", "repo"))
+    for path in (install, runs, worktrees, repo):
+        path.mkdir()
+    state = {"full_publication": {"pr_number": 77}}
+    monkeypatch.setattr(delivery, "status", lambda directory: {"state": state})
+    monkeypatch.setattr(openhands_watcher, "status", lambda directory: {"status": "not_started"})
+    monkeypatch.setattr(openhands_watcher, "fresh_ci_status", lambda *args: {"status": "pending"})
+    monkeypatch.setattr(factory, "_ui_route", lambda *args: {})
+    assert factory.main(["status", "--issue", "123", "--install-root", str(install),
+                         "--state-root", str(runs), "--worktree-root", str(worktrees),
+                         "--repo-root", str(repo)]) == 0
+    assert json.loads(capsys.readouterr().out)["live_ci"] == {"status": "pending"}
+
+
 @pytest.mark.parametrize("port,ui_port", [(0, 3001), (65536, 3001), (8766, 8766)])
 def test_owner_invalid_ports_leave_no_persisted_state(tmp_path, monkeypatch, port, ui_port):
     root = tmp_path / "runs"

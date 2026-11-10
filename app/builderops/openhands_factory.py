@@ -1361,7 +1361,9 @@ def main(argv: list[str] | None = None) -> int:
             result = getattr(delivery, args.command)(directory)
             if args.command == "status":
                 result["watcher"] = watcher.status(directory)
-                if result["watcher"].get("pr_number") is not None:
+                publication_state = result["state"].get("full_publication")
+                if (result["watcher"].get("pr_number") is not None
+                        or isinstance(publication_state, dict) and publication_state.get("pr_number") is not None):
                     result["live_ci"] = watcher.fresh_ci_status(result["state"], result["watcher"], repo, args.issue)
         result["owner_ui"] = _ui_route(install, directory, result)
         print(json.dumps(result, indent=2))

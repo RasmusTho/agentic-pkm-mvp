@@ -60,6 +60,24 @@ def test_fresh_ci_readback_is_head_bound_and_read_only(tmp_path, checks, statuse
     assert watcher.fresh_ci_status(state, recorded, tmp_path, 123, runner) == {
         "status": expected, "head": head, "pr_number": 77}
     assert len(runner.calls) == 4
+    if expected == "checks_successful":
+        assert watcher.fresh_ci_status(state, {}, tmp_path, 123, ReadOnly()) == {
+            "status": expected, "head": head, "pr_number": 77}
+
+
+def test_fresh_ci_does_not_hide_a_same_named_failure(tmp_path, monkeypatch):
+    head = "a" * 40
+    branch = "codex/issue-123-openhands"
+    state = {"repository": delivery.REPOSITORY, "root": str(tmp_path), "issue": 123, "branch": branch,
+             "full_publication": {"pr_number": 77, "candidate": {"head": head}}}
+    pr = {"number": 77, "state": "open", "draft": True,
+          "head": {"sha": head, "ref": branch, "repo": {"full_name": delivery.REPOSITORY}},
+          "base": {"ref": "main", "repo": {"full_name": delivery.REPOSITORY}}}
+    monkeypatch.setattr(publication, "_read_pr_history", lambda *args: [pr])
+    monkeypatch.setattr(delivery, "_check_readback", lambda *args: {"check_runs": [
+        {"name": "settings", "status": "completed", "conclusion": "failure"},
+        {"name": "settings", "status": "completed", "conclusion": "success"}], "statuses": []})
+    assert watcher.fresh_ci_status(state, {}, tmp_path, 123) == {"status": "unavailable"}
 
 
 def test_fresh_ci_refuses_pr_head_drift_and_unavailable_readback(tmp_path, monkeypatch):
