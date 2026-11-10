@@ -1580,6 +1580,8 @@ def publish_full(
     Optional stateful_fallback=true requires stateful_fallback_matrix_complete=true;
     workflow_review_receipt may name {path} for the existing workflow gate.
     This checks source files and bindings; reviewer identity remains host-attested.
+    Manually supplied host evidence is trusted under that same host-attestation
+    model; it does not authenticate a reviewer against a malicious host user.
     """
     if not title.strip():
         raise DeliveryError("Draft PR title is required")

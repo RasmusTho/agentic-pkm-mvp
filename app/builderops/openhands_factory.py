@@ -954,6 +954,9 @@ def _review(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
         worktree = Path(state["worktree"]).resolve(strict=True)
         if state.get("issue") != issue or state.get("root") != str(repo) or worktree.parent != worktree_root:
             raise delivery.DeliveryError("Recorded review target does not match this delivery")
+        review_root = directory.resolve(strict=True)
+        if review_root == worktree or worktree in review_root.parents:
+            raise delivery.DeliveryError("Review evidence directory must be outside the worker workspace")
         head = _candidate_head(worktree, state["branch"])
         git = ["git", "--no-replace-objects", "-C", str(worktree)]
         base = delivery._run([*git, "rev-parse", "--verify", "refs/remotes/origin/main^{commit}"]).stdout.strip()

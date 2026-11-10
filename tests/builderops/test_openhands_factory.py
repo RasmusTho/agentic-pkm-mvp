@@ -1282,3 +1282,76 @@ def test_doc_writeback_verification_waits_for_independent_review(tmp_path, monke
     assert result['status'] == 'pending_review'
     assert result['doc_targets'] == [target]
     assert result['verification'] == []
+
+
+@pytest.mark.parametrize('doc_result', ['pass', 'fail', 'unresolved'])
+def test_finish_document_review_to_publication(tmp_path, monkeypatch, doc_result):
+    install, state_root, worktrees = _installation(tmp_path)
+    directory, state, server, saved, worker_id = _recorded_run(install, state_root, worktrees)
+    worktree = Path(state['worktree'])
+    (worktree / 'AGENTS.md').write_text('Review repository instructions.\n')
+    target = 'doc writeback at `docs/OWNER.md :: State`'
+    body = f'## Acceptance Criteria\n- [ ] Updated state.\n  - Verify: {target}\n'
+    head, base = 'a' * 40, 'b' * 40
+    state.update(branch='codex/issue-123-openhands', issue_body_sha256=delivery._sha(body))
+    monkeypatch.setattr(delivery, '_finished_run', lambda path: state)
+    monkeypatch.setattr(delivery, '_conversation', lambda *args: saved)
+    monkeypatch.setattr(factory, '_candidate_head', lambda *args: head)
+    monkeypatch.setattr(service, 'status', lambda path: {'status': 'running', 'state': server})
+    monkeypatch.setattr(delivery, '_json_result', lambda command: {
+        'number': 123, 'state': 'OPEN', 'body': body,
+        'url': f'https://github.com/{delivery.REPOSITORY}/issues/123'})
+
+    def git(command, **kwargs):
+        if 'rev-parse' in command:
+            output = base
+        elif '--name-only' in command:
+            output = 'docs/OWNER.md\n'
+        elif 'diff' in command:
+            output = 'diff --git a/docs/OWNER.md b/docs/OWNER.md\n+Updated state\n'
+        else:
+            output = ''
+        return subprocess.CompletedProcess(command, 0, output, '')
+
+    monkeypatch.setattr(delivery, '_run', git)
+    called = []
+
+    def run_review(python, settings, workspace, candidate, prompt, worker, *, doc_targets):
+        assert worker == worker_id and workspace == worktree and candidate == head
+        assert doc_targets == [target] and target in prompt
+        text = json.dumps({'head_sha': head, 'verdict': 'pass', 'summary': 'Reviewed candidate.',
+                           'findings': [], 'doc_writebacks': [{'target': target, 'result': doc_result,
+                           'rationale': 'The State section describes the delivered behavior.'}]})
+        return factory.review._parse_result(text, candidate, doc_targets), text, 'independent-thread'
+
+    monkeypatch.setattr(factory.review, 'run_review', run_review)
+    monkeypatch.setattr(factory.publication, '_candidate_paths', lambda *args: {'docs/OWNER.md'})
+
+    def publish(directory_arg, paths, title, inputs, evidence_file):
+        receipt, _ = delivery._full_evidence(evidence_file, state, head, base, body)
+        artifact = Path(receipt['review']['evidence']['path'])
+        assert worktree not in artifact.resolve().parents
+        assert artifact.stat().st_mode & 0o777 == 0o600
+        called.append(receipt)
+        return {'draft': True}
+
+    monkeypatch.setattr(delivery, 'publish_full', publish)
+    args = (install, directory, 123, factory.FACTORY_ROOT, worktrees, 'Update state', {}, [], None)
+    if doc_result == 'pass':
+        assert factory._finish(*args) == {'draft': True}
+        assert len(called) == 1
+    else:
+        with pytest.raises(factory.FinishEvidenceError, match='Independent review'):
+            factory._finish(*args)
+        assert called == []
+
+
+def test_review_refuses_evidence_directory_in_worker_workspace(tmp_path, monkeypatch):
+    install, state_root, worktrees = _installation(tmp_path)
+    _, state, _, _, _ = _recorded_run(install, state_root, worktrees)
+    worktree = Path(state['worktree'])
+    directory = worktree / 'worker-writable-evidence'
+    directory.mkdir(mode=0o700)
+    monkeypatch.setattr(delivery, '_finished_run', lambda path: state)
+    with pytest.raises(delivery.DeliveryError, match='outside the worker workspace'):
+        factory._review(install, directory, 123, factory.FACTORY_ROOT, worktrees)
