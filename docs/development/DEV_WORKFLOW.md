@@ -194,9 +194,10 @@ For a finished conversation on a clean committed worktree, use `verify` with the
 roots. It rereads the recorded Issue contract and runs concrete `tests/...py` pytest targets in the
 retained Codex sandbox profile, capturing output and exit status in a private verification
 directory. The JSON result binds the evidence to `HEAD` and lists passing, failing and unresolved
-targets; document anchors, arbitrary commands and other unmapped targets remain unresolved. A
-nonzero command result or unresolved target makes `verify` exit nonzero. This is test evidence,
-not independent review or publication authority. Some tests need facilities excluded by the
+targets. Canonical document-writeback targets remain pending independent review; other document
+anchors, arbitrary commands and unmapped targets remain unresolved. Standalone `verify` exits
+nonzero unless verification passes, including when document review is pending. This is test
+evidence, not independent review or publication authority. Some tests need facilities excluded by the
 sandbox, such as network access; their actual results remain visible in the private logs.
 
 Use `review` with the same Issue and roots to run an independent native Codex review of the
