@@ -133,8 +133,10 @@ paths in its private handoff, while its title and body describe the full candida
 risk surfaces without dropping any previously declared risk. The host retains the original handoff,
 computes the cumulative candidate paths, and reruns verification and independent review. The worker
 must preserve Issue exclusions and existing behavior outside the authorized fix, choose the smallest
-in-scope fix, and leave a required contract expansion unresolved. Document writebacks remain
-unresolved by the test verifier, so they do not trigger automatic repair. Other unknown or
+in-scope fix, and leave a required contract expansion unresolved. A canonical document-writeback
+target whose file changed is pending until the independent reviewer assesses that exact target against
+the Issue and candidate; a file or heading alone is not a pass. Missing, unsupported or unresolved
+document targets do not automatically trigger repair. Other unknown or
 non-actionable outcomes stop for inspection. A failed/publishing watcher is not automatically
 restarted; a `repair_sending` outcome remains pending and is never automatically resent.
 
