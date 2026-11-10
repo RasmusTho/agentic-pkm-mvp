@@ -950,3 +950,32 @@ def test_unresolved_bare_pytest_file_target_is_actionable(authorized_run, monkey
     (worktree / "tests").mkdir()
     (worktree / "tests/test_missing.py").write_text("pass\n")
     assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
+
+
+def test_missing_selector_diagnostic_must_name_exact_requested_target(authorized_run, monkeypatch):
+    directory, worktree, state, handoff, _, _ = authorized_run
+    target = "tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam"
+    file = worktree / target.split("::")[0]
+    file.parent.mkdir(parents=True)
+    file.write_text("def test_other(): pass\n")
+    body = f"## Acceptance Criteria\n- [ ] Coverage\n  - Verify: `{target}`\n"
+    state.update(repository=delivery.REPOSITORY, issue_body_sha256=delivery._sha(body))
+    monkeypatch.setattr(delivery, "_json_result", lambda *args: {
+        "number": state["issue"], "state": "OPEN", "body": body,
+        "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"})
+    log = directory / "pytest.log"
+    # Same diagnostic shape as issue-3867's target-001.log, with only the fixture root changed.
+    text = f"[verification runner] Target: {target}\nERROR: not found: {worktree / target}\n(no match in any of [<Module test_multi_vault_context_boundaries.py>])\n"
+    log.write_text(text)
+    entry = {"target": target, "head_sha": "b" * 40, "exit_code": 4,
+             "reason": "Command failed before test results were established",
+             "evidence": {"path": str(log), "sha256": hashlib.sha256(text.encode()).hexdigest()}}
+    evidence = {"repository": delivery.REPOSITORY, "issue": state["issue"], "head_sha": "b" * 40,
+                "issue_body_sha256": state["issue_body_sha256"], "status": "unresolved",
+                "failed": [], "unresolved": [entry]}
+    error = factory.FinishEvidenceError("unresolved", kind="verification", evidence=evidence)
+    assert target in watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
+    text = "ERROR: file or directory not found: tests/from-addopts.py\n"
+    log.write_text(text)
+    entry["evidence"]["sha256"] = hashlib.sha256(text.encode()).hexdigest()
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None

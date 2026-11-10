@@ -421,7 +421,10 @@ def _repair_feedback(error: factory.FinishEvidenceError, state: dict[str, Any],
                     if item.get("head_sha") != head or item.get("exit_code") != 4:
                         return None
                     _, output = delivery._evidence_artifact(item.get("evidence"), directory, worktree)
-                    if "not found" not in output.lower():
+                    errors = [line for line in output.splitlines() if line.startswith("ERROR:")]
+                    expected = {f"ERROR: not found: {target}",
+                                f"ERROR: not found: {worktree / target}"}
+                    if len(errors) != 1 or errors[0] not in expected:
                         return None
                 else:
                     # Doc writeback has no independent verifier in this factory.
