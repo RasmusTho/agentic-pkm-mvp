@@ -1240,8 +1240,13 @@ def test_doc_writeback_requires_exact_review_and_candidate_change(tmp_path, monk
     receipt_file.write_text(json.dumps(receipt))
     monkeypatch.setattr(delivery, '_run', lambda *args, **kwargs:
                         subprocess.CompletedProcess([], 0, 'docs/OWNER.md\n', ''))
+    monkeypatch.setattr(delivery, '_candidate_document_is_regular', lambda *args: True)
     review_file.write_text(json.dumps(result))
     delivery._full_evidence(receipt_file, state, head, base, body)
+    monkeypatch.setattr(delivery, '_candidate_document_is_regular', lambda *args: False)
+    with pytest.raises(delivery.DeliveryError, match='regular tracked candidate file'):
+        delivery._full_evidence(receipt_file, state, head, base, body)
+    monkeypatch.setattr(delivery, '_candidate_document_is_regular', lambda *args: True)
     for field, value in [('target', target.replace('State', 'Other')), ('result', 'fail'),
                          ('result', 'unresolved')]:
         broken = json.loads(json.dumps(result))
@@ -1314,6 +1319,7 @@ def test_finish_document_review_to_publication(tmp_path, monkeypatch, doc_result
         return subprocess.CompletedProcess(command, 0, output, '')
 
     monkeypatch.setattr(delivery, '_run', git)
+    monkeypatch.setattr(delivery, '_candidate_document_is_regular', lambda *args: True)
     called = []
 
     def run_review(python, settings, workspace, candidate, prompt, worker, *, doc_targets):
@@ -1355,3 +1361,33 @@ def test_review_refuses_evidence_directory_in_worker_workspace(tmp_path, monkeyp
     monkeypatch.setattr(delivery, '_finished_run', lambda path: state)
     with pytest.raises(delivery.DeliveryError, match='outside the worker workspace'):
         factory._review(install, directory, 123, factory.FACTORY_ROOT, worktrees)
+
+
+@pytest.mark.parametrize('kind', ['regular', 'deleted', 'missing', 'symlink'])
+def test_candidate_document_must_be_regular_tracked_blob(tmp_path, kind):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    git('init', '-q')
+    (repo / 'docs').mkdir()
+    target = repo / 'docs/OWNER.md'
+    target.write_text('# State\nOld\n')
+    git('add', '.')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base')
+    if kind == 'regular':
+        target.write_text('# State\nNew\n')
+    elif kind == 'deleted':
+        target.unlink()
+    elif kind == 'missing':
+        target.unlink()
+        (repo / 'other').write_text('change')
+    else:
+        target.unlink()
+        target.symlink_to('../other')
+    git('add', '-A')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'candidate')
+    head = git('rev-parse', 'HEAD')
+    assert delivery._candidate_document_is_regular(repo, head, 'docs/OWNER.md') is (kind == 'regular')

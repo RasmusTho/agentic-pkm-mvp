@@ -1134,6 +1134,13 @@ def _doc_writeback_path(target: str) -> str | None:
     return match.group(1)
 
 
+def _candidate_document_is_regular(worktree: Path, head: str, path: str) -> bool:
+    """Read the exact candidate tree, without following worktree symlinks."""
+    output = _run(["git", "--no-replace-objects", "--literal-pathspecs", "-C", str(worktree),
+                   "ls-tree", "-z", "--full-tree", head, "--", path]).stdout
+    return re.fullmatch(r"100(?:644|755) blob [0-9a-f]{40}(?:[0-9a-f]{24})?\t" + re.escape(path) + "\x00", output) is not None
+
+
 def _full_evidence(
     receipt_file: Path, state: dict[str, Any], head: str, base: str, issue_body: str,
 ) -> tuple[dict[str, Any], str]:
@@ -1203,6 +1210,10 @@ def _full_evidence(
         changed = set(_run(["git", "--no-replace-objects", "-C", str(worktree), "diff", "--name-only", base, head, "--"]).stdout.splitlines())
         if any(_doc_writeback_path(target) not in changed for target in doc_targets):
             raise DeliveryError("Document writeback target was not changed in the candidate")
+        for target in doc_targets:
+            path = _doc_writeback_path(target)
+            if path is None or not _candidate_document_is_regular(worktree, head, path):
+                raise DeliveryError("Document writeback target is not a regular tracked candidate file")
     verification = receipt.get("verification")
     if not isinstance(verification, list) or (not verification and not doc_targets):
         raise DeliveryError("Candidate verification evidence is missing")
