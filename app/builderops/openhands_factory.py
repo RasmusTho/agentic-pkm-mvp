@@ -506,9 +506,6 @@ def _owner_service(install: Path, state_root: Path, repo: Path, action: str,
             return {"status": observed["status"], "ui": _canvas(install, directory, state, "status", ui_port, False)["ui"]}
         if state["port"] != port:
             raise delivery.DeliveryError("Owner service is bound to another port")
-        if state.get("ui_port") != ui_port:
-            state["ui_port"] = ui_port
-            service._write(directory, state)
         if observed["status"] == "stopped":
             service.start(directory / "server", install / "venv/bin/python", Path(state["worktree"]),
                           port, directory / "settings.json", control_only=True)
@@ -534,10 +531,11 @@ def _owner_service(install: Path, state_root: Path, repo: Path, action: str,
         openhands_owner.ensure_profile(install, directory, state)
         control = openhands_owner.attach(install, directory, None)
         canvas = _canvas(install, directory, state, "start", ui_port, open_browser)["ui"]
+        if state.get("ui_port") != ui_port:
+            state["ui_port"] = ui_port
+            service._write(directory, state)
         control["url"] = f"{canvas['url']}/conversations/{control['conversation_id']}?backend=default-local"
         return control
-
-
 def _private_read(path: Path) -> bytes:
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_NONBLOCK)
@@ -1316,7 +1314,12 @@ def main(argv: list[str] | None = None) -> int:
             # Older versions attached a second control conversation to the
             # worker. Reuse the independent owner instead; leave any old
             # worker control record untouched for inspection.
-            result = _owner_service(install, state_root, repo, "start", None, args.ui_port, args.open)
+            owner_state = service._read(state_root / "owner")
+            if owner_state is None:
+                raise delivery.DeliveryError("Worker-hosted control is retired; start the independent owner first")
+            if args.ui_port is not None and args.ui_port != owner_state.get("ui_port"):
+                raise delivery.DeliveryError("Control uses the recorded owner UI port; change it through the owner command")
+            result = _owner_service(install, state_root, repo, "start", None, None, args.open)
             result["note"] = ("Using the independent owner control. Existing worker control records are preserved; "
                               "select an authorized issue in this conversation.")
             print(json.dumps(result, indent=2))

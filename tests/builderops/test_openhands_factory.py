@@ -160,6 +160,9 @@ def test_legacy_control_uses_existing_owner_without_touching_worker_record(tmp_p
     install, runs, worktrees, repo = (tmp_path / name for name in ("install", "runs", "worktrees", "repo"))
     for path in (install, runs, worktrees, repo):
         path.mkdir()
+    owner = runs / "owner"
+    owner.mkdir(mode=0o700)
+    service._write(owner, {"version": 1, "kind": "openhands_owner_service.v1", "ui_port": 8124})
     old_control = runs / "issue-123" / "owner-control"
     old_control.mkdir(parents=True)
     (old_control / "service.json").write_text('{"version": 1, "phase": "creating"}')
@@ -171,9 +174,36 @@ def test_legacy_control_uses_existing_owner_without_touching_worker_record(tmp_p
         args += ["--ui-port", str(ui_port)]
     result = factory.main(args)
     assert result == 0
-    assert calls == [(install, runs, repo, "start", None, ui_port, False)]
+    assert calls == [(install, runs, repo, "start", None, None, False)]
     assert "owner-url" in capsys.readouterr().out
     assert json.loads((old_control / "service.json").read_text()) == {"version": 1, "phase": "creating"}
+
+
+def test_legacy_control_without_owner_fails_before_touching_worker(tmp_path, monkeypatch, capsys):
+    install, runs, worktrees, repo = (tmp_path / name for name in ("install", "runs", "worktrees", "repo"))
+    for path in (install, runs, worktrees, repo):
+        path.mkdir()
+    monkeypatch.setattr(factory, "_owner_service", lambda *args: pytest.fail("started missing owner"))
+    assert factory.main(["control", "--issue", "123", "--install-root", str(install),
+                         "--state-root", str(runs), "--worktree-root", str(worktrees),
+                         "--repo-root", str(repo)]) != 0
+    assert "retired" in capsys.readouterr().err
+    assert not (runs / "issue-123").exists()
+
+
+def test_legacy_control_rejects_a_different_owner_port(tmp_path, monkeypatch, capsys):
+    install, runs, worktrees, repo = (tmp_path / name for name in ("install", "runs", "worktrees", "repo"))
+    for path in (install, runs, worktrees, repo):
+        path.mkdir()
+    owner = runs / "owner"
+    owner.mkdir(mode=0o700)
+    service._write(owner, {"version": 1, "kind": "openhands_owner_service.v1", "ui_port": 8124})
+    monkeypatch.setattr(factory, "_owner_service", lambda *args: pytest.fail("changed owner port"))
+    assert factory.main(["control", "--issue", "123", "--ui-port", "8125", "--install-root", str(install),
+                         "--state-root", str(runs), "--worktree-root", str(worktrees),
+                         "--repo-root", str(repo)]) != 0
+    assert "recorded owner UI port" in capsys.readouterr().err
+    assert service._read(owner)["ui_port"] == 8124
 
 
 @pytest.mark.parametrize("port,ui_port", [(0, 3001), (65536, 3001), (8766, 8766)])
@@ -262,6 +292,32 @@ def test_owner_rejects_colliding_canvas_port_without_changing_saved_state(tmp_pa
     monkeypatch.setattr(service, "start", lambda *args, **kwargs: pytest.fail("started on invalid ports"))
     with pytest.raises(delivery.DeliveryError, match="valid and distinct"):
         factory._owner_service(tmp_path, root, tmp_path, "start", None, 8123, False)
+    assert service._read(directory) == original
+
+
+def test_failed_owner_canvas_port_change_preserves_existing_port(tmp_path, monkeypatch):
+    from app.builderops import openhands_owner
+
+    root = tmp_path / "runs"
+    directory = root / "owner"
+    workspace = directory / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    root.chmod(0o700)
+    directory.chmod(0o700)
+    original = {"version": 1, "kind": "openhands_owner_service.v1", "worktree": str(workspace),
+                "port": 8123, "ui_port": 8124}
+    service._write(directory, original)
+    monkeypatch.setattr(service, "status", lambda *args: {"status": "stopped"})
+    monkeypatch.setattr(service, "start", lambda *args, **kwargs: None)
+    monkeypatch.setattr(delivery, "_server_key", lambda *args: "private")
+    monkeypatch.setattr(delivery, "_http", lambda *args: (200, {}))
+    monkeypatch.setattr(openhands_owner, "ensure_profile", lambda *args: None)
+    monkeypatch.setattr(openhands_owner, "attach", lambda *args: {"conversation_id": "control"})
+    def fail_canvas(*args):
+        raise delivery.DeliveryError("Canvas already running on another port")
+    monkeypatch.setattr(factory, "_canvas", fail_canvas)
+    with pytest.raises(delivery.DeliveryError, match="another port"):
+        factory._owner_service(tmp_path, root, tmp_path, "start", None, 8125, False)
     assert service._read(directory) == original
 
 
