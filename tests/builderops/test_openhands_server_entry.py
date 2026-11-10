@@ -1,15 +1,22 @@
 import asyncio
+import importlib.util
 import json
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import UUID
+
+import pytest
 
 from app.builderops import openhands_service as service
-from app.builderops.openhands_server_entry import DeliveryInputFence
+from app.builderops.openhands_server_entry import DeliveryInputFence, _install_loaded_interrupt
 
 
 def test_http_blocks_direct_run_and_events_after_interrupt(tmp_path: Path):
     async def run():
-        state = {"version": 1, "kind": "openhands_delivery_run.v1", "worktree": "/work", "phase": "active"}
+        state = {"version": 1, "kind": "openhands_delivery_run.v1", "worktree": "/work", "phase": "active",
+                 "conversation_id": "11111111-1111-4111-8111-111111111111"}
         service._write(tmp_path, state)
         handled = []
         responses = []
@@ -37,13 +44,119 @@ def test_http_blocks_direct_run_and_events_after_interrupt(tmp_path: Path):
             await fence({"type": "http", "method": "POST", "path": path}, receive, send)
         interrupt_path = "/api/conversations/11111111-1111-4111-8111-111111111111/interrupt"
         await fence({"type": "http", "method": "POST", "path": interrupt_path}, receive, send)
+        service._write(tmp_path, {**state, "phase": "interrupting"})
+        await fence({"type": "http", "method": "POST", "path": "/api/conversations/22222222-2222-4222-8222-222222222222/interrupt"}, receive, send)
+        await fence({"type": "http", "method": "POST", "path": interrupt_path}, receive, send)
+        service._write(tmp_path, {**state, "phase": "interrupted"})
         await fence({"type": "http", "method": "POST", "path": "/api/app-backends/name/interrupt"}, receive, send)
         await fence({"type": "http", "method": "GET", "path": base + "/events/search"}, receive, send)
         await fence({"type": "http", "method": "GET", "path": "/api/file/archive"}, receive, send)
         assert handled == [base + "/run", "/api/settings", "/server_info", "/api/conversations/search",
                            base + "/events/search", interrupt_path]
-        assert [r["status"] for r in responses if r["type"] == "http.response.start"] == [409] * 8
+        assert [r["status"] for r in responses if r["type"] == "http.response.start"] == [409] * 10
     asyncio.run(run())
+
+
+def test_interrupt_only_uses_live_recorded_event_under_lifecycle_lock(tmp_path: Path):
+    async def run():
+        conversation_id = UUID("11111111-1111-4111-8111-111111111111")
+        state = {"version": 1, "kind": "openhands_delivery_run.v1", "worktree": "/work",
+                 "phase": "interrupting", "conversation_id": str(conversation_id)}
+        service._write(tmp_path, state)
+        lock = asyncio.Lock()
+        calls = []
+
+        class Event:
+            stored = "stored"
+            is_open_value = True
+            def is_open(self):
+                return self.is_open_value
+            async def interrupt(self):
+                assert lock.locked()
+                calls.append("interrupt")
+            async def get_state(self):
+                return "paused"
+
+        class ConversationService:
+            _event_services = {}
+            @asynccontextmanager
+            async def _conversation_lifecycle(self, unused):
+                async with lock:
+                    yield
+            async def _notify_conversation_webhooks(self, info):
+                calls.append(info)
+
+        _install_loaded_interrupt(ConversationService, tmp_path, "/work", lambda stored, status: (stored, status))
+        instance = ConversationService()
+        assert not await instance.interrupt_conversation(conversation_id)
+        event = Event()
+        instance._event_services[conversation_id] = event
+        event.is_open_value = False
+        assert not await instance.interrupt_conversation(conversation_id)
+        event.is_open_value = True
+        assert await instance.interrupt_conversation(conversation_id)
+        assert calls == ["interrupt", ("stored", "paused")]
+        async with lock:
+            pending = asyncio.create_task(instance.interrupt_conversation(conversation_id))
+            await asyncio.sleep(0)
+            service._write(tmp_path, {**state, "phase": "interrupted"})
+        assert not await pending
+        assert calls == ["interrupt", ("stored", "paused")]
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(importlib.util.find_spec("openhands") is None, reason="requires pinned agent-server")
+def test_pinned_openhands_interrupt_route_never_reloads_an_unloaded_runtime(tmp_path: Path, monkeypatch):
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from openhands.agent_server.conversation_router import conversation_router
+    from openhands.agent_server.conversation_service import ConversationService
+    from openhands.agent_server.dependencies import check_session_api_key
+
+    conversation_id = UUID("11111111-1111-4111-8111-111111111111")
+    state = {"version": 1, "kind": "openhands_delivery_run.v1", "worktree": "/work",
+             "phase": "interrupting", "conversation_id": str(conversation_id)}
+    service._write(tmp_path, state)
+    calls = []
+
+    class Event:
+        stored = "stored"
+        open = True
+        def is_open(self):
+            return self.open
+        async def interrupt(self):
+            calls.append("interrupt")
+        async def get_state(self):
+            return "paused"
+
+    cs = ConversationService(conversations_dir=tmp_path / "conversations")
+    cs._event_services = {}
+    async def notified(info):
+        calls.append(info)
+    cs._notify_conversation_webhooks = notified
+    monkeypatch.setattr(ConversationService, "interrupt_conversation", ConversationService.interrupt_conversation)
+    _install_loaded_interrupt(ConversationService, tmp_path, "/work", lambda stored, status: (stored, status))
+    api = FastAPI()
+    api.state.config = SimpleNamespace(session_api_keys=["synthetic-key"])
+    api.state.conversation_service = cs
+    api.include_router(conversation_router, prefix="/api", dependencies=[Depends(check_session_api_key)])
+    api.add_middleware(DeliveryInputFence, directory=str(tmp_path), workspace="/work")
+    path = f"/api/conversations/{conversation_id}/interrupt"
+    headers = {"X-Session-API-Key": "synthetic-key"}
+    with TestClient(api) as client:
+        assert client.post(path).status_code == 401
+        assert client.post(path, headers=headers).status_code == 404
+        assert not (tmp_path / "conversations").exists()
+        event = Event()
+        cs._event_services[conversation_id] = event
+        event.open = False
+        assert client.post(path, headers=headers).status_code == 404
+        event.open = True
+        assert client.post(path, headers=headers).status_code == 200
+        assert calls == ["interrupt", ("stored", "paused")]
+        service._write(tmp_path, {**state, "phase": "interrupted"})
+        assert client.post(path, headers=headers).status_code == 409
+        assert calls == ["interrupt", ("stored", "paused")]
 
 
 def test_disconnected_http_client_does_not_release_fence_before_handler_finishes(tmp_path: Path):

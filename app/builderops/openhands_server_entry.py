@@ -17,8 +17,42 @@ import stat
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
+from uuid import UUID
 
 from app.builderops import openhands_service as service
+
+
+def _interrupt_allowed(directory: Path, workspace: str, conversation_id: UUID) -> bool:
+    try:
+        state = service._read(directory)
+        return bool(state and state.get("kind") == "openhands_delivery_run.v1"
+                    and state.get("worktree") == workspace and state.get("phase") == "interrupting"
+                    and UUID(str(state.get("conversation_id"))) == conversation_id)
+    except (OSError, ValueError, TypeError, service.ServiceError):
+        return False
+
+
+def _install_loaded_interrupt(conversation_service_type: Any, directory: Path, workspace: str,
+                              compose_notification: Any) -> None:
+    """Keep the authenticated upstream route, but never load a runtime to interrupt it.
+
+    This is installed only in a pinned worker server. OpenHands' lifecycle
+    lock excludes eviction while the already-open event service is interrupted.
+    """
+    async def interrupt_loaded(self: Any, conversation_id: UUID) -> bool:
+        async with self._conversation_lifecycle(conversation_id):
+            if not _interrupt_allowed(directory, workspace, conversation_id):
+                return False
+            event_services = self._event_services
+            event = event_services.get(conversation_id) if event_services is not None else None
+            if event is None or not event.is_open():
+                return False
+            await event.interrupt()
+            state = await event.get_state()
+            await self._notify_conversation_webhooks(compose_notification(event.stored, state))
+            return True
+
+    conversation_service_type.interrupt_conversation = interrupt_loaded
 
 
 class DeliveryInputFence:
@@ -90,13 +124,11 @@ class DeliveryInputFence:
                     return
             if method == "POST" and re.fullmatch(r"/api/conversations/[0-9a-fA-F-]{32,36}/interrupt", path):
                 try:
-                    state = service._read(self.directory)
-                    if (state and state.get("kind") == "openhands_delivery_run.v1"
-                            and state.get("worktree") == self.workspace
-                            and state.get("phase") in {"interrupting", "interrupted"}):
+                    conversation_id = UUID(path.split("/")[3])
+                    if _interrupt_allowed(self.directory, self.workspace, conversation_id):
                         await self.app(scope, receive, send)
                         return
-                except (OSError, ValueError, service.ServiceError):
+                except ValueError:
                     pass
                 await self._refuse_http(send)
                 return
@@ -222,10 +254,19 @@ class DeliveryInputFence:
 
 
 def main() -> None:
+    from importlib.metadata import version
+
     directory = os.environ["OPENHANDS_FACTORY_DELIVERY_DIR"]
     workspace = os.environ["OPENHANDS_FACTORY_WORKSPACE"]
+    if version("openhands-agent-server") != "1.60.1":
+        raise service.ServiceError("Unsupported OpenHands version for worker interrupt")
     from openhands.agent_server.api import api
     from openhands.agent_server.__main__ import main as upstream_main
+    from openhands.agent_server.conversation_service import (
+        ConversationService,
+        _compose_webhook_conversation_info,
+    )
 
+    _install_loaded_interrupt(ConversationService, Path(directory), workspace, _compose_webhook_conversation_info)
     api.add_middleware(DeliveryInputFence, directory=directory, workspace=workspace)
     upstream_main()
