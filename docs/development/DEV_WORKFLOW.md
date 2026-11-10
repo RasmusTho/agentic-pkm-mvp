@@ -125,21 +125,25 @@ change set, commits the scoped changes locally with hooks and signing disabled, 
 existing `finish` verification, independent review and draft publication path. The review assesses
 the declared risk against the actual change. Worker claims are not test or review evidence.
 
-For one actionable test failure, narrowly classified missing pytest target, or structured review
-finding, the watcher can send bounded feedback to the same recorded conversation. Missing pytest
-targets must come from the current Issue's exact Verify targets and the verified candidate; uncertain
-runner or contract outcomes are not repair instructions. The worker lists exactly the repair-delta
-paths in its private handoff, while its title and body describe the full candidate. It reassesses
-risk surfaces without dropping any previously declared risk. The host retains the original handoff,
-computes the cumulative candidate paths, and reruns verification and independent review. The worker
-must preserve Issue exclusions and existing behavior outside the authorized fix, choose the smallest
-in-scope fix, and leave a required contract expansion unresolved. A canonical document-writeback
-target whose file changed is pending until the independent reviewer assesses that exact target against
-the Issue and candidate; a file or heading alone is not a pass. When missing test targets trigger
-repair, any pending declared document requirements are included as context and still require that
-independent review. Unsupported or unresolved document targets alone do not trigger repair. Other unknown or
-non-actionable outcomes stop for inspection. A failed/publishing watcher is not automatically
-restarted; a `repair_sending` outcome remains pending and is never automatically resent.
+For one actionable test failure or structured review finding, the watcher can send bounded actual
+feedback to the same recorded conversation. The worker updates the private handoff with only the
+repair paths, which must be a subset of the originally recorded paths. It must preserve the Issue's
+exclusions and existing behavior outside the authorized fix, choose the smallest in-scope fix,
+and leave a required contract expansion unresolved. Review and repair assess the Issue's acceptance
+examples and regressions without making unchanged, out-of-scope improvements blockers by themselves.
+After checking the message,
+session and finished conversation, the watcher commits the additive repair through the same gates
+and reruns verification and independent review. A second failure, an unavailable or non-actionable
+review, unresolved test targets, or an out-of-scope repair stops for inspection. If message delivery
+is ambiguous, the recorded `repair_sending` phase is pending and is never automatically resent.
+
+For a canonical document-writeback Verify target, `finish` requires the target to be a changed
+regular file in the exact candidate and an explicit semantic pass from the independent reviewer.
+The file or heading alone is not a pass; unsupported targets and uncertain assessments remain
+unresolved. Review evidence is stored in private host state outside the worker workspace. As with
+the existing publication path, manually supplied host evidence is trusted and is not authenticated
+against a malicious user on the same host. Automatic repair of document-bearing review findings is
+not yet supported.
 
 `status` includes the watcher's `running`, `finished`, `pending` or `failed` state; a launch request
 alone is not proof it started. Status reads the atomically retained delivery state without waiting

@@ -411,15 +411,6 @@ def test_watcher_retries_publication_without_repeating_commit(authorized_run, mo
 @pytest.mark.parametrize("kind", ["review", "verification"])
 def test_watcher_repairs_actionable_feedback_once_and_preserves_replay(authorized_run, monkeypatch, mode, kind):
     directory, worktree, state, _, runner, calls = authorized_run
-    issue_body = "## Acceptance Criteria\n- [ ] Feature\n  - Verify: `tests/test_feature.py::test_bug`\n"
-    state["issue_body_sha256"] = delivery._sha(issue_body)
-    service._write(directory, state)
-    monkeypatch.setattr(delivery, "_json_result", lambda *args: {
-        "number": state["issue"], "state": "OPEN", "body": issue_body,
-        "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"})
-    monkeypatch.setattr(delivery, "_doc_writeback_path", lambda target: None, raising=False)
-    old_parse = factory.review._parse_result
-    monkeypatch.setattr(factory.review, "_parse_result", lambda raw, head, targets: old_parse(raw, head))
     review = {"head_sha": "b" * 40, "verdict": "unresolved", "summary": "A concrete defect needs repair",
               "findings": [{"severity": "P1", "description": "Handle the missing value in this branch.",
                             "file": "feature.py", "line": 3}]}
@@ -449,8 +440,6 @@ def test_watcher_repairs_actionable_feedback_once_and_preserves_replay(authorize
 
     def finish(*args, **kwargs):
         finish_calls.append(runner.head)
-        if len(finish_calls) == 2:
-            assert service._read(directory / "watcher")["handoff"]["paths"] == ["added.py", "feature.py"]
         if len(finish_calls) == 1 or mode == "repeated":
             raise failure
         return {"pr_number": 1234, "commit_sha": runner.head, "checks": {}}
@@ -482,8 +471,6 @@ def test_watcher_repairs_actionable_feedback_once_and_preserves_replay(authorize
 
     monkeypatch.setattr(factory, "_finish", finish)
     monkeypatch.setattr(delivery, "_conversation", conversation)
-    monkeypatch.setattr(publication, "_read_pr_history", lambda *args: [])
-    monkeypatch.setattr(publication, "_candidate_paths", lambda *args: {"feature.py", "added.py"})
     monkeypatch.setattr(delivery, "_server_key", lambda *args: "local-test-key")
     monkeypatch.setattr(delivery, "_http", http)
     arguments = (Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
@@ -507,8 +494,6 @@ def test_watcher_repairs_actionable_feedback_once_and_preserves_replay(authorize
     assert "pre-existing behavior as a blocker merely because it could be improved" in prompt
     assert "regressions and failed acceptance criteria within scope" in prompt
     assert "smallest in-scope fix" in prompt and "leave it unresolved" in prompt
-    assert "paths to exactly the files changed or deleted in this repair only" in prompt
-    assert "title and body to truthfully describe the full candidate" in prompt
     assert finish_calls == ["b" * 40, "c" * 40]
     assert result["status"] == ("failed" if mode == "repeated" else "finished")
     watcher.run(*arguments)
@@ -834,235 +819,3 @@ def test_watcher_refuses_unscoped_or_ambiguous_work(authorized_run, monkeypatch,
     result = watcher.status(directory)
     assert result["status"] == ("pending" if case == "ambiguous_commit" else "failed")
     assert not runner.committed and not any("add" in call for call in calls)
-
-
-def test_unresolved_feedback_is_bound_to_current_issue_and_safe_targets(authorized_run, monkeypatch):
-    directory, worktree, state, handoff, _, _ = authorized_run
-    body = '## Acceptance Criteria\n- [ ] Behavior\n  - Verify: `tests/test_missing.py::test_behavior`\n- [ ] Docs\n  - Verify: doc writeback at `docs/OWNER.md :: State`\n'
-    state.update(repository=delivery.REPOSITORY, issue_body_sha256=delivery._sha(body))
-    issue = {"number": state["issue"], "state": "OPEN", "body": body,
-             "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"}
-    monkeypatch.setattr(delivery, "_json_result", lambda *args: issue)
-    evidence = {"repository": delivery.REPOSITORY, "issue": state["issue"],
-                "head_sha": "b" * 40, "issue_body_sha256": state["issue_body_sha256"],
-                "status": "unresolved", "failed": [], "unresolved": [
-                    {"target": "`tests/test_missing.py::test_behavior`", "reason": "Not a concrete local pytest target"},
-                    {"target": "doc writeback at `docs/OWNER.md :: State`", "reason": "Not a concrete local pytest target"},
-                ]}
-    doc_target = "doc writeback at `docs/OWNER.md :: State`"
-    monkeypatch.setattr(delivery, "_doc_writeback_path", lambda value: "docs/OWNER.md" if value == doc_target else None,
-                        raising=False)
-    error = factory.FinishEvidenceError("unresolved", kind="verification", evidence=evidence)
-    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
-    evidence["unresolved"].pop()
-    evidence["doc_targets"] = [doc_target]
-    feedback = watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
-    assert "test_missing.py::test_behavior" in feedback and doc_target in feedback
-    evidence["doc_targets"] = [doc_target, "doc writeback at `docs/INJECT.md :: State`"]
-    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
-    evidence["doc_targets"] = [doc_target]
-    evidence["unresolved"].append({"target": "tests/injected.py::test_x", "reason": "Not a concrete local pytest target"})
-    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
-    evidence["unresolved"].pop()
-    issue["body"] += "changed"
-    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
-    issue["body"] = body
-    evidence["unresolved"][0]["reason"] = "Command unavailable or timed out"
-    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
-
-
-
-def test_failed_publishing_remains_stopped_without_native_completion_proof(authorized_run, monkeypatch):
-    directory, worktree, state, handoff, runner, _ = authorized_run
-    watch_dir = directory / "watcher"
-    watch_dir.mkdir(mode=0o700)
-    service._write(watch_dir, {"version": 1, "status": "failed", "phase": "publishing",
-                              "head": "b" * 40, "handoff": handoff,
-                              "failed_evidence": {"kind": "verification", "status": "unresolved"}})
-    monkeypatch.setattr(factory, "_finish", lambda *args, **kwargs: pytest.fail("must not restart"))
-    watcher.run(Path("/install"), directory, state["issue"], factory.FACTORY_ROOT, worktree.parent)
-    assert runner.commits == 0
-    assert watcher.status(directory)["status"] == "failed"
-
-
-def test_repair_handoff_retains_original_and_expands_risks_and_candidate_paths(authorized_run, monkeypatch):
-    directory, worktree, state, handoff, runner, _ = authorized_run
-    watch_dir = directory / "watcher"
-    watch_dir.mkdir(mode=0o700)
-    runner.head = "b" * 40
-    runner.commits = 1
-    original = {"title": "Original", "body": {}, "risks": ["auth"], "paths": ["old.py"]}
-    updated = {"title": "Updated", "body": {}, "risks": ["auth", "data"], "paths": ["feature.py"]}
-    monkeypatch.setattr(watcher, "_handoff", lambda *args: updated)
-    monkeypatch.setattr(publication, "_candidate_paths", lambda *args: {"old.py", "feature.py"})
-    record = {"version": 1, "phase": "repair_sent", "repair_base": runner.head, "handoff": original}
-    result = watcher._commit(directory, state, record, watch_dir, runner)
-    assert result["paths"] == ["feature.py", "old.py"]
-    assert result["risks"] == ["auth", "data"]
-    assert service._read(watch_dir)["original_handoff"] == original
-
-
-def test_real_git_repair_handoff_uses_delta_and_preserves_cumulative_paths(tmp_path, monkeypatch):
-    import subprocess
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    def git(*args):
-        return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
-    git("init", "-b", "codex/repair")
-    git("config", "user.name", "Test")
-    git("config", "user.email", "test@example.invalid")
-    (repo / ".gitignore").write_text(".codex-tmp/\n")
-    git("add", ".gitignore")
-    git("commit", "-m", "base")
-    base = git("rev-parse", "HEAD")
-    (repo / "original.py").write_text("original\n")
-    git("add", "original.py")
-    git("commit", "-m", "original candidate")
-    repair_base = git("rev-parse", "HEAD")
-    (repo / "new.py").write_text("repair\n")
-    local = repo / ".codex-tmp"
-    local.mkdir()
-    receipt = BODY_INPUTS["pickup_receipt"].replace("/tmp/publication-test", str(repo))
-    state = {"issue": 5230, "worktree": str(repo), "branch": "codex/repair", "base_commit": base,
-             "pickup_receipt": receipt}
-    handoff = {"version": 1, "issue": 5230, "title": "Full candidate", "paths": ["new.py"],
-               "risk_surfaces": ["auth", "data"], "body": {key: BODY_INPUTS[key] for key in watcher.BODY_FIELDS}}
-    handoff_file = local / "openhands-finish.json"
-    handoff_file.write_text(json.dumps(handoff))
-    handoff_file.chmod(0o600)
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    watch_dir = run_dir / "watcher"
-    watch_dir.mkdir()
-    previous = {"title": "Original", "body": {}, "risks": ["auth"], "paths": ["original.py"]}
-    record = {"version": 1, "phase": "repair_sent", "repair_base": repair_base, "handoff": previous}
-    monkeypatch.setattr(delivery, "_full_claim_readback", lambda *args: None)
-    monkeypatch.setattr(delivery, "_finished_run", lambda *args: state)
-    class LocalGit:
-        def run(self, argv, *, cwd, input_text=None):
-            if str(argv[0]).endswith("agent_workspace_preflight.sh"):
-                return publication.CommandResult(tuple(argv), 0, "", "")
-            assert argv[0] == "git"
-            return publication.SubprocessExecutor().run(argv, cwd=cwd, input_text=input_text)
-    result = watcher._commit(run_dir, state, record, watch_dir, LocalGit())
-    assert result["paths"] == ["new.py", "original.py"]
-    assert result["title"] == "Full candidate" and result["risks"] == ["auth", "data"]
-    assert service._read(watch_dir)["original_handoff"] == previous
-    assert git("status", "--porcelain") == ""
-
-
-def test_unresolved_bare_pytest_file_target_is_actionable(authorized_run, monkeypatch):
-    directory, worktree, state, handoff, _, _ = authorized_run
-    body = "## Acceptance Criteria\n- [ ] Coverage\n  - Verify: `tests/test_missing.py`\n"
-    state.update(repository=delivery.REPOSITORY, issue_body_sha256=delivery._sha(body))
-    monkeypatch.setattr(delivery, "_json_result", lambda *args: {
-        "number": state["issue"], "state": "OPEN", "body": body,
-        "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"})
-    error = factory.FinishEvidenceError("unresolved", kind="verification", evidence={
-        "repository": delivery.REPOSITORY, "issue": state["issue"], "head_sha": "b" * 40,
-        "issue_body_sha256": state["issue_body_sha256"], "status": "unresolved", "failed": [],
-        "unresolved": [{"target": "`tests/test_missing.py`", "reason": "Not a concrete local pytest target"}]})
-    assert "tests/test_missing.py" in watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
-    (worktree / "tests").mkdir()
-    (worktree / "tests/test_missing.py").write_text("pass\n")
-    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
-
-
-def test_missing_selector_diagnostic_must_name_exact_requested_target(authorized_run, monkeypatch):
-    directory, worktree, state, handoff, _, _ = authorized_run
-    target = "tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam"
-    file = worktree / target.split("::")[0]
-    file.parent.mkdir(parents=True)
-    file.write_text("def test_other(): pass\n")
-    body = f"## Acceptance Criteria\n- [ ] Coverage\n  - Verify: `{target}`\n"
-    state.update(repository=delivery.REPOSITORY, issue_body_sha256=delivery._sha(body))
-    monkeypatch.setattr(delivery, "_json_result", lambda *args: {
-        "number": state["issue"], "state": "OPEN", "body": body,
-        "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"})
-    log = directory / "pytest.log"
-    # Same diagnostic shape as issue-3867's target-001.log, with only the fixture root changed.
-    text = f"[verification runner] Target: {target}\nERROR: not found: {worktree / target}\n(no match in any of [<Module test_multi_vault_context_boundaries.py>])\n"
-    log.write_text(text)
-    entry = {"target": target, "head_sha": "b" * 40, "exit_code": 4,
-             "reason": "Command failed before test results were established",
-             "evidence": {"path": str(log), "sha256": hashlib.sha256(text.encode()).hexdigest()}}
-    evidence = {"repository": delivery.REPOSITORY, "issue": state["issue"], "head_sha": "b" * 40,
-                "issue_body_sha256": state["issue_body_sha256"], "status": "unresolved",
-                "failed": [], "unresolved": [entry]}
-    error = factory.FinishEvidenceError("unresolved", kind="verification", evidence=evidence)
-    assert target in watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
-    text = "ERROR: file or directory not found: tests/from-addopts.py\n"
-    log.write_text(text)
-    entry["evidence"]["sha256"] = hashlib.sha256(text.encode()).hexdigest()
-    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
-
-
-def test_review_feedback_binds_document_targets_to_current_issue(authorized_run, monkeypatch):
-    directory, _, state, handoff, _, _ = authorized_run
-    target = "doc writeback at `docs/OWNER.md :: State`"
-    body = f"## Acceptance Criteria\n- [ ] Document\n  - Verify: {target}\n"
-    state["issue_body_sha256"] = delivery._sha(body)
-    issue = {"number": state["issue"], "state": "OPEN", "body": body,
-             "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"}
-    monkeypatch.setattr(delivery, "_json_result", lambda *args: issue)
-    monkeypatch.setattr(delivery, "_doc_writeback_path", lambda value: "docs/OWNER.md" if value == target else None,
-                        raising=False)
-    review = {"head_sha": "b" * 40, "verdict": "findings", "summary": "Document needs repair",
-              "findings": [{"severity": "P1", "description": "Correct the stated owner boundary.",
-                            "file": "feature.py", "line": 1}],
-              "doc_writebacks": [{"target": target, "result": "fail", "rationale": "The owner boundary is missing."}]}
-    raw = json.dumps(review)
-    artifact = directory / "review-doc.txt"
-    artifact.write_text(raw)
-    def parse(source, head, targets):
-        parsed = json.loads(source)
-        if targets != [target] or parsed["head_sha"] != head or [x["target"] for x in parsed["doc_writebacks"]] != targets:
-            raise factory.review.ReviewError("mismatch")
-        return parsed
-    monkeypatch.setattr(factory.review, "_parse_result", parse)
-    evidence = {"status": "unresolved", "head_sha": "b" * 40, "reason": None,
-                "review": {"head_sha": "b" * 40, "issue_body_sha256": state["issue_body_sha256"],
-                           "evidence": {"path": str(artifact), "sha256": hashlib.sha256(raw.encode()).hexdigest()}}}
-    error = factory.FinishEvidenceError("review", kind="review", evidence=evidence)
-    assert target in watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
-    issue["body"] += "changed"
-    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
-    issue["body"] = body
-    review["doc_writebacks"][0]["result"] = "unresolved"
-    raw = json.dumps(review)
-    artifact.write_text(raw)
-    evidence["review"]["evidence"]["sha256"] = hashlib.sha256(raw.encode()).hexdigest()
-    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
-
-
-def test_mixed_missing_selectors_and_pending_docs_are_issue_bound(authorized_run, monkeypatch):
-    directory, worktree, state, handoff, _, _ = authorized_run
-    target = "tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam"
-    missing = "`tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`"
-    doc = "doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection`"
-    body = f"## Acceptance Criteria\n- [ ] Inventory\n  - Verify: `{target}`\n- [ ] Smoke\n  - Verify: {missing}\n- [ ] Debt\n  - Verify: {doc}\n"
-    state.update(repository=delivery.REPOSITORY, issue_body_sha256=delivery._sha(body))
-    monkeypatch.setattr(delivery, "_json_result", lambda *args: {
-        "number": state["issue"], "state": "OPEN", "body": body,
-        "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"})
-    monkeypatch.setattr(delivery, "_doc_writeback_path", lambda value: "docs/architecture/SBS_TRANSITION_DEBT.md" if value == doc else None, raising=False)
-    file = worktree / target.split("::")[0]
-    file.parent.mkdir(parents=True)
-    file.write_text("def test_other(): pass\n")
-    output = f"[verification runner] Target: {target}\nERROR: not found: {worktree / target}\n(no match in any of [<Module test_multi_vault_context_boundaries.py>])\n"
-    log = directory / "target.log"
-    log.write_text(output)
-    evidence = {"repository": delivery.REPOSITORY, "issue": state["issue"], "head_sha": "b" * 40,
-                "issue_body_sha256": state["issue_body_sha256"], "status": "unresolved", "failed": [],
-                "doc_targets": [doc], "unresolved": [
-                    {"target": target, "head_sha": "b" * 40, "exit_code": 4,
-                     "reason": "Command failed before test results were established",
-                     "evidence": {"path": str(log), "sha256": hashlib.sha256(output.encode()).hexdigest()}},
-                    {"target": missing, "reason": "Not a concrete local pytest target"}]}
-    error = factory.FinishEvidenceError("unresolved", kind="verification", evidence=evidence)
-    feedback = watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
-    assert all(item in feedback for item in (target, missing, doc))
-    assert "independent semantic review is still required" in feedback
-    evidence["doc_targets"] = ["doc writeback at `docs/OTHER.md :: State`"]
-    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
