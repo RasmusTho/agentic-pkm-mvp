@@ -401,6 +401,14 @@ def _repair_feedback(error: factory.FinishEvidenceError, state: dict[str, Any],
                 return None
             items = factory._extract_acceptance_items(factory.extract_sections(issue["body"]).get("acceptance criteria"))
             declared = {target for item in items for target in factory._declared_verify_targets(item)}
+            doc_parser = getattr(delivery, "_doc_writeback_path", None)
+            if doc_parser is None and any(target.startswith("doc writeback at ") for target in declared):
+                return None
+            declared_docs = {target for target in declared if doc_parser is not None and doc_parser(target) is not None}
+            docs = evidence.get("doc_targets", [])
+            if (not isinstance(docs, list) or any(not isinstance(target, str) for target in docs)
+                    or len(docs) != len(set(docs)) or set(docs) != declared_docs):
+                return None
             unresolved = evidence.get("unresolved")
             if not isinstance(unresolved, list) or not 1 <= len(unresolved) <= 32:
                 return None
@@ -431,7 +439,11 @@ def _repair_feedback(error: factory.FinishEvidenceError, state: dict[str, Any],
                     # Sending a worker would only repeat an unresolvable gate.
                     return None
                 targets.append(raw)
-            return "Unresolved declared Verify targets (not proof of failure):\n" + "\n".join(targets)
+            feedback = "Unresolved declared Verify targets (not proof of failure):\n" + "\n".join(targets)
+            if docs:
+                feedback += ("\n\nPending document writebacks from the same Issue contract "
+                             "(independent semantic review is still required):\n" + "\n".join(docs))
+            return feedback
         failures = evidence.get("failed")
         if (evidence.get("status") != "failed" or evidence.get("unresolved") != []
                 or not isinstance(failures, list) or not 1 <= len(failures) <= 4):

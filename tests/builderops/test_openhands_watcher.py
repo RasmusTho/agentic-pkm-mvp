@@ -849,10 +849,18 @@ def test_unresolved_feedback_is_bound_to_current_issue_and_safe_targets(authoriz
                     {"target": "`tests/test_missing.py::test_behavior`", "reason": "Not a concrete local pytest target"},
                     {"target": "doc writeback at `docs/OWNER.md :: State`", "reason": "Not a concrete local pytest target"},
                 ]}
+    doc_target = "doc writeback at `docs/OWNER.md :: State`"
+    monkeypatch.setattr(delivery, "_doc_writeback_path", lambda value: "docs/OWNER.md" if value == doc_target else None,
+                        raising=False)
     error = factory.FinishEvidenceError("unresolved", kind="verification", evidence=evidence)
     assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
     evidence["unresolved"].pop()
-    assert "test_missing.py::test_behavior" in watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
+    evidence["doc_targets"] = [doc_target]
+    feedback = watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
+    assert "test_missing.py::test_behavior" in feedback and doc_target in feedback
+    evidence["doc_targets"] = [doc_target, "doc writeback at `docs/INJECT.md :: State`"]
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
+    evidence["doc_targets"] = [doc_target]
     evidence["unresolved"].append({"target": "tests/injected.py::test_x", "reason": "Not a concrete local pytest target"})
     assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
     evidence["unresolved"].pop()
@@ -1025,4 +1033,36 @@ def test_review_feedback_binds_document_targets_to_current_issue(authorized_run,
     raw = json.dumps(review)
     artifact.write_text(raw)
     evidence["review"]["evidence"]["sha256"] = hashlib.sha256(raw.encode()).hexdigest()
+    assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
+
+
+def test_mixed_missing_selectors_and_pending_docs_are_issue_bound(authorized_run, monkeypatch):
+    directory, worktree, state, handoff, _, _ = authorized_run
+    target = "tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam"
+    missing = "`tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`"
+    doc = "doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection`"
+    body = f"## Acceptance Criteria\n- [ ] Inventory\n  - Verify: `{target}`\n- [ ] Smoke\n  - Verify: {missing}\n- [ ] Debt\n  - Verify: {doc}\n"
+    state.update(repository=delivery.REPOSITORY, issue_body_sha256=delivery._sha(body))
+    monkeypatch.setattr(delivery, "_json_result", lambda *args: {
+        "number": state["issue"], "state": "OPEN", "body": body,
+        "url": f"https://github.com/{delivery.REPOSITORY}/issues/{state['issue']}"})
+    monkeypatch.setattr(delivery, "_doc_writeback_path", lambda value: "docs/architecture/SBS_TRANSITION_DEBT.md" if value == doc else None, raising=False)
+    file = worktree / target.split("::")[0]
+    file.parent.mkdir(parents=True)
+    file.write_text("def test_other(): pass\n")
+    output = f"[verification runner] Target: {target}\nERROR: not found: {worktree / target}\n(no match in any of [<Module test_multi_vault_context_boundaries.py>])\n"
+    log = directory / "target.log"
+    log.write_text(output)
+    evidence = {"repository": delivery.REPOSITORY, "issue": state["issue"], "head_sha": "b" * 40,
+                "issue_body_sha256": state["issue_body_sha256"], "status": "unresolved", "failed": [],
+                "doc_targets": [doc], "unresolved": [
+                    {"target": target, "head_sha": "b" * 40, "exit_code": 4,
+                     "reason": "Command failed before test results were established",
+                     "evidence": {"path": str(log), "sha256": hashlib.sha256(output.encode()).hexdigest()}},
+                    {"target": missing, "reason": "Not a concrete local pytest target"}]}
+    error = factory.FinishEvidenceError("unresolved", kind="verification", evidence=evidence)
+    feedback = watcher._repair_feedback(error, state, handoff, "b" * 40, directory)
+    assert all(item in feedback for item in (target, missing, doc))
+    assert "independent semantic review is still required" in feedback
+    evidence["doc_targets"] = ["doc writeback at `docs/OTHER.md :: State`"]
     assert watcher._repair_feedback(error, state, handoff, "b" * 40, directory) is None
