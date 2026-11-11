@@ -34,7 +34,9 @@ through the existing health/status/receipt substrates, never a parallel channel.
    rows to answer, per item: which source(s) discovered it and when; whether it was deduplicated
    (trigger count > 1); which step failed (reason code + stage); whether the cursor advanced
    (source `last_success_at` vs frontier); when the next retry is due; which account binding and
-   channel database ran the job. All secret-free (INV-YSS-5).
+   channel database ran the job. When the outbox, request store, or source registry is
+   unavailable, the projection reports the unavailable input and refuses a complete result;
+   an available empty input remains distinct. All secret-free (INV-YSS-5).
 4. **Health-contract feed:** dead-letter counts and queue-age signals ride the existing
    outbox/dead-letter fields the `HealthContract` already evaluates — no new health channel;
    `/healthz` semantics unchanged.
