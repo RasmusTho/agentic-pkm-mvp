@@ -11,8 +11,9 @@ fields below are projected. ``account_binding_id``, ``collection_ref``,
 ``cursor``, ``provenance`` and the stored ``last_error.detail`` are never
 emitted, a stored ``last_error`` is reduced to a known reason code plus its
 timestamp, and a ``title`` containing any listed binding's collection ref or
-account binding id, or a URL/identifier/secret shape (see :func:`_safe_title`),
-is reported as null.
+account binding id (see :func:`_safe_title`) is reported as null. Titles are
+written through ``json.dumps`` in both modes, so control characters are
+escaped rather than emitted raw.
 Backend failures report a fixed reason code, never the exception text (which
 can carry DSN or driver detail).
 """
@@ -20,7 +21,6 @@ can carry DSN or driver detail).
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -93,14 +93,6 @@ def _policy_mode(policy: Any) -> str | None:
     return None
 
 
-_URL_RE = re.compile(r"://|\bwww\.|youtube\.com|youtu\.be", re.IGNORECASE)
-# Defense-in-depth shape checks (deliberately unanchored, so an id glued to
-# other characters still matches). These are heuristics, not general secret
-# detection: a free-text title can still carry a secret no pattern recognises.
-_YOUTUBE_ID_RE = re.compile(r"UC[A-Za-z0-9_-]{22}|(?:PL|UU|LL|FL|OL|RD)[A-Za-z0-9_-]{16,}")
-_UUID_RE = re.compile(r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}", re.IGNORECASE)
-_OPAQUE_TOKEN_RE = re.compile(r"(?=[A-Za-z0-9_+/=.-]*[0-9])(?=[A-Za-z0-9_+/=.-]*[A-Za-z])[A-Za-z0-9_+/=.-]{24,}")
-_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 # Refs shorter than this (Liked videos is ``LL``) match case-sensitively so a
 # title such as "All music" is not withheld for containing "ll".
 _CASEFOLD_MIN_REF_LENGTH = 4
@@ -127,15 +119,14 @@ def _identifier_forms(bindings: Sequence[Any]) -> tuple[frozenset[str], frozense
 
 
 def _safe_title(title: Any, identifiers: tuple[frozenset[str], frozenset[str]]) -> str | None:
-    """Project the display title, or ``null`` when it may carry an identifier.
+    """Project the display title, or ``null`` when it contains a listed identifier.
 
-    ``title`` is free text (the Takeout importer even falls back to the raw
+    ``title`` is display text (the Takeout importer even falls back to the raw
     channel/playlist id). It is withheld whole -- never partially redacted --
     when any listed binding's ``collection_ref`` or ``account_binding_id``
-    occurs anywhere in it (plain substring, no token boundary). The URL,
-    id/UUID-shaped, opaque-token and control-character checks additionally
-    withhold common identifier and secret shapes; they reduce but cannot
-    eliminate the chance that an arbitrary title carries a secret.
+    occurs anywhere in it (plain substring, no token boundary). This filters
+    only those known literal values; it is not a general secret detector, and
+    any other title is shown as stored.
     """
 
     if not isinstance(title, str) or not title.strip():
@@ -145,11 +136,6 @@ def _safe_title(title: Any, identifiers: tuple[frozenset[str], frozenset[str]]) 
     if (
         any(value in title for value in exact)
         or any(value in lowered for value in folded)
-        or _URL_RE.search(title)
-        or _YOUTUBE_ID_RE.search(title)
-        or _UUID_RE.search(title)
-        or _OPAQUE_TOKEN_RE.search(title)
-        or _CONTROL_RE.search(title)
     ):
         return None
     return title

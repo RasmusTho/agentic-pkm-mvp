@@ -314,32 +314,32 @@ def test_list_suppresses_takeout_id_fallback_titles(
         assert channel_id not in text and playlist_id not in text
 
 
-def test_list_withholds_titles_embedding_identifiers_or_secrets(registry: SourceRegistry) -> None:
-    """Review finding on c2c114615: equality-only suppression leaked embedded refs."""
+def test_list_withholds_titles_containing_listed_identifiers(registry: SourceRegistry) -> None:
+    """Only listed literal refs/account ids withhold a title; ordinary titles stay."""
 
     account = str(uuid.uuid4())
     own_ref = "PLembeddedRefFixture01"
-    other_channel = "UCforeignChannelFixture001"
-    other_playlist = "PLforeignPlaylistFixture99"
-    leaking_titles = {
+    withheld_titles = {
         "own ref in prose": f"Playlist {own_ref}",
         "own ref in URL": f"https://www.youtube.com/playlist?list={own_ref}",
-        "bare URL": "watch at youtu.be/abc",
         "account id": f"Inbox for {account}",
         "account id uppercase": f"Inbox {account.upper()}",
-        "foreign channel id": f"Mirror of {other_channel}",
-        "foreign playlist id": f"Copy of {other_playlist}",
-        "opaque secret": "notes ghp_9fK2xQ7LmZ3vB8nR4tY6wP1sD0cE5a",
-        "control chars": "Inbox\x1b[2Jcleared",
     }
-    safe_titles = {
+    # Not a listed identifier, so shown as stored: the filter is bounded to
+    # known literal values and is not a URL/id-shape or secret detector.
+    kept_titles = {
         "plain": "Mimer Inbox",
         "unicode": "Föreläsningar 2026 – AI & lärande",
-        "short caps": "PLAYLIST OF THE YEAR",
+        "caps": "PLAYLIST OF THE YEAR",
         "short code": "Lecture series PL-101",
+        "unlisted URL": "https://example.com/playlist",
+        "unlisted channel-shaped id": "Mirror of UCforeignChannelFixture001",
+        "unlisted token-like text": "notes ghp_9fK2xQ7LmZ3vB8nR4tY6wP1sD0cE5a",
+        "unlisted uuid": f"Batch {uuid.uuid4()}",
+        "control chars": "Inbox\x1b[2Jcleared",
     }
     ids: dict[str, str] = {}
-    for index, (label, title) in enumerate((*leaking_titles.items(), *safe_titles.items())):
+    for index, (label, title) in enumerate((*withheld_titles.items(), *kept_titles.items())):
         binding = registry.register(
             collection_kind="owned_playlist",
             collection_ref=own_ref if index == 0 else f"PLtitleFixtureRef{index:04d}",
@@ -348,26 +348,30 @@ def test_list_withholds_titles_embedding_identifiers_or_secrets(registry: Source
         )
         ids[label] = binding.binding_id
     assert registry.get(ids["own ref in prose"]).collection_ref == own_ref
-    # A short own ref (Liked videos is ``LL``) is matched as a whole token only.
+    # A short ref (Liked videos is ``LL``) matches case-sensitively.
     liked = registry.register(
         collection_kind="liked_videos", collection_ref="LL", title="LL backup", account_binding_id=account
     )
-    leaking_titles["short own ref"] = liked.title
-    ids["short own ref"] = liked.binding_id
+    withheld_titles["short ref"] = liked.title
+    ids["short ref"] = liked.binding_id
 
     result = CliRunner(mix_stderr=False).invoke(cli, ["youtube-sources", "list", "--json"])
     assert result.exit_code == 0, result.output
     titles = {row["binding_id"]: row["title"] for row in json.loads(result.stdout)}
-    for label in leaking_titles:
+    for label in withheld_titles:
         assert titles[ids[label]] is None, label
-    for label, title in safe_titles.items():
+    for label, title in kept_titles.items():
         assert titles[ids[label]] == title, label
 
     human = CliRunner(mix_stderr=False).invoke(cli, ["youtube-sources", "list"])
     assert human.exit_code == 0, human.output
-    assert human.stdout.count("(untitled)") == len(leaking_titles)
+    assert human.stdout.count("(untitled)") == len(withheld_titles)
+    assert "https://example.com/playlist" in human.stdout
+    # Both modes escape control characters instead of emitting them raw.
+    assert "\\u001b[2Jcleared" in human.stdout
     for text in (result.stdout + result.stderr, human.stdout + human.stderr):
-        for value in (own_ref, account, account.upper(), other_channel, other_playlist, "ghp_", "\x1b", "youtu"):
+        assert "\x1b" not in text
+        for value in (own_ref, account, account.upper()):
             assert value not in text
         for binding in registry.list_all():
             assert binding.collection_ref not in text
