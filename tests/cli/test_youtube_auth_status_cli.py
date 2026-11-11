@@ -33,6 +33,10 @@ def test_registered_auth_status_uses_existing_service(monkeypatch, tmp_path):
     assert json.loads(result.output) == {"status": "connected", "reason_code": None, "scopes": [SCOPE], "token_store": "encrypted"}
     assert "secret" not in result.output
     assert "Status: connected" in CliRunner().invoke(cli, ["youtube-auth", "status"]).output
+    bindings.set_state(row.account_binding_id, state="degraded", reason_code=None)
+    degraded = _invoke()
+    assert degraded.exit_code == 1
+    assert json.loads(degraded.output)["status"] == "degraded"
 
 
 def test_auth_status_handles_missing_ambiguous_and_secrets(monkeypatch):
@@ -54,6 +58,8 @@ def test_auth_status_handles_missing_ambiguous_and_secrets(monkeypatch):
     assert "secret-sentinel" not in result.output
     monkeypatch.setattr(auth_cli, "youtube_account_status", lambda *a, **kw: {"status": "connected", "reason_code": None, "scopes": []})
     assert json.loads(_invoke().output)["status"] == "unavailable"
+    monkeypatch.setattr(auth_cli, "youtube_account_status", lambda *a, **kw: {"status": "degraded", "reason_code": None, "scopes": [SCOPE]})
+    assert json.loads(_invoke().output)["status"] == "degraded"
     monkeypatch.setattr(AccountBindingStore, "for_runtime", lambda **kw: (_ for _ in ()).throw(RuntimeError("secret-sentinel")))
     result = _invoke()
     assert result.exit_code == 1
