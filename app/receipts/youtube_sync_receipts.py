@@ -146,15 +146,21 @@ class YouTubeSyncReceiptRow:
         }
 
 
+class YouTubeSyncReceiptUnavailableError(RuntimeError):
+    """The receipt projection cannot establish a complete result."""
+
+
 @dataclass(frozen=True)
 class YouTubeSyncReceiptQueryResult:
     source_available: bool
     rows: tuple[YouTubeSyncReceiptRow, ...] = ()
     non_authoritative_records: tuple[dict[str, str | None], ...] = ()
+    unavailable_sources: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "source_available": self.source_available,
+            "unavailable_sources": list(self.unavailable_sources),
             "rows": [row.to_dict() for row in self.rows],
             "non_authoritative_records": list(self.non_authoritative_records),
         }
@@ -438,21 +444,28 @@ def query_youtube_sync_receipts(
     del vault_root
     source_records = list(records) if records is not None else read_receipt_source_records(outbox_path=outbox_path)
     if source_records is None:
-        return YouTubeSyncReceiptQueryResult(source_available=False)
+        return YouTubeSyncReceiptQueryResult(source_available=False, unavailable_sources=("outbox",))
+    unavailable_sources: list[str] = []
     if requests is None:
         try:
             from app.knowledge_acquisition.acquisition_requests import AcquisitionRequests
 
-            requests = AcquisitionRequests.for_runtime().list_all()
+            requests = tuple(AcquisitionRequests.for_runtime().list_all())
         except Exception:
             requests = ()
+            unavailable_sources.append("requests")
     if sources is None:
         try:
             from app.knowledge_acquisition.source_registry import SourceRegistry
 
-            sources = SourceRegistry.for_runtime().list_all()
+            sources = tuple(SourceRegistry.for_runtime().list_all())
         except Exception:
             sources = ()
+            unavailable_sources.append("source_registry")
+    if unavailable_sources:
+        return YouTubeSyncReceiptQueryResult(
+            source_available=False, unavailable_sources=tuple(unavailable_sources)
+        )
     rows, diagnostics = _rows_from_records(
         source_records,
         requests=requests,
@@ -485,12 +498,15 @@ def project_youtube_sync_receipt(
     **kwargs: Any,
 ) -> YouTubeSyncReceiptRow | None:
     result = query_youtube_sync_receipts(YouTubeSyncReceiptQuery(item_ref=item_ref), **kwargs)
+    if not result.source_available:
+        raise YouTubeSyncReceiptUnavailableError("YouTube sync receipt sources unavailable")
     return result.rows[0] if result.rows else None
 
 
 __all__ = [
     "YouTubeSyncReceiptQuery",
     "YouTubeSyncReceiptQueryResult",
+    "YouTubeSyncReceiptUnavailableError",
     "YouTubeSyncReceiptRow",
     "YouTubeSyncTrigger",
     "project_youtube_sync_receipt",
