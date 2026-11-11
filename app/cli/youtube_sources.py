@@ -10,8 +10,8 @@ Output is secret-free by construction (INV-YSS-5): only the allowlisted
 fields below are projected. ``account_binding_id``, ``collection_ref``,
 ``cursor``, ``provenance`` and the stored ``last_error.detail`` are never
 emitted, a stored ``last_error`` is reduced to a known reason code plus its
-timestamp, and a ``title`` that merely repeats the ``collection_ref`` (the
-Takeout importer's fallback for an untitled source) is reported as null.
+timestamp, and a ``title`` that embeds an identifier, URL or secret-shaped
+token (see :func:`_safe_title`) is reported as null.
 Backend failures report a fixed reason code, never the exception text (which
 can carry DSN or driver detail).
 """
@@ -19,6 +19,7 @@ can carry DSN or driver detail).
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -91,11 +92,46 @@ def _policy_mode(policy: Any) -> str | None:
     return None
 
 
+_URL_RE = re.compile(r"://|\bwww\.|youtube\.com|youtu\.be", re.IGNORECASE)
+# YouTube channel ids and playlist-family ids (incl. uploads/liked/mix lists).
+_YOUTUBE_ID_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:UC[A-Za-z0-9_-]{22}|(?:PL|UU|LL|FL|OL|RD)[A-Za-z0-9_-]{16,})(?![A-Za-z0-9_-])"
+)
+_UUID_RE = re.compile(r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}", re.IGNORECASE)
+# Long opaque runs mixing letters and digits are secret-shaped (tokens, keys).
+_OPAQUE_TOKEN_RE = re.compile(r"(?=[A-Za-z0-9_+/=.-]*[0-9])(?=[A-Za-z0-9_+/=.-]*[A-Za-z])[A-Za-z0-9_+/=.-]{24,}")
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _contains_token(text: str, value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    pattern = r"(?<![A-Za-z0-9_-])" + re.escape(value.strip()) + r"(?![A-Za-z0-9_-])"
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
 def _safe_title(binding: Any) -> str | None:
+    """Project the display title, or ``null`` when it may carry an identifier.
+
+    ``title`` is free text (the Takeout importer even falls back to the raw
+    channel/playlist id). It is withheld whole -- never partially redacted --
+    when it embeds this binding's ``collection_ref`` or ``account_binding_id``,
+    any URL, YouTube-id-shaped or UUID-shaped token, a long opaque
+    secret-shaped token, or control characters.
+    """
+
     title = binding.title
     if not isinstance(title, str) or not title.strip():
         return None
-    if title.strip() == str(binding.collection_ref).strip():
+    if (
+        _contains_token(title, binding.collection_ref)
+        or _contains_token(title, binding.account_binding_id)
+        or _URL_RE.search(title)
+        or _YOUTUBE_ID_RE.search(title)
+        or _UUID_RE.search(title)
+        or _OPAQUE_TOKEN_RE.search(title)
+        or _CONTROL_RE.search(title)
+    ):
         return None
     return title
 
