@@ -332,6 +332,8 @@ def test_list_withholds_titles_containing_listed_identifiers(registry: SourceReg
         "unicode": "Föreläsningar 2026 – AI & lärande",
         "caps": "PLAYLIST OF THE YEAR",
         "short code": "Lecture series PL-101",
+        "unlisted URL": "https://example.com/playlist",
+        "unlisted uuid": f"Batch {uuid.uuid4()}",
         "site name": "Notes from example.com/playlist",
         "punctuation": "Q&A: Systems #3 (2026) — part 2/4",
         "control chars": "Inbox\x1b[2Jcleared",
@@ -364,6 +366,7 @@ def test_list_withholds_titles_containing_listed_identifiers(registry: SourceReg
     human = CliRunner(mix_stderr=False).invoke(cli, ["youtube-sources", "list"])
     assert human.exit_code == 0, human.output
     assert human.stdout.count("(untitled)") == len(withheld_titles)
+    assert "https://example.com/playlist" in human.stdout
     assert "Notes from example.com/playlist" in human.stdout
     # Both modes escape control characters instead of emitting them raw.
     assert "\\u001b[2Jcleared" in human.stdout
