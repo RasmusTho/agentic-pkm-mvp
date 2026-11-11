@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import socket
 import uuid
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from app.cli import cli
+from app.cli.youtube_sources import KNOWN_LAST_ERROR_REASON_CODES
 from app.knowledge_acquisition import source_registry as registry_module
+from app.knowledge_acquisition.playlist_discovery import SAFE_REASON_CODES
 from app.knowledge_acquisition.source_registry import SourceRegistry, reset_memory_source_registry
+from app.knowledge_acquisition.youtube_onboarding import import_takeout_registry
 
 pytestmark = pytest.mark.not_pg
 
@@ -176,8 +181,12 @@ def test_list_output_does_not_expose_secrets(
     registry: SourceRegistry, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ids = _seed(registry)
-    # A stored reason code that is not a plain token is withheld, not echoed.
-    registry.record_poll_failure(ids["inbox"], reason_code=f"auth {_SECRET}", detail=_SECRET)
+    # The registry stores any non-empty reason code; only known codes are
+    # projected, so a token-shaped planted value is withheld, not echoed.
+    snake_secret = "secret_token_123"
+    registry.record_poll_failure(ids["inbox"], reason_code=snake_secret, detail=_SECRET)
+    assert registry.get(ids["inbox"]).last_error["reason_code"] == snake_secret
+    assert SAFE_REASON_CODES <= KNOWN_LAST_ERROR_REASON_CODES
     stored = registry.list_all()
     hidden_values = {ids["account"]}
     for binding in stored:
@@ -202,7 +211,104 @@ def test_list_output_does_not_expose_secrets(
         outputs.append(failed.stdout + failed.stderr)
 
     for text in outputs:
-        assert _SECRET not in text
+        assert _SECRET not in text and snake_secret not in text
         assert "Bearer" not in text and "page_token" not in text and "provenance" not in text
         for value in hidden_values:
             assert value not in text
+
+
+class _RecordingCursor:
+    def __init__(self, statements: list[str], table_present: bool) -> None:
+        self._statements = statements
+        self._table_present = table_present
+        self._last = ""
+
+    def execute(self, sql: str, params: object = None) -> None:
+        del params
+        self._last = sql
+        self._statements.append(sql)
+
+    def fetchone(self):
+        if "to_regclass" in self._last:
+            return ("oid",) if self._table_present else (None,)
+        return None
+
+    def fetchall(self):
+        return []
+
+
+class _RecordingConnection:
+    def __init__(self, statements: list[str], table_present: bool) -> None:
+        self._statements = statements
+        self._table_present = table_present
+
+    def cursor(self, *args, **kwargs):
+        del args, kwargs
+        return _RecordingCursor(self._statements, self._table_present)
+
+    def close(self) -> None:
+        pass
+
+
+def test_list_never_bootstraps_pg_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-in schema autocreate must not turn a read-only listing into DDL."""
+
+    statements: list[str] = []
+    table = {"present": False}
+    monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+    monkeypatch.setattr(registry_module, "_resolve_backend", lambda: "pg")
+    monkeypatch.setattr(
+        registry_module, "_pg_connect", lambda: _RecordingConnection(statements, table["present"])
+    )
+
+    # Schema absent: the listing refuses safely instead of creating it.
+    missing = CliRunner(mix_stderr=False).invoke(cli, ["youtube-sources", "list", "--json"])
+    assert missing.exit_code == 1
+    assert json.loads(missing.stderr) == {"error": {"reason_code": "source_registry_schema_missing"}}
+
+    # Schema present: the listing reads it.
+    table["present"] = True
+    for args in (("--json",), ()):
+        result = _invoke(*args)
+        assert result.exit_code == 0, result.output
+    assert any("FROM acquisition_source_registry" in sql for sql in statements)
+    assert all(sql.lstrip().upper().startswith("SELECT") for sql in statements), statements
+
+    # Control: the read-write constructor does run DDL here (the fake keeps
+    # reporting the table absent, so its post-create assertion then refuses).
+    statements.clear()
+    table["present"] = False
+    with pytest.raises(registry_module.SourceRegistrySchemaMissingError):
+        SourceRegistry.for_runtime()
+    assert any(sql.lstrip().upper().startswith("CREATE") for sql in statements)
+
+
+def test_list_suppresses_takeout_id_fallback_titles(
+    registry: SourceRegistry, tmp_path: Path
+) -> None:
+    channel_id = "UCuntitledFixture0000001"
+    playlist_id = "PLuntitledFixtureList"
+    root = tmp_path / "Takeout"
+    root.mkdir()
+    with (root / "subscriptions.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["Channel ID", "Channel Title", "Channel URL"])
+        writer.writerow([channel_id, "", f"https://www.youtube.com/channel/{channel_id}"])
+    with (root / "playlists.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["Playlist ID", "Playlist Title"])
+        writer.writerow([playlist_id, ""])
+    import_takeout_registry(root, registry=registry, account_binding_id=str(uuid.uuid4()))
+    stored = registry.list_all()
+    assert {binding.title for binding in stored} == {channel_id, playlist_id}
+
+    result = CliRunner(mix_stderr=False).invoke(cli, ["youtube-sources", "list", "--json"])
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.stdout)
+    assert len(rows) == 2 and all(row["title"] is None for row in rows)
+
+    human = CliRunner(mix_stderr=False).invoke(cli, ["youtube-sources", "list"])
+    assert human.exit_code == 0, human.output
+    assert human.stdout.count("(untitled)") == 2
+    for text in (result.stdout + result.stderr, human.stdout + human.stderr):
+        assert channel_id not in text and playlist_id not in text

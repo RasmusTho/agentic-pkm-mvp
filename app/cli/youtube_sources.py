@@ -2,28 +2,55 @@
 
 ``python -m app.cli youtube-sources list [--json]`` is a thin read-only
 projection over :meth:`SourceRegistry.list_all`
-(``app/knowledge_acquisition/source_registry.py``). It never writes the
-registry and never calls a provider.
+(``app/knowledge_acquisition/source_registry.py``), opened through
+:meth:`SourceRegistry.for_runtime_read_only` so it never bootstraps schema.
+It never writes the registry and never calls a provider.
 
 Output is secret-free by construction (INV-YSS-5): only the allowlisted
 fields below are projected. ``account_binding_id``, ``collection_ref``,
 ``cursor``, ``provenance`` and the stored ``last_error.detail`` are never
-emitted, and a stored ``last_error`` is reduced to a well-formed reason code
-plus its timestamp. Backend failures report a fixed reason code, never the
-exception text (which can carry DSN or driver detail).
+emitted, a stored ``last_error`` is reduced to a known reason code plus its
+timestamp, and a ``title`` that merely repeats the ``collection_ref`` (the
+Takeout importer's fallback for an untitled source) is reported as null.
+Backend failures report a fixed reason code, never the exception text (which
+can carry DSN or driver detail).
 """
 
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
 import click
 
-_REASON_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+# Every reason code a production writer stores in ``last_error``:
+# ``playlist_discovery.SAFE_REASON_CODES`` (also the youtube_oauth degradation
+# codes) plus the subscription-feed codes from ``channel_rss_discovery``. Any
+# other stored value is withheld as null, never echoed.
+KNOWN_LAST_ERROR_REASON_CODES: frozenset[str] = frozenset(
+    {
+        "auth_missing",
+        "auth_key_missing",
+        "auth_expired",
+        "auth_revoked",
+        "auth_disconnected",
+        "quota_exhausted",
+        "api_unavailable",
+        "network_error",
+        "source_gone",
+        "policy_unsupported",
+        "policy_conflict",
+        "paused_source",
+        "inbox_missing",
+        "source_mismatch",
+        "rss_feed_unavailable",
+        "rss_feed_too_large",
+        "rss_feed_invalid",
+        "filter_metadata_unavailable",
+    }
+)
 
 
 def _safe_timestamp(value: Any) -> str | None:
@@ -43,15 +70,16 @@ def _safe_timestamp(value: Any) -> str | None:
 def _safe_last_error(error: Any) -> dict[str, str | None] | None:
     """Reduce a stored ``{reason_code, detail, at}`` to a safe reason code and time.
 
-    ``detail`` is arbitrary caller data and is always dropped. A reason code
-    that is not a plain snake_case token is reported as ``null`` rather than
-    echoed, so the presence of an error stays visible without its content.
+    ``detail`` is arbitrary caller data and is always dropped. The registry
+    accepts any non-empty ``reason_code``, so one outside
+    :data:`KNOWN_LAST_ERROR_REASON_CODES` is reported as ``null`` rather than
+    echoed; the presence of an error stays visible without its content.
     """
 
     if not isinstance(error, Mapping):
         return None
     code = error.get("reason_code")
-    safe_code = code if isinstance(code, str) and _REASON_CODE_RE.match(code) else None
+    safe_code = code if isinstance(code, str) and code in KNOWN_LAST_ERROR_REASON_CODES else None
     return {"reason_code": safe_code, "at": _safe_timestamp(error.get("at"))}
 
 
@@ -63,11 +91,20 @@ def _policy_mode(policy: Any) -> str | None:
     return None
 
 
+def _safe_title(binding: Any) -> str | None:
+    title = binding.title
+    if not isinstance(title, str) or not title.strip():
+        return None
+    if title.strip() == str(binding.collection_ref).strip():
+        return None
+    return title
+
+
 def _project_binding(binding: Any) -> dict[str, Any]:
     return {
         "binding_id": binding.binding_id,
         "kind": binding.collection_kind,
-        "title": binding.title,
+        "title": _safe_title(binding),
         "enabled": binding.enabled,
         "interval_seconds": binding.poll_interval_seconds,
         "policy": _policy_mode(binding.acquisition_policy),
@@ -86,7 +123,7 @@ def _format_row(row: dict[str, Any]) -> str:
         f"{row['binding_id']}  {row['kind']}  {'enabled' if row['enabled'] else 'disabled'}  "
         f"every {row['interval_seconds']}s  policy={row['policy'] or '-'}  "
         f"last_success={row['last_success_at'] or '-'}  last_error={error_text}  "
-        f"{json.dumps(row['title'], ensure_ascii=False)}"
+        f"{json.dumps(row['title'], ensure_ascii=False) if row['title'] is not None else '(untitled)'}"
     )
 
 
@@ -104,7 +141,7 @@ def list_sources(as_json: bool) -> None:
     )
 
     try:
-        bindings = SourceRegistry.for_runtime().list_all()
+        bindings = SourceRegistry.for_runtime_read_only().list_all()
         rows = [_project_binding(binding) for binding in bindings]
     except Exception as exc:  # backend detail may carry DSN/driver text; never echo it
         reason = (
