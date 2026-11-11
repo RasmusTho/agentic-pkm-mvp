@@ -45,6 +45,15 @@ def test_auth_status_handles_missing_ambiguous_and_secrets(monkeypatch):
     result = _invoke()
     assert result.exit_code == 1
     assert json.loads(result.output)["reason_code"] == "ambiguous_bindings"
+    binding_module.reset_memory_account_bindings()
+    bindings.create(provider_channel_id="UC-three", display_label="three", scopes=["secret-sentinel"])
+    monkeypatch.setattr(auth_cli, "YouTubeTokenStore", lambda **kw: object())
+    monkeypatch.setattr(auth_cli, "youtube_account_status", lambda *a, **kw: {"status": "connected", "reason_code": None, "scopes": ["secret-sentinel"]})
+    result = _invoke()
+    assert result.exit_code == 1
+    assert "secret-sentinel" not in result.output
+    monkeypatch.setattr(auth_cli, "youtube_account_status", lambda *a, **kw: {"status": "connected", "reason_code": None, "scopes": []})
+    assert json.loads(_invoke().output)["status"] == "unavailable"
     monkeypatch.setattr(AccountBindingStore, "for_runtime", lambda **kw: (_ for _ in ()).throw(RuntimeError("secret-sentinel")))
     result = _invoke()
     assert result.exit_code == 1

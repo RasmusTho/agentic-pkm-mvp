@@ -30,7 +30,9 @@ def _view() -> dict[str, object]:
         scopes = result.get("scopes")
         if state not in {"connected", "degraded", "absent"} or reason not in {
             None, "auth_missing", "auth_key_missing", "auth_expired", "auth_revoked", "auth_disconnected"
-        } or not isinstance(scopes, list) or any(scope != SCOPE for scope in scopes):
+        } or not isinstance(scopes, list) or any(scope != SCOPE for scope in scopes) or (
+            state == "connected" and (reason is not None or not scopes)
+        ) or (state == "degraded" and reason is None):
             return unavailable
         return {"status": state, "reason_code": reason, "scopes": scopes, "token_store": "encrypted"}
     except Exception:
