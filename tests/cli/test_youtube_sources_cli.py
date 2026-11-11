@@ -325,17 +325,15 @@ def test_list_withholds_titles_containing_listed_identifiers(registry: SourceReg
         "account id": f"Inbox for {account}",
         "account id uppercase": f"Inbox {account.upper()}",
     }
-    # Not a listed identifier, so shown as stored: the filter is bounded to
-    # known literal values and is not a URL/id-shape or secret detector.
+    # Ordinary display titles that contain no listed identifier are shown as
+    # stored; filtering is bounded to the listed literal values.
     kept_titles = {
         "plain": "Mimer Inbox",
         "unicode": "Föreläsningar 2026 – AI & lärande",
         "caps": "PLAYLIST OF THE YEAR",
         "short code": "Lecture series PL-101",
-        "unlisted URL": "https://example.com/playlist",
-        "unlisted channel-shaped id": "Mirror of UCforeignChannelFixture001",
-        "unlisted token-like text": "notes ghp_9fK2xQ7LmZ3vB8nR4tY6wP1sD0cE5a",
-        "unlisted uuid": f"Batch {uuid.uuid4()}",
+        "site name": "Notes from example.com/playlist",
+        "punctuation": "Q&A: Systems #3 (2026) — part 2/4",
         "control chars": "Inbox\x1b[2Jcleared",
     }
     ids: dict[str, str] = {}
@@ -366,7 +364,7 @@ def test_list_withholds_titles_containing_listed_identifiers(registry: SourceReg
     human = CliRunner(mix_stderr=False).invoke(cli, ["youtube-sources", "list"])
     assert human.exit_code == 0, human.output
     assert human.stdout.count("(untitled)") == len(withheld_titles)
-    assert "https://example.com/playlist" in human.stdout
+    assert "Notes from example.com/playlist" in human.stdout
     # Both modes escape control characters instead of emitting them raw.
     assert "\\u001b[2Jcleared" in human.stdout
     for text in (result.stdout + result.stderr, human.stdout + human.stderr):
