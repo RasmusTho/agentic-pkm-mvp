@@ -73,7 +73,12 @@ def _playlist_id_from_url(url: str) -> str | None:
 
 def _read_csv(path: Path) -> Iterable[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig") as handle:
-        yield from csv.DictReader(handle)
+        for row in csv.DictReader(handle):
+            # DictReader uses a None key for extra cells and None values for
+            # missing cells. Reject the entire row, including any plausible ID.
+            if None in row or any(value is None for value in row.values()):
+                continue
+            yield row
 
 
 def parse_takeout(takeout_root: Path) -> OnboardingRegistry:
