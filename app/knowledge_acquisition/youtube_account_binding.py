@@ -312,10 +312,13 @@ def _row_to_binding(row: tuple[Any, ...]) -> AccountBinding:
 
 
 class _PgAccountBindingBackend:
-    def __init__(self) -> None:
+    def __init__(self, *, read_only: bool = False) -> None:
         conn = _pg_connect()
         try:
-            _bootstrap_pg(conn)
+            if read_only:
+                _assert_pg_schema(conn)
+            else:
+                _bootstrap_pg(conn)
         finally:
             conn.close()
 
@@ -434,9 +437,9 @@ class AccountBindingStore:
         self._backend = backend
 
     @classmethod
-    def for_runtime(cls) -> "AccountBindingStore":
+    def for_runtime(cls, *, read_only: bool = False) -> "AccountBindingStore":
         if _resolve_backend() == "pg":
-            return cls(_PgAccountBindingBackend())
+            return cls(_PgAccountBindingBackend(read_only=read_only))
         return cls(_MEMORY_BINDINGS)
 
     def create(

@@ -18,6 +18,9 @@ output — the CLI is both the automation surface and the UI-independent fallbac
 
 ## What This Task Does
 
+The `youtube-auth status` command is implemented as a read-only, secret-free view.
+The remaining command family remains pending; the separate backfill hold remains open.
+
 Two new click groups in the existing CLI structure (`app/cli/`, registered via
 `cli.add_command`), thin wrappers over the core modules (no business logic in the CLI layer),
 following the repo idioms: kebab-case, `--json`, `click.ClickException` for argument/precondition
