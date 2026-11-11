@@ -371,3 +371,49 @@ def test_list_withholds_titles_embedding_identifiers_or_secrets(registry: Source
             assert value not in text
         for binding in registry.list_all():
             assert binding.collection_ref not in text
+
+
+def test_list_withholds_titles_with_boundaryless_identifiers(registry: SourceRegistry) -> None:
+    """Review finding on 71d3c146d: token-boundary matching leaked glued refs."""
+
+    account = str(uuid.uuid4())
+    channel_ref = "UCabcdefghijklmnopqrstuv"
+    # Too short for the id-shape regexes: only the actual-identifier check catches it.
+    short_ref = "PLshortQ7"
+    other_short_ref = "PLtinyZ3"
+    cases = [
+        ("subscription_feed", channel_ref, None, f"mirror x{channel_ref}y"),
+        ("public_playlist", short_ref, None, f"mixx{short_ref}yy"),
+        ("public_playlist", "PLcaseFold5", None, "copy of xplcasefold5x"),
+        ("owned_playlist", other_short_ref, account, f"see_{short_ref.upper()}_too"),
+        ("owned_playlist", "PLacctGlue1", account, f"acct{account}tail"),
+        ("owned_playlist", "PLacctHex22", account, f"hex{account.replace('-', '')}tail"),
+    ]
+    ids = []
+    for kind, ref, account_id, title in cases:
+        binding = registry.register(
+            collection_kind=kind, collection_ref=ref, title=title, account_binding_id=account_id
+        )
+        ids.append(binding.binding_id)
+    kept = registry.register(
+        collection_kind="public_playlist",
+        collection_ref="PLkeptTitle8",
+        title="All music, liked and allowed",
+    )
+
+    result = CliRunner(mix_stderr=False).invoke(cli, ["youtube-sources", "list", "--json"])
+    assert result.exit_code == 0, result.output
+    titles = {row["binding_id"]: row["title"] for row in json.loads(result.stdout)}
+    assert all(titles[binding_id] is None for binding_id in ids), titles
+    assert titles[kept.binding_id] == "All music, liked and allowed"
+
+    human = CliRunner(mix_stderr=False).invoke(cli, ["youtube-sources", "list"])
+    assert human.exit_code == 0, human.output
+    assert human.stdout.count("(untitled)") == len(cases)
+    assert "All music, liked and allowed" in human.stdout
+    hidden = {account, account.replace("-", "")}
+    hidden.update(binding.collection_ref for binding in registry.list_all())
+    for text in (result.stdout + result.stderr, human.stdout + human.stderr):
+        folded = text.casefold()
+        for value in hidden:
+            assert value.casefold() not in folded, value

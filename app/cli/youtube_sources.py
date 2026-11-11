@@ -10,8 +10,9 @@ Output is secret-free by construction (INV-YSS-5): only the allowlisted
 fields below are projected. ``account_binding_id``, ``collection_ref``,
 ``cursor``, ``provenance`` and the stored ``last_error.detail`` are never
 emitted, a stored ``last_error`` is reduced to a known reason code plus its
-timestamp, and a ``title`` that embeds an identifier, URL or secret-shaped
-token (see :func:`_safe_title`) is reported as null.
+timestamp, and a ``title`` containing any listed binding's collection ref or
+account binding id, or a URL/identifier/secret shape (see :func:`_safe_title`),
+is reported as null.
 Backend failures report a fixed reason code, never the exception text (which
 can carry DSN or driver detail).
 """
@@ -20,7 +21,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -93,39 +94,57 @@ def _policy_mode(policy: Any) -> str | None:
 
 
 _URL_RE = re.compile(r"://|\bwww\.|youtube\.com|youtu\.be", re.IGNORECASE)
-# YouTube channel ids and playlist-family ids (incl. uploads/liked/mix lists).
-_YOUTUBE_ID_RE = re.compile(
-    r"(?<![A-Za-z0-9_-])(?:UC[A-Za-z0-9_-]{22}|(?:PL|UU|LL|FL|OL|RD)[A-Za-z0-9_-]{16,})(?![A-Za-z0-9_-])"
-)
+# Defense-in-depth shape checks (deliberately unanchored, so an id glued to
+# other characters still matches). These are heuristics, not general secret
+# detection: a free-text title can still carry a secret no pattern recognises.
+_YOUTUBE_ID_RE = re.compile(r"UC[A-Za-z0-9_-]{22}|(?:PL|UU|LL|FL|OL|RD)[A-Za-z0-9_-]{16,}")
 _UUID_RE = re.compile(r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}", re.IGNORECASE)
-# Long opaque runs mixing letters and digits are secret-shaped (tokens, keys).
 _OPAQUE_TOKEN_RE = re.compile(r"(?=[A-Za-z0-9_+/=.-]*[0-9])(?=[A-Za-z0-9_+/=.-]*[A-Za-z])[A-Za-z0-9_+/=.-]{24,}")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+# Refs shorter than this (Liked videos is ``LL``) match case-sensitively so a
+# title such as "All music" is not withheld for containing "ll".
+_CASEFOLD_MIN_REF_LENGTH = 4
 
 
-def _contains_token(text: str, value: Any) -> bool:
-    if not isinstance(value, str) or not value.strip():
-        return False
-    pattern = r"(?<![A-Za-z0-9_-])" + re.escape(value.strip()) + r"(?![A-Za-z0-9_-])"
-    return re.search(pattern, text, re.IGNORECASE) is not None
+def _identifier_forms(bindings: Sequence[Any]) -> tuple[frozenset[str], frozenset[str]]:
+    """Every actual identifier in the listing: (case-sensitive, casefolded) forms."""
+
+    exact: set[str] = set()
+    folded: set[str] = set()
+    for binding in bindings:
+        ref = binding.collection_ref
+        if isinstance(ref, str) and ref.strip():
+            ref = ref.strip()
+            if len(ref) < _CASEFOLD_MIN_REF_LENGTH:
+                exact.add(ref)
+            else:
+                folded.add(ref.casefold())
+        account = binding.account_binding_id
+        if isinstance(account, str) and account.strip():
+            account = account.strip().casefold()
+            folded.update({account, account.replace("-", "")})
+    return frozenset(exact), frozenset(folded)
 
 
-def _safe_title(binding: Any) -> str | None:
+def _safe_title(title: Any, identifiers: tuple[frozenset[str], frozenset[str]]) -> str | None:
     """Project the display title, or ``null`` when it may carry an identifier.
 
     ``title`` is free text (the Takeout importer even falls back to the raw
     channel/playlist id). It is withheld whole -- never partially redacted --
-    when it embeds this binding's ``collection_ref`` or ``account_binding_id``,
-    any URL, YouTube-id-shaped or UUID-shaped token, a long opaque
-    secret-shaped token, or control characters.
+    when any listed binding's ``collection_ref`` or ``account_binding_id``
+    occurs anywhere in it (plain substring, no token boundary). The URL,
+    id/UUID-shaped, opaque-token and control-character checks additionally
+    withhold common identifier and secret shapes; they reduce but cannot
+    eliminate the chance that an arbitrary title carries a secret.
     """
 
-    title = binding.title
     if not isinstance(title, str) or not title.strip():
         return None
+    exact, folded = identifiers
+    lowered = title.casefold()
     if (
-        _contains_token(title, binding.collection_ref)
-        or _contains_token(title, binding.account_binding_id)
+        any(value in title for value in exact)
+        or any(value in lowered for value in folded)
         or _URL_RE.search(title)
         or _YOUTUBE_ID_RE.search(title)
         or _UUID_RE.search(title)
@@ -136,11 +155,11 @@ def _safe_title(binding: Any) -> str | None:
     return title
 
 
-def _project_binding(binding: Any) -> dict[str, Any]:
+def _project_binding(binding: Any, identifiers: tuple[frozenset[str], frozenset[str]]) -> dict[str, Any]:
     return {
         "binding_id": binding.binding_id,
         "kind": binding.collection_kind,
-        "title": _safe_title(binding),
+        "title": _safe_title(binding.title, identifiers),
         "enabled": binding.enabled,
         "interval_seconds": binding.poll_interval_seconds,
         "policy": _policy_mode(binding.acquisition_policy),
@@ -178,7 +197,8 @@ def list_sources(as_json: bool) -> None:
 
     try:
         bindings = SourceRegistry.for_runtime_read_only().list_all()
-        rows = [_project_binding(binding) for binding in bindings]
+        identifiers = _identifier_forms(bindings)
+        rows = [_project_binding(binding, identifiers) for binding in bindings]
     except Exception as exc:  # backend detail may carry DSN/driver text; never echo it
         reason = (
             "source_registry_schema_missing"
