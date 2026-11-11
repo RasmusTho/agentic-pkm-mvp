@@ -19,6 +19,12 @@ output — the CLI is both the automation surface and the UI-independent fallbac
 ## What This Task Does
 
 The `youtube-auth status` command is implemented as a read-only, secret-free view.
+The `youtube-sources list [--json]` command is implemented as a read-only view that projects
+only the keys shown under Concretely: identifier- and credential-bearing source fields
+(account binding id, collection reference, cursor, provenance) and raw stored error detail are
+excluded, and `last_error` is `{reason_code, at}` or null. A title containing a listed
+collection reference or account binding id is reported as null; other titles are shown as
+stored, so an arbitrary secret pasted into a free-text title cannot be detected.
 The remaining command family remains pending; the separate backfill hold remains open.
 
 Two new click groups in the existing CLI structure (`app/cli/`, registered via
