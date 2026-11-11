@@ -41,6 +41,7 @@ from app.cli.calibration import calibration as calibration_cli
 from app.cli.briefing import briefing_group
 from app.cli.journaling import journaling_group
 from app.cli.youtube_inbox_dev import youtube_inbox_dev
+from app.cli.youtube_sources import youtube_sources
 
 
 from app.config.paths import resolve_system_settings_path
@@ -330,6 +331,7 @@ cli.add_command(ops_cli, name="ops")
 cli.add_command(decisions_cli, name="decisions")
 cli.add_command(calibration_cli, name="calibration")
 cli.add_command(youtube_inbox_dev)
+cli.add_command(youtube_sources)
 
 # ---------------------------------------------------------------------------
 # Canvas CLI group
