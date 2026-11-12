@@ -157,6 +157,33 @@ def test_invalid_batch_and_binding(tmp_path):
         intake([observation()], run_id="test-run", root=tmp_path / "other", expected_run_id="test-run", expected_root=tmp_path)
 
 
+def test_governing_issue_contract_is_validated_before_reservation(tmp_path):
+    setup_run(tmp_path)
+    invalid = [None, {}, {"body": "issue"}, {"state": "open"},
+               {"body": None, "state": None}, {"body": 1, "state": "open"},
+               {"body": "  ", "state": "open"}, {"body": "issue", "state": 1},
+               {"body": "issue", "state": "unknown"}]
+    batch = []
+    for number, issue in enumerate(invalid, 1):
+        pr = observation(number)
+        pr["governing_issue"] = issue
+        # Simulate trusted receipts bound to the malformed contract itself.
+        identity = work_identity(pr)
+        pr.update(independent_review_identity=identity, verify_evidence=receipt(identity),
+                  closure_authorized=receipt(identity))
+        batch.append(pr)
+    good = observation(len(batch) + 1)
+    good["governing_issue"]["state"] = "closed"
+    identity = work_identity(good)
+    good.update(independent_review_identity=identity, verify_evidence=receipt(identity),
+                closure_authorized=receipt(identity))
+    results = run(tmp_path, [*batch, good])
+    assert all(r["action"] == "wait" and r["reason"] == "invalid PR observation"
+               and r["operation_id"] is None for r in results[:-1])
+    assert results[-1]["action"] == "verification-and-closure"
+    assert [r["number"] for r in records(tmp_path)] == [good["number"]]
+
+
 def test_concurrent_callers_share_reservation(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     setup_run(tmp_path)

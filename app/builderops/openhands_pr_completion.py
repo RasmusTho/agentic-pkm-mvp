@@ -92,6 +92,8 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
     submitted_at. The latest APPROVED or CHANGES_REQUESTED per user is decisive;
     COMMENTED, PENDING and DISMISSED records are not decisive. A dismissed
     review must itself be supplied as DISMISSED. Malformed records fail closed.
+    ``governing_issue`` requires a nonblank string body and a state of ``open``
+    or ``closed`` (lowercase).
     A dispatch is a request to the named external boundary, never an execution.
     """
     if run_id != expected_run_id or Path(root).resolve() != Path(expected_root).resolve():
@@ -113,6 +115,10 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
             if (not isinstance(pr["labels"], list) or not all(isinstance(x, str) for x in pr["labels"])
                     or not isinstance(pr["governing_issue"], dict)
                     or not {"body", "state"} <= pr["governing_issue"].keys()
+                    or not isinstance(pr["governing_issue"]["body"], str)
+                    or not pr["governing_issue"]["body"].strip()
+                    or not isinstance(pr["governing_issue"]["state"], str)
+                    or pr["governing_issue"]["state"] not in ("open", "closed")
                     or not isinstance(pr["restrictions"], list) or not isinstance(pr["effect_outcomes"], dict)
                     or not isinstance(pr["reviews"], list) or not isinstance(pr["verification"], dict)
                     or type(pr["draft"]) is not bool or not isinstance(pr["body"], str)
