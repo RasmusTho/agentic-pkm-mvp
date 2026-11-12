@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import stat
 import subprocess
@@ -48,6 +49,13 @@ _WORKER_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _MEMORY = re.compile(r"^[1-9][0-9]*[mg]$")
 _CPUS = re.compile(r"^(0\.[1-9][0-9]?|[1-9][0-9]?(\.[0-9]{1,2})?)$")
+# Docker image reference: never starts with "-", no whitespace or option syntax.
+_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,199}(:[A-Za-z0-9._-]{1,128})?(@sha256:[0-9a-f]{64})?$")
+_NETWORK = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+# Paths embedded in --mount CSV: no comma, quote, equals, whitespace or control characters.
+_MOUNT_PATH = re.compile(r"^/[A-Za-z0-9._/@+-]*$")
+EXTRA_MOUNT_PREFIX = "/mnt/"
+INSPECT_TARGET = "/inspect"
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -174,6 +182,33 @@ def _record_worker(layout: Layout, issue: int, **fields: Any) -> dict[str, Any]:
     )
 
 
+def _reserve_worker(layout: Layout, issue: int, worker: str, **fields: Any) -> dict[str, Any]:
+    """Bind issue<->worker under the run-state lock; refuse any reassignment."""
+
+    key = str(int(issue))
+
+    def updater(state: dict[str, Any]) -> dict[str, Any]:
+        mappings = state.setdefault("issue_mappings", {})
+        for other_key, other in mappings.items():
+            if not isinstance(other, Mapping):
+                continue
+            if other_key == key and other.get("worker") not in (None, worker):
+                raise LaunchRefused(f"issue #{key} already belongs to worker {other.get('worker')!r}")
+            if other_key != key and other.get("worker") == worker:
+                raise LaunchRefused(f"worker {worker!r} already owns issue #{other_key}")
+        mapping = dict(mappings.get(key, {}))
+        mapping.update(fields, worker=worker, updated_at=_now())
+        mappings[key] = mapping
+        return state
+
+    return epic_run_state.update_epic_run_state(
+        layout.run_id,
+        root=layout.run_state_dir,
+        updater=updater,
+        expected_epic_issue_number=layout.epic,
+    )
+
+
 def _issue_for_worker(state: Mapping[str, Any], worker: str) -> int:
     for key, mapping in state.get("issue_mappings", {}).items():
         if isinstance(mapping, Mapping) and mapping.get("worker") == worker:
@@ -218,10 +253,7 @@ def create_worker(
     if not _BRANCH.match(branch) or ".." in branch:
         raise LaunchRefused(f"invalid branch {branch!r}")
     checkout = layout.checkout(worker)
-    state = _load_state(layout)
-    for key, mapping in state.get("issue_mappings", {}).items():
-        if isinstance(mapping, Mapping) and mapping.get("worker") == worker and key != str(issue):
-            raise LaunchRefused(f"worker {worker!r} already owns issue #{key}")
+    _reserve_worker(layout, issue, worker, state="creating")
     if not checkout.exists():
         checkout.parent.mkdir(parents=True, exist_ok=True)
         _run(runner, ["git", "clone", "--quiet", "--no-hardlinks", str(layout.source), str(checkout)])
@@ -229,10 +261,10 @@ def create_worker(
         start = f"origin/{branch}" if exists.returncode == 0 else f"origin/{base}"
         _run(runner, ["git", "-C", str(checkout), "checkout", "--quiet", "-B", branch, start])
     layout.home(worker).mkdir(parents=True, exist_ok=True)
-    _record_worker(
+    _reserve_worker(
         layout,
         issue,
-        worker=worker,
+        worker,
         branch=branch,
         checkout=str(checkout),
         state="created",
@@ -268,19 +300,26 @@ def _validate_env_file(env_file: Path | None, layout: Layout) -> Path | None:
 _FORBIDDEN_SOURCES = ("/var/run/docker.sock", "/run/docker.sock", "/run/containerd", "/var/lib/docker", "/proc", "/sys", "/etc", "/root")
 
 
-def validate_mounts(layout: Layout, worker: str, mounts: Sequence[tuple[str, str]]) -> None:
+def validate_mounts(layout: Layout, worker: str, mounts: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
     """Allow only this worker's own directories; refuse everything else."""
 
-    own = layout.worker_dir(worker)
-    for source, _target in mounts:
-        src = Path(source).expanduser()
-        text = str(src)
+    own = layout.worker_dir(worker).resolve(strict=False)
+    resolved: list[tuple[str, str]] = []
+    for source, target in mounts:
+        raw = Path(source).expanduser()
+        if raw.is_symlink():
+            raise LaunchRefused(f"symlink mount source refused: {raw}")
+        text = str(raw.resolve(strict=False))
+        if not _MOUNT_PATH.match(text) or not _MOUNT_PATH.match(target):
+            raise LaunchRefused("mount source/target contains characters outside the safe path set")
         if any(text == f or text.startswith(f + "/") for f in _FORBIDDEN_SOURCES):
             raise LaunchRefused(f"forbidden mount source {text}")
-        if not _is_within(src, own):
+        if not _is_within(Path(text), own):
             raise LaunchRefused(f"mount outside worker {worker!r} workspace: {text}")
-        if src.is_symlink():
-            raise LaunchRefused(f"symlink mount source refused: {text}")
+        if os.path.normpath(target) != target:
+            raise LaunchRefused(f"mount target must be a normalized absolute path: {target}")
+        resolved.append((text, target))
+    return resolved
 
 
 def build_launch_argv(
@@ -299,9 +338,15 @@ def build_launch_argv(
     home = layout.home(worker)
     if not checkout.is_dir():
         raise LaunchRefused(f"worker {worker!r} has no checkout; create it first")
-    mounts = [(str(checkout), CONTAINER_WORKSPACE), (str(home), CONTAINER_HOME), *extra_mounts]
-    validate_mounts(layout, worker, mounts)
-    if network in ("host",) or network.startswith("container:"):
+    for _source, target in extra_mounts:
+        if not str(target).startswith(EXTRA_MOUNT_PREFIX):
+            raise LaunchRefused(f"extra mount target must be under {EXTRA_MOUNT_PREFIX}: {target}")
+    mounts = validate_mounts(
+        layout, worker, [(str(checkout), CONTAINER_WORKSPACE), (str(home), CONTAINER_HOME), *extra_mounts]
+    )
+    if not _IMAGE.match(image):
+        raise LaunchRefused(f"invalid image reference {image!r}")
+    if not _NETWORK.match(network) or network == "host":
         raise LaunchRefused(f"network mode {network!r} refused")
     argv = [
         "docker", "run", "--detach",
@@ -398,18 +443,45 @@ def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = su
     return work
 
 
-def inspect_checkout(checkout: Path, *, runner: Runner = subprocess.run) -> dict[str, Any]:
-    """Classify a checkout's unique work (never mutates it)."""
+def _contained_git(checkout: Path, args: Sequence[str], *, runner: Runner, image: str) -> subprocess.CompletedProcess:
+    """Run git against a worker checkout inside a throwaway container.
+
+    The checkout's ``.git/config`` and ``.gitattributes`` are worker-controlled (fsmonitor,
+    filter drivers, hooks). Running git on the host would execute that config as the
+    controller user, so inspection runs contained: read-only mount, no network, no
+    capabilities, no writes, uid 1000.
+    """
+
+    source = str(checkout.resolve(strict=True))
+    if not _MOUNT_PATH.match(source):
+        raise EpicWorkspaceError("checkout path contains unsafe characters")
+    argv = [
+        "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges", "--user", WORKER_UID_GID, "--pids-limit", "64",
+        "--memory", "256m", "--tmpfs", "/tmp:rw,nosuid,size=16m", "--env", "HOME=/tmp",
+        "--env", "GIT_CONFIG_NOSYSTEM=1", "--env", "GIT_CONFIG_GLOBAL=/dev/null",
+        "--mount", f"type=bind,source={source},target={INSPECT_TARGET},readonly",
+        image,
+        "git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+        "-c", f"safe.directory={INSPECT_TARGET}", "-C", INSPECT_TARGET, *args,
+    ]
+    return runner(argv, capture_output=True, text=True, check=False)
+
+
+def inspect_checkout(checkout: Path, *, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
+    """Classify a checkout's unique work without executing worker-controlled config on the host."""
 
     if not checkout.is_dir():
         return {"present": False}
-    head = _run(runner, ["git", "-C", str(checkout), "rev-parse", "HEAD"], check=False)
-    porcelain = _run(
-        runner,
-        ["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=all", "--ignored=matching"],
-        check=False,
-    )
-    unpublished = _run(runner, ["git", "-C", str(checkout), "rev-list", "--count", "HEAD", "--not", "--remotes"], check=False)
+    try:
+        _assert_engine(runner)
+        head = _contained_git(checkout, ["rev-parse", "HEAD"], runner=runner, image=image)
+        porcelain = _contained_git(
+            checkout, ["status", "--porcelain", "--untracked-files=all", "--ignored=matching"], runner=runner, image=image
+        )
+        unpublished = _contained_git(checkout, ["rev-list", "--count", "HEAD", "--not", "--remotes"], runner=runner, image=image)
+    except EpicWorkspaceError:
+        return {"present": True, "readable": False, "unique_work": True}
     lines = [line for line in (porcelain.stdout or "").splitlines() if line.strip()]
     changed = [line[3:] for line in lines if not line.startswith("!! ")]
     # Ignored files (e.g. ``*.txt``, ``.codex-tmp/``) may still be unique work; report them

@@ -7,7 +7,6 @@ import os
 import subprocess
 from pathlib import Path
 
-import pytest
 
 from app.builderops import epic_workspace as ew
 
@@ -19,10 +18,13 @@ class FakeEngine:
         self.available = available
         self.calls: list[list[str]] = []
         self.containers: dict[str, str] = {}
+        self.host_git: list[list[str]] = []
+        self.inspections: list[list[str]] = []
 
     def __call__(self, argv, **kwargs):
         argv = list(argv)
         if argv[0] == "git":
+            self.host_git.append(argv)
             return subprocess.run(argv, **kwargs)
         self.calls.append(argv)
         if not self.available:
@@ -34,6 +36,20 @@ class FakeEngine:
             worker = next(a[len(prefix):] for a in argv if a.startswith(prefix))
             state = self.containers.get(worker)
             return subprocess.CompletedProcess(argv, 0, f"{state}\n" if state else "", "")
+        if argv[1] == "run" and "--rm" in argv:
+            # Contained inspection: emulate by running the same git argv against the mount source.
+            self.inspections.append(argv)
+            mount = next(argv[i + 1] for i, a in enumerate(argv) if a == "--mount")
+            fields = dict(f.split("=", 1) for f in mount.split(",") if "=" in f)
+            assert fields["target"] == ew.INSPECT_TARGET and mount.endswith(",readonly")
+            assert argv[argv.index("--network") + 1] == "none"
+            git = argv[argv.index("git"):]
+            git = [fields["source"] if a == ew.INSPECT_TARGET else a for a in git]
+            i = git.index(f"safe.directory={ew.INSPECT_TARGET}") if f"safe.directory={ew.INSPECT_TARGET}" in git else None
+            if i is None:
+                i = next(k for k, a in enumerate(git) if a.startswith("safe.directory="))
+            del git[i - 1:i + 1]
+            return subprocess.run(git, capture_output=True, text=True, check=False)
         if argv[1] == "run":
             worker = argv[argv.index("--label", argv.index("--label") + 1) + 1].split("=", 1)[1]
             self.containers[worker] = "running"
@@ -101,6 +117,13 @@ def test_production_launch_enforces_workspace_and_resource_boundaries(tmp_path, 
         ["--mount", "/var/run/docker.sock:/var/run/docker.sock"],
         ["--mount", f"{Path.home()}:/host-home"],
         ["--mount", f"{layout.checkout('w-a')}:/other"],
+        # Repeated-key CSV injection through the target or a comma in the source.
+        ["--mount", f"{layout.worker_dir('w-b')}:/mnt/x,source=/var/run/docker.sock"],
+        ["--mount", f"{layout.worker_dir('w-b')}/a,source=:/mnt/x"],
+        ["--mount", f"{layout.worker_dir('w-b')}:/workspace"],
+        ["--mount", f"{layout.worker_dir('w-b')}:/mnt/../etc"],
+        ["--image=--privileged -- -v /:/host alpine"],
+        ["--image", "alpine -v /:/host"],
         ["--mount", f"{layout.source}:/source"],
         ["--mount", f"{ew.Layout(root.resolve(), 9001).checkout('w-a')}:/fixture"],
         ["--memory", "unbounded"],
@@ -133,4 +156,33 @@ def test_production_launch_enforces_workspace_and_resource_boundaries(tmp_path, 
     # Workers have separate clones: an edit in one is invisible to the other.
     (layout.checkout("w-a") / "only-a.txt").write_text("a\n")
     assert not (layout.checkout("w-b") / "only-a.txt").exists()
-    assert ew.inspect_checkout(layout.checkout("w-b"))["unique_work"] is False
+    assert ew.inspect_checkout(layout.checkout("w-b"), runner=engine)["unique_work"] is False
+
+
+def test_issue_cannot_be_reassigned_and_worker_git_config_never_runs_on_host(tmp_path, capsys):
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = FakeEngine()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    assert _cli(root, 6615, engine, "worker-create", "--worker", "w-a", "--issue", "6617", "--branch", "b/a", "--next-action", "x") == 0
+    capsys.readouterr()
+    # A second worker cannot take over an issue that already has one.
+    assert _cli(root, 6615, engine, "worker-create", "--worker", "w-b", "--issue", "6617", "--branch", "b/b", "--next-action", "x") == 2
+    assert "already belongs to worker 'w-a'" in capsys.readouterr().err
+    layout = ew.Layout(root.resolve(), 6615)
+    assert not layout.checkout("w-b").exists()
+    assert ew._load_state(layout)["issue_mappings"]["6617"]["worker"] == "w-a"
+
+    # Worker-controlled git config must not be executed by the controller on the host.
+    marker = tmp_path / "fsmonitor-ran"
+    hook = tmp_path / "fsmonitor.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    hook.chmod(0o755)
+    subprocess.run(["git", "-C", str(layout.checkout("w-a")), "config", "core.fsmonitor", str(hook)], check=True)
+    engine.host_git.clear()
+    assert _cli(root, 6615, engine, "worker-start", "--worker", "w-a", "--", "true") == 0
+    assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "r") == 0
+    assert _cli(root, 6615, engine, "status") == 0
+    assert engine.host_git == []
+    assert engine.inspections, "inspection must run in a contained, read-only, no-network container"
+    assert not marker.exists()
