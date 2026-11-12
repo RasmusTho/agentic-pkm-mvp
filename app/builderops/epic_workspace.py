@@ -866,6 +866,7 @@ _FAILURE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # Subscription quota phrasing from Claude Code and Codex only; no bare "429" or "rate limit".
     ("quota_exhausted", re.compile(
         r"usage limit (reached|has been reached)|claude ai usage limit|you'?ve hit your usage limit|"
+        r"you['’]ve hit your (weekly|session) limit\b|"
         r"usage_limit_reached|(5|five)-hour limit|weekly limit reached|out of (extra )?usage", re.I)),
     ("context_exhausted", re.compile(r"context (length|window)|prompt is too long|maximum context|too many tokens", re.I)),
     ("transient_network", re.compile(
@@ -896,10 +897,11 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
     port, key, cid = int(mapping["port"]), _session_key(layout, worker), record["id"]
     try:
         code, info = http("GET", port, key, f"/conversations/{cid}", None, 10.0)
-        ecode, events = http("GET", port, key, f"/conversations/{cid}/events/search?limit={int(limit)}", None, 10.0)
+        ecode, events = http("GET", port, key, f"/conversations/{cid}/events/search?limit={int(limit)}&sort_order=TIMESTAMP_DESC", None, 10.0)
     except OSError:
         return {"issue": issue, "worker": worker, "conversation": dict(record), "reachable": False}
-    items = events.get("items", []) if ecode == 200 and isinstance(events, Mapping) else []
+    # The server returns the newest page first; retain chronological order within that page.
+    items = list(reversed(events.get("items", []))) if ecode == 200 and isinstance(events, Mapping) else []
     errors = [
         f"{e.get('code') or ''} {e.get('detail') or e.get('error') or ''}".strip()
         for e in items if isinstance(e, Mapping) and e.get("kind") == "ConversationErrorEvent"

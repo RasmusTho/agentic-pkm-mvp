@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from urllib.parse import parse_qs, urlsplit
 
 from app.builderops import epic_workspace as ew
 from tests.builderops.test_epic_workspace_isolation import FakeEngine, _cli, _seed_repo
@@ -33,7 +34,9 @@ class FakeAgentServer:
                 raise OSError("response lost")
             return 201, self.conversations[cid]
         if method == "GET" and "/events/search" in path:
-            return 200, {"items": self.events}
+            params = parse_qs(urlsplit(path).query)
+            events = self.events[::-1] if params.get("sort_order") == ["TIMESTAMP_DESC"] else self.events
+            return 200, {"items": events[:int(params.get("limit", ["100"])[0])]}
         if method == "GET" and path.startswith("/conversations/"):
             cid = path.rsplit("/", 1)[1]
             return (200, self.conversations[cid]) if cid in self.conversations else (404, None)
@@ -148,6 +151,9 @@ def test_failure_classes_are_distinct_and_status_reports_them(tmp_path, capsys):
         "ACPAuthRequired [-32000] Authentication required": "authentication",
         "Claude AI usage limit reached|1731456000": "quota_exhausted",
         "You've hit your usage limit. Try again later.": "quota_exhausted",
+        'ACPPromptError [-32603] Internal error: You\'ve hit your weekly limit · resets 2am (UTC): {"errorKind": "rate_limit"}': "quota_exhausted",
+        'ACP error: [-32603] Internal error: You\'ve hit your session limit · resets 9pm (UTC): {"errorKind": "rate_limit"}': "quota_exhausted",
+        "YOU’VE HIT YOUR WEEKLY LIMIT": "quota_exhausted",
         "429 Too Many Requests": "task_failure",
         "gh: API rate limit exceeded": "task_failure",
         'File "x.py", line 429': "task_failure",
@@ -177,3 +183,50 @@ def test_failure_classes_are_distinct_and_status_reports_them(tmp_path, capsys):
     assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
     report = json.loads(capsys.readouterr().out)
     assert report["failure_class"] == "authentication" and report["execution_status"] == "running"
+
+    for detail in (
+        'Internal error: You\'ve hit your weekly limit · resets 2am (UTC): {"errorKind": "rate_limit"}',
+        'Internal error: You\'ve hit your session limit · resets 9pm (UTC): {"errorKind": "rate_limit"}',
+    ):
+        server.events = [{"kind": "ConversationErrorEvent", "code": "ACPPromptError", "detail": detail}]
+        assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
+        assert json.loads(capsys.readouterr().out)["failure_class"] == "quota_exhausted"
+
+        server.events = [
+            {"kind": "AgentErrorEvent", "error": detail},
+            {"kind": "MessageEvent", "source": "agent", "detail": detail},
+        ]
+        assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
+        assert json.loads(capsys.readouterr().out)["failure_class"] is None
+
+
+def test_status_uses_latest_page_and_newest_error_and_message(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
+    prompt = tmp_path / "p.md"
+    prompt.write_text("x")
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
+    quota = "You've hit your weekly limit · resets 2am (UTC)"
+    server.events = (
+        [{"kind": "MessageEvent", "source": "user", "detail": "old"} for _ in range(55)]
+        + [
+            {"kind": "ConversationErrorEvent", "detail": "Authentication required"},
+            {"kind": "MessageEvent", "source": "agent", "detail": "older reply"},
+            {"kind": "ConversationErrorEvent", "detail": quota},
+            {"kind": "MessageEvent", "source": "agent", "detail": "newest reply"},
+            {"kind": "AgentErrorEvent", "error": "Authentication required"},
+        ]
+    )
+    capsys.readouterr()
+    assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["failure_class"] == "quota_exhausted"
+    assert report["last_agent_message"]["detail"] == "newest reply"
+    assert len(report["event_kinds"]) == 50
+
+    server.events = server.events[:55] + [
+        {"kind": "AgentErrorEvent", "error": quota},
+        {"kind": "MessageEvent", "source": "agent", "detail": quota},
+    ]
+    assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
+    assert json.loads(capsys.readouterr().out)["failure_class"] is None

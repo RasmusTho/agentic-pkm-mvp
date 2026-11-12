@@ -315,9 +315,14 @@ claude-code|codex [--model M]` creates the conversation through upstream `agent_
 (`acp_server`, `acp_model`), tagged with epic, Issue and worker. The default is Claude Code with
 `claude-sonnet-5-5`; Codex accepts only `gpt-6.1-terra`, and Astra is refused. The conversation id
 is recorded before the request. A lost response is reconciled by reading that id and is never
-retried as a create. `conversation-status` reads upstream state and events and classifies the last
-error as `quota_exhausted`, `authentication`, `context_exhausted`, `transient_network` or
-`task_failure`. Only quota exhaustion may trigger the engine handoff (#6618). `worker-start` runs a
+retried as a create. In this source candidate, `conversation-status` reads the newest bounded
+upstream event page (default 50) and classifies only the latest `ConversationErrorEvent` as
+`quota_exhausted`, `authentication`, `context_exhausted`, `transient_network` or `task_failure`.
+The classifier recognizes the observed native session and weekly quota phrases; tool and message
+text cannot trigger a handoff. Upstream 1.60.1 already supports the newest-first event ordering.
+Only quota exhaustion may trigger the engine handoff (#6618). The running pinned controller has
+not been hot-upgraded with this correction, and automatic handoff remains unqualified.
+`worker-start` runs a
 plain container and is recorded as `native-exception`: it is for bootstrap, diagnostics and recovery
 only and never counts as OpenHands-delivered work.
 
