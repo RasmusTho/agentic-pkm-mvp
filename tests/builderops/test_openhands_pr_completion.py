@@ -118,7 +118,8 @@ def test_stable_identity_and_stale_evidence(tmp_path):
     setup_run(tmp_path)
     pr = observation()
     identity = work_identity(pr)
-    pr["reviews"] = [{"result": "pass"}]
+    pr["reviews"] = [{"user": {"login": "reviewer"}, "state": "APPROVED",
+                      "submitted_at": "2026-01-01T00:00:00Z"}]
     pr["verification"] = {"result": "pass"}
     assert work_identity(pr) == identity
     for field in ("ci", "verify_evidence", "closure_authorized"):
@@ -163,3 +164,43 @@ def test_concurrent_callers_share_reservation(tmp_path):
         results = list(pool.map(lambda _: run(tmp_path, [observation()])[0], range(2)))
     assert sorted(r["action"] for r in results) == ["reconcile", "verification-and-closure"]
     assert len(records(tmp_path)) == 1
+
+
+def test_raw_reviews_gate_conflicting_receipt_and_handle_review_states(tmp_path):
+    setup_run(tmp_path)
+    def review(state, day, user="reviewer"):
+        return {"user": {"login": user}, "state": state,
+                "submitted_at": f"2026-01-{day:02d}T00:00:00Z"}
+
+    blocked = observation(1)
+    blocked["reviews"] = [review("CHANGES_REQUESTED", 1)]
+    approved = observation(2)
+    approved["reviews"] = [review("CHANGES_REQUESTED", 1), review("APPROVED", 2)]
+    dismissed = observation(3)
+    dismissed["reviews"] = [review("DISMISSED", 1)]
+    malformed = observation(4)
+    malformed["reviews"] = [review("UNKNOWN", 1)]
+    commented = observation(5)
+    commented["reviews"] = [review("CHANGES_REQUESTED", 1), review("COMMENTED", 2)]
+    results = run(tmp_path, [blocked, approved, dismissed, malformed, commented])
+    assert [r["action"] for r in results] == ["wait", "verification-and-closure",
+        "verification-and-closure", "wait", "wait"]
+    assert results[0]["reason"] == "review repair belongs to current owner"
+    assert results[3]["reason"] == "invalid PR observation"
+    assert work_identity(blocked) == blocked["independent_review_identity"]
+
+
+def test_recursive_observation_does_not_stop_next_pr(tmp_path, monkeypatch):
+    setup_run(tmp_path)
+    bad = observation(1)
+    import json.encoder
+    import sys
+    monkeypatch.setattr(json.encoder, "c_make_encoder", None)
+    nested = []
+    for _ in range(sys.getrecursionlimit() + 100):
+        nested = [nested]
+    bad["verification"] = {"nested": nested}
+    results = run(tmp_path, [bad, observation(2)])
+    assert [r["action"] for r in results] == ["wait", "verification-and-closure"]
+    assert results[0]["reason"] == "invalid PR observation"
+    assert results[1]["operation_id"]

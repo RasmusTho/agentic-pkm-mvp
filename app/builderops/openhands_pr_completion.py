@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, TypedDict
 
@@ -46,6 +47,38 @@ def _bound(value: Any, binding: str, *, key: str = "identity") -> bool:
             and isinstance(value.get("ref"), str) and bool(value["ref"].strip()))
 
 
+def _blocking_reviews(reviews: list[Any]) -> bool:
+    """Interpret GitHub REST reviews; latest decisive review per user wins."""
+    latest: dict[str, tuple[datetime, str]] = {}
+    seen: set[tuple[str, datetime]] = set()
+    for review in reviews:
+        if not isinstance(review, dict) or not isinstance(review.get("user"), dict):
+            raise ValueError("invalid review")
+        login = review["user"].get("login")
+        state = review.get("state")
+        if not isinstance(login, str) or not login.strip() or state not in (
+            "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"
+        ):
+            raise ValueError("invalid review")
+        if state == "PENDING" and review.get("submitted_at") is None:
+            continue
+        submitted = review.get("submitted_at")
+        if not isinstance(submitted, str):
+            raise ValueError("invalid review timestamp")
+        timestamp = datetime.fromisoformat(submitted.replace("Z", "+00:00"))
+        if timestamp.utcoffset() is None:
+            raise ValueError("invalid review timestamp")
+        key = (login.casefold(), timestamp)
+        if key in seen:
+            raise ValueError("ambiguous review ordering")
+        seen.add(key)
+        if state in ("APPROVED", "CHANGES_REQUESTED"):
+            previous = latest.get(key[0])
+            if previous is None or timestamp > previous[0]:
+                latest[key[0]] = (timestamp, state)
+    return any(state == "CHANGES_REQUESTED" for _, state in latest.values())
+
+
 def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
            expected_run_id: str, expected_root: Path | str) -> list[Decision]:
     """Return one decision per open PR, atomically recording waits and requests.
@@ -55,6 +88,10 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
     trusted receipts with ``completed`` or ``no_effect`` status; missing or unknown outcomes remain unresolved.
     The caller must bind successful review evidence to ``work_identity`` and
     supply repository acceptance Verify evidence and current CI independently.
+    ``reviews`` contains GitHub REST review records with user.login, state and
+    submitted_at. The latest APPROVED or CHANGES_REQUESTED per user is decisive;
+    COMMENTED, PENDING and DISMISSED records are not decisive. A dismissed
+    review must itself be supplied as DISMISSED. Malformed records fail closed.
     A dispatch is a request to the named external boundary, never an execution.
     """
     if run_id != expected_run_id or Path(root).resolve() != Path(expected_root).resolve():
@@ -85,8 +122,9 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
             route = pr["route"]
             if route not in ("native", "executor", "fenced"):
                 raise ValueError("unknown delivery route")
+            blocking_review = _blocking_reviews(pr["reviews"])
             _digest(pr)  # validate the complete observation before any reservation
-        except (AttributeError, KeyError, TypeError, ValueError):
+        except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
             number = pr.get("number", 0) if isinstance(pr, Mapping) else 0
             decisions.append({"number": number if type(number) is int else 0, "identity": "",
                               "action": "wait", "reason": "invalid PR observation",
@@ -106,6 +144,8 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
             result["reason"] = "executor or fenced route requires owning workflow"
         elif pr["effect_outcome"] != "none":
             result["reason"] = "existing or unknown effect requires reconciliation"
+        elif blocking_review:
+            result["reason"] = "review repair belongs to current owner"
         elif pr["review_outcome"] == "unknown":
             result["reason"] = "review outcome unknown"
         elif pr["review_outcome"] == "changes_requested":
