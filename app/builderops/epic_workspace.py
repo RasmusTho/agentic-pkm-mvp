@@ -866,6 +866,7 @@ _FAILURE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # Subscription quota phrasing from Claude Code and Codex only; no bare "429" or "rate limit".
     ("quota_exhausted", re.compile(
         r"usage limit (reached|has been reached)|claude ai usage limit|you'?ve hit your usage limit|"
+        r"you['’]ve hit your (weekly|session) limit\b|"
         r"usage_limit_reached|(5|five)-hour limit|weekly limit reached|out of (extra )?usage", re.I)),
     ("context_exhausted", re.compile(r"context (length|window)|prompt is too long|maximum context|too many tokens", re.I)),
     ("transient_network", re.compile(

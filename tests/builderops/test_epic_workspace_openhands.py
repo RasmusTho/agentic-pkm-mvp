@@ -148,6 +148,9 @@ def test_failure_classes_are_distinct_and_status_reports_them(tmp_path, capsys):
         "ACPAuthRequired [-32000] Authentication required": "authentication",
         "Claude AI usage limit reached|1731456000": "quota_exhausted",
         "You've hit your usage limit. Try again later.": "quota_exhausted",
+        'ACPPromptError [-32603] Internal error: You\'ve hit your weekly limit · resets 2am (UTC): {"errorKind": "rate_limit"}': "quota_exhausted",
+        'ACP error: [-32603] Internal error: You\'ve hit your session limit · resets 9pm (UTC): {"errorKind": "rate_limit"}': "quota_exhausted",
+        "YOU’VE HIT YOUR WEEKLY LIMIT": "quota_exhausted",
         "429 Too Many Requests": "task_failure",
         "gh: API rate limit exceeded": "task_failure",
         'File "x.py", line 429': "task_failure",
@@ -177,3 +180,18 @@ def test_failure_classes_are_distinct_and_status_reports_them(tmp_path, capsys):
     assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
     report = json.loads(capsys.readouterr().out)
     assert report["failure_class"] == "authentication" and report["execution_status"] == "running"
+
+    for detail in (
+        'Internal error: You\'ve hit your weekly limit · resets 2am (UTC): {"errorKind": "rate_limit"}',
+        'Internal error: You\'ve hit your session limit · resets 9pm (UTC): {"errorKind": "rate_limit"}',
+    ):
+        server.events = [{"kind": "ConversationErrorEvent", "code": "ACPPromptError", "detail": detail}]
+        assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
+        assert json.loads(capsys.readouterr().out)["failure_class"] == "quota_exhausted"
+
+        server.events = [
+            {"kind": "AgentErrorEvent", "error": detail},
+            {"kind": "MessageEvent", "source": "agent", "detail": detail},
+        ]
+        assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
+        assert json.loads(capsys.readouterr().out)["failure_class"] is None
