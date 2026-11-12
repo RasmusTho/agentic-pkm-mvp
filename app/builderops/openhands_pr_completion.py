@@ -33,22 +33,32 @@ def work_identity(pr: Mapping[str, Any]) -> str:
     """Hash the current repository, code and relevant observed contract state."""
     contract = {key: pr[key] for key in (
         "repository", "number", "head_sha", "body", "draft", "labels",
-        "base_ref", "base_sha", "governing_issue", "reviews", "verification",
+        "base_ref", "base_sha", "governing_issue", "state", "head_repository",
+        "restrictions", "route",
     )}
     contract["labels"] = sorted(contract["labels"])
     return _digest(contract)
 
 
-def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str) -> list[Decision]:
+def _bound(value: Any, binding: str, *, key: str = "identity") -> bool:
+    return (isinstance(value, dict) and value.get("status") == "pass"
+            and value.get("trusted") is True and value.get(key) == binding
+            and isinstance(value.get("ref"), str) and bool(value["ref"].strip()))
+
+
+def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
+           expected_run_id: str, expected_root: Path | str) -> list[Decision]:
     """Return one decision per open PR, atomically recording waits and requests.
 
     The caller must supply all fields below, including explicit evidence states.
     ``effect_outcomes`` maps prior operation IDs to independently reconciled
-    ``completed`` or ``no_effect``; missing or unknown outcomes remain unresolved.
+    trusted receipts with ``completed`` or ``no_effect`` status; missing or unknown outcomes remain unresolved.
     The caller must bind successful review evidence to ``work_identity`` and
     supply repository acceptance Verify evidence and current CI independently.
     A dispatch is a request to the named external boundary, never an execution.
     """
+    if run_id != expected_run_id or Path(root).resolve() != Path(expected_root).resolve():
+        raise ValueError("run does not match configured reservation authority")
     required = {"repository", "number", "state", "head_repository", "head_sha", "body",
                 "draft", "labels", "base_ref", "base_sha", "governing_issue", "reviews",
                 "verification", "restrictions", "owner", "route", "effect_outcome", "ci",
@@ -56,24 +66,32 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str) -> li
                 "closure_authorized", "effect_outcomes"}
     decisions: list[Decision] = []
     for pr in prs:
-        if not required <= pr.keys():
-            raise ValueError("incomplete PR observation: " + ", ".join(sorted(required - pr.keys())))
-        if pr["repository"] != REPOSITORY or type(pr["number"]) is not int or pr["number"] <= 0:
-            raise ValueError("invalid repository or PR number")
-        if pr["state"] != "open":
+        try:
+            if not required <= pr.keys():
+                raise ValueError("incomplete PR observation: " + ", ".join(sorted(required - pr.keys())))
+            if pr["repository"] != REPOSITORY or type(pr["number"]) is not int or pr["number"] <= 0:
+                raise ValueError("invalid repository or PR number")
+            if pr["state"] != "open":
+                continue
+            if (not isinstance(pr["labels"], list) or not all(isinstance(x, str) for x in pr["labels"])
+                    or not isinstance(pr["governing_issue"], dict)
+                    or not {"body", "state"} <= pr["governing_issue"].keys()
+                    or not isinstance(pr["restrictions"], list) or not isinstance(pr["effect_outcomes"], dict)
+                    or not isinstance(pr["reviews"], list) or not isinstance(pr["verification"], dict)
+                    or type(pr["draft"]) is not bool or not isinstance(pr["body"], str)
+                    or not all(isinstance(pr[k], str) and pr[k] for k in ("head_sha", "base_ref", "base_sha"))):
+                raise ValueError("invalid PR contract observation")
+            identity = work_identity(pr)
+            route = pr["route"]
+            if route not in ("native", "executor", "fenced"):
+                raise ValueError("unknown delivery route")
+            _digest(pr)  # validate the complete observation before any reservation
+        except (AttributeError, KeyError, TypeError, ValueError):
+            number = pr.get("number", 0) if isinstance(pr, Mapping) else 0
+            decisions.append({"number": number if type(number) is int else 0, "identity": "",
+                              "action": "wait", "reason": "invalid PR observation",
+                              "operation_id": None, "route": ""})
             continue
-        if (not isinstance(pr["labels"], list) or not all(isinstance(x, str) for x in pr["labels"])
-                or not isinstance(pr["governing_issue"], dict)
-                or not {"body", "state"} <= pr["governing_issue"].keys()
-                or not isinstance(pr["restrictions"], list) or not isinstance(pr["effect_outcomes"], dict)
-                or not isinstance(pr["reviews"], list) or not isinstance(pr["verification"], dict)
-                or type(pr["draft"]) is not bool or not isinstance(pr["body"], str)
-                or not all(isinstance(pr[k], str) and pr[k] for k in ("head_sha", "base_ref", "base_sha"))):
-            raise ValueError("invalid PR contract observation")
-        identity = work_identity(pr)
-        route = pr["route"]
-        if route not in ("native", "executor", "fenced"):
-            raise ValueError("unknown delivery route")
         result: Decision = {"number": pr["number"], "identity": identity, "action": "wait",
                             "reason": "", "operation_id": None, "route": route}
         labels = {label.strip().lower() for label in pr["labels"]}
@@ -102,11 +120,11 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str) -> li
             result["reason"] = "active or unknown writable owner"
         elif pr["verify_evidence"] == "missing":
             request = "repository-verification"
-        elif pr["verify_evidence"] != "pass":
+        elif not _bound(pr["verify_evidence"], identity):
             result["reason"] = "repository acceptance Verify evidence failed or unknown"
-        elif pr["ci"] != "success":
+        elif not _bound(pr["ci"], pr["head_sha"], key="head_sha"):
             result["reason"] = "CI pending, failed, or unknown"
-        elif pr["closure_authorized"] is not True:
+        elif not _bound(pr["closure_authorized"], identity):
             result["reason"] = "verification-and-closure authorization missing"
         else:
             request = "verification-and-closure"
@@ -119,21 +137,35 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str) -> li
                           and r.get("operation_id")]
             for op in operations:
                 outcome = pr["effect_outcomes"].get(op["operation_id"])
-                if outcome in ("completed", "no_effect"):
-                    op["outcome"] = outcome
-            if request:
-                operation_id = "pr-completion-" + _digest({"identity": identity, "action": request, "route": route})
-                unresolved = next((op for op in operations if op.get("outcome") not in ("completed", "no_effect")), None)
-                previous = next((op for op in operations if op["operation_id"] == operation_id), None)
-                if unresolved or previous:
-                    op = unresolved or previous
-                    result.update(action="reconcile", operation_id=op["operation_id"],
-                                  reason="reconcile existing reservation before replacement")
+                if (op.get("outcome") not in ("completed", "no_effect")
+                        and isinstance(outcome, dict) and outcome.get("status") in ("completed", "no_effect")
+                        and outcome.get("trusted") is True and outcome.get("operation_id") == op["operation_id"]
+                        and isinstance(outcome.get("ref"), str) and outcome["ref"].strip()):
+                    op["outcome"] = outcome["status"]
+            unresolved = next((op for op in operations if op.get("outcome") not in ("completed", "no_effect")), None)
+            if unresolved:
+                result["action"] = "reconcile"
+                result["operation_id"] = unresolved["operation_id"]
+                result["reason"] = "reconcile existing reservation before replacement"
+            elif request:
+                previous = [op for op in operations if op.get("identity") == identity and op.get("request") == request and op.get("route") == route]
+                last = previous[-1] if previous else None
+                retry = pr.get("retry_authorization")
+                if last is not None and last.get("outcome") == "completed" and not (
+                    isinstance(retry, dict) and _bound(retry, identity) and retry.get("operation_id") == last["operation_id"]
+                ):
+                    result["action"] = "reconcile"
+                    result["operation_id"] = last["operation_id"]
+                    result["reason"] = "completed request lacks results or authorized retry"
                 else:
+                    attempt = len(previous) + 1
+                    operation_id = "pr-completion-" + _digest({"identity": identity, "action": request, "route": route, "attempt": attempt})
                     records.append({"kind": "openhands_pr_completion", "operation_id": operation_id,
                                     "repository": REPOSITORY, "number": pr["number"], "identity": identity,
-                                    "route": route, "request": request, "outcome": "unknown"})
-                    result.update(action=request, operation_id=operation_id, reason="request reserved")
+                                    "route": route, "request": request, "attempt": attempt, "outcome": "unknown"})
+                    result["action"] = request
+                    result["operation_id"] = operation_id
+                    result["reason"] = "request reserved"
             if result["action"] == "wait":
                 wait = {"kind": "openhands_pr_wait", "repository": REPOSITORY, "number": pr["number"],
                         "identity": identity, "route": route, "reason": result["reason"]}
