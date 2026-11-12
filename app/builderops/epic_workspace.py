@@ -42,6 +42,7 @@ CONTAINER_WORKSPACE = "/workspace"
 CONTAINER_HOME = "/home/worker"
 WORKER_UID_GID = "1000:1000"
 DEFAULT_IMAGE = "epic-worker:baseline"
+DEFAULT_NETWORK = "epicws"  # owned user-defined bridge; host/container modes are refused
 
 _WORKER_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
@@ -291,7 +292,7 @@ def build_launch_argv(
     budget: Budget,
     env_file: Path | None = None,
     extra_mounts: Sequence[tuple[str, str]] = (),
-    network: str = "bridge",
+    network: str = DEFAULT_NETWORK,
 ) -> list[str]:
     budget = budget.validated()
     checkout = layout.checkout(worker)
@@ -340,6 +341,7 @@ def start_worker(
     extra_mounts: Sequence[tuple[str, str]] = (),
     engine: str = "claude",
     model: str | None = None,
+    network: str = DEFAULT_NETWORK,
     runner: Runner = subprocess.run,
 ) -> str:
     """Start one replaceable worker container. Refuses before any side effect."""
@@ -347,7 +349,7 @@ def start_worker(
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     env_path = _validate_env_file(env_file, layout)
-    argv = build_launch_argv(layout, worker, image=image, command=command, budget=budget, env_file=env_path, extra_mounts=extra_mounts)
+    argv = build_launch_argv(layout, worker, image=image, command=command, budget=budget, env_file=env_path, extra_mounts=extra_mounts, network=network)
     _assert_engine(runner)
     existing = _container_state(layout, worker, runner)
     if existing is not None:
@@ -364,6 +366,7 @@ def start_worker(
         engine=engine,
         model=model,
         budget={"cpus": budget.cpus, "memory": budget.memory, "pids": budget.pids},
+        network=network,
         started_at=_now(),
     )
     return container_id
@@ -481,6 +484,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--mount", action="append", default=[], help="extra SOURCE:TARGET (validated; normally refused)")
     s.add_argument("--engine", default="claude")
     s.add_argument("--model")
+    s.add_argument("--network", default=DEFAULT_NETWORK)
     s.add_argument("command", nargs=argparse.REMAINDER)
     t = sub.add_parser("worker-stop")
     t.add_argument("--worker", required=True)
@@ -508,7 +512,7 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = subprocess.run) 
                 layout, args.worker, command=command, image=args.image,
                 budget=Budget(args.cpus, args.memory, args.pids),
                 env_file=Path(args.env_file) if args.env_file else None,
-                extra_mounts=mounts, engine=args.engine, model=args.model, runner=runner,
+                extra_mounts=mounts, engine=args.engine, model=args.model, network=args.network, runner=runner,
             )
             out = {"container_id": cid}
         elif args.cmd == "worker-stop":

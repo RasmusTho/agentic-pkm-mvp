@@ -89,7 +89,7 @@ def test_production_launch_enforces_workspace_and_resource_boundaries(tmp_path, 
         f"type=bind,source={layout.checkout('w-a')},target=/workspace",
         f"type=bind,source={layout.home('w-a')},target=/home/worker",
     ]
-    for flag, value in [("--cpus", "0.75"), ("--memory", "768m"), ("--memory-swap", "768m"), ("--pids-limit", "128"), ("--cap-drop", "ALL"), ("--security-opt", "no-new-privileges"), ("--user", "1000:1000"), ("--network", "bridge")]:
+    for flag, value in [("--cpus", "0.75"), ("--memory", "768m"), ("--memory-swap", "768m"), ("--pids-limit", "128"), ("--cap-drop", "ALL"), ("--security-opt", "no-new-privileges"), ("--user", "1000:1000"), ("--network", "epicws")]:
         assert run[run.index(flag) + 1] == value
     assert "--read-only" in run and "--privileged" not in run
     assert not any("docker.sock" in a for a in run)
@@ -105,6 +105,8 @@ def test_production_launch_enforces_workspace_and_resource_boundaries(tmp_path, 
         ["--mount", f"{ew.Layout(root.resolve(), 9001).checkout('w-a')}:/fixture"],
         ["--memory", "unbounded"],
         ["--pids", "0"],
+        ["--network", "host"],
+        ["--network", "container:other"],
     ]
     for extra in refused:
         before = len(engine.calls)
