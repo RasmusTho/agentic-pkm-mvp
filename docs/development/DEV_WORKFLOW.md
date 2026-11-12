@@ -270,6 +270,55 @@ with the same Issue and roots to inspect or stop Canvas without stopping the bac
 passes the private session-key file path to the launcher; never print or copy its contents into
 logs or PRs.
 
+## Persistent epic workspace on TARS (experimental)
+
+Epic #6615 runs a persistent, per-epic workspace on BOB-1 (VM 102, guest `builder-system`). It is a
+bootstrap baseline (#6616), not a qualified factory. The trusted controller is
+`app/builderops/epic_workspace.py`, installed read-only as a pinned release under
+`~ygg/epic-sandbox/runner/<sha>/` with `current` pointing at the active release. Its only entry
+point is `~ygg/epic-sandbox/bin/epicws`, which fixes the workspace root to
+`~ygg/epic-sandbox/workspaces` and the engine to the default Docker engine. Neither path is mounted
+into a worker. The dedicated BuilderOps engine and its services are not used.
+
+Each epic directory holds a controller-owned bare mirror, one separate clone and home per worker,
+an integration checkout and the existing `epic_run_state` record (worker, branch, container,
+engine, model, budget and next action per Issue). Containers are replaceable; checkouts and
+run-state are unique work and survive container removal. The mirror is seeded from a git bundle,
+so BOB-1 holds no GitHub credentials. Publication stays with the coordinator, which fetches the
+worker branch and uses `publish-pr`.
+
+`worker-start` mounts only the worker's checkout (`/workspace`) and home (`/home/worker`). It
+enforces CPU, memory and pids budgets, drops all capabilities, sets `no-new-privileges`, uses a
+read-only root, runs as uid 1000 and joins the owned `epicws` bridge. It refuses before any engine
+effect for: other mounts, Docker or host paths, host or container network modes, invalid budgets, a
+credential env file inside the workspace root or readable by others, and an existing container for
+the same worker. If the engine is unavailable, it refuses: there is no host fallback. `worker-stop`
+removes the container. It records `stopped_verified` only after engine readback shows the container
+is absent, together with the checkout's uncommitted, ignored and unpublished work.
+
+Stop and recovery, from outside any worker:
+
+```sh
+ssh bob-1-builder-system '~/epic-sandbox/bin/epicws --epic <N> status'
+ssh bob-1-builder-system '~/epic-sandbox/bin/epicws --epic <N> worker-stop --worker <W> --reason <why>'
+ssh bob-1-builder-system 'docker rm -f $(docker ps -aq --filter label=epic-workspace.epic=<N>)'
+ssh bob-1-builder-system 'ln -sfn <previous-sha> ~/epic-sandbox/runner/current'
+```
+
+The third command is the emergency stop for every container of one epic. The fourth restores the
+previous controller release. Workers must not hot-replace the active release. A candidate controller
+is installed as a new `<sha>` directory between reconciled runs.
+
+Claude Code authenticates with a subscription token from `claude setup-token`. The token is stored
+as `CLAUDE_CODE_OAUTH_TOKEN` in `~ygg/.config/epic-workspace/claude.env` (mode 0600, outside the
+workspace root) and is passed with `--env-file`. No API key and no host credential store is used.
+
+Known limits: BOB-1 has 2 vCPU and 4 GB RAM, so expect at most about two concurrent workers. The
+default engine's `docker0` bridge is missing, which is why the owned `epicws` bridge is used.
+Ignored files are reported but not yet protected by a retirement policy (#6617). The OpenHands
+agent-server/ACP integration, Codex workers and the coordinator service are still open (#6618,
+#6619).
+
 ## Planning vocabulary and lightweight breakdown
 
 Use these terms consistently across specifications, skills, and issues:
