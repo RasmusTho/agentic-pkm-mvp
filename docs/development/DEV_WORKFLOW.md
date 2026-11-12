@@ -287,7 +287,22 @@ run-state are unique work and survive container removal. The mirror is seeded fr
 so BOB-1 holds no GitHub credentials. Publication stays with the coordinator, which fetches the
 worker branch and uses `publish-pr`.
 
-`worker-start` mounts only the worker's checkout (`/workspace`) and home (`/home/worker`). It
+OpenHands is the normal execution and session-control surface. `openhands-start` runs the pinned
+upstream agent-server image (`ghcr.io/openhands/agent-server:1.60.1-python`, by digest; it bundles
+claude-agent-acp 0.63.0 and codex-acp 2.2.2) as the worker container. Each worker gets a loopback-only
+port in 18700–18799 and a per-worker session key in the controller-only `control/` directory.
+Conversation history is kept in the worker's persistent home. `conversation-start --engine
+claude-code|codex [--model M]` creates the conversation through upstream `agent_settings`
+(`acp_server`, `acp_model`), tagged with epic, Issue and worker. The default is Claude Code with
+`claude-sonnet-5-5`; Codex accepts only `gpt-6.1-terra`, and Astra is refused. The conversation id
+is recorded before the request. A lost response is reconciled by reading that id and is never
+retried as a create. `conversation-status` reads upstream state and events and classifies the last
+error as `quota_exhausted`, `authentication`, `context_exhausted`, `transient_network` or
+`task_failure`. Only quota exhaustion may trigger the engine handoff (#6618). `worker-start` runs a
+plain container and is recorded as `native-exception`: it is for bootstrap, diagnostics and recovery
+only and never counts as OpenHands-delivered work.
+
+The boundary rules below apply to both. `worker-start` mounts only the worker's checkout (`/workspace`) and home (`/home/worker`). It
 enforces CPU, memory and pids budgets, drops all capabilities, sets `no-new-privileges`, uses a
 read-only root, runs as uid 1000 and joins the owned `epicws` bridge. It refuses before any engine
 effect for: other mounts, Docker or host paths, host or container network modes, invalid budgets, a
@@ -311,13 +326,19 @@ is installed as a new `<sha>` directory between reconciled runs.
 
 Claude Code authenticates with a subscription token from `claude setup-token`. The token is stored
 as `CLAUDE_CODE_OAUTH_TOKEN` in `~ygg/.config/epic-workspace/claude.env` (mode 0600, outside the
-workspace root) and is passed with `--env-file`. No API key and no host credential store is used.
+workspace root) and passed with `--env-file` (`openhands-start --claude-env-file`). Upstream OpenHands
+lets this token take precedence and strips `ANTHROPIC_API_KEY`. The Terra reserve uses one ChatGPT
+subscription login in `~ygg/.config/epic-workspace/codex`, created once by the owner with
+`ssh -t bob-1-builder-system '~/epic-sandbox/runner/current/config/builderops/epic-workspace/codex-device-login.sh'`.
+`openhands-start --codex-home` mounts it at `/run/codex-home` for one worker at a time, because
+refresh tokens rotate. No API key and no host credential store is used.
 
 Known limits: BOB-1 has 2 vCPU and 4 GB RAM, so expect at most about two concurrent workers. The
 default engine's `docker0` bridge is missing, which is why the owned `epicws` bridge is used.
-Ignored files are reported but not yet protected by a retirement policy (#6617). The OpenHands
-agent-server/ACP integration, Codex workers and the coordinator service are still open (#6618,
-#6619).
+An agent-server worker uses about 0.5 GB at rest. Ignored files are reported but not yet protected
+by a retirement policy. Nothing reclaims a workspace that may hold unique work until #6617 qualifies
+preservation (KD-B5F8B2D2F2BB, KD-FE5EDF575D1E). The engine handoff and the disconnect-safe
+coordinator are #6618; non-progress handling is #6619.
 
 ## Planning vocabulary and lightweight breakdown
 
