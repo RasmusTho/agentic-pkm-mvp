@@ -897,10 +897,11 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
     port, key, cid = int(mapping["port"]), _session_key(layout, worker), record["id"]
     try:
         code, info = http("GET", port, key, f"/conversations/{cid}", None, 10.0)
-        ecode, events = http("GET", port, key, f"/conversations/{cid}/events/search?limit={int(limit)}", None, 10.0)
+        ecode, events = http("GET", port, key, f"/conversations/{cid}/events/search?limit={int(limit)}&sort_order=TIMESTAMP_DESC", None, 10.0)
     except OSError:
         return {"issue": issue, "worker": worker, "conversation": dict(record), "reachable": False}
-    items = events.get("items", []) if ecode == 200 and isinstance(events, Mapping) else []
+    # The server returns the newest page first; retain chronological order within that page.
+    items = list(reversed(events.get("items", []))) if ecode == 200 and isinstance(events, Mapping) else []
     errors = [
         f"{e.get('code') or ''} {e.get('detail') or e.get('error') or ''}".strip()
         for e in items if isinstance(e, Mapping) and e.get("kind") == "ConversationErrorEvent"
