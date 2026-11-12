@@ -24,7 +24,7 @@ import urllib.request
 from typing import Any, Callable
 
 from app.builderops.devui_issue_work import _governs
-from app.builderops.openhands_pr_completion import REPOSITORY, work_identity
+from app.builderops.openhands_pr_completion import REPOSITORY, _blocking_reviews, work_identity
 
 API_ROOT = "https://api.github.com"
 PER_PAGE = 100
@@ -163,8 +163,13 @@ def _observe(reader: _Reader, number: int) -> dict[str, Any] | None:
         if (not isinstance(user, dict) or not isinstance(user.get("login"), str)
                 or row.get("state") not in _REVIEW_STATES):
             raise ObservationError("review record unreadable")
-        reviews.append({"user": {"login": user["login"]}, "state": row["state"],
-                        "submitted_at": row.get("submitted_at")})
+        review = {"user": {"login": user["login"]}, "state": row["state"],
+                  "submitted_at": row.get("submitted_at")}
+        try:
+            _blocking_reviews([review])
+        except ValueError as exc:
+            raise ObservationError("review record unreadable") from exc
+        reviews.append(review)
     held = [f"#{n} hold" for n in HELD_ISSUES
             if n in (number, governing) or re.search(rf"#{n}(?![0-9])", body)]
     return {

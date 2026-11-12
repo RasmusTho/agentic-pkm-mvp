@@ -264,6 +264,51 @@ def test_cli_prints_a_readonly_report_and_exit_code_reflects_completeness(monkey
     assert obs.main([]) == 0
 
 
+@pytest.mark.parametrize("state,at,accepted", [
+    ("PENDING", None, True), ("APPROVED", None, False),
+    ("PENDING", [], False), ("APPROVED", "2026-01-01T00:00:00", False),
+    ("APPROVED", "invalid", False), ("APPROVED", "2026-01-01T00:00:00Z", True),
+])
+def test_review_timestamp_contract_is_enforced_per_pr(state, at, accepted):
+    api = Api([1, 2])
+    api.routes[f"{BASE}/pulls/1/reviews"] = [review_json(state=state, at=at)]
+    report = obs.collect(api)
+    assert [o["number"] for o in report["observations"]] == ([1, 2] if accepted else [2])
+    assert report["complete"] is accepted
+    if not accepted:
+        assert failure_for(report, 1) == "review record unreadable"
+
+
+def test_cli_rejects_parser_accepted_nested_timestamp_and_keeps_peer(monkeypatch, capsys):
+    prefix = b'[{"user":{"login":"r"},"state":"APPROVED","submitted_at":'
+    suffix = b'}]'
+
+    def payload(depth):
+        return prefix + b'[' * depth + b'"RAW_PAYLOAD"' + b']' * depth + suffix
+
+    # Find the parser's own nesting limit, which varies by interpreter and call stack.
+    low, high = 1, min(4096, (obs.MAX_RESPONSE_BYTES - len(prefix) - len(suffix) - 20) // 2)
+    while low < high:
+        mid = (low + high + 1) // 2
+        try:
+            json.loads(payload(mid))
+        except RecursionError:
+            high = mid - 1
+        else:
+            low = mid
+    raw = payload(low - 10)
+    assert len(raw) < obs.MAX_RESPONSE_BYTES and json.loads(raw)
+    api = Api([1, 2])
+    api.routes[f"{BASE}/pulls/1/reviews"] = (200, raw)
+    monkeypatch.setattr(obs, "public_fetch", api)
+    assert obs.main([]) == 1
+    output = capsys.readouterr().out
+    report = json.loads(output)
+    assert not report["complete"] and [o["number"] for o in report["observations"]] == [2]
+    assert failure_for(report, 1) == "review record unreadable"
+    assert "RAW_PAYLOAD" not in output
+
+
 def test_rate_limit_refusal_is_a_visible_incomplete_scan():
     report = obs.collect(Api([], **{f"{BASE}/pulls?state=open": (429, b"")}))
     assert not report["complete"] and "rate limit" in report["failures"][0]["reason"]
