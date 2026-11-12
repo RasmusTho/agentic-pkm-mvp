@@ -22,6 +22,7 @@ class FakeEngine:
         self.labels: dict[str, list[str]] = {}
         self.ports: dict[str, int] = {}
         self.inspections: list[list[str]] = []
+        self.writable_inspections = 0
 
     def __call__(self, argv, **kwargs):
         argv = list(argv)
@@ -49,15 +50,19 @@ class FakeEngine:
             self.inspections.append(argv)
             mount = next(argv[i + 1] for i, a in enumerate(argv) if a == "--mount")
             fields = dict(f.split("=", 1) for f in mount.split(",") if "=" in f)
-            assert fields["target"] == ew.INSPECT_TARGET and mount.endswith(",readonly")
+            assert fields["target"] == ew.INSPECT_TARGET
+            readonly = mount.endswith(",readonly")
+            self.writable_inspections += 0 if readonly else 1
             assert argv[argv.index("--network") + 1] == "none"
+            env = {k: v.replace(ew.INSPECT_TARGET, fields["source"]) for k, v in (argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "--env") if k.startswith("GIT_")}
+            kwargs = {**kwargs, "env": {**os.environ, **env}}
             git = argv[argv.index("git"):]
             git = [fields["source"] if a == ew.INSPECT_TARGET else a for a in git]
             i = git.index(f"safe.directory={ew.INSPECT_TARGET}") if f"safe.directory={ew.INSPECT_TARGET}" in git else None
             if i is None:
                 i = next(k for k, a in enumerate(git) if a.startswith("safe.directory="))
             del git[i - 1:i + 1]
-            return subprocess.run(git, capture_output=True, text=True, check=False)
+            return subprocess.run(git, **kwargs)
         if argv[1] == "run":
             labels = [argv[i + 1] for i, a in enumerate(argv) if a == "--label"]
             worker = next(v.split("=", 1)[1] for v in labels if v.startswith(f"{ew.LABEL_WORKER}="))
@@ -76,7 +81,7 @@ class FakeEngine:
         raise AssertionError(f"unexpected docker call {argv}")
 
     def runs(self) -> list[list[str]]:
-        return [c for c in self.calls if c[1] == "run"]
+        return [c for c in self.calls if c[1] == "run" and "--rm" not in c]
 
 
 def _seed_repo(tmp_path: Path) -> str:

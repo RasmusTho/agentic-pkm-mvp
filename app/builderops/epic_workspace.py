@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -68,6 +69,13 @@ _NETWORK = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 _MOUNT_PATH = re.compile(r"^/[A-Za-z0-9._/@+-]*$")
 EXTRA_MOUNT_PREFIX = "/mnt/"
 INSPECT_TARGET = "/inspect"
+CHECKPOINT_REF_PREFIX = "refs/checkpoints/"
+CHECKPOINT_INDEX = f"{INSPECT_TARGET}/.git/epic-checkpoint.index"
+# Ignored paths that are rebuildable caches. Every other ignored path is potentially unique work.
+DISPOSABLE_CACHE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", "node_modules", ".venv"})
+PUBLICATION_KINDS = ("branch_push", "pr_create")
+_OP_UNRESOLVED = ("intended", "quarantined")
+_ENV_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -82,6 +90,14 @@ class EngineUnavailable(EpicWorkspaceError):
 
 class LaunchRefused(EpicWorkspaceError):
     """A launch request violates the workspace or resource boundary."""
+
+
+class UniqueWorkPresent(EpicWorkspaceError):
+    """Retirement refused: the checkout may hold work that exists nowhere else."""
+
+
+class TakeoverRefused(EpicWorkspaceError):
+    """A successor may not write yet; the previous execution or its work is not reconciled."""
 
 
 @dataclass(frozen=True)
@@ -221,6 +237,12 @@ def _reserve_worker(layout: Layout, issue: int, worker: str, **fields: Any) -> d
     )
 
 
+def _assert_no_pending_takeover(mapping: Mapping[str, Any]) -> None:
+    pending = mapping.get("takeover")
+    if isinstance(pending, Mapping) and pending.get("status") == "required":
+        raise TakeoverRefused("takeover required: reconcile the predecessor's work and publication before any successor writes")
+
+
 def _issue_for_worker(state: Mapping[str, Any], worker: str) -> int:
     for key, mapping in state.get("issue_mappings", {}).items():
         if isinstance(mapping, Mapping) and mapping.get("worker") == worker:
@@ -265,23 +287,29 @@ def create_worker(
     if not _BRANCH.match(branch) or ".." in branch:
         raise LaunchRefused(f"invalid branch {branch!r}")
     checkout = layout.checkout(worker)
+    recorded = _load_state(layout).get("issue_mappings", {}).get(str(int(issue)), {})
+    if checkout.exists():
+        # A re-run must not record a branch the checkout is not on (KD-FE5EDF575D1E).
+        actual = checkout_branch(checkout, runner=runner)
+        if actual != branch:
+            raise LaunchRefused(f"checkout of worker {worker!r} is on {actual!r}, not the requested {branch!r}; refusing to record it")
+        if recorded.get("branch") not in (None, branch):
+            raise LaunchRefused(f"issue #{int(issue)} is recorded on branch {recorded.get('branch')!r}, not {branch!r}")
+        _reserve_worker(layout, issue, worker, branch=actual, checkout=str(checkout), next_action=next_action,
+                        **({} if recorded.get("state") else {"state": "created"}))
+        layout.home(worker).mkdir(parents=True, exist_ok=True)
+        return checkout
     _reserve_worker(layout, issue, worker, state="creating")
-    if not checkout.exists():
-        checkout.parent.mkdir(parents=True, exist_ok=True)
-        _run(runner, ["git", "clone", "--quiet", "--no-hardlinks", str(layout.source), str(checkout)])
-        exists = _run(runner, ["git", "-C", str(checkout), "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}"], check=False)
-        start = f"origin/{branch}" if exists.returncode == 0 else f"origin/{base}"
-        _run(runner, ["git", "-C", str(checkout), "checkout", "--quiet", "-B", branch, start])
+    checkout.parent.mkdir(parents=True, exist_ok=True)
+    _run(runner, ["git", "clone", "--quiet", "--no-hardlinks", str(layout.source), str(checkout)])
+    exists = _run(runner, ["git", "-C", str(checkout), "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}"], check=False)
+    start = f"origin/{branch}" if exists.returncode == 0 else f"origin/{base}"
+    _run(runner, ["git", "-C", str(checkout), "checkout", "--quiet", "-B", branch, start])
+    actual = checkout_branch(checkout, runner=runner)
+    if actual != branch:
+        raise EpicWorkspaceError(f"new checkout is on {actual!r}, not {branch!r}")
     layout.home(worker).mkdir(parents=True, exist_ok=True)
-    _reserve_worker(
-        layout,
-        issue,
-        worker,
-        branch=branch,
-        checkout=str(checkout),
-        state="created",
-        next_action=next_action,
-    )
+    _reserve_worker(layout, issue, worker, branch=actual, checkout=str(checkout), state="created", next_action=next_action)
     return checkout
 
 
@@ -423,6 +451,7 @@ def start_worker(
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
+    _assert_no_pending_takeover(state["issue_mappings"][str(issue)])
     env_path = _validate_env_file(env_file, layout)
     argv = build_launch_argv(layout, worker, image=image, command=command, budget=budget, env_file=env_path, extra_mounts=extra_mounts, network=network)
     _assert_engine(runner)
@@ -461,8 +490,12 @@ def _container_state(layout: Layout, worker: str, runner: Runner) -> str | None:
     return states[0] if states else None
 
 
-def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run) -> dict[str, Any]:
-    """Remove the worker container and prove absence by engine readback."""
+def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
+    """Remove the worker container, prove absence by engine readback, then preserve its work.
+
+    Absence is recorded before any checkpoint so a failed checkpoint never hides that the
+    container is gone; the checkout is never touched except for the checkpoint refs.
+    """
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
@@ -471,34 +504,55 @@ def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = su
     remaining = _container_state(layout, worker, runner)
     if remaining is not None:
         raise EpicWorkspaceError(f"worker {worker!r} container still present ({remaining}); not verified stopped")
-    work = inspect_checkout(layout.checkout(worker), runner=runner)
+    work, ignored_all = _inspect(layout.checkout(worker), runner=runner, image=image)
+    mapping = state["issue_mappings"][str(issue)]
+    needs_takeover = bool(work.get("unique_work")) or any(op.get("status") in _OP_UNRESOLVED for op in mapping.get("publication_ops", []))
     fields: dict[str, Any] = {"state": "stopped_verified", "stopped_at": _now(), "stop_reason": reason, "work_at_stop": work}
-    conversation = state["issue_mappings"][str(issue)].get("conversation")
+    if needs_takeover:
+        # Anything that could still be written or published needs reconciliation before a successor writes.
+        fields["takeover"] = {"status": "required", "reason": reason, "at": _now(), "generation": int((mapping.get("takeover") or {}).get("generation", 0))}
+    conversation = mapping.get("conversation")
     if isinstance(conversation, Mapping):
         # The hosting container is verified absent, so this conversation can no longer write.
         fields["conversation"] = {**conversation, "status": CONVERSATION_ENDED, "ended_at": _now()}
     _record_worker(layout, issue, **fields)
+    work = dict(work)
+    work["checkpoint"] = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image)
     return work
 
 
-def _contained_git(checkout: Path, args: Sequence[str], *, runner: Runner, image: str) -> subprocess.CompletedProcess:
+def _contained_git(
+    checkout: Path,
+    args: Sequence[str],
+    *,
+    runner: Runner,
+    image: str,
+    writable: bool = False,
+    env: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     """Run git against a worker checkout inside a throwaway container.
 
     The checkout's ``.git/config`` and ``.gitattributes`` are worker-controlled (fsmonitor,
     filter drivers, hooks). Running git on the host would execute that config as the
-    controller user, so inspection runs contained: read-only mount, no network, no
-    capabilities, no writes, uid 1000.
+    controller user, so inspection runs contained: no network, no capabilities, uid 1000, only
+    this checkout mounted. The mount is read-only unless a checkpoint write is requested.
     """
 
     source = str(checkout.resolve(strict=True))
     if not _MOUNT_PATH.match(source):
         raise EpicWorkspaceError("checkout path contains unsafe characters")
+    extra_env: list[str] = []
+    for key, value in (env or {}).items():
+        if not _ENV_KEY.match(key) or "\n" in value or "\x00" in value:
+            raise EpicWorkspaceError(f"invalid environment entry {key!r}")
+        extra_env += ["--env", f"{key}={value}"]
+    mount = f"type=bind,source={source},target={INSPECT_TARGET}" + ("" if writable else ",readonly")
     argv = [
         "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges", "--user", WORKER_UID_GID, "--pids-limit", "64",
         "--memory", "256m", "--tmpfs", "/tmp:rw,nosuid,size=16m", "--env", "HOME=/tmp",
-        "--env", "GIT_CONFIG_NOSYSTEM=1", "--env", "GIT_CONFIG_GLOBAL=/dev/null",
-        "--mount", f"type=bind,source={source},target={INSPECT_TARGET},readonly",
+        "--env", "GIT_CONFIG_NOSYSTEM=1", "--env", "GIT_CONFIG_GLOBAL=/dev/null", *extra_env,
+        "--mount", mount,
         image,
         "git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
         "-c", f"safe.directory={INSPECT_TARGET}", "-C", INSPECT_TARGET, *args,
@@ -506,39 +560,110 @@ def _contained_git(checkout: Path, args: Sequence[str], *, runner: Runner, image
     return runner(argv, capture_output=True, text=True, check=False)
 
 
-def inspect_checkout(checkout: Path, *, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
-    """Classify a checkout's unique work without executing worker-controlled config on the host."""
+class _Unreadable(Exception):
+    pass
+
+
+def is_disposable_cache(path: str) -> bool:
+    parts = [part for part in path.split("/") if part]
+    return bool(parts) and (any(part in DISPOSABLE_CACHE_DIRS for part in parts) or parts[-1].endswith(".pyc"))
+
+
+def _parse_status(raw: str) -> tuple[list[str], list[str]]:
+    """Split ``status --porcelain=v1 -z`` into (changed, ignored) paths."""
+
+    changed: list[str] = []
+    ignored: list[str] = []
+    items = raw.split("\0")
+    index = 0
+    while index < len(items):
+        entry = items[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        code, path = entry[:2], entry[3:]
+        if code[0] in "RC":
+            index += 1  # the rename/copy source follows as a separate field
+        (ignored if code == "!!" else changed).append(path)
+    return changed, ignored
+
+
+def _inspect(checkout: Path, *, runner: Runner, image: str) -> tuple[dict[str, Any], list[str]]:
+    """Return (summary, every non-disposable ignored path). Unreadable evidence is unique work."""
 
     if not checkout.is_dir():
-        return {"present": False}
+        return {"present": False}, []
+
+    def git(*args: str) -> str:
+        result = _contained_git(checkout, args, runner=runner, image=image)
+        if result.returncode != 0:
+            raise _Unreadable(args[0])
+        return result.stdout or ""
+
     try:
         _assert_engine(runner)
-        head = _contained_git(checkout, ["rev-parse", "HEAD"], runner=runner, image=image)
-        porcelain = _contained_git(
-            checkout, ["status", "--porcelain", "--untracked-files=all", "--ignored=matching"], runner=runner, image=image
-        )
-        unpublished = _contained_git(checkout, ["rev-list", "--count", "HEAD", "--not", "--remotes"], runner=runner, image=image)
-    except EpicWorkspaceError:
-        return {"present": True, "readable": False, "unique_work": True}
-    lines = [line for line in (porcelain.stdout or "").splitlines() if line.strip()]
-    changed = [line[3:] for line in lines if not line.startswith("!! ")]
-    # Ignored files (e.g. ``*.txt``, ``.codex-tmp/``) may still be unique work; report them
-    # separately so a reclaim decision can see them instead of treating them as absent.
-    ignored = [line[3:] for line in lines if line.startswith("!! ")]
-    count = int((unpublished.stdout or "0").strip() or 0) if unpublished.returncode == 0 else -1
-    readable = porcelain.returncode == 0 and unpublished.returncode == 0
-    return {
+        head = git("rev-parse", "HEAD").strip()
+        abbrev = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+        branch = None if abbrev == "HEAD" else abbrev
+        changed, ignored_all = _parse_status(git("status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"))
+        ignored = [path for path in ignored_all if not is_disposable_cache(path)]
+        head_unpublished = int(git("rev-list", "--count", "HEAD", "--not", "--remotes").strip() or 0)
+        other_branches: list[dict[str, Any]] = []
+        checkpoint_refs: list[str] = []
+        stash_shas: list[str] = []
+        for line in git("for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/stash", CHECKPOINT_REF_PREFIX.rstrip("/")).splitlines():
+            sha, _, ref = line.partition(" ")
+            if ref.startswith(CHECKPOINT_REF_PREFIX):
+                checkpoint_refs.append(ref)
+            elif ref == "refs/stash":
+                stash_shas = [s for s in git("reflog", "show", "--format=%H", "refs/stash").split() if s] or [sha]
+            elif ref != f"refs/heads/{branch}":
+                count = int(git("rev-list", "--count", sha, "--not", "--remotes").strip() or 0)
+                if count:
+                    other_branches.append({"ref": ref, "unpublished": count})
+        stash_unpublished = int(git("rev-list", "--count", *stash_shas, "--not", "--remotes").strip() or 0) if stash_shas else 0
+    except (EpicWorkspaceError, _Unreadable, ValueError):
+        return {"present": True, "readable": False, "unique_work": True}, []
+    summary = {
         "present": True,
-        "readable": readable,
-        "head": (head.stdout or "").strip() or None,
+        "readable": True,
+        "head": head,
+        "branch": branch,
         "uncommitted_paths": changed[:50],
         "uncommitted_count": len(changed),
         "ignored_paths": ignored[:50],
         "ignored_count": len(ignored),
-        "unpublished_commits": count,
-        # Unreadable evidence is treated as unique work (fail safe).
-        "unique_work": (not readable) or bool(changed) or count != 0,
+        "disposable_ignored_count": len(ignored_all) - len(ignored),
+        "unpublished_commits": head_unpublished,
+        "other_branches": other_branches,
+        "stash_entries": len(stash_shas),
+        "stash_unpublished": stash_unpublished,
+        "checkpoint_refs": sorted(checkpoint_refs),
+        "unique_work": bool(changed or ignored or head_unpublished or other_branches or stash_unpublished),
     }
+    return summary, ignored
+
+
+def inspect_checkout(checkout: Path, *, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
+    """Classify a checkout's unique work without executing worker-controlled config on the host.
+
+    Unique work is: uncommitted or untracked files, ignored files that are not explicitly
+    disposable caches, commits on any local branch or in the stash that no remote ref contains,
+    and anything that cannot be read (fail safe).
+    """
+
+    return _inspect(checkout, runner=runner, image=image)[0]
+
+
+def checkout_branch(checkout: Path, *, runner: Runner, image: str = DEFAULT_IMAGE) -> str | None:
+    """The branch the checkout actually has checked out (``None`` when detached)."""
+
+    _assert_engine(runner)
+    result = _contained_git(checkout, ["rev-parse", "--abbrev-ref", "HEAD"], runner=runner, image=image)
+    if result.returncode != 0:
+        raise EpicWorkspaceError("checkout branch is unreadable")
+    name = (result.stdout or "").strip()
+    return None if name == "HEAD" else name
 
 
 def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]:
@@ -569,6 +694,9 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
             "engine": mapping.get("engine"),
             "model": mapping.get("model"),
             "next_action": mapping.get("next_action"),
+            "next_authorized_action": next_authorized_action(mapping),
+            "takeover": (mapping.get("takeover") or {}).get("status"),
+            "checkpoints": [c.get("ref") for c in mapping.get("checkpoints", []) if c.get("status") == "preserved"],
             "work": inspect_checkout(layout.checkout(worker), runner=runner),
         })
     return {
@@ -579,6 +707,406 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
         "workers": workers,
         "authority": "coordination evidence only; GitHub Issues/PRs/CI win",
     }
+
+
+# --------------------------------------------------------------------------- preservation and takeover
+#
+# Unique work (uncommitted edits, ignored-but-unique files, detached commits) is captured into
+# ``refs/checkpoints/ckpt-NNNN`` inside the worker's own checkout by a contained writable git, only
+# after the worker container is proven absent. The checkpoint never alters the working tree or the
+# real index. Commits on local branches and the stash already live in refs and are reported, not copied.
+
+
+def _checkpoint(
+    layout: Layout, issue: int, worker: str, work: Mapping[str, Any], ignored_all: Sequence[str], *, reason: str, runner: Runner, image: str
+) -> dict[str, Any] | None:
+    if not work.get("present"):
+        return None
+    if not work.get("readable"):
+        return None  # kept intact as unique work; takeover and retirement refuse on it
+    if not (work["uncommitted_count"] or work["ignored_count"] or (work["branch"] is None and work["unpublished_commits"])):
+        return None
+    checkout = layout.checkout(worker)
+    if not (checkout / ".git").is_dir() or (checkout / ".git").is_symlink():
+        raise EpicWorkspaceError("checkout .git is not a plain directory; cannot checkpoint")
+    base_env = {
+        "GIT_INDEX_FILE": CHECKPOINT_INDEX,
+        "GIT_AUTHOR_NAME": "epic-workspace", "GIT_AUTHOR_EMAIL": "epic-workspace@localhost",
+        "GIT_COMMITTER_NAME": "epic-workspace", "GIT_COMMITTER_EMAIL": "epic-workspace@localhost",
+    }
+
+    def git(*args: str, env: Mapping[str, str] | None = None) -> str:
+        result = _contained_git(checkout, args, runner=runner, image=image, writable=True, env={**base_env, **(env or {})})
+        if result.returncode != 0:
+            raise EpicWorkspaceError(f"checkpoint step {args[0]} failed: {(result.stderr or '').strip()[:200]}")
+        return (result.stdout or "").strip()
+
+    head = work["head"]
+    git("read-tree", head)
+    git("add", "-A", "--", ".")
+    for offset in range(0, len(ignored_all), 100):
+        git("add", "-f", "-A", "--", *ignored_all[offset:offset + 100], env={"GIT_LITERAL_PATHSPECS": "1"})
+    tree = git("write-tree")
+    mapping = _load_state(layout)["issue_mappings"][str(issue)]
+    for prior in mapping.get("checkpoints", []):
+        if prior.get("tree") == tree and prior.get("head") == head and prior.get("status") == "preserved" and _checkpoint_present(checkout, prior, runner, image):
+            return prior
+    commit = git("commit-tree", tree, "-p", head, "-m", f"epic-workspace checkpoint ({worker}): {reason[:120]}")
+    ref = f"{CHECKPOINT_REF_PREFIX}ckpt-{len(mapping.get('checkpoints', [])) + 1:04d}"
+    git("update-ref", ref, commit, "")  # empty old value: the ref must not already exist
+    record = {
+        "ref": ref, "commit": commit, "tree": tree, "head": head, "branch": work["branch"], "reason": reason, "at": _now(),
+        "uncommitted_count": work["uncommitted_count"], "ignored_count": work["ignored_count"], "status": "preserved",
+    }
+    if not _checkpoint_present(checkout, record, runner, image):
+        raise EpicWorkspaceError(f"checkpoint {ref} could not be read back")
+
+    def updater(state: dict[str, Any]) -> dict[str, Any]:
+        entry = state["issue_mappings"][str(issue)]
+        entry["checkpoints"] = [*entry.get("checkpoints", []), record]
+        entry["updated_at"] = _now()
+        return state
+
+    epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater, expected_epic_issue_number=layout.epic)
+    return record
+
+
+def _checkpoint_present(checkout: Path, record: Mapping[str, Any], runner: Runner, image: str) -> bool:
+    result = _contained_git(checkout, ["rev-parse", "--verify", "--quiet", f"{record['ref']}^{{tree}}"], runner=runner, image=image)
+    commit = _contained_git(checkout, ["rev-parse", "--verify", "--quiet", f"{record['ref']}^{{commit}}"], runner=runner, image=image)
+    return (
+        result.returncode == 0 and (result.stdout or "").strip() == record["tree"]
+        and commit.returncode == 0 and (commit.stdout or "").strip() == record["commit"]
+    )
+
+
+def checkpoint_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any] | None:
+    """Checkpoint a worker whose container is already proven absent; refuse otherwise."""
+
+    state = _load_state(layout)
+    issue = _issue_for_worker(state, worker)
+    _assert_engine(runner)
+    if _container_state(layout, worker, runner) is not None:
+        raise EpicWorkspaceError("worker container is present; a checkpoint would compete with it. Stop it first")
+    work, ignored_all = _inspect(layout.checkout(worker), runner=runner, image=image)
+    if work.get("present") and not work.get("readable"):
+        raise EpicWorkspaceError("checkout is unreadable; it is kept intact as unique work and cannot be checkpointed")
+    return _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image)
+
+
+def release_checkpoint(
+    layout: Layout, worker: str, *, ref: str, published_commit: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE
+) -> dict[str, Any]:
+    """Mark a checkpoint superseded once every path it captured is identical in a published commit."""
+
+    state = _load_state(layout)
+    issue = _issue_for_worker(state, worker)
+    mapping = state["issue_mappings"][str(issue)]
+    record = next((c for c in mapping.get("checkpoints", []) if c.get("ref") == ref), None)
+    if record is None or record.get("status") != "preserved":
+        raise EpicWorkspaceError(f"no preserved checkpoint {ref!r} for worker {worker!r}")
+    if not re.fullmatch(r"[0-9a-f]{40,64}", published_commit):
+        raise EpicWorkspaceError("published commit must be a full object id")
+    _assert_engine(runner)
+    checkout = layout.checkout(worker)
+
+    def read(*args: str, env: Mapping[str, str] | None = None) -> str:
+        result = _contained_git(checkout, args, runner=runner, image=image, env=env)
+        if result.returncode != 0:
+            raise EpicWorkspaceError(f"cannot verify release: {args[0]} failed")
+        return result.stdout or ""
+
+    if int(read("rev-list", "--count", published_commit, "--not", "--remotes").strip() or 1) != 0:
+        raise EpicWorkspaceError("commit is not contained in a remote ref; not published")
+    paths = [p for p in read("diff", "--name-only", "-z", f"{record['head']}", record["commit"]).split("\0") if p]
+    for offset in range(0, len(paths), 100):
+        differing = read("diff", "--name-only", record["commit"], published_commit, "--", *paths[offset:offset + 100], env={"GIT_LITERAL_PATHSPECS": "1"}).split()
+        if differing:
+            raise EpicWorkspaceError(f"checkpoint content not in the published commit: {differing[:5]}")
+
+    def updater(current: dict[str, Any]) -> dict[str, Any]:
+        entry = current["issue_mappings"][str(issue)]
+        entry["checkpoints"] = [
+            {**c, "status": "released", "released_at": _now(), "released_by": published_commit} if c.get("ref") == ref else c
+            for c in entry.get("checkpoints", [])
+        ]
+        return current
+
+    epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater, expected_epic_issue_number=layout.epic)
+    return {**record, "status": "released", "released_by": published_commit}
+
+
+# ---- publication operations: intent is recorded before the external effect, so an unknown
+# outcome is reconciled by branch/PR readback and never replayed.
+
+
+def _mutate_mapping(layout: Layout, worker: str, mutate: Callable[[dict[str, Any]], Any]) -> Any:
+    issue = _issue_for_worker(_load_state(layout), worker)
+    box: list[Any] = []
+
+    def updater(state: dict[str, Any]) -> dict[str, Any]:
+        entry = state["issue_mappings"][str(issue)]
+        if entry.get("worker") != worker:
+            raise EpicWorkspaceError(f"issue #{issue} no longer belongs to worker {worker!r}")
+        box.append(mutate(entry))
+        entry["updated_at"] = _now()
+        return state
+
+    epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater, expected_epic_issue_number=layout.epic)
+    return box[0]
+
+
+def begin_publication(layout: Layout, worker: str, *, kind: str, expect_sha: str | None = None) -> dict[str, Any]:
+    """Record the intent to publish the worker's branch. Refused while an earlier attempt is unresolved."""
+
+    if kind not in PUBLICATION_KINDS:
+        raise EpicWorkspaceError(f"unknown publication kind {kind!r}")
+    if expect_sha is not None and not re.fullmatch(r"[0-9a-f]{40,64}", expect_sha):
+        raise EpicWorkspaceError("expect_sha must be a full object id")
+
+    def mutate(entry: dict[str, Any]) -> dict[str, Any]:
+        if entry.get("state") == "retired" or not entry.get("branch"):
+            raise EpicWorkspaceError("worker has no active branch to publish")
+        ops = list(entry.get("publication_ops", []))
+        same = [op for op in ops if op["kind"] == kind and op["branch"] == entry["branch"]]
+        for op in same:
+            if op["status"] in _OP_UNRESOLVED:
+                raise EpicWorkspaceError(f"{kind} {op['id']} is {op['status']}; reconcile it by readback, do not replay")
+            if op["status"] == "confirmed":
+                raise EpicWorkspaceError(f"{kind} {op['id']} is already confirmed")
+        op = {"id": f"{kind}-{len(ops) + 1}", "kind": kind, "branch": entry["branch"], "expect_sha": expect_sha, "status": "intended", "intent_at": _now()}
+        if same:
+            op["retry_of"] = same[-1]["id"]
+            for prior in same:
+                prior["superseded_by"] = op["id"]
+        entry["publication_ops"] = [*ops, op]
+        return op
+
+    return _mutate_mapping(layout, worker, mutate)
+
+
+def _find_op(entry: Mapping[str, Any], op_id: str) -> dict[str, Any]:
+    for op in entry.get("publication_ops", []):
+        if op["id"] == op_id:
+            return op
+    raise EpicWorkspaceError(f"unknown publication operation {op_id!r}")
+
+
+def complete_publication(layout: Layout, worker: str, *, op_id: str, result: Mapping[str, Any]) -> dict[str, Any]:
+    """Record a positively observed outcome of an ``intended`` operation."""
+
+    def mutate(entry: dict[str, Any]) -> dict[str, Any]:
+        op = _find_op(entry, op_id)
+        if op["status"] != "intended":
+            raise EpicWorkspaceError(f"{op_id} is {op['status']}, not intended")
+        op.update(status="confirmed", confirmed_at=_now(), result=_publication_result(result))
+        return dict(op)
+
+    return _mutate_mapping(layout, worker, mutate)
+
+
+def _publication_result(value: Mapping[str, Any]) -> dict[str, Any]:
+    allowed = {"number": int, "url": str, "sha": str, "state": str}
+    return {k: value[k] for k, t in allowed.items() if isinstance(value.get(k), t) and not isinstance(value.get(k), bool)}
+
+
+def _judge_readback(op: Mapping[str, Any], readback: Mapping[str, Any] | None) -> tuple[str, dict[str, Any], str | None]:
+    """(status, result, reason) from coordinator-supplied GitHub readback. Anything unclear is quarantine."""
+
+    if not isinstance(readback, Mapping) or readback.get("complete") is not True:
+        return "quarantined", {}, "readback missing or incomplete"
+    if op["kind"] == "branch_push":
+        branch = readback.get("branch")
+        if not isinstance(branch, Mapping) or not isinstance(branch.get("exists"), bool):
+            return "quarantined", {}, "branch readback malformed"
+        if not branch["exists"]:
+            return "absent_confirmed", {}, None
+        sha = branch.get("sha")
+        if not isinstance(sha, str):
+            return "quarantined", {}, "branch sha missing"
+        if op.get("expect_sha") in (None, sha):
+            return "confirmed", {"sha": sha}, None
+        return "quarantined", {"sha": sha}, "remote branch differs from the intended commit"
+    prs = readback.get("pull_requests")
+    if not isinstance(prs, list) or not all(isinstance(pr, Mapping) for pr in prs):
+        return "quarantined", {}, "pull request readback malformed"
+    if not prs:
+        return "absent_confirmed", {}, None
+    if len(prs) == 1:
+        return "confirmed", _publication_result(prs[0]), None
+    return "quarantined", {}, "several pull requests exist for the branch"
+
+
+def reconcile_publication(layout: Layout, worker: str, *, op_id: str, readback: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Resolve an unresolved operation from readback. Only that operation is quarantined on doubt."""
+
+    def mutate(entry: dict[str, Any]) -> dict[str, Any]:
+        op = _find_op(entry, op_id)
+        if op["status"] not in _OP_UNRESOLVED:
+            return dict(op)
+        status, result, reason = _judge_readback(op, readback)
+        op.update(status=status, reconciled_at=_now(), result=result)
+        op.pop("reason", None)
+        if reason:
+            op["reason"] = reason
+        return dict(op)
+
+    return _mutate_mapping(layout, worker, mutate)
+
+
+# ---- next authorized action and takeover
+
+
+def next_authorized_action(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Derive what may happen next from one run-state mapping alone."""
+
+    ops = [op for op in mapping.get("publication_ops", []) if isinstance(op, Mapping)]
+    blocked = [{"id": op["id"], "kind": op["kind"], "status": op["status"], "reason": op.get("reason")} for op in ops if op["status"] in _OP_UNRESOLVED]
+    retry = [op["kind"] for op in ops if op["status"] == "absent_confirmed" and not op.get("superseded_by")]
+    takeover = mapping.get("takeover") if isinstance(mapping.get("takeover"), Mapping) else {}
+    if mapping.get("state") == "retired":
+        action = "none: worker retired"
+    elif takeover.get("status") == "required":
+        action = "run takeover: reconcile files and publication before any successor writes"
+    elif takeover.get("status") == "authorized":
+        action = f"start exactly one continuation (generation {takeover.get('generation')}): {mapping.get('next_action')}"
+    else:
+        action = str(mapping.get("next_action"))
+    return {"action": action, "recorded_next_action": mapping.get("next_action"), "blocked_operations": blocked, "retry_authorized": retry}
+
+
+def continuation_brief(layout: Layout, worker: str) -> dict[str, Any]:
+    """Rebuild a successor's briefing from durable records only; the predecessor writes nothing."""
+
+    state = _load_state(layout)
+    issue = _issue_for_worker(state, worker)
+    mapping = state["issue_mappings"][str(issue)]
+    action = next_authorized_action(mapping)
+    checkpoints = [
+        {k: c.get(k) for k in ("ref", "commit", "status", "uncommitted_count", "ignored_count", "at")}
+        for c in mapping.get("checkpoints", []) if c.get("status") == "preserved"
+    ]
+    conversations = [*mapping.get("conversation_history", []), *([mapping["conversation"]] if isinstance(mapping.get("conversation"), Mapping) else [])]
+    brief: dict[str, Any] = {
+        "schema": "epic_continuation_brief.v1",
+        "epic": layout.epic, "issue": issue, "worker": worker, "branch": mapping.get("branch"),
+        "generation": (mapping.get("takeover") or {}).get("generation"),
+        "next_authorized_action": action,
+        "checkpoints": checkpoints,
+        "publication_operations": [
+            {k: op.get(k) for k in ("id", "kind", "status", "result", "reason")} for op in mapping.get("publication_ops", [])
+        ],
+        "predecessors": [{k: c.get(k) for k in ("id", "engine", "model", "status")} for c in conversations],
+        "history_path": f"{CONTAINER_HOME}/openhands/conversations",
+    }
+    brief["prompt"] = _render_continuation_prompt(brief)
+    return brief
+
+
+def _render_continuation_prompt(brief: Mapping[str, Any]) -> str:
+    action = brief["next_authorized_action"]
+    lines = [
+        f"You are continuing GitHub Issue #{brief['issue']} (epic #{brief['epic']}) on branch `{brief['branch']}` in /workspace.",
+        "A previous worker was replaced. Do not rely on any summary from it: its work is in this checkout.",
+        "First run `git status`, `git branch -a`, `git stash list` and `git log --oneline -5`; uncommitted and ignored files are real work, keep them.",
+        f"Next authorized action: {action['action']}",
+    ]
+    if brief["checkpoints"]:
+        lines.append("Safety checkpoints (read-only history, do not delete): " + ", ".join(c["ref"] for c in brief["checkpoints"]))
+    if action["blocked_operations"]:
+        lines.append("Do NOT attempt these publication operations; their outcome is unknown and only the coordinator reconciles them: " + ", ".join(f"{b['kind']} ({b['id']})" for b in action["blocked_operations"]))
+    lines += [
+        "You have no GitHub credentials: never push or open pull requests; commit locally and record the state in `.codex-tmp/epic-continuation.md`.",
+        f"Earlier conversation history, if you need it, is under {brief['history_path']}.",
+    ]
+    return "\n".join(lines)
+
+
+def takeover(
+    layout: Layout,
+    worker: str,
+    *,
+    reason: str,
+    readbacks: Mapping[str, Mapping[str, Any]] | None = None,
+    runner: Runner = subprocess.run,
+    image: str = DEFAULT_IMAGE,
+) -> dict[str, Any]:
+    """Permit exactly one continuation after the predecessor is proven gone and its effects reconciled.
+
+    Order: (1) container removed and absence read back from the engine (a lease or timeout proves
+    nothing), (2) files checkpointed and branch identity confirmed, (3) every unresolved publication
+    attempt reconciled from coordinator-supplied readback, quarantining only the ones that stay
+    unclear, (4) one continuation recorded under the run-state lock.
+    """
+
+    state = _load_state(layout)
+    issue = _issue_for_worker(state, worker)
+    mapping = state["issue_mappings"][str(issue)]
+    if mapping.get("state") == "retired":
+        raise TakeoverRefused("worker is retired")
+    current = mapping.get("takeover")
+    if isinstance(current, Mapping) and current.get("status") == "authorized":
+        return {**continuation_brief(layout, worker), "already_authorized": True}
+    work = stop_worker(layout, worker, reason=f"takeover: {reason}", runner=runner, image=image)
+    if not work.get("readable", work.get("present") is False):
+        raise TakeoverRefused("checkout evidence is unreadable; treated as unique work, no continuation permitted")
+    recorded = mapping.get("branch")
+    if work.get("present") and work.get("branch") != recorded:
+        raise TakeoverRefused(f"checkout is on {work.get('branch')!r} but run-state records {recorded!r}")
+    for op in list(_load_state(layout)["issue_mappings"][str(issue)].get("publication_ops", [])):
+        if op["status"] in _OP_UNRESOLVED:
+            reconcile_publication(layout, worker, op_id=op["id"], readback=(readbacks or {}).get(op["id"]))
+
+    def mutate(entry: dict[str, Any]) -> None:
+        prior = entry.get("takeover") if isinstance(entry.get("takeover"), Mapping) else {}
+        if prior.get("status") == "authorized":
+            raise TakeoverRefused("another continuation is already authorized")
+        entry["takeover"] = {
+            "status": "authorized", "generation": int(prior.get("generation", 0)) + 1, "reason": reason,
+            "authorized_at": _now(), "checkpoints": [c["ref"] for c in entry.get("checkpoints", []) if c.get("status") == "preserved"],
+        }
+
+    _mutate_mapping(layout, worker, mutate)
+    return {**continuation_brief(layout, worker), "already_authorized": False}
+
+
+def retire_worker(layout: Layout, worker: str, *, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
+    """Remove this worker's container and, only when nothing unique remains, its checkout.
+
+    Only the container carrying this epic/worker label pair is touched; other containers and
+    services are never listed for removal. Unique work, unreadable evidence, unreleased
+    checkpoints and unresolved publication attempts all refuse the checkout removal.
+    """
+
+    state = _load_state(layout)
+    issue = _issue_for_worker(state, worker)
+    work = stop_worker(layout, worker, reason="retirement", runner=runner, image=image)
+    entry = _load_state(layout)["issue_mappings"][str(issue)]
+    reasons = []
+    if work.get("present"):
+        if not work.get("readable"):
+            reasons.append("checkout evidence is unreadable")
+        elif work.get("unique_work"):
+            reasons.append("checkout holds unique work (uncommitted, ignored, or unpublished commits/stash)")
+    if any(c.get("status") == "preserved" for c in entry.get("checkpoints", [])):
+        reasons.append("unreleased checkpoints exist")
+    if any(op.get("status") in _OP_UNRESOLVED for op in entry.get("publication_ops", [])):
+        reasons.append("a publication attempt is unresolved")
+    if reasons:
+        _record_worker(layout, issue, retirement_refused={"at": _now(), "reasons": reasons})
+        raise UniqueWorkPresent("; ".join(reasons) + "; container removed, checkout kept")
+    checkout = layout.checkout(worker)
+    removed = False
+    if work.get("present"):
+        if checkout.is_symlink() or not _is_within(checkout, layout.workers):
+            raise EpicWorkspaceError("checkout path is not inside the workers directory; refusing to remove")
+        try:
+            shutil.rmtree(checkout)
+        except OSError as exc:
+            raise EpicWorkspaceError(f"could not remove checkout: {exc}") from exc
+        removed = True
+    _record_worker(layout, issue, state="retired", retired_at=_now(), checkout_removed=removed)
+    return {"worker": worker, "container_removed": True, "checkout_removed": removed}
 
 
 # --------------------------------------------------------------------------- OpenHands runtime
@@ -690,6 +1218,7 @@ def start_openhands_worker(
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
+    _assert_no_pending_takeover(state["issue_mappings"][str(issue)])
     credential_env = _validate_env_file(claude_env_file, layout)
     _assert_engine(runner)
     if _container_state(layout, worker, runner) is not None:
@@ -766,6 +1295,11 @@ def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mappi
                 f"conversation {prior.get('id')} is {prior.get('status')!r} and could still write; "
                 "continue it, or stop the worker (verified) before a successor conversation starts"
             )
+        _assert_no_pending_takeover(mapping)
+        pending = mapping.get("takeover")
+        if isinstance(pending, Mapping) and pending.get("status") == "authorized":
+            # The single permitted continuation is consumed by this conversation.
+            mapping["takeover"] = {**pending, "status": "consumed", "conversation_id": record["id"], "consumed_at": _now()}
         history = list(mapping.get("conversation_history", []))
         if isinstance(prior, Mapping):
             history.append(dict(prior))
@@ -964,12 +1498,47 @@ def _parser() -> argparse.ArgumentParser:
     cs.add_argument("--worker", required=True)
     cs.add_argument("--engine", default="claude-code", choices=sorted(ENGINE_DEFAULT_MODELS))
     cs.add_argument("--model")
-    cs.add_argument("--prompt-file", required=True)
+    cs.add_argument("--prompt-file", help="task text; required unless --continuation")
+    cs.add_argument("--continuation", action="store_true", help="prefix the prompt with the brief rebuilt from run-state")
     ct = sub.add_parser("conversation-status")
     ct.add_argument("--worker", required=True)
     cr = sub.add_parser("conversation-reconcile", help="resolve a creating/unknown conversation by id readback")
     cr.add_argument("--worker", required=True)
+    cp = sub.add_parser("worker-checkpoint", help="checkpoint unique work of a worker whose container is already gone")
+    cp.add_argument("--worker", required=True)
+    cp.add_argument("--reason", required=True)
+    rl = sub.add_parser("checkpoint-release", help="supersede a checkpoint whose content is in a published commit")
+    rl.add_argument("--worker", required=True)
+    rl.add_argument("--ref", required=True)
+    rl.add_argument("--published-commit", required=True)
+    tk = sub.add_parser("takeover", help="prove the predecessor gone, reconcile, and permit exactly one continuation")
+    tk.add_argument("--worker", required=True)
+    tk.add_argument("--reason", required=True)
+    tk.add_argument("--readback-file", help="JSON {operation-id: readback} supplied by the coordinator")
+    cb = sub.add_parser("continuation-brief", help="rebuild the next authorized action from run-state alone")
+    cb.add_argument("--worker", required=True)
+    rt = sub.add_parser("worker-retire", help="remove the worker's container and, if nothing unique remains, its checkout")
+    rt.add_argument("--worker", required=True)
+    pb = sub.add_parser("publication-begin", help="record the intent to push/open a PR before doing it")
+    pb.add_argument("--worker", required=True)
+    pb.add_argument("--kind", required=True, choices=PUBLICATION_KINDS)
+    pb.add_argument("--expect-sha")
+    pc = sub.add_parser("publication-complete", help="record an observed publication outcome")
+    pc.add_argument("--worker", required=True)
+    pc.add_argument("--op", required=True)
+    pc.add_argument("--result-file", required=True)
+    pr = sub.add_parser("publication-reconcile", help="resolve an unresolved publication from coordinator readback")
+    pr.add_argument("--worker", required=True)
+    pr.add_argument("--op", required=True)
+    pr.add_argument("--readback-file")
     return p
+
+
+def _read_json(path: str) -> Any:
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise EpicWorkspaceError(f"cannot read JSON from {path}: {exc}") from exc
 
 
 def main(
@@ -1007,12 +1576,33 @@ def main(
                 codex_home=Path(args.codex_home) if args.codex_home else None, runner=runner, **_http_kw,
             )
         elif args.cmd == "conversation-start":
-            prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+            if not args.prompt_file and not args.continuation:
+                raise LaunchRefused("--prompt-file is required unless --continuation is given")
+            parts = [continuation_brief(layout, args.worker)["prompt"]] if args.continuation else []
+            if args.prompt_file:
+                parts.append(Path(args.prompt_file).read_text(encoding="utf-8"))
+            prompt = "\n\n".join(parts)
             out = start_conversation(layout, args.worker, engine=args.engine, model=args.model, prompt=prompt, **_http_kw)
         elif args.cmd == "conversation-status":
             out = conversation_status(layout, args.worker, **_http_kw)
         elif args.cmd == "conversation-reconcile":
             out = reconcile_worker_conversation(layout, args.worker, **_http_kw)
+        elif args.cmd == "worker-checkpoint":
+            out = {"checkpoint": checkpoint_worker(layout, args.worker, reason=args.reason, runner=runner)}
+        elif args.cmd == "checkpoint-release":
+            out = release_checkpoint(layout, args.worker, ref=args.ref, published_commit=args.published_commit, runner=runner)
+        elif args.cmd == "takeover":
+            out = takeover(layout, args.worker, reason=args.reason, readbacks=_read_json(args.readback_file) if args.readback_file else None, runner=runner)
+        elif args.cmd == "continuation-brief":
+            out = continuation_brief(layout, args.worker)
+        elif args.cmd == "worker-retire":
+            out = retire_worker(layout, args.worker, runner=runner)
+        elif args.cmd == "publication-begin":
+            out = begin_publication(layout, args.worker, kind=args.kind, expect_sha=args.expect_sha)
+        elif args.cmd == "publication-complete":
+            out = complete_publication(layout, args.worker, op_id=args.op, result=_read_json(args.result_file))
+        elif args.cmd == "publication-reconcile":
+            out = reconcile_publication(layout, args.worker, op_id=args.op, readback=_read_json(args.readback_file) if args.readback_file else None)
         elif args.cmd == "worker-stop":
             out = {"work_at_stop": stop_worker(layout, args.worker, reason=args.reason, runner=runner)}
         else:
