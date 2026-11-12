@@ -280,6 +280,13 @@ point is `~ygg/epic-sandbox/bin/epicws`, which fixes the workspace root to
 `~ygg/epic-sandbox/workspaces` and the engine to the default Docker engine. Neither path is mounted
 into a worker. The dedicated BuilderOps engine and its services are not used.
 
+The new PR evidence adapter emits repository-specific requests; it is not yet wired to automatic
+merge. Upstream automation 1.30.1 runs as `epicws-6615-automation` on the BOB-1 default engine,
+loopback port 18810, pinned to image `sha256:b36bb669cf50846c3fa6c5157397dd47526721334a7a544b7df449d9b62f523d`,
+with its owned persistent SQLite database. Only public read-only discovery runs every five minutes;
+review, repair and merge activation await real lifecycle proofs. Status: `ssh bob-1-builder-system
+'python3 ~/epic-sandbox/automation/status.py'`.
+
 Each epic directory holds a controller-owned bare mirror, one separate clone and home per worker,
 an integration checkout and the existing `epic_run_state` record (worker, branch, container,
 engine, model, budget and next action per Issue). Containers are replaceable; checkouts and
