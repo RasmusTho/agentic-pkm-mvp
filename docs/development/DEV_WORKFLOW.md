@@ -324,6 +324,37 @@ The third command is the emergency stop for every container of one epic. The fou
 previous controller release. Workers must not hot-replace the active release. A candidate controller
 is installed as a new `<sha>` directory between reconciled runs.
 
+Preservation, takeover and retirement (#6617). Commands run from outside any worker:
+
+- `worker-stop` removes the container, reads absence back from the engine, then writes a checkpoint
+  ref `refs/checkpoints/ckpt-NNNN` inside the worker's own checkout (contained, no network, working
+  tree and index untouched). It captures uncommitted, untracked and ignored files. Commits on any
+  local branch and the stash already live in refs and are reported, not copied.
+- Unique work is: uncommitted or untracked files, ignored files that are not an explicit disposable
+  cache (`__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.hypothesis`, `node_modules`,
+  `.venv`), commits on any local branch or in the stash that no remote ref contains, and any evidence
+  that cannot be read (for example a failing `rev-parse HEAD`).
+- `takeover --worker W --reason R [--readback-file F]` is the only way to continue a replaced worker.
+  It removes any remaining container and proves absence by engine readback (a lease or timeout proves
+  nothing), checkpoints the files, confirms the checkout is on the branch run-state records, applies
+  coordinator-supplied GitHub readback to unresolved publication attempts and records exactly one
+  continuation. Until then `worker-start`, `openhands-start` and `conversation-start` refuse. A repeated
+  takeover returns the same continuation; `conversation-start --continuation` consumes it.
+- `continuation-brief` rebuilds the next authorized action, checkpoints, blocked operations and the
+  engine-neutral successor prompt from run-state alone, so a Codex worker can continue a Claude
+  worker's task (and back) without the predecessor writing a summary.
+- Publication goes through `publication-begin` (intent recorded before the effect), then
+  `publication-complete` or `publication-reconcile`. The coordinator reads GitHub and supplies
+  `{"complete": true, "branch": {"exists": .., "sha": ..}, "pull_requests": [..]}`; the controller holds
+  no GitHub credentials. An unknown outcome is quarantined for that operation only and is never
+  replayed; only readback that proves absence authorizes one retry.
+- `worker-retire` removes only the container carrying this epic/worker label pair, then the checkout
+  only when nothing unique remains. It refuses while unique work, unreadable evidence, an unreleased
+  checkpoint or an unresolved publication exists. `checkpoint-release` supersedes a checkpoint once every
+  path it captured is identical in a commit already contained in a remote ref.
+- `worker-create` on an existing checkout reads the actual branch back and refuses a mismatch with the
+  requested or recorded branch instead of recording it.
+
 Claude Code authenticates with a subscription token from `claude setup-token`. The token is stored
 as `CLAUDE_CODE_OAUTH_TOKEN` in `~ygg/.config/epic-workspace/claude.env` (mode 0600, outside the
 workspace root) and passed with `--env-file` (`openhands-start --claude-env-file`). Upstream OpenHands
