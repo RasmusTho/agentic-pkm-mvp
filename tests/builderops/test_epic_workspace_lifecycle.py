@@ -20,12 +20,15 @@ def test_container_removal_preserves_checkout_and_run_state(tmp_path, capsys):
     partial = layout.checkout("w-a") / "app" / "partial.py"
     partial.parent.mkdir()
     partial.write_text("def half_done():\n")
+    (layout.checkout("w-a") / ".gitignore").write_text("*.txt\n")
+    (layout.checkout("w-a") / "notes.txt").write_text("ignored but unique\n")
     (layout.home("w-a") / "session.jsonl").write_text("{}\n")
 
     capsys.readouterr()
     assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "controlled loss") == 0
     stop = json.loads(capsys.readouterr().out)["work_at_stop"]
     assert stop["unique_work"] is True and "app/partial.py" in stop["uncommitted_paths"]
+    assert stop["ignored_paths"] == ["notes.txt"]
     assert engine.containers == {}
 
     # A fresh controller process (new engine object, no in-memory state) reads it back.
@@ -37,7 +40,8 @@ def test_container_removal_preserves_checkout_and_run_state(tmp_path, capsys):
     assert worker["recorded_state"] == "stopped_verified" and worker["container"] == "absent"
     assert worker["model"] == "claude-sonnet-5-5"
     assert worker["next_action"] == "finish checkpoint tests"
-    assert worker["work"]["uncommitted_count"] == 1
+    assert worker["work"]["uncommitted_count"] == 2  # app/partial.py and the new .gitignore
+    assert worker["work"]["ignored_count"] == 1
     assert partial.read_text() == "def half_done():\n"
     assert (layout.home("w-a") / "session.jsonl").exists()
 

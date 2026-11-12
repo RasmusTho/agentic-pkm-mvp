@@ -404,17 +404,30 @@ def inspect_checkout(checkout: Path, *, runner: Runner = subprocess.run) -> dict
     if not checkout.is_dir():
         return {"present": False}
     head = _run(runner, ["git", "-C", str(checkout), "rev-parse", "HEAD"], check=False)
-    porcelain = _run(runner, ["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=all"], check=False)
+    porcelain = _run(
+        runner,
+        ["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=all", "--ignored=matching"],
+        check=False,
+    )
     unpublished = _run(runner, ["git", "-C", str(checkout), "rev-list", "--count", "HEAD", "--not", "--remotes"], check=False)
-    changed = [line[3:] for line in (porcelain.stdout or "").splitlines() if line.strip()]
+    lines = [line for line in (porcelain.stdout or "").splitlines() if line.strip()]
+    changed = [line[3:] for line in lines if not line.startswith("!! ")]
+    # Ignored files (e.g. ``*.txt``, ``.codex-tmp/``) may still be unique work; report them
+    # separately so a reclaim decision can see them instead of treating them as absent.
+    ignored = [line[3:] for line in lines if line.startswith("!! ")]
     count = int((unpublished.stdout or "0").strip() or 0) if unpublished.returncode == 0 else -1
+    readable = porcelain.returncode == 0 and unpublished.returncode == 0
     return {
         "present": True,
+        "readable": readable,
         "head": (head.stdout or "").strip() or None,
         "uncommitted_paths": changed[:50],
         "uncommitted_count": len(changed),
+        "ignored_paths": ignored[:50],
+        "ignored_count": len(ignored),
         "unpublished_commits": count,
-        "unique_work": bool(changed) or count != 0,
+        # Unreadable evidence is treated as unique work (fail safe).
+        "unique_work": (not readable) or bool(changed) or count != 0,
     }
 
 
