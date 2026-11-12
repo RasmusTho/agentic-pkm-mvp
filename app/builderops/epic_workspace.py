@@ -472,7 +472,12 @@ def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = su
     if remaining is not None:
         raise EpicWorkspaceError(f"worker {worker!r} container still present ({remaining}); not verified stopped")
     work = inspect_checkout(layout.checkout(worker), runner=runner)
-    _record_worker(layout, issue, state="stopped_verified", stopped_at=_now(), stop_reason=reason, work_at_stop=work)
+    fields: dict[str, Any] = {"state": "stopped_verified", "stopped_at": _now(), "stop_reason": reason, "work_at_stop": work}
+    conversation = state["issue_mappings"][str(issue)].get("conversation")
+    if isinstance(conversation, Mapping):
+        # The hosting container is verified absent, so this conversation can no longer write.
+        fields["conversation"] = {**conversation, "status": CONVERSATION_ENDED, "ended_at": _now()}
+    _record_worker(layout, issue, **fields)
     return work
 
 
@@ -743,6 +748,36 @@ def resolve_engine(engine: str, model: str | None) -> tuple[str, str]:
     return engine, chosen
 
 
+CONVERSATION_ENDED = "ended_with_container"
+
+
+def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mapping[str, Any]) -> dict[str, Any]:
+    """Atomically admit one writer: refuse while any earlier conversation could still write."""
+
+    key = str(int(issue))
+
+    def updater(state: dict[str, Any]) -> dict[str, Any]:
+        mapping = dict(state.get("issue_mappings", {}).get(key, {}))
+        if mapping.get("worker") != worker or mapping.get("runtime") != "openhands" or mapping.get("state") != "running":
+            raise LaunchRefused("worker has no running OpenHands agent-server")
+        prior = mapping.get("conversation")
+        if isinstance(prior, Mapping) and prior.get("status") != CONVERSATION_ENDED:
+            raise LaunchRefused(
+                f"conversation {prior.get('id')} is {prior.get('status')!r} and could still write; "
+                "continue it, or stop the worker (verified) before a successor conversation starts"
+            )
+        history = list(mapping.get("conversation_history", []))
+        if isinstance(prior, Mapping):
+            history.append(dict(prior))
+        mapping.update(conversation=dict(record), conversation_history=history, updated_at=_now())
+        state["issue_mappings"][key] = mapping
+        return state
+
+    return epic_run_state.update_epic_run_state(
+        layout.run_id, root=layout.run_state_dir, updater=updater, expected_epic_issue_number=layout.epic
+    )
+
+
 def start_conversation(
     layout: Layout,
     worker: str,
@@ -754,8 +789,10 @@ def start_conversation(
 ) -> dict[str, Any]:
     """Create one OpenHands conversation for the worker's task.
 
-    The conversation id is chosen and recorded before the request, so a lost response is
-    reconciled by reading that id back; a create is never repeated blindly.
+    One writer per worker: a new conversation is admitted only when no earlier one exists or the
+    earlier one ended with a verified container stop. The id is chosen and recorded (under the
+    run-state lock) before the request, so a lost response is reconciled by reading that id back;
+    a create is never repeated.
     """
 
     import uuid
@@ -763,16 +800,11 @@ def start_conversation(
     engine, model = resolve_engine(engine, model)
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
-    mapping = state["issue_mappings"][str(issue)]
-    if mapping.get("runtime") != "openhands" or mapping.get("state") != "running":
-        raise LaunchRefused("worker has no running OpenHands agent-server")
-    pending = mapping.get("conversation")
-    if isinstance(pending, Mapping) and pending.get("status") in ("creating", "unknown"):
-        raise LaunchRefused("a previous conversation create has an unknown outcome; reconcile it first")
-    port, key = int(mapping["port"]), _session_key(layout, worker)
     conversation_id = str(uuid.uuid4())
     record: dict[str, Any] = {"id": conversation_id, "engine": engine, "model": model, "status": "creating", "at": _now()}
-    _record_worker(layout, issue, conversation=record)
+    reserved = _reserve_conversation(layout, issue, worker, record)
+    mapping = reserved["issue_mappings"][str(issue)]
+    port, key = int(mapping["port"]), _session_key(layout, worker)
     payload = {
         "conversation_id": conversation_id,
         "workspace": {"working_dir": CONTAINER_WORKSPACE},
@@ -783,7 +815,7 @@ def start_conversation(
     }
     try:
         code, body = http("POST", port, key, "/conversations", payload, 120.0)
-    except OSError:
+    except Exception:  # noqa: BLE001 - any transport/decode failure leaves the outcome unknown
         code, body = 0, None
     if code == 201 and isinstance(body, Mapping) and str(body.get("id")) == conversation_id:
         record.update(status="created", execution_status=body.get("execution_status"))
@@ -794,27 +826,59 @@ def start_conversation(
 
 
 def reconcile_conversation(port: int, key: str, conversation_id: str, *, http: Callable[..., tuple[int, Any]] = _http) -> str:
+    """``created`` only on positive readback; anything else stays ``unknown``.
+
+    A 404 right after a lost create is not proof of absence (the server may still be creating
+    it). The only way out of ``unknown`` besides positive readback is a verified worker stop.
+    """
+
     try:
         code, body = http("GET", port, key, f"/conversations/{conversation_id}", None, 10.0)
-    except OSError:
+    except Exception:  # noqa: BLE001
         return "unknown"
     if code == 200 and isinstance(body, Mapping) and str(body.get("id")) == conversation_id:
         return "created"
-    if code == 404:
-        return "absent"
     return "unknown"
 
 
+def reconcile_worker_conversation(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http) -> dict[str, Any]:
+    state = _load_state(layout)
+    issue = _issue_for_worker(state, worker)
+    mapping = state["issue_mappings"][str(issue)]
+    record = mapping.get("conversation")
+    if not isinstance(record, Mapping):
+        raise EpicWorkspaceError("worker has no conversation to reconcile")
+    if record.get("status") not in ("creating", "unknown"):
+        return dict(record)
+    if mapping.get("state") != "running":
+        raise EpicWorkspaceError("worker is not running; a verified stop already ends its conversation")
+    updated = {**record, "status": reconcile_conversation(int(mapping["port"]), _session_key(layout, worker), record["id"], http=http)}
+    _record_worker(layout, issue, conversation=updated)
+    return updated
+
+
 _FAILURE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("quota_exhausted", re.compile(r"usage limit|quota|rate[ _-]?limit|too many requests|\b429\b|limit reached|credit balance", re.I)),
-    ("authentication", re.compile(r"authentication required|ACPAuthRequired|unauthori[sz]ed|\b401\b|invalid (api key|token)|login", re.I)),
+    # A paid-API credential in use violates the subscription-only policy; never a handoff trigger.
+    ("policy", re.compile(r"credit balance|ANTHROPIC_API_KEY|OPENAI_API_KEY|billing", re.I)),
+    ("authentication", re.compile(
+        r"authentication required|ACPAuthRequired|unauthori[sz]ed|invalid (api key|token|bearer)|"
+        r"token (has )?expired|refresh token|sign in again|log ?in again|not logged in|oauth", re.I)),
+    # Subscription quota phrasing from Claude Code and Codex only; no bare "429" or "rate limit".
+    ("quota_exhausted", re.compile(
+        r"usage limit (reached|has been reached)|claude ai usage limit|you'?ve hit your usage limit|"
+        r"usage_limit_reached|(5|five)-hour limit|weekly limit reached|out of (extra )?usage", re.I)),
     ("context_exhausted", re.compile(r"context (length|window)|prompt is too long|maximum context|too many tokens", re.I)),
-    ("transient_network", re.compile(r"ECONN|ETIMEDOUT|timed? ?out|network|connection (reset|refused)|\b50[234]\b|overloaded", re.I)),
+    ("transient_network", re.compile(
+        r"ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|connection (reset|refused|closed)|"
+        r"timed out|overloaded|\b50[234] (bad gateway|service unavailable|gateway time-?out)", re.I)),
 )
 
 
 def classify_failure(text: str) -> str:
-    """Map an engine/ACP error to one class. Only ``quota_exhausted`` may trigger an engine handoff."""
+    """Map an engine-level (ACP/conversation) error to one class.
+
+    Only ``quota_exhausted`` may trigger an engine handoff. Tool output is never classified here.
+    """
 
     for name, pattern in _FAILURE_PATTERNS:
         if pattern.search(text or ""):
@@ -838,7 +902,7 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
     items = events.get("items", []) if ecode == 200 and isinstance(events, Mapping) else []
     errors = [
         f"{e.get('code') or ''} {e.get('detail') or e.get('error') or ''}".strip()
-        for e in items if isinstance(e, Mapping) and str(e.get("kind", "")).endswith("ErrorEvent")
+        for e in items if isinstance(e, Mapping) and e.get("kind") == "ConversationErrorEvent"
     ]
     last_agent_message = next(
         (e for e in reversed(items) if isinstance(e, Mapping) and e.get("kind") == "MessageEvent" and e.get("source") == "agent"),
@@ -903,6 +967,8 @@ def _parser() -> argparse.ArgumentParser:
     cs.add_argument("--prompt-file", required=True)
     ct = sub.add_parser("conversation-status")
     ct.add_argument("--worker", required=True)
+    cr = sub.add_parser("conversation-reconcile", help="resolve a creating/unknown conversation by id readback")
+    cr.add_argument("--worker", required=True)
     return p
 
 
@@ -945,6 +1011,8 @@ def main(
             out = start_conversation(layout, args.worker, engine=args.engine, model=args.model, prompt=prompt, **_http_kw)
         elif args.cmd == "conversation-status":
             out = conversation_status(layout, args.worker, **_http_kw)
+        elif args.cmd == "conversation-reconcile":
+            out = reconcile_worker_conversation(layout, args.worker, **_http_kw)
         elif args.cmd == "worker-stop":
             out = {"work_at_stop": stop_worker(layout, args.worker, reason=args.reason, runner=runner)}
         else:

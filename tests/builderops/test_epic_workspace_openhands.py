@@ -92,36 +92,54 @@ def test_openhands_worker_runs_pinned_agent_server_inside_the_boundary(tmp_path,
     assert "already mounted" in capsys.readouterr().err
 
 
-def test_engine_selection_and_lost_create_are_reconciled_not_repeated(tmp_path, capsys):
+def test_one_writer_per_worker_and_unknown_creates_are_never_repeated(tmp_path, capsys):
     root, engine, server = _setup(tmp_path, capsys)
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Implement #6617 slice")
+    posts = lambda: [c for c in server.calls if c[0] == "POST"]  # noqa: E731
 
     for bad in (["--engine", "codex", "--model", "gpt-astra"], ["--engine", "codex", "--model", "gpt-5"], ["--model", "astra-1"]):
         assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt), *bad) == 2
-    assert not [c for c in server.calls if c[0] == "POST"]
+    assert posts() == []
 
     capsys.readouterr()
     assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
     first = json.loads(capsys.readouterr().out)
-    [post] = [c for c in server.calls if c[0] == "POST"]
-    assert post[3]["agent_settings"] == {"agent_kind": "acp", "acp_server": "claude-code", "acp_model": "claude-sonnet-5-5"}
-    assert post[3]["tags"] == {"epic": "6615", "issue": "6617", "worker": "w-a"}
+    assert posts()[0][3]["agent_settings"] == {"agent_kind": "acp", "acp_server": "claude-code", "acp_model": "claude-sonnet-5-5"}
+    assert posts()[0][3]["tags"] == {"epic": "6615", "issue": "6617", "worker": "w-a"}
     assert first["status"] == "created" and uuid.UUID(first["id"])
 
-    # Lost response on a create that GitHub-style was applied: reconciled by id, never re-POSTed.
-    server.lose_next_create = True
+    # A live conversation is the worker's single writer: a second one is refused before any POST.
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex", "--prompt-file", str(prompt)) == 2
+    assert "could still write" in capsys.readouterr().err and len(posts()) == 1
+
+    # Only a verified container stop ends it; then a successor conversation (other engine) may start.
+    assert _main(root, engine, server, "worker-stop", "--worker", "w-a", "--reason", "simulated handoff") == 0
+    layout = ew.Layout(root.resolve(), 6615)
+    assert ew._load_state(layout)["issue_mappings"]["6617"]["conversation"]["status"] == ew.CONVERSATION_ENDED
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
+    server.lose_next_create = True  # applied by the server, response lost
+    capsys.readouterr()
     assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex", "--prompt-file", str(prompt)) == 0
     second = json.loads(capsys.readouterr().out)
-    posts = [c for c in server.calls if c[0] == "POST"]
-    assert len(posts) == 2 and second["status"] == "created" and second["model"] == "gpt-6.1-terra"
+    assert second["status"] == "created" and second["model"] == "gpt-6.1-terra" and len(posts()) == 2
+    mapping = ew._load_state(layout)["issue_mappings"]["6617"]
+    assert [c["id"] for c in mapping["conversation_history"]] == [first["id"]]
 
-    # Lost response and the server never applied it: recorded as absent, still not retried.
+    # Lost response and not (yet) visible: stays unknown, blocks a new create, is never re-POSTed.
+    assert _main(root, engine, server, "worker-stop", "--worker", "w-a", "--reason", "r") == 0
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
     server.lose_next_create, server.create_not_applied = True, True
+    capsys.readouterr()
     assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
-    assert json.loads(capsys.readouterr().out)["status"] == "absent"
-    assert len([c for c in server.calls if c[0] == "POST"]) == 3
+    assert json.loads(capsys.readouterr().out)["status"] == "unknown"
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 2
+    assert _main(root, engine, server, "conversation-reconcile", "--worker", "w-a") == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "unknown"
+    assert len(posts()) == 3
+    assert _main(root, engine, server, "worker-stop", "--worker", "w-a", "--reason", "end unknown create") == 0
+    assert ew._load_state(layout)["issue_mappings"]["6617"]["conversation"]["status"] == ew.CONVERSATION_ENDED
 
 
 def test_failure_classes_are_distinct_and_status_reports_them(tmp_path, capsys):
@@ -129,7 +147,14 @@ def test_failure_classes_are_distinct_and_status_reports_them(tmp_path, capsys):
         "[-32000] Authentication required": "authentication",
         "ACPAuthRequired [-32000] Authentication required": "authentication",
         "Claude AI usage limit reached|1731456000": "quota_exhausted",
-        "429 Too Many Requests": "quota_exhausted",
+        "You've hit your usage limit. Try again later.": "quota_exhausted",
+        "429 Too Many Requests": "task_failure",
+        "gh: API rate limit exceeded": "task_failure",
+        'File "x.py", line 429': "task_failure",
+        "Your credit balance is too low to access the Anthropic API": "policy",
+        "OAuth token has expired": "authentication",
+        "refresh token was already used; please sign in again": "authentication",
+        "docker: --network none": "task_failure",
         "prompt is too long: 210000 tokens > 200000 maximum": "context_exhausted",
         "connect ECONNRESET 1.2.3.4:443": "transient_network",
         "pytest exited 1": "task_failure",
@@ -143,7 +168,11 @@ def test_failure_classes_are_distinct_and_status_reports_them(tmp_path, capsys):
     prompt = tmp_path / "p.md"
     prompt.write_text("x")
     assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
-    server.events = [{"kind": "MessageEvent", "source": "user"}, {"kind": "ConversationErrorEvent", "code": "ACPAuthRequired", "detail": "[-32000] Authentication required"}]
+    server.events = [
+        {"kind": "MessageEvent", "source": "user"},
+        {"kind": "AgentErrorEvent", "error": "Claude AI usage limit reached"},  # tool-level: never classified
+        {"kind": "ConversationErrorEvent", "code": "ACPAuthRequired", "detail": "[-32000] Authentication required"},
+    ]
     capsys.readouterr()
     assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
     report = json.loads(capsys.readouterr().out)
