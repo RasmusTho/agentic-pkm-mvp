@@ -287,6 +287,18 @@ with its owned persistent SQLite database. Only public read-only discovery runs 
 review, repair and merge activation await real lifecycle proofs. Status: `ssh bob-1-builder-system
 'python3 ~/epic-sandbox/automation/status.py'`.
 
+`python -m app.builderops.openhands_pr_observation` is the read-only, unauthenticated collector for that
+adapter: it reads open PRs, reviews and the exactly-one `Governing-Issue` Issue through bounded public
+REST calls to the pinned repository and prints a JSON report. It writes no run state and does not call
+`intake`; a trusted caller decides separately whether to pass the observations on. Failures, closed
+PRs, an incomplete inventory, oversize or too deeply nested responses and HTTP refusals (including the
+unauthenticated limit of about 60 requests per hour, roughly 3 per open PR) are reported explicitly as
+an incomplete scan with exit code 1. The transport timeout applies per socket operation and the
+120-second deadline is only checked between requests, so a scan is not a hard wall-clock bound.
+Owner, route, review, Verify, CI, closure and effect evidence have no trusted source there and stay
+`unknown`, so every PR waits and nothing can be reserved from this report. Nothing repeats a scan
+automatically, and the collector is not wired into the scheduled command.
+
 Each epic directory holds a controller-owned bare mirror, one separate clone and home per worker,
 an integration checkout and the existing `epic_run_state` record (worker, branch, container,
 engine, model, budget and next action per Issue). Containers are replaceable; checkouts and
