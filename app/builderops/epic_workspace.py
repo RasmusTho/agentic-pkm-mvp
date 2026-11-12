@@ -44,6 +44,18 @@ CONTAINER_HOME = "/home/worker"
 WORKER_UID_GID = "1000:1000"
 DEFAULT_IMAGE = "epic-worker:baseline"
 DEFAULT_NETWORK = "epicws"  # owned user-defined bridge; host/container modes are refused
+# Upstream OpenHands agent-server (same release as the #6600 pin). It bundles the ACP providers
+# claude-agent-acp 0.63.0 (``claude-code``) and codex-acp 2.2.2 (``codex``).
+OPENHANDS_IMAGE = (
+    "ghcr.io/openhands/agent-server:1.60.1-python"
+    "@sha256:b43ee580c2177280c81cb807c9a559d7a14aa13b48dba5040132a6a637bb6d55"
+)
+OPENHANDS_CONTAINER_PORT = 8000
+OPENHANDS_PORT_RANGE = range(18700, 18800)
+CODEX_HOME_TARGET = "/run/codex-home"
+# Engine/model policy for epic workers (#6615 owner revisions 2026-11-12/12b).
+ENGINE_DEFAULT_MODELS = {"claude-code": "claude-sonnet-5-5", "codex": "gpt-6.1-terra"}
+_ENGINE_MODEL = {"claude-code": re.compile(r"^claude-[a-z0-9.-]{1,60}$"), "codex": re.compile(r"^gpt-6\.1-terra$")}
 
 _WORKER_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
@@ -332,6 +344,11 @@ def build_launch_argv(
     env_file: Path | None = None,
     extra_mounts: Sequence[tuple[str, str]] = (),
     network: str = DEFAULT_NETWORK,
+    extra_env_files: Sequence[Path] = (),
+    env: Mapping[str, str] | None = None,
+    publish_port: int | None = None,
+    credential_mounts: Sequence[tuple[str, str]] = (),
+    tmpfs_exec: bool = False,
 ) -> list[str]:
     budget = budget.validated()
     checkout = layout.checkout(worker)
@@ -360,16 +377,29 @@ def build_launch_argv(
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
         "--read-only",
-        "--tmpfs", "/tmp:rw,nosuid,size=512m",
+        # The upstream agent-server is a self-extracting binary that unpacks into /tmp.
+        "--tmpfs", "/tmp:rw,exec,nosuid,size=768m" if tmpfs_exec else "/tmp:rw,nosuid,size=512m",
         "--user", WORKER_UID_GID,
         "--network", network,
         "--env", f"HOME={CONTAINER_HOME}",
         "--workdir", CONTAINER_WORKSPACE,
     ]
+    if publish_port is not None:
+        if publish_port not in OPENHANDS_PORT_RANGE:
+            raise LaunchRefused(f"published port {publish_port} outside the sandbox range")
+        argv += ["--publish", f"127.0.0.1:{publish_port}:{OPENHANDS_CONTAINER_PORT}"]
+    for key, value in (env or {}).items():
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", key) or "\n" in value or "\x00" in value:
+            raise LaunchRefused(f"invalid environment entry {key!r}")
+        argv += ["--env", f"{key}={value}"]
     for source, target in mounts:
         argv += ["--mount", f"type=bind,source={source},target={target}"]
-    if env_file is not None:
-        argv += ["--env-file", str(env_file)]
+    for source, target in credential_mounts:
+        if not _MOUNT_PATH.match(source) or target != CODEX_HOME_TARGET:
+            raise LaunchRefused("invalid credential mount")
+        argv += ["--mount", f"type=bind,source={source},target={target}"]
+    for path in ([env_file] if env_file is not None else []) + list(extra_env_files):
+        argv += ["--env-file", str(path)]
     argv.append(image)
     argv += list(command)
     return argv
@@ -405,6 +435,9 @@ def start_worker(
         layout,
         issue,
         state="running",
+        # Plain container execution is a recorded bootstrap/diagnostic exception, never the
+        # normal delivery path (#6615 owner revision 2026-11-12b).
+        runtime="native-exception",
         container=layout.container_name(worker),
         container_id=container_id,
         image=image,
@@ -543,6 +576,287 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
     }
 
 
+# --------------------------------------------------------------------------- OpenHands runtime
+#
+# The worker container runs the upstream OpenHands agent-server. Conversations, events, ACP
+# engine processes and model selection are upstream facilities; this controller adds only the
+# epic seams: workspace/isolation, a loopback port and session key per worker, issue/conversation
+# association in run-state, and reconciliation of an unknown create outcome.
+
+def _http(method: str, port: int, key: str, path: str, body: Mapping[str, Any] | None, timeout: float) -> tuple[int, Any]:
+    import urllib.error
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401
+            return None
+
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{int(port)}/api{path}", data=data, method=method,
+        headers={"X-Session-API-Key": key, "Content-Type": "application/json"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            raw = response.read(1_048_577)
+            return response.status, json.loads(raw) if raw else None
+    except urllib.error.HTTPError as exc:
+        return exc.code, None
+
+
+def _control_dir(layout: Layout) -> Path:
+    path = layout.epic_dir / "control"
+    path.mkdir(mode=0o700, exist_ok=True)
+    return path
+
+
+def _session_key_file(layout: Layout, worker: str) -> Path:
+    """Per-worker agent-server key, kept in a controller-only directory (never mounted)."""
+
+    import secrets
+
+    path = _control_dir(layout) / f"{validate_worker_id(worker)}.key"
+    if not path.exists():
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(f"OH_SESSION_API_KEYS_0={secrets.token_urlsafe(32)}\n")
+    return path
+
+
+def _session_key(layout: Layout, worker: str) -> str:
+    line = _session_key_file(layout, worker).read_text().strip()
+    return line.split("=", 1)[1]
+
+
+def _allocate_port(runner: Runner) -> int:
+    import socket
+
+    used = runner(["docker", "ps", "--format", "{{.Ports}}"], capture_output=True, text=True, check=False)
+    if used.returncode != 0:
+        raise EngineUnavailable("cannot read published ports")
+    taken = set(int(m) for m in re.findall(r"127\.0\.0\.1:(\d+)->", used.stdout or ""))
+    for port in OPENHANDS_PORT_RANGE:
+        if port in taken:
+            continue
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
+    raise LaunchRefused("no free sandbox port")
+
+
+def _validate_codex_home(path: Path | None, layout: Layout, runner: Runner) -> list[tuple[str, str]]:
+    """The Terra reserve's single ChatGPT login directory. One mounting worker at a time, because
+    refresh tokens rotate and divergent copies would invalidate each other."""
+
+    if path is None:
+        return []
+    home = Path(path).expanduser()
+    if not home.is_dir() or home.is_symlink() or _is_within(home, layout.root):
+        raise LaunchRefused("codex home must be an existing directory outside the workspace root")
+    if stat.S_IMODE(home.stat().st_mode) & 0o077:
+        raise LaunchRefused("codex home must not be group/world accessible")
+    busy = runner(["docker", "ps", "--filter", "label=epic-workspace.codex-home=1", "--format", "{{.Names}}"],
+                  capture_output=True, text=True, check=False)
+    if busy.returncode != 0 or (busy.stdout or "").strip():
+        raise LaunchRefused("codex home is already mounted by another running worker (or unknown)")
+    return [(str(home.resolve()), CODEX_HOME_TARGET)]
+
+
+def start_openhands_worker(
+    layout: Layout,
+    worker: str,
+    *,
+    budget: Budget = Budget(cpus="1.0", memory="1536m", pids=512),
+    claude_env_file: Path | None = None,
+    codex_home: Path | None = None,
+    image: str = OPENHANDS_IMAGE,
+    network: str = DEFAULT_NETWORK,
+    runner: Runner = subprocess.run,
+    http: Callable[..., tuple[int, Any]] = _http,
+    ready_timeout: float = 90.0,
+) -> dict[str, Any]:
+    """Start the worker's OpenHands agent-server container and wait for authenticated readiness."""
+
+    import time
+
+    state = _load_state(layout)
+    issue = _issue_for_worker(state, worker)
+    credential_env = _validate_env_file(claude_env_file, layout)
+    _assert_engine(runner)
+    if _container_state(layout, worker, runner) is not None:
+        raise LaunchRefused(f"container for worker {worker!r} already exists; stop it before a successor starts")
+    codex_mounts = _validate_codex_home(codex_home, layout, runner)
+    key_file = _session_key_file(layout, worker)
+    port = _allocate_port(runner)
+    env = {
+        "HOME": CONTAINER_HOME,
+        "OH_ENABLE_VSCODE": "false",
+        "OH_CONVERSATIONS_PATH": f"{CONTAINER_HOME}/openhands/conversations",
+        "OH_BASH_EVENTS_DIR": f"{CONTAINER_HOME}/openhands/bash_events",
+        "OH_WORKSPACE_PATH": CONTAINER_WORKSPACE,
+    }
+    if codex_mounts:
+        env["CODEX_HOME"] = CODEX_HOME_TARGET
+    argv = build_launch_argv(
+        layout, worker, image=image, command=[], budget=budget, env_file=credential_env,
+        extra_env_files=[key_file], env=env, publish_port=port, credential_mounts=codex_mounts,
+        network=network, tmpfs_exec=True,
+    )
+    if codex_mounts:
+        argv[argv.index("--label"):argv.index("--label")] = ["--label", "epic-workspace.codex-home=1"]
+    result = _run(runner, argv)
+    _record_worker(
+        layout, issue, state="starting", runtime="openhands", container=layout.container_name(worker),
+        container_id=(result.stdout or "").strip()[:64], image=image, port=port,
+        budget={"cpus": budget.cpus, "memory": budget.memory, "pids": budget.pids}, network=network,
+        credentials={"claude": "oauth-token-env" if credential_env else None, "codex": "chatgpt-login-dir" if codex_mounts else None},
+        started_at=_now(),
+    )
+    key = _session_key(layout, worker)
+    deadline = time.monotonic() + ready_timeout
+    while True:
+        try:
+            code, _ = http("GET", port, key, "/conversations/search?limit=1", None, 5.0)
+        except OSError:
+            code = 0
+        if code == 200:
+            break
+        if time.monotonic() >= deadline:
+            raise EpicWorkspaceError("agent-server did not become ready; inspect container")
+        time.sleep(1.0)
+    _record_worker(layout, issue, state="running")
+    return {"port": port, "container": layout.container_name(worker), "image": image}
+
+
+def resolve_engine(engine: str, model: str | None) -> tuple[str, str]:
+    """Owner-selectable engine/model under the epic policy. Never Astra, never paid API."""
+
+    if engine not in ENGINE_DEFAULT_MODELS:
+        raise LaunchRefused(f"unsupported engine {engine!r}; use claude-code or codex")
+    chosen = model or ENGINE_DEFAULT_MODELS[engine]
+    if "astra" in chosen.lower() or not _ENGINE_MODEL[engine].match(chosen):
+        raise LaunchRefused(f"model {chosen!r} is not permitted for engine {engine!r}")
+    return engine, chosen
+
+
+def start_conversation(
+    layout: Layout,
+    worker: str,
+    *,
+    engine: str,
+    model: str | None,
+    prompt: str,
+    http: Callable[..., tuple[int, Any]] = _http,
+) -> dict[str, Any]:
+    """Create one OpenHands conversation for the worker's task.
+
+    The conversation id is chosen and recorded before the request, so a lost response is
+    reconciled by reading that id back; a create is never repeated blindly.
+    """
+
+    import uuid
+
+    engine, model = resolve_engine(engine, model)
+    state = _load_state(layout)
+    issue = _issue_for_worker(state, worker)
+    mapping = state["issue_mappings"][str(issue)]
+    if mapping.get("runtime") != "openhands" or mapping.get("state") != "running":
+        raise LaunchRefused("worker has no running OpenHands agent-server")
+    pending = mapping.get("conversation")
+    if isinstance(pending, Mapping) and pending.get("status") in ("creating", "unknown"):
+        raise LaunchRefused("a previous conversation create has an unknown outcome; reconcile it first")
+    port, key = int(mapping["port"]), _session_key(layout, worker)
+    conversation_id = str(uuid.uuid4())
+    record: dict[str, Any] = {"id": conversation_id, "engine": engine, "model": model, "status": "creating", "at": _now()}
+    _record_worker(layout, issue, conversation=record)
+    payload = {
+        "conversation_id": conversation_id,
+        "workspace": {"working_dir": CONTAINER_WORKSPACE},
+        "agent_settings": {"agent_kind": "acp", "acp_server": engine, "acp_model": model},
+        "autotitle": False,
+        "tags": {"epic": str(layout.epic), "issue": str(issue), "worker": worker},
+        "initial_message": {"role": "user", "content": [{"type": "text", "text": prompt}]},
+    }
+    try:
+        code, body = http("POST", port, key, "/conversations", payload, 120.0)
+    except OSError:
+        code, body = 0, None
+    if code == 201 and isinstance(body, Mapping) and str(body.get("id")) == conversation_id:
+        record.update(status="created", execution_status=body.get("execution_status"))
+    else:
+        record.update(status=reconcile_conversation(port, key, conversation_id, http=http))
+    _record_worker(layout, issue, conversation=record)
+    return record
+
+
+def reconcile_conversation(port: int, key: str, conversation_id: str, *, http: Callable[..., tuple[int, Any]] = _http) -> str:
+    try:
+        code, body = http("GET", port, key, f"/conversations/{conversation_id}", None, 10.0)
+    except OSError:
+        return "unknown"
+    if code == 200 and isinstance(body, Mapping) and str(body.get("id")) == conversation_id:
+        return "created"
+    if code == 404:
+        return "absent"
+    return "unknown"
+
+
+_FAILURE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("quota_exhausted", re.compile(r"usage limit|quota|rate[ _-]?limit|too many requests|\b429\b|limit reached|credit balance", re.I)),
+    ("authentication", re.compile(r"authentication required|ACPAuthRequired|unauthori[sz]ed|\b401\b|invalid (api key|token)|login", re.I)),
+    ("context_exhausted", re.compile(r"context (length|window)|prompt is too long|maximum context|too many tokens", re.I)),
+    ("transient_network", re.compile(r"ECONN|ETIMEDOUT|timed? ?out|network|connection (reset|refused)|\b50[234]\b|overloaded", re.I)),
+)
+
+
+def classify_failure(text: str) -> str:
+    """Map an engine/ACP error to one class. Only ``quota_exhausted`` may trigger an engine handoff."""
+
+    for name, pattern in _FAILURE_PATTERNS:
+        if pattern.search(text or ""):
+            return name
+    return "task_failure" if text else "unclassified"
+
+
+def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http, limit: int = 50) -> dict[str, Any]:
+    state = _load_state(layout)
+    issue = _issue_for_worker(state, worker)
+    mapping = state["issue_mappings"][str(issue)]
+    record = mapping.get("conversation")
+    if not isinstance(record, Mapping):
+        return {"issue": issue, "worker": worker, "conversation": None}
+    port, key, cid = int(mapping["port"]), _session_key(layout, worker), record["id"]
+    try:
+        code, info = http("GET", port, key, f"/conversations/{cid}", None, 10.0)
+        ecode, events = http("GET", port, key, f"/conversations/{cid}/events/search?limit={int(limit)}", None, 10.0)
+    except OSError:
+        return {"issue": issue, "worker": worker, "conversation": dict(record), "reachable": False}
+    items = events.get("items", []) if ecode == 200 and isinstance(events, Mapping) else []
+    errors = [
+        f"{e.get('code') or ''} {e.get('detail') or e.get('error') or ''}".strip()
+        for e in items if isinstance(e, Mapping) and str(e.get("kind", "")).endswith("ErrorEvent")
+    ]
+    last_agent_message = next(
+        (e for e in reversed(items) if isinstance(e, Mapping) and e.get("kind") == "MessageEvent" and e.get("source") == "agent"),
+        None,
+    )
+    return {
+        "issue": issue,
+        "worker": worker,
+        "conversation": dict(record),
+        "reachable": code == 200,
+        "execution_status": info.get("execution_status") if isinstance(info, Mapping) else None,
+        "event_kinds": [e.get("kind") for e in items if isinstance(e, Mapping)][-limit:],
+        "errors": errors,
+        "failure_class": classify_failure(errors[-1]) if errors else None,
+        "last_agent_message": last_agent_message,
+    }
+
+
 # --------------------------------------------------------------------------- CLI
 
 
@@ -575,11 +889,31 @@ def _parser() -> argparse.ArgumentParser:
     t.add_argument("--worker", required=True)
     t.add_argument("--reason", required=True)
     sub.add_parser("status")
+    o = sub.add_parser("openhands-start", help="start the worker's pinned OpenHands agent-server container")
+    o.add_argument("--worker", required=True)
+    o.add_argument("--cpus", default="1.0")
+    o.add_argument("--memory", default="1536m")
+    o.add_argument("--pids", type=int, default=512)
+    o.add_argument("--claude-env-file", help="file holding CLAUDE_CODE_OAUTH_TOKEN (mode 0600, outside the root)")
+    o.add_argument("--codex-home", help="Terra reserve ChatGPT login directory (mode 0700, outside the root)")
+    cs = sub.add_parser("conversation-start", help="start an OpenHands conversation with the selected engine/model")
+    cs.add_argument("--worker", required=True)
+    cs.add_argument("--engine", default="claude-code", choices=sorted(ENGINE_DEFAULT_MODELS))
+    cs.add_argument("--model")
+    cs.add_argument("--prompt-file", required=True)
+    ct = sub.add_parser("conversation-status")
+    ct.add_argument("--worker", required=True)
     return p
 
 
-def main(argv: Sequence[str] | None = None, *, runner: Runner = subprocess.run) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    runner: Runner = subprocess.run,
+    http: Callable[..., tuple[int, Any]] | None = None,
+) -> int:
     args = _parser().parse_args(argv)
+    _http_kw: dict[str, Any] = {"http": http} if http is not None else {}
     root = Path(args.root).expanduser().resolve()
     layout = Layout(root, args.epic)
     try:
@@ -600,6 +934,17 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = subprocess.run) 
                 extra_mounts=mounts, engine=args.engine, model=args.model, network=args.network, runner=runner,
             )
             out = {"container_id": cid}
+        elif args.cmd == "openhands-start":
+            out = start_openhands_worker(
+                layout, args.worker, budget=Budget(args.cpus, args.memory, args.pids),
+                claude_env_file=Path(args.claude_env_file) if args.claude_env_file else None,
+                codex_home=Path(args.codex_home) if args.codex_home else None, runner=runner, **_http_kw,
+            )
+        elif args.cmd == "conversation-start":
+            prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+            out = start_conversation(layout, args.worker, engine=args.engine, model=args.model, prompt=prompt, **_http_kw)
+        elif args.cmd == "conversation-status":
+            out = conversation_status(layout, args.worker, **_http_kw)
         elif args.cmd == "worker-stop":
             out = {"work_at_stop": stop_worker(layout, args.worker, reason=args.reason, runner=runner)}
         else:

@@ -1,0 +1,150 @@
+"""OpenHands-managed worker runtime for the epic workspace (#6616, owner revision 2026-11-12b)."""
+
+from __future__ import annotations
+
+import json
+import uuid
+
+from app.builderops import epic_workspace as ew
+from tests.builderops.test_epic_workspace_isolation import FakeEngine, _cli, _seed_repo
+
+
+class FakeAgentServer:
+    """Minimal stand-in for the upstream agent-server REST surface."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, str, dict | None]] = []
+        self.conversations: dict[str, dict] = {}
+        self.lose_next_create = False
+        self.create_not_applied = False
+        self.events: list[dict] = []
+
+    def __call__(self, method, port, key, path, body, timeout):
+        assert key and len(key) >= 32
+        self.calls.append((method, port, path, body))
+        if method == "GET" and path.startswith("/conversations/search"):
+            return 200, {"items": []}
+        if method == "POST" and path == "/conversations":
+            cid = body["conversation_id"]
+            if not self.create_not_applied:
+                self.conversations[cid] = {"id": cid, "execution_status": "running", "agent_settings": body["agent_settings"]}
+            if self.lose_next_create:
+                self.lose_next_create = False
+                raise OSError("response lost")
+            return 201, self.conversations[cid]
+        if method == "GET" and "/events/search" in path:
+            return 200, {"items": self.events}
+        if method == "GET" and path.startswith("/conversations/"):
+            cid = path.rsplit("/", 1)[1]
+            return (200, self.conversations[cid]) if cid in self.conversations else (404, None)
+        raise AssertionError((method, path))
+
+
+def _setup(tmp_path, capsys):
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine, server = FakeEngine(), FakeAgentServer()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    assert _cli(root, 6615, engine, "worker-create", "--worker", "w-a", "--issue", "6617", "--branch", "b/a", "--next-action", "implement") == 0
+    capsys.readouterr()
+    return root, engine, server
+
+
+def _main(root, engine, server, *args):
+    return ew.main(["--root", str(root), "--epic", "6615", *args], runner=engine, http=server)
+
+
+def test_openhands_worker_runs_pinned_agent_server_inside_the_boundary(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    secret = tmp_path / "claude.env"
+    secret.write_text("CLAUDE_CODE_OAUTH_TOKEN=placeholder\n")
+    secret.chmod(0o600)
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a", "--claude-env-file", str(secret)) == 0
+    [run] = engine.runs()
+    assert ew.OPENHANDS_IMAGE in run and run[-1] == ew.OPENHANDS_IMAGE  # upstream image, its own entrypoint
+    assert "--read-only" in run and run[run.index("--cap-drop") + 1] == "ALL" and run[run.index("--user") + 1] == "1000:1000"
+    assert run[run.index("--publish") + 1].startswith("127.0.0.1:") and run[run.index("--network") + 1] == "epicws"
+    assert "/tmp:rw,exec,nosuid,size=768m" in run
+    mounts = [run[i + 1] for i, a in enumerate(run) if a == "--mount"]
+    layout = ew.Layout(root.resolve(), 6615)
+    assert mounts == [
+        f"type=bind,source={layout.checkout('w-a')},target=/workspace",
+        f"type=bind,source={layout.home('w-a')},target=/home/worker",
+    ]
+    env_files = [run[i + 1] for i, a in enumerate(run) if a == "--env-file"]
+    key_file = layout.epic_dir / "control" / "w-a.key"
+    assert env_files == [str(secret), str(key_file)] and (key_file.stat().st_mode & 0o077) == 0
+    assert "OH_CONVERSATIONS_PATH=/home/worker/openhands/conversations" in run
+    assert "placeholder" not in json.dumps(run)
+    state = ew._load_state(layout)["issue_mappings"]["6617"]
+    assert state["runtime"] == "openhands" and state["state"] == "running" and state["credentials"]["claude"] == "oauth-token-env"
+
+    # A second agent-server for the same worker is refused; the codex login dir is single-mount.
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 2
+    codex = tmp_path / "codex-home"
+    codex.mkdir(mode=0o700)
+    assert _cli(root, 6615, engine, "worker-create", "--worker", "w-b", "--issue", "6618", "--branch", "b/b", "--next-action", "x") == 0
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-b", "--codex-home", str(codex)) == 0
+    run_b = engine.runs()[-1]
+    assert f"type=bind,source={codex.resolve()},target=/run/codex-home" in run_b and "CODEX_HOME=/run/codex-home" in run_b
+    assert _cli(root, 6615, engine, "worker-create", "--worker", "w-c", "--issue", "6619", "--branch", "b/c", "--next-action", "x") == 0
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-c", "--codex-home", str(codex)) == 2
+    assert "already mounted" in capsys.readouterr().err
+
+
+def test_engine_selection_and_lost_create_are_reconciled_not_repeated(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("Implement #6617 slice")
+
+    for bad in (["--engine", "codex", "--model", "gpt-astra"], ["--engine", "codex", "--model", "gpt-5"], ["--model", "astra-1"]):
+        assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt), *bad) == 2
+    assert not [c for c in server.calls if c[0] == "POST"]
+
+    capsys.readouterr()
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
+    first = json.loads(capsys.readouterr().out)
+    [post] = [c for c in server.calls if c[0] == "POST"]
+    assert post[3]["agent_settings"] == {"agent_kind": "acp", "acp_server": "claude-code", "acp_model": "claude-sonnet-5-5"}
+    assert post[3]["tags"] == {"epic": "6615", "issue": "6617", "worker": "w-a"}
+    assert first["status"] == "created" and uuid.UUID(first["id"])
+
+    # Lost response on a create that GitHub-style was applied: reconciled by id, never re-POSTed.
+    server.lose_next_create = True
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex", "--prompt-file", str(prompt)) == 0
+    second = json.loads(capsys.readouterr().out)
+    posts = [c for c in server.calls if c[0] == "POST"]
+    assert len(posts) == 2 and second["status"] == "created" and second["model"] == "gpt-6.1-terra"
+
+    # Lost response and the server never applied it: recorded as absent, still not retried.
+    server.lose_next_create, server.create_not_applied = True, True
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "absent"
+    assert len([c for c in server.calls if c[0] == "POST"]) == 3
+
+
+def test_failure_classes_are_distinct_and_status_reports_them(tmp_path, capsys):
+    cases = {
+        "[-32000] Authentication required": "authentication",
+        "ACPAuthRequired [-32000] Authentication required": "authentication",
+        "Claude AI usage limit reached|1731456000": "quota_exhausted",
+        "429 Too Many Requests": "quota_exhausted",
+        "prompt is too long: 210000 tokens > 200000 maximum": "context_exhausted",
+        "connect ECONNRESET 1.2.3.4:443": "transient_network",
+        "pytest exited 1": "task_failure",
+        "": "unclassified",
+    }
+    for text, expected in cases.items():
+        assert ew.classify_failure(text) == expected, text
+
+    root, engine, server = _setup(tmp_path, capsys)
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
+    prompt = tmp_path / "p.md"
+    prompt.write_text("x")
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
+    server.events = [{"kind": "MessageEvent", "source": "user"}, {"kind": "ConversationErrorEvent", "code": "ACPAuthRequired", "detail": "[-32000] Authentication required"}]
+    capsys.readouterr()
+    assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["failure_class"] == "authentication" and report["execution_status"] == "running"
