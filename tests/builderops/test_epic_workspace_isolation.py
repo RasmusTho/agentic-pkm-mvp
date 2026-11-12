@@ -19,6 +19,8 @@ class FakeEngine:
         self.calls: list[list[str]] = []
         self.containers: dict[str, str] = {}
         self.host_git: list[list[str]] = []
+        self.labels: dict[str, list[str]] = {}
+        self.ports: dict[str, int] = {}
         self.inspections: list[list[str]] = []
 
     def __call__(self, argv, **kwargs):
@@ -31,6 +33,12 @@ class FakeEngine:
             return subprocess.CompletedProcess(argv, 1, "", "Cannot connect to the Docker daemon")
         if argv[1] == "version":
             return subprocess.CompletedProcess(argv, 0, "29.1.3\n", "")
+        if argv[1] == "ps" and not any(a.startswith(f"label={ew.LABEL_WORKER}=") for a in argv):
+            if "{{.Ports}}" in argv:
+                return subprocess.CompletedProcess(argv, 0, "".join(f"127.0.0.1:{p}->8000/tcp\n" for p in self.ports.values()), "")
+            label = next((a for a in argv if a.startswith("label=")), "")
+            busy = [w for w, labels in self.labels.items() if label[len("label="):] in labels and w in self.containers]
+            return subprocess.CompletedProcess(argv, 0, "".join(f"{w}\n" for w in busy), "")
         if argv[1] == "ps":
             prefix = f"label={ew.LABEL_WORKER}="
             worker = next(a[len(prefix):] for a in argv if a.startswith(prefix))
@@ -51,14 +59,19 @@ class FakeEngine:
             del git[i - 1:i + 1]
             return subprocess.run(git, capture_output=True, text=True, check=False)
         if argv[1] == "run":
-            worker = argv[argv.index("--label", argv.index("--label") + 1) + 1].split("=", 1)[1]
+            labels = [argv[i + 1] for i, a in enumerate(argv) if a == "--label"]
+            worker = next(v.split("=", 1)[1] for v in labels if v.startswith(f"{ew.LABEL_WORKER}="))
             self.containers[worker] = "running"
+            self.labels[worker] = labels
+            if "--publish" in argv:
+                self.ports[worker] = int(argv[argv.index("--publish") + 1].split(":")[1])
             return subprocess.CompletedProcess(argv, 0, "c0ffee" * 10 + "\n", "")
         if argv[1] == "rm":
             name = argv[-1]
             for worker in list(self.containers):
                 if name.endswith(f"-{worker}"):
                     del self.containers[worker]
+                    self.ports.pop(worker, None)
             return subprocess.CompletedProcess(argv, 0, name + "\n", "")
         raise AssertionError(f"unexpected docker call {argv}")
 
