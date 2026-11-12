@@ -1,4 +1,8 @@
+import asyncio
 import json
+import socket
+import threading
+import urllib.error
 
 import pytest
 
@@ -52,7 +56,7 @@ class Api:
         value = self.routes.get(key)
         if value is None:
             return 404, b""
-        if isinstance(value, Exception):
+        if isinstance(value, BaseException):
             raise value
         if isinstance(value, tuple):
             return value
@@ -300,3 +304,128 @@ def test_deeply_nested_first_inventory_page_is_an_incomplete_scan_not_a_crash():
     report = obs.collect(Api([], **{f"{BASE}/pulls?state=open": (200, DEEP)}))
     assert not report["inventory_complete"] and report["observations"] == []
     assert "nesting" in report["failures"][0]["reason"]
+
+
+def ok(value):
+    body = json.dumps(value).encode()
+    return (b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
+            b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+
+
+TRUNCATED_CHUNK = (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                   b"400\r\n[{\"number\": 9}")
+RAW_FAILURES = {
+    "IncompleteRead": TRUNCATED_CHUNK,
+    "BadStatusLine": b"HTTP/1.1 2x0 OK\r\nConnection: close\r\n\r\n",
+    "LineTooLong": b"HTTP/1.1 200 OK\r\nX-Pad: " + b"a" * 70_000 + b"\r\n\r\n[]",
+    "RemoteDisconnected": b"",
+}
+
+
+@pytest.fixture
+def loopback(monkeypatch):
+    """Owned loopback HTTP peer answering canned raw bytes per request target."""
+    routes = {}
+    server = socket.create_server(("127.0.0.1", 0))
+    server.settimeout(0.2)
+    stopping = threading.Event()
+
+    def serve():
+        while not stopping.is_set():
+            try:
+                conn, _ = server.accept()
+            except TimeoutError:
+                continue
+            with conn:
+                request = b""
+                while b"\r\n\r\n" not in request:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    request += chunk
+                target = request.split(b" ")[1].decode() if request.count(b" ") >= 2 else ""
+                conn.sendall(routes.get(target, b"HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n"
+                                                b"Connection: close\r\n\r\n{}"))
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    monkeypatch.setattr(obs, "API_ROOT", f"http://127.0.0.1:{server.getsockname()[1]}")
+    yield routes
+    stopping.set()
+    thread.join(5)
+    server.close()
+
+
+@pytest.mark.parametrize("kind", sorted(RAW_FAILURES))
+def test_real_transport_protocol_failures_become_bounded_observation_errors(loopback, kind):
+    loopback[f"{BASE}/pulls/1"] = RAW_FAILURES[kind]
+    with pytest.raises(obs.ObservationError) as caught:
+        obs.public_fetch(f"{BASE}/pulls/1", 5.0)
+    assert str(caught.value) == f"transport failure: {kind}"
+
+
+def test_real_transport_http_error_is_closed_and_has_no_body(loopback, monkeypatch):
+    closed = []
+    original = urllib.error.HTTPError.close
+    monkeypatch.setattr(urllib.error.HTTPError, "close", lambda self: (closed.append(self.code), original(self)))
+    loopback[f"{BASE}/pulls/1"] = (b"HTTP/1.1 403 Forbidden\r\nContent-Length: 6\r\n"
+                                   b"Connection: close\r\n\r\nsecret")
+    assert obs.public_fetch(f"{BASE}/pulls/1", 5.0) == (403, b"")
+    assert closed == [403]
+
+
+def test_real_transport_mixed_pr_and_inventory_failures_keep_peers_and_rows(loopback, monkeypatch):
+    monkeypatch.setattr(obs, "PER_PAGE", 2)
+    loopback[f"{BASE}/pulls?state=open&per_page=2&page=1"] = ok([{"number": 1}, {"number": 2}])
+    loopback[f"{BASE}/pulls?state=open&per_page=2&page=2"] = TRUNCATED_CHUNK
+    loopback[f"{BASE}/pulls/1"] = ok(pr_json(1))
+    loopback[f"{BASE}/issues/101"] = ok(issue_json(101))
+    loopback[f"{BASE}/pulls/1/reviews?per_page=2&page=1"] = ok([review_json()])
+    loopback[f"{BASE}/pulls/2"] = RAW_FAILURES["BadStatusLine"]
+    report = obs.collect()
+    assert [o["number"] for o in report["observations"]] == [1]
+    assert report["failures"] == [
+        {"number": None, "reason": "inventory incomplete: transport failure: IncompleteRead"},
+        {"number": 2, "reason": "transport failure: BadStatusLine"}]
+    assert not report["complete"] and not report["inventory_complete"]
+
+
+class Unexpected(Exception):
+    pass
+
+
+def test_unexpected_exception_is_isolated_per_pr_and_inventory_without_payload(monkeypatch):
+    monkeypatch.setattr(obs, "PER_PAGE", 2)
+    api = Api([1, 2, 3])
+    inner = api.__call__
+    payload = "PAYLOAD" * 300_000
+
+    def fetch(path, timeout):
+        if path == f"{BASE}/pulls/2" or path.endswith("state=open&per_page=2&page=2"):
+            raise Unexpected(payload)
+        return inner(path, timeout)
+
+    report = obs.collect(fetch)
+    assert [o["number"] for o in report["observations"]] == [1]
+    assert report["failures"] == [
+        {"number": None, "reason": "inventory incomplete: unexpected failure: Unexpected"},
+        {"number": 2, "reason": "unexpected failure: Unexpected"}]
+    assert not report["complete"] and "PAYLOAD" not in json.dumps(report["failures"])
+
+
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit, asyncio.CancelledError])
+@pytest.mark.parametrize("where", ["inventory", "pr"])
+def test_interrupts_and_cancellation_are_never_swallowed(interrupt, where):
+    api = Api([1])
+    api.routes[f"{BASE}/pulls?state=open" if where == "inventory" else f"{BASE}/pulls/1"] = interrupt()
+    with pytest.raises(interrupt):
+        obs.collect(api)
+
+
+def test_unknown_pr_state_failure_does_not_echo_the_value():
+    api = Api([1, 2])
+    api.routes[f"{BASE}/pulls/1"] = pr_json(1, state="x" * 1_000_000)
+    report = obs.collect(api)
+    reason = failure_for(report, 1)
+    assert "KD-D5A2534ED444" in reason and "xxxx" not in reason and len(reason) < 100
+    assert [o["number"] for o in report["observations"]] == [2]

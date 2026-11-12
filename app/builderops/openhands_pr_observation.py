@@ -14,6 +14,7 @@ named failures. Nothing here repeats a scan on its own.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import re
 import sys
@@ -64,9 +65,17 @@ def public_fetch(path: str, timeout: float) -> tuple[int, bytes]:
         with opener.open(request, timeout=timeout) as response:
             return response.status, response.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        return exc.code, b""
-    except (OSError, urllib.error.URLError) as exc:
-        raise ObservationError(f"transport failure: {type(exc).__name__}") from exc
+        try:
+            return exc.code, b""
+        finally:
+            exc.close()
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+        raise ObservationError(f"transport failure: {_exception_type(exc)}") from exc
+
+
+def _exception_type(exc: Exception) -> str:
+    """Keep diagnostics bounded and free of exception messages and response data."""
+    return re.sub(r"[^A-Za-z0-9_]", "_", type(exc).__name__)[:80] or "Exception"
 
 
 class _Reader:
@@ -129,7 +138,7 @@ def _observe(reader: _Reader, number: int) -> dict[str, Any] | None:
         raise ObservationError("PR identity mismatch")
     state = pr.get("state")
     if state not in ("open", "closed"):
-        raise ObservationError(f"PR state null or unknown (KD-D5A2534ED444): {state!r}")
+        raise ObservationError("PR state null or unknown (KD-D5A2534ED444)")
     if state == "closed":
         return None
     head, base = pr.get("head"), pr.get("base")
@@ -183,6 +192,9 @@ def collect(fetch: Fetch = public_fetch, *, clock: Callable[[], float] = time.mo
     except ObservationError as exc:
         failures.append({"number": None, "reason": f"inventory incomplete: {exc}"})
         complete = False
+    except Exception as exc:
+        failures.append({"number": None, "reason": f"inventory incomplete: unexpected failure: {_exception_type(exc)}"})
+        complete = False
     for row in listed:
         number = row.get("number") if isinstance(row, dict) else None
         if type(number) is not int or number <= 0:
@@ -195,8 +207,11 @@ def collect(fetch: Fetch = public_fetch, *, clock: Callable[[], float] = time.mo
     for number in numbers:
         try:
             observed = _observe(reader, number)
-        except (ObservationError, AttributeError, KeyError, TypeError, ValueError) as exc:
-            failures.append({"number": number, "reason": str(exc) or type(exc).__name__})
+        except ObservationError as exc:
+            failures.append({"number": number, "reason": str(exc)})
+            continue
+        except Exception as exc:
+            failures.append({"number": number, "reason": f"unexpected failure: {_exception_type(exc)}"})
             continue
         if observed is None:
             closed.append(number)
