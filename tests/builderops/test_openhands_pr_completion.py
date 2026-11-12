@@ -31,7 +31,7 @@ def setup_run(tmp_path):
 
 
 def run(tmp_path, prs):
-    return intake(prs, run_id="test-run", root=tmp_path, expected_run_id="test-run", expected_root=tmp_path)
+    return intake(prs, run_id="test-run", root=tmp_path, expected_run_id="test-run", expected_root=tmp_path, expected_epic_issue_number=6615)
 
 
 def records(tmp_path):
@@ -152,9 +152,9 @@ def test_invalid_batch_and_binding(tmp_path):
     result = run(tmp_path, [observation(1), bad, observation(3)])
     assert [r["action"] for r in result] == ["verification-and-closure", "wait", "verification-and-closure"]
     with pytest.raises(ValueError, match="authority"):
-        intake([observation()], run_id="other", root=tmp_path, expected_run_id="test-run", expected_root=tmp_path)
+        intake([observation()], run_id="other", root=tmp_path, expected_run_id="test-run", expected_root=tmp_path, expected_epic_issue_number=6615)
     with pytest.raises(ValueError, match="authority"):
-        intake([observation()], run_id="test-run", root=tmp_path / "other", expected_run_id="test-run", expected_root=tmp_path)
+        intake([observation()], run_id="test-run", root=tmp_path / "other", expected_run_id="test-run", expected_root=tmp_path, expected_epic_issue_number=6615)
 
 
 def test_governing_issue_contract_is_validated_before_reservation(tmp_path):
@@ -231,3 +231,15 @@ def test_recursive_observation_does_not_stop_next_pr(tmp_path, monkeypatch):
     assert [r["action"] for r in results] == ["wait", "verification-and-closure"]
     assert results[0]["reason"] == "invalid PR observation"
     assert results[1]["operation_id"]
+
+
+def test_run_state_owned_by_another_epic_is_refused_without_mutation(tmp_path):
+    import pytest
+    from app.builderops.epic_run_state import EpicRunStateError, epic_run_state_path
+    create_epic_run_state(9999, "test-run", root=tmp_path)
+    path = epic_run_state_path("test-run", root=tmp_path)
+    before = path.read_bytes()
+    with pytest.raises(EpicRunStateError):
+        run(tmp_path, [observation(1)])
+    assert path.read_bytes() == before
+    assert records(tmp_path) == []

@@ -80,7 +80,8 @@ def _blocking_reviews(reviews: list[Any]) -> bool:
 
 
 def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
-           expected_run_id: str, expected_root: Path | str) -> list[Decision]:
+           expected_run_id: str, expected_root: Path | str,
+           expected_epic_issue_number: int) -> list[Decision]:
     """Return one decision per open PR, atomically recording waits and requests.
 
     The caller must supply all fields below, including explicit evidence states.
@@ -94,6 +95,8 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
     review must itself be supplied as DISMISSED. Malformed records fail closed.
     ``governing_issue`` requires a nonblank string body and a state of ``open``
     or ``closed`` (lowercase).
+    ``expected_epic_issue_number`` is the configured governing epic; a run-state
+    file owned by any other epic is refused before any reservation or mutation.
     A dispatch is a request to the named external boundary, never an execution.
     """
     if run_id != expected_run_id or Path(root).resolve() != Path(expected_root).resolve():
@@ -219,6 +222,9 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
                     records.append(wait)
             return state
 
-        update_epic_run_state(run_id, root=root, updater=record)
+        update_epic_run_state(
+            run_id, root=root, updater=record,
+            expected_epic_issue_number=expected_epic_issue_number,
+        )
         decisions.append(result)
     return decisions
