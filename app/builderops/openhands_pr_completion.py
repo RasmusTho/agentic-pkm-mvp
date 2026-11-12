@@ -129,7 +129,7 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
                 raise ValueError("invalid PR contract observation")
             identity = work_identity(pr)
             route = pr["route"]
-            if route not in ("native", "executor", "fenced"):
+            if route not in ("native", "executor", "fenced", "unknown"):
                 raise ValueError("unknown delivery route")
             blocking_review = _blocking_reviews(pr["reviews"])
             _digest(pr)  # validate the complete observation before any reservation
@@ -150,7 +150,7 @@ def intake(prs: list[Mapping[str, Any]], *, run_id: str, root: Path | str,
         elif pr["head_repository"] != REPOSITORY:
             result["reason"] = "foreign head requires owner handoff"
         elif route != "native":
-            result["reason"] = "executor or fenced route requires owning workflow"
+            result["reason"] = "executor, fenced or unverified route requires owning workflow"
         elif pr["effect_outcome"] != "none":
             result["reason"] = "existing or unknown effect requires reconciliation"
         elif blocking_review:
