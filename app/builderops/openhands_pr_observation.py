@@ -3,7 +3,13 @@
 Collects the contract facts GitHub itself reports (body, head, base, labels,
 reviews, governing Issue). Owner, route, review/Verify/CI/closure evidence and
 effect outcomes have no trusted source here and stay ``unknown``; this module
-never authenticates, writes to GitHub, launches models or runs shell commands.
+never authenticates, writes to GitHub, launches models or runs shell commands. It only prints
+a report; feeding observations to ``intake`` is the trusted caller's separate decision.
+
+Limits: the transport timeout applies per socket operation and the overall deadline is checked
+between requests, so a scan is not a hard wall-clock bound. Unauthenticated GitHub allows about
+60 requests per hour (roughly 3 per open PR); a refusal surfaces as an incomplete scan with
+named failures. Nothing here repeats a scan on its own.
 """
 from __future__ import annotations
 
@@ -14,11 +20,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Any, Callable
 
 from app.builderops.devui_issue_work import _governs
-from app.builderops.openhands_pr_completion import REPOSITORY, intake, work_identity
+from app.builderops.openhands_pr_completion import REPOSITORY, work_identity
 
 API_ROOT = "https://api.github.com"
 PER_PAGE = 100
@@ -75,13 +80,16 @@ class _Reader:
             raise ObservationError("scan deadline exceeded")
         status, body = self.fetch(path, min(REQUEST_TIMEOUT, remaining))
         if status != 200:
-            raise ObservationError(f"HTTP {status} for {path.split('?')[0]}")
+            limited = " (possible unauthenticated rate limit)" if status in (403, 429) else ""
+            raise ObservationError(f"HTTP {status}{limited} for {path.split('?')[0]}")
         if len(body) > MAX_RESPONSE_BYTES:
             raise ObservationError("response exceeds size bound")
         try:
             return json.loads(body)
         except ValueError as exc:
             raise ObservationError("response is not JSON") from exc
+        except RecursionError as exc:
+            raise ObservationError("response JSON nesting exceeds the parser bound") from exc
 
     def pages(self, path: str, limit: int, rows: list[Any] | None = None) -> list[Any]:
         rows = [] if rows is None else rows
@@ -201,19 +209,9 @@ def collect(fetch: Fetch = public_fetch, *, clock: Callable[[], float] = time.mo
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Read-only public PR observation scan.")
-    parser.add_argument("--run-id")
-    parser.add_argument("--root")
-    parser.add_argument("--epic-issue", type=int)
-    args = parser.parse_args(argv)
+    parser = argparse.ArgumentParser(description="Read-only public PR observation scan; prints a JSON report.")
+    parser.parse_args(argv)
     report = collect(public_fetch)
-    if args.run_id:
-        if not args.root or args.epic_issue is None:
-            parser.error("--run-id requires --root and --epic-issue")
-        report["decisions"] = intake(
-            report["observations"], run_id=args.run_id, root=Path(args.root),
-            expected_run_id=args.run_id, expected_root=Path(args.root),
-            expected_epic_issue_number=args.epic_issue)
     json.dump(report, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if report["complete"] else 1

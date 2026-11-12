@@ -237,15 +237,66 @@ def test_comment_claims_never_become_owner_review_verify_or_closure_authority(tm
     assert kinds == {"openhands_pr_wait"}
 
 
-def test_cli_reports_incomplete_scan_with_nonzero_exit_and_runs_intake(tmp_path, monkeypatch, capsys):
+def test_trusted_caller_feeds_collected_observations_to_intake_separately(tmp_path):
     setup_run(tmp_path)
     api = Api([1, 2])
     api.routes[f"{BASE}/pulls/2"] = (500, b"")
+    report = obs.collect(api)
+    assert "decisions" not in report
+    assert [d["number"] for d in run_intake(tmp_path, report["observations"])] == [1]
+
+
+def test_cli_prints_a_readonly_report_and_exit_code_reflects_completeness(monkeypatch, capsys):
+    api = Api([1, 2])
+    api.routes[f"{BASE}/pulls/2"] = (500, b"")
     monkeypatch.setattr(obs, "public_fetch", api)
-    code = obs.main(["--run-id", "r", "--root", str(tmp_path), "--epic-issue", "6615"])
-    out = json.loads(capsys.readouterr().out)
-    assert code == 1 and not out["complete"]
-    assert [d["number"] for d in out["decisions"]] == [1]
     assert obs.main([]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert not out["complete"] and [o["number"] for o in out["observations"]] == [1]
+    assert "decisions" not in out
+    with pytest.raises(SystemExit):
+        obs.main(["--run-id", "r"])
     monkeypatch.setattr(obs, "public_fetch", Api([1]))
     assert obs.main([]) == 0
+
+
+def test_rate_limit_refusal_is_a_visible_incomplete_scan():
+    report = obs.collect(Api([], **{f"{BASE}/pulls?state=open": (429, b"")}))
+    assert not report["complete"] and "rate limit" in report["failures"][0]["reason"]
+
+
+DEEP = b"[" * 200_000 + b"]" * 200_000
+
+
+@pytest.mark.parametrize("position", ["pr", "issue", "reviews"])
+def test_deeply_nested_json_fails_only_that_pr(position):
+    api = Api([1, 2, 3])
+    route = {"pr": f"{BASE}/pulls/2", "issue": f"{BASE}/issues/102",
+             "reviews": f"{BASE}/pulls/2/reviews"}[position]
+    api.routes[route] = (200, DEEP)
+    report = obs.collect(api)
+    assert [o["number"] for o in report["observations"]] == [1, 3]
+    assert [f["number"] for f in report["failures"]] == [2]
+    assert "nesting" in failure_for(report, 2) and len(failure_for(report, 2)) < 100
+    assert not report["complete"]
+
+
+def test_deeply_nested_inventory_page_keeps_earlier_pages_and_is_incomplete(monkeypatch):
+    monkeypatch.setattr(obs, "PER_PAGE", 2)
+    api = Api([1, 2])
+    api.routes[f"{BASE}/pulls?state=open"] = [{"number": 1}, {"number": 2}]
+    inner = api.__call__
+
+    def fetch(path, timeout):
+        return (200, DEEP) if path.endswith("state=open&per_page=2&page=2") else inner(path, timeout)
+
+    report = obs.collect(fetch)
+    assert [o["number"] for o in report["observations"]] == [1, 2]
+    assert not report["inventory_complete"] and not report["complete"]
+    assert report["failures"][0]["number"] is None and "nesting" in report["failures"][0]["reason"]
+
+
+def test_deeply_nested_first_inventory_page_is_an_incomplete_scan_not_a_crash():
+    report = obs.collect(Api([], **{f"{BASE}/pulls?state=open": (200, DEEP)}))
+    assert not report["inventory_complete"] and report["observations"] == []
+    assert "nesting" in report["failures"][0]["reason"]
