@@ -157,6 +157,17 @@ explicit gaps. Builder Vault carries the operational handoff and private evidenc
 a descriptive status view; application deployment, release eligibility and capability acceptance
 remain with their existing owners.
 
+**Builder epic workspace trial (2026-11-13).** The owner reports that the TARS baseline controller
+remains `c68dd18db4dc`. An isolated trial qualified worker image
+`sha256:3c3c2472b35ea3ccb0df57df7cc9d2303f582dcb2987b259124c9df946d56644` with official
+OpenHands 1.62.0 and Python 3.12, including native `gpt-6.1-terra` execution, ChatGPT subscription
+authentication and persistence. This qualifies the carrier trial, not the recovery implementation
+or [epic #6615](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6615). The
+[#6617](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6617) source candidate `89259fcd54b0`
+awaits independent review, real-path proof and full CI. #6618, #6619, #6620 and full automatic PR
+activation remain unfinished. The [epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental)
+owns the operating boundary.
+
 The August 22 baseline formerly here and the dated October 5 observations above are historical.
 Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those
 older paragraphs. Infrastructure-reference review on 2026-10-21 does not revalidate the other
