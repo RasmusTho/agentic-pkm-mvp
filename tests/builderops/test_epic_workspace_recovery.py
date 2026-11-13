@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import subprocess
 
+import pytest
+
 from app.builderops import epic_workspace as ew
 from tests.builderops.test_epic_workspace_isolation import FakeEngine
 from tests.builderops.test_epic_workspace_lifecycle import _ckpt, _git
@@ -112,7 +114,7 @@ def test_partial_work_and_ambiguous_publication_are_reconciled_before_takeover(t
     assert len([op for op in _state(root)["publication_ops"] if op["kind"] == "pr_create"]) == 1
 
 
-def test_readback_quarantines_doubt_and_permits_one_retry_only_on_proven_absence(tmp_path, capsys):
+def test_readback_quarantines_doubt_and_empty_readback_never_proves_settlement(tmp_path, capsys):
     root, engine, server = _setup(tmp_path, capsys)
     layout = ew.Layout(root.resolve(), 6615)
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
@@ -136,18 +138,15 @@ def test_readback_quarantines_doubt_and_permits_one_retry_only_on_proven_absence
     assert _main(root, engine, server, "publication-reconcile", "--worker", "w-a", "--op", pr_op) == 0
     assert _json(capsys)["status"] == "quarantined"  # no readback at all
 
-    # Takeover applies the coordinator's readback per operation: proven absence, not a guess.
+    # A complete empty list is still compatible with a delayed original request.
     absent = _write(tmp_path / "absent.json", {pr_op: {"complete": True, "branch": "b/a", "pull_requests": []}})
     assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "r", "--readback-file", absent) == 0
     taken = _json(capsys)
-    assert taken["next_authorized_action"]["blocked_operations"] == []
-    assert taken["next_authorized_action"]["retry_authorized"] == ["pr_create"]
-    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create") == 0
-    retry = _json(capsys)
-    assert retry["retry_of"] == pr_op and retry["status"] == "intended"
+    assert [item["id"] for item in taken["next_authorized_action"]["blocked_operations"]] == [pr_op]
+    assert taken["next_authorized_action"]["retry_authorized"] == []
     assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create") == 2
     ops = {op["id"]: op for op in _state(root)["publication_ops"]}
-    assert ops[pr_op]["superseded_by"] == retry["id"]
+    assert len(ops) == 1 and ops[pr_op]["status"] == "quarantined"
     assert next_actions(root)["retry_authorized"] == []
 
 
@@ -195,13 +194,15 @@ def test_claude_worker_is_continued_by_codex_from_durable_records(tmp_path, caps
     assert _json(capsys)["model"] == "claude-sonnet-5-5"
 
 
-def test_takeover_refuses_a_checkout_on_the_wrong_branch(tmp_path, capsys):
+def test_takeover_reconciles_a_checkout_on_a_different_branch(tmp_path, capsys):
     root, engine, server = _setup(tmp_path, capsys)
     layout = ew.Layout(root.resolve(), 6615)
     _git(layout.checkout("w-a"), "checkout", "--quiet", "-b", "drifted")
-    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "r") == 2
-    assert "run-state records 'b/a'" in capsys.readouterr().err
-    assert "takeover" not in _state(root) or _state(root)["takeover"]["status"] != "authorized"
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "r") == 0
+    brief = _json(capsys)
+    assert brief["branch"] == "b/a" and brief["execution_branch"] == "drifted"
+    assert _state(root)["takeover"]["status"] == "authorized"
+    assert _state(root)["checkpoints"][0]["branch"] == "drifted"
 
 
 def test_takeover_treats_unreadable_evidence_as_unique_work(tmp_path, capsys):
@@ -213,3 +214,246 @@ def test_takeover_treats_unreadable_evidence_as_unique_work(tmp_path, capsys):
     mapping = _state(root)
     assert mapping["takeover"]["status"] == "required" and mapping["work_at_stop"]["unique_work"] is True
     assert (layout.checkout("w-a") / ".git" / "HEAD").read_text() == "garbage\n"
+
+
+def test_empty_lost_create_stays_blocked_across_restart_then_adopts_original(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    checkout = ew.Layout(root.resolve(), 6615).checkout("w-a")
+    sha = _git(checkout, "rev-parse", "HEAD")
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
+    (checkout / "partial.py").write_text("preserve this\n")
+    capsys.readouterr()
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create", "--expect-sha", sha) == 0
+    op = _json(capsys)["id"]
+    empty = _write(tmp_path / "empty.json", {op: {"complete": True, "branch": "b/a", "pull_requests": []}})
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "lost response", "--readback-file", empty) == 0
+    brief = _json(capsys)
+    assert brief["next_authorized_action"]["blocked_operations"][0]["id"] == op
+    assert brief["next_authorized_action"]["action"].endswith("implement")
+    assert _ckpt(root, "w-a", "show", "refs/checkpoints/ckpt-0001:partial.py") == "preserve this"
+
+    # A fresh controller can continue work and even start an unrelated publication kind.
+    fresh = FakeEngine()
+    assert _main(root, fresh, server, "worker-start", "--worker", "w-a", "--", "sleep", "60") == 0
+    capsys.readouterr()
+    assert _main(root, fresh, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create") == 2
+    assert _main(root, fresh, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", sha) == 0
+    push = _json(capsys)["id"]
+    assert _main(root, fresh, server, "publication-complete", "--worker", "w-a", "--op", push, "--result-file", _write(tmp_path / "push.json", {"branch": "b/a", "sha": sha})) == 0
+    capsys.readouterr()
+    present = _write(tmp_path / "present.json", {"complete": True, "branch": "b/a", "pull_requests": [{"number": 23, "branch": "b/a", "sha": sha}]})
+    assert _main(root, fresh, server, "publication-reconcile", "--worker", "w-a", "--op", op, "--readback-file", present) == 0
+    assert _json(capsys)["result"]["number"] == 23
+    assert _main(root, fresh, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create") == 2
+    assert len(_state(root)["publication_ops"]) == 2
+    assert (checkout / "partial.py").read_text() == "preserve this\n"
+
+
+def test_legacy_empty_absence_and_missing_remote_branch_remain_unknown(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    layout = ew.Layout(root.resolve(), 6615)
+    sha = _git(layout.checkout("w-a"), "rev-parse", "HEAD")
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create") == 0
+    op = _json(capsys)["id"]
+    ew._mutate_mapping(layout, "w-a", lambda entry: entry["publication_ops"][0].update(status="absent_confirmed"))
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create") == 2
+    assert next_actions(root)["blocked_operations"][0]["id"] == op
+    assert next_actions(root)["retry_authorized"] == []
+    empty = _write(tmp_path / "empty.json", {"complete": True, "branch": "b/a", "pull_requests": []})
+    assert _main(root, engine, server, "publication-reconcile", "--worker", "w-a", "--op", op, "--readback-file", empty) == 0
+    assert _json(capsys)["status"] == "quarantined"
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", sha) == 0
+    push = _json(capsys)["id"]
+    absent = _write(tmp_path / "branch.json", {"complete": True, "branch": {"name": "b/a", "exists": False}})
+    assert _main(root, engine, server, "publication-reconcile", "--worker", "w-a", "--op", push, "--readback-file", absent) == 0
+    assert _json(capsys)["status"] == "quarantined"
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", "a" * 40) == 2
+
+
+def test_legacy_retried_create_cannot_misattribute_a_matching_pr(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    layout = ew.Layout(root.resolve(), 6615)
+    sha = _git(layout.checkout("w-a"), "rev-parse", "HEAD")
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create", "--expect-sha", sha) == 0
+    first = _json(capsys)["id"]
+
+    def legacy_retry(entry):
+        prior = entry["publication_ops"][0]
+        prior.update(status="absent_confirmed", superseded_by="pr_create-2")
+        entry["publication_ops"].append({**prior, "id": "pr_create-2", "status": "intended", "retry_of": first})
+
+    ew._mutate_mapping(layout, "w-a", legacy_retry)
+    present = _write(tmp_path / "present.json", {"complete": True, "branch": "b/a", "pull_requests": [{"number": 23, "branch": "b/a", "sha": sha}]})
+    for op in (first, "pr_create-2"):
+        assert _main(root, engine, server, "publication-reconcile", "--worker", "w-a", "--op", op, "--readback-file", present) == 0
+        assert _json(capsys)["status"] == "quarantined"
+    # An operation-specific result can settle one attempt without erasing the other.
+    result = _write(tmp_path / "result.json", {"number": 23, "branch": "b/a", "sha": sha})
+    assert _main(root, engine, server, "publication-complete", "--worker", "w-a", "--op", "pr_create-2", "--result-file", result) == 0
+    ops = {op["id"]: op for op in _state(root)["publication_ops"]}
+    assert ops[first]["status"] == "quarantined" and ops["pr_create-2"]["status"] == "confirmed"
+    assert _main(root, engine, server, "publication-reconcile", "--worker", "w-a", "--op", first, "--readback-file", present) == 0
+    assert _json(capsys)["status"] == "quarantined"
+
+
+def test_reconciled_execution_branch_retains_all_work_and_publisher_scope(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    layout = ew.Layout(root.resolve(), 6615)
+    checkout = layout.checkout("w-a")
+    assert _main(root, engine, server, "worker-start", "--worker", "w-a", "--", "sleep", "60") == 0
+    _git(checkout, "checkout", "-b", "b/actual")
+    _git(checkout, "checkout", "-b", "b/side")
+    (checkout / "side.py").write_text("side commit\n")
+    _git(checkout, "add", "side.py")
+    _git(checkout, "commit", "-m", "side")
+    side = _git(checkout, "rev-parse", "HEAD")
+    _git(checkout, "checkout", "b/actual")
+    (checkout / "README.md").write_text("stash content\n")
+    _git(checkout, "stash", "push", "-m", "keep")
+    stash = _git(checkout, "rev-parse", "refs/stash")
+    (checkout / "stage.py").write_text("staged version\n")
+    _git(checkout, "add", "stage.py")
+    (checkout / "stage.py").write_text("worktree version\n")
+    (checkout / ".git" / "info" / "exclude").write_text("*.cache\n")
+    (checkout / "unique.cache").write_text("ignored content\n")
+    head = _git(checkout, "rev-parse", "HEAD")
+    capsys.readouterr()
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "continue") == 0
+    brief = _json(capsys)
+    entry = _state(root)
+    assert (brief["branch"], brief["execution_branch"]) == ("b/a", "b/actual")
+    assert "publisher/claim branch is `b/a`" in brief["prompt"]
+    assert entry["branch"] == "b/a" and entry["execution_branch"] == "b/actual"
+    assert entry["takeover"]["head"] == head and entry["takeover"]["previous_execution_branch"] == "b/a"
+    checkpoint = entry["checkpoints"][0]
+    assert checkpoint["branch"] == "b/actual" and checkpoint["head"] == head
+    assert _ckpt(root, "w-a", "show", f"{checkpoint['ref']}:stage.py") == "worktree version"
+    assert _ckpt(root, "w-a", "show", f"{checkpoint['staged_ref']}:stage.py") == "staged version"
+    assert _ckpt(root, "w-a", "show", f"{checkpoint['ref']}:unique.cache") == "ignored content"
+    assert _ckpt(root, "w-a", "rev-parse", f"refs/retained/{side}") == side
+    assert _ckpt(root, "w-a", "rev-parse", f"refs/retained/{stash}") == stash
+    assert _git(checkout, "show", ":stage.py") == "staged version"
+    assert (checkout / "stage.py").read_text() == "worktree version\n"
+    assert _git(checkout, "rev-parse", "refs/heads/b/side") == side
+    assert _git(checkout, "rev-parse", "refs/stash") == stash
+    fresh = FakeEngine()
+    assert _main(root, fresh, server, "continuation-brief", "--worker", "w-a") == 0
+    assert _json(capsys)["execution_branch"] == "b/actual"
+    assert _main(root, fresh, server, "worker-start", "--worker", "w-a", "--", "sleep", "60") == 0
+    assert _git(checkout, "branch", "--show-current") == "b/actual"
+    assert _main(root, fresh, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create", "--expect-sha", head) == 0
+    assert _json(capsys)["branch"] == "b/a"  # parent gate still binds the original branch
+
+
+def test_confirmed_push_allows_new_head_without_losing_prior_evidence(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    checkout = ew.Layout(root.resolve(), 6615).checkout("w-a")
+    first = _git(checkout, "rev-parse", "HEAD")
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", first) == 0
+    op1 = _json(capsys)["id"]
+    result = _write(tmp_path / "first.json", {"branch": "b/a", "sha": first})
+    assert _main(root, engine, server, "publication-complete", "--worker", "w-a", "--op", op1, "--result-file", result) == 0
+    confirmed = _json(capsys)
+    assert _main(root, engine, server, "publication-complete", "--worker", "w-a", "--op", op1, "--result-file", result) == 0
+    assert _json(capsys) == confirmed
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", first) == 2
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "continue") == 0
+    assert _main(root, engine, server, "worker-start", "--worker", "w-a", "--", "sleep", "60") == 0
+    (checkout / "next.py").write_text("next\n")
+    _git(checkout, "add", "next.py")
+    _git(checkout, "commit", "-m", "next")
+    second = _git(checkout, "rev-parse", "HEAD")
+    capsys.readouterr()
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", second) == 0
+    op2 = _json(capsys)["id"]
+    assert op2 != op1
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", second) == 2
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", "a" * 40) == 2
+    assert _main(root, engine, server, "publication-complete", "--worker", "w-a", "--op", op2, "--result-file", _write(tmp_path / "second.json", {"branch": "b/a", "sha": second})) == 0
+    entries = _state(root)
+    ops = {op["id"]: op for op in entries["publication_ops"]}
+    assert ops[op1] == confirmed and ops[op2]["status"] == "confirmed"
+    assert {h["sha"] for h in entries["published_heads"]} >= {first, second}
+    assert not ops[op1].get("superseded_by") and not ops[op2].get("retry_of")
+
+
+def test_later_push_keeps_prior_head_usable_for_checkpoint_release(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    checkout = ew.Layout(root.resolve(), 6615).checkout("w-a")
+    (checkout / "kept.py").write_text("captured\n")
+    _git(checkout, "add", "kept.py")
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "checkpoint") == 0
+    ref = _state(root)["checkpoints"][0]["ref"]
+    assert _main(root, engine, server, "worker-start", "--worker", "w-a", "--", "sleep", "60") == 0
+    _git(checkout, "commit", "-m", "publish captured work")
+    first = _git(checkout, "rev-parse", "HEAD")
+    capsys.readouterr()
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", first) == 0
+    op1 = _json(capsys)["id"]
+    assert _main(root, engine, server, "publication-complete", "--worker", "w-a", "--op", op1, "--result-file", _write(tmp_path / "first.json", {"branch": "b/a", "sha": first})) == 0
+    (checkout / "next.py").write_text("later\n")
+    _git(checkout, "add", "next.py")
+    _git(checkout, "commit", "-m", "later")
+    second = _git(checkout, "rev-parse", "HEAD")
+    capsys.readouterr()
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", second) == 0
+    op2 = _json(capsys)["id"]
+    assert _main(root, engine, server, "publication-complete", "--worker", "w-a", "--op", op2, "--result-file", _write(tmp_path / "second.json", {"branch": "b/a", "sha": second})) == 0
+    capsys.readouterr()
+    assert _main(root, engine, server, "checkpoint-release", "--worker", "w-a", "--ref", ref, "--published-commit", first) == 0
+    assert _json(capsys)["released_by"] == first
+
+
+def test_branch_changed_during_checkpoint_is_refused_even_with_same_head_and_refs(tmp_path, capsys, monkeypatch):
+    root, engine, server = _setup(tmp_path, capsys)
+    checkout = ew.Layout(root.resolve(), 6615).checkout("w-a")
+    _git(checkout, "checkout", "-b", "b/actual")
+    _git(checkout, "branch", "b/alternate")
+    (checkout / "partial.py").write_text("keep\n")
+    original = ew._inspect
+    calls = 0
+
+    def inspect(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            _git(checkout, "checkout", "b/alternate")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ew, "_inspect", inspect)
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "r") == 2
+    assert "changed while the checkpoint" in capsys.readouterr().err
+    assert _state(root)["takeover"]["status"] == "required"
+    assert _state(root)["branch"] == "b/a" and not _state(root).get("execution_branch")
+    assert (checkout / "partial.py").read_text() == "keep\n"
+
+
+@pytest.mark.parametrize("changed", ["branch", "execution_branch", "checkout", "generation"])
+def test_branch_adoption_refuses_changed_mapping_scope_or_generation(tmp_path, capsys, monkeypatch, changed):
+    root, engine, server = _setup(tmp_path, capsys)
+    layout = ew.Layout(root.resolve(), 6615)
+    checkout = layout.checkout("w-a")
+    _git(checkout, "checkout", "-b", "b/actual")
+    (checkout / "partial.py").write_text("keep\n")
+    original = ew._inspect
+    calls = 0
+
+    def inspect(*args, **kwargs):
+        nonlocal calls
+        result = original(*args, **kwargs)
+        calls += 1
+        if calls == 2:
+            def drift(entry):
+                if changed == "generation":
+                    entry["takeover"]["generation"] += 1
+                else:
+                    entry[changed] = "foreign"
+            ew._mutate_mapping(layout, "w-a", drift)
+        return result
+
+    monkeypatch.setattr(ew, "_inspect", inspect)
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "r") == 2
+    assert "changed during takeover" in capsys.readouterr().err
+    assert _state(root)["takeover"]["status"] == "required"
+    assert (checkout / "partial.py").read_text() == "keep\n"
+    assert _state(root)["checkpoints"][0]["branch"] == "b/actual"

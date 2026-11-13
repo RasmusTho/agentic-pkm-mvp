@@ -370,9 +370,13 @@ independently reviewed, installed and verified, these commands run from outside 
   treated as unreadable work and kept intact because a gitlink does not capture its worktree.
 - `takeover --worker W --reason R [--readback-file F]` is the only way to continue a replaced worker.
   It removes any remaining container and proves absence by engine readback (a lease or timeout proves
-  nothing), checkpoints the files, checks the post-checkpoint content and refs, confirms the recorded
-  branch, and reconciles publication attempts from coordinator-supplied readback. It reads engine
-  absence again while recording exactly one continuation. Per-worker controller locks fence overlapping
+  nothing), checkpoints the files, checks the post-checkpoint content and refs, validates the recorded
+  mapping and reconciles publication attempts from coordinator-supplied readback. If the actual named
+  branch differs, takeover checkpoints even a clean checkout, compares the stopped and current HEAD,
+  branch, index, worktree and refs, and records the actual execution branch under the existing worker
+  and generation. The original publisher/claim branch is retained separately; this reconciliation
+  neither changes a claim nor authorizes publication. Detached or unreadable evidence remains fenced.
+  It reads engine absence again while recording exactly one continuation. Per-worker controller locks fence overlapping
   starts, stops, checkpoints and takeovers. The successor's `worker-start` or `openhands-start` consumes
   that authorization; a repeated takeover before a start returns the same continuation. Worker
   launches create an unstarted container first and record its full ID before sending a start for
@@ -398,8 +402,13 @@ independently reviewed, installed and verified, these commands run from outside 
   the observed `branch` and `sha`, plus a PR `number` for PR creation. Reconciliation supplies a complete
   branch readback with its `name`, `exists` and, when present, `sha`, or the queried `branch` with a
   complete `pull_requests` list whose sole match includes `number`, `branch` and `sha`. An unknown
-  outcome is quarantined for that operation only and is never replayed; only readback that proves
-  absence authorizes one retry.
+  outcome is quarantined for that operation only and is never replayed. A missing branch or empty PR
+  list does not establish that an old request has finished. Older `absent_confirmed` records from
+  such readbacks remain unresolved. This controller has no authenticated no-effect settlement receipt;
+  a later matching positive readback can confirm the original operation when no other create attempt
+  could have produced that PR. A confirmed push keeps its
+  evidence, and a different, explicitly specified head can use a new push intent after all prior pushes
+  on that branch have settled. Normal parent publisher and branch gates still apply.
 - `worker-retire` removes only the container carrying this epic/worker label pair, then the checkout
   only when nothing unique remains. It refuses while unique work, unreadable evidence, an unreleased
   checkpoint or an unresolved publication exists. `checkpoint-release` supersedes a checkpoint only
@@ -408,7 +417,7 @@ independently reviewed, installed and verified, these commands run from outside 
   bytes for the same path cannot both match one published commit, so the checkpoint remains preserved.
   Older checkpoint records without staged-index evidence also remain preserved.
 - `worker-create` on an existing checkout reads the actual branch back and refuses a mismatch with the
-  requested or recorded branch instead of recording it.
+  requested or reconciled execution branch instead of recording it. It does not alter the publisher branch.
 
 Claude Code authenticates with a subscription token from `claude setup-token`. The token is stored
 as `CLAUDE_CODE_OAUTH_TOKEN` in `~ygg/.config/epic-workspace/claude.env` (mode 0600, outside the

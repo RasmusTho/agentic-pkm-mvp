@@ -87,7 +87,9 @@ MAX_DETAIL_QUERIES = 64
 MAX_RETAINED_REFS = 5000
 MAX_GIT_METADATA_ENTRIES = 200_000
 PUBLICATION_KINDS = ("branch_push", "pr_create")
-_OP_UNRESOLVED = ("intended", "quarantined")
+# Older candidates treated an empty readback as proof of absence. Such records
+# do not prove a request has stopped and must be reconciled again.
+_OP_UNRESOLVED = ("intended", "quarantined", "absent_confirmed")
 _ENV_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _OID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _CKPT_REF = re.compile(r"^refs/checkpoints/ckpt-([0-9]{4,})$")
@@ -457,9 +459,11 @@ def create_worker(
         actual = checkout_branch(checkout, runner=runner)
         if actual != branch:
             raise LaunchRefused(f"checkout of worker {worker!r} is on {actual!r}, not the requested {branch!r}; refusing to record it")
-        if recorded.get("branch") not in (None, branch):
-            raise LaunchRefused(f"issue #{int(issue)} is recorded on branch {recorded.get('branch')!r}, not {branch!r}")
-        _reserve_worker(layout, issue, worker, branch=actual, checkout=str(checkout), next_action=next_action,
+        execution_branch = recorded.get("execution_branch", recorded.get("branch"))
+        if execution_branch not in (None, branch):
+            raise LaunchRefused(f"issue #{int(issue)} is recorded on branch {execution_branch!r}, not {branch!r}")
+        # A reconciled execution branch never rewrites the parent's publication branch.
+        _reserve_worker(layout, issue, worker, branch=recorded.get("branch") or actual, checkout=str(checkout), next_action=next_action,
                         **({} if recorded.get("state") else {"state": "created"}))
         layout.home(worker).mkdir(parents=True, exist_ok=True)
         return checkout
@@ -770,7 +774,8 @@ def _stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner, im
     _mutate_mapping(layout, worker, record_stop)
     work = dict(work)
     work["stop_id"] = stop_id
-    work["checkpoint"] = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image)
+    drifted = work.get("branch") != mapping.get("execution_branch", mapping.get("branch"))
+    work["checkpoint"] = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image, force=drifted)
     return work
 
 
@@ -1331,6 +1336,7 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
             "issue": int(key),
             "worker": worker,
             "branch": mapping.get("branch"),
+            "execution_branch": mapping.get("execution_branch", mapping.get("branch")),
             "recorded_state": mapping.get("state"),
             "container": container,
             "engine": mapping.get("engine"),
@@ -1375,14 +1381,15 @@ def _checkpoint_index(repo: Path) -> Path:
 
 
 def _checkpoint(
-    layout: Layout, issue: int, worker: str, work: Mapping[str, Any], ignored_all: Sequence[str], *, reason: str, runner: Runner, image: str
+    layout: Layout, issue: int, worker: str, work: Mapping[str, Any], ignored_all: Sequence[str], *, reason: str, runner: Runner, image: str,
+    force: bool = False,
 ) -> dict[str, Any] | None:
     if not work.get("present"):
         return None
     if not work.get("readable"):
         return None  # kept intact as unique work; takeover and retirement refuse on it
     _settle_checkpoint_writer(layout, worker, runner)
-    if not work.get("unique_work"):
+    if not work.get("unique_work") and not force:
         return None
     checkout = layout.checkout(worker)
     if (checkout / ".git" / "epic-checkpoint.index").is_symlink():
@@ -1447,6 +1454,7 @@ def _checkpoint(
             staged_commit = staged_data[0]
             prior = recorded.get(ref)
             if (prior and prior.get("status") == "preserved" and prior.get("commit") == commit
+                    and prior.get("branch") == work["branch"]
                     and prior.get("refs_fingerprint") == work["refs_fingerprint"]
                     and prior.get("staged_ref") == staged_ref and prior.get("staged_commit") == staged_commit
                     and prior.get("staged_tree") == staged_tree):
@@ -1644,18 +1652,23 @@ def begin_publication(layout: Layout, worker: str, *, kind: str, expect_sha: str
     def mutate(entry: dict[str, Any]) -> dict[str, Any]:
         if entry.get("state") == "retired" or not entry.get("branch"):
             raise EpicWorkspaceError("worker has no active branch to publish")
+        if entry.get("checkpoint_inspection_unknown"):
+            raise TakeoverRefused("checkpoint inspection cleanup is unknown; settle it before starting publication")
+        if entry.get("state") == "starting":
+            raise TakeoverRefused("worker launch is unresolved; settle it before starting publication")
         ops = list(entry.get("publication_ops", []))
         same = [op for op in ops if op["kind"] == kind and op["branch"] == entry["branch"]]
         for op in same:
             if op["status"] in _OP_UNRESOLVED:
                 raise EpicWorkspaceError(f"{kind} {op['id']} is {op['status']}; reconcile it by readback, do not replay")
             if op["status"] == "confirmed":
-                raise EpicWorkspaceError(f"{kind} {op['id']} is already confirmed")
+                confirmed_sha = (op.get("result") or {}).get("sha")
+                if (kind != "branch_push" or expect_sha is None or not isinstance(confirmed_sha, str)
+                        or not _OID.match(confirmed_sha) or confirmed_sha == expect_sha):
+                    raise EpicWorkspaceError(f"{kind} {op['id']} is already confirmed")
+            elif op["status"] not in _OP_UNRESOLVED:
+                raise EpicWorkspaceError(f"{kind} {op['id']} has an unrecognized outcome; preserve it")
         op = {"id": f"{kind}-{len(ops) + 1}", "kind": kind, "branch": entry["branch"], "expect_sha": expect_sha, "status": "intended", "intent_at": _now()}
-        if same:
-            op["retry_of"] = same[-1]["id"]
-            for prior in same:
-                prior["superseded_by"] = op["id"]
         entry["publication_ops"] = [*ops, op]
         return op
 
@@ -1674,8 +1687,6 @@ def complete_publication(layout: Layout, worker: str, *, op_id: str, result: Map
 
     def mutate(entry: dict[str, Any]) -> dict[str, Any]:
         op = _find_op(entry, op_id)
-        if op["status"] != "intended":
-            raise EpicWorkspaceError(f"{op_id} is {op['status']}, not intended")
         sha = result.get("sha")
         if not isinstance(sha, str) or not _OID.match(sha):
             raise EpicWorkspaceError("result sha must be a full object id")
@@ -1685,7 +1696,14 @@ def complete_publication(layout: Layout, worker: str, *, op_id: str, result: Map
             type(result.get("number")) is not int or result["number"] <= 0
         ):
             raise EpicWorkspaceError("pull request readback must include its positive number")
+        if op["status"] == "confirmed":
+            if op.get("result") != _publication_result(result):
+                raise EpicWorkspaceError(f"{op_id} is already confirmed with a different result")
+            return dict(op)
+        if op["status"] not in _OP_UNRESOLVED:
+            raise EpicWorkspaceError(f"{op_id} is {op['status']}, not unresolved")
         op.update(status="confirmed", confirmed_at=_now(), result=_publication_result(result))
+        op.pop("reason", None)
         _record_published_head(entry, op)
         return dict(op)
 
@@ -1728,11 +1746,11 @@ def _judge_readback(op: Mapping[str, Any], readback: Mapping[str, Any] | None) -
         if branch.get("name") != op["branch"]:
             return "quarantined", {}, "branch readback does not identify the intended branch"
         if not branch["exists"]:
-            return "absent_confirmed", {}, None
+            return "quarantined", {}, "branch absence does not settle a possibly in-flight push"
         sha = branch.get("sha")
         if not isinstance(sha, str) or not _OID.match(sha):
             return "quarantined", {}, "branch sha missing or malformed"
-        if op.get("expect_sha") in (None, sha):
+        if op.get("expect_sha") == sha:
             return "confirmed", {"sha": sha, "branch": op["branch"]}, None
         return "quarantined", {"sha": sha}, "remote branch differs from the intended commit"
     prs = readback.get("pull_requests")
@@ -1741,7 +1759,7 @@ def _judge_readback(op: Mapping[str, Any], readback: Mapping[str, Any] | None) -
     if not isinstance(prs, list) or not all(isinstance(pr, Mapping) for pr in prs):
         return "quarantined", {}, "pull request readback malformed"
     if not prs:
-        return "absent_confirmed", {}, None
+        return "quarantined", {}, "empty PR readback does not settle a possibly in-flight create"
     if len(prs) == 1:
         pr = prs[0]
         sha = pr.get("sha")
@@ -1761,6 +1779,14 @@ def reconcile_publication(layout: Layout, worker: str, *, op_id: str, readback: 
         if op["status"] not in _OP_UNRESOLVED:
             return dict(op)
         status, result, reason = _judge_readback(op, readback)
+        if status == "confirmed" and op["kind"] == "pr_create" and any(
+            other.get("id") != op_id and other.get("kind") == "pr_create"
+            and other.get("branch") == op["branch"] and other.get("status") in (*_OP_UNRESOLVED, "confirmed")
+            for other in entry.get("publication_ops", []) if isinstance(other, Mapping)
+        ):
+            # A legacy retry can make a matching PR attributable to either request.
+            # Preserve both until operation-specific evidence settles each one.
+            status, result, reason = "quarantined", {}, "matching PR cannot distinguish multiple create attempts"
         op.update(status=status, reconciled_at=_now(), result=result)
         op.pop("reason", None)
         if reason:
@@ -1780,7 +1806,9 @@ def next_authorized_action(mapping: Mapping[str, Any]) -> dict[str, Any]:
 
     ops = [op for op in mapping.get("publication_ops", []) if isinstance(op, Mapping)]
     blocked = [{"id": op["id"], "kind": op["kind"], "status": op["status"], "reason": op.get("reason")} for op in ops if op["status"] in _OP_UNRESOLVED]
-    retry = [op["kind"] for op in ops if op["status"] == "absent_confirmed" and not op.get("superseded_by")]
+    # This controller has no authenticated no-effect settlement receipt. In particular,
+    # legacy absent_confirmed records came from a point-in-time readback, not settlement.
+    retry: list[str] = []
     takeover = _takeover_of(mapping)
     if mapping.get("state") == "retired":
         action = "none: worker retired"
@@ -1817,6 +1845,7 @@ def continuation_brief(layout: Layout, worker: str) -> dict[str, Any]:
     brief: dict[str, Any] = {
         "schema": "epic_continuation_brief.v1",
         "epic": layout.epic, "issue": issue, "worker": worker, "branch": mapping.get("branch"),
+        "execution_branch": mapping.get("execution_branch", mapping.get("branch")),
         "generation": _takeover_of(mapping).get("generation"),
         "next_authorized_action": action,
         "checkpoints": checkpoints,
@@ -1832,7 +1861,8 @@ def continuation_brief(layout: Layout, worker: str) -> dict[str, Any]:
 def _render_continuation_prompt(brief: Mapping[str, Any]) -> str:
     action = brief["next_authorized_action"]
     lines = [
-        f"You are continuing GitHub Issue #{brief['issue']} (epic #{brief['epic']}) on branch `{brief['branch']}` in /workspace.",
+        f"You are continuing GitHub Issue #{brief['issue']} (epic #{brief['epic']}) on execution branch `{brief['execution_branch']}` in /workspace.",
+        f"The parent publisher/claim branch is `{brief['branch']}`; branch reconciliation does not grant publication authority.",
         "A previous worker was replaced. Do not rely on any summary from it: its work is in this checkout.",
         "First run `git status`, `git branch -a`, `git stash list` and `git log --oneline -5`; uncommitted and ignored files are real work, keep them.",
         f"Next authorized action: {action['action']}",
@@ -1868,6 +1898,12 @@ def takeover(
     mapping = state["issue_mappings"][str(issue)]
     if mapping.get("state") == "retired":
         raise TakeoverRefused("worker is retired")
+    recorded = mapping.get("branch")
+    previous_execution = mapping.get("execution_branch", recorded)
+    generation = int(_takeover_of(mapping).get("generation", 0))
+    if (not isinstance(recorded, str) or not isinstance(previous_execution, str)
+            or mapping.get("checkout") != str(layout.checkout(worker))):
+        raise TakeoverRefused("worker mapping scope or branch is unreadable; preserving checkout")
     _settle_checkpoint_writer(layout, worker, runner)
     if _takeover_of(mapping).get("status") == "authorized":
         return {**continuation_brief(layout, worker), "already_authorized": True}
@@ -1892,16 +1928,18 @@ def takeover(
         raise TakeoverRefused("checkout evidence is missing or unreadable; treated as unique work, no continuation permitted")
     if after.get("head") != stopped.get("head"):
         raise TakeoverRefused("checkout HEAD moved while the checkpoint was taken; no continuation permitted")
-    if any(after.get(key) != stopped.get(key) for key in ("snapshot_tree", "staged_tree", "refs_fingerprint")):
+    if any(after.get(key) != stopped.get(key) for key in ("branch", "snapshot_tree", "staged_tree", "refs_fingerprint")):
         raise TakeoverRefused("checkout content or refs changed while the checkpoint was taken; no continuation permitted")
     checkpoint = stopped.get("checkpoint")
     if checkpoint is not None and checkpoint.get("tree") != after.get("snapshot_tree"):
         raise TakeoverRefused("checkpoint does not match the post-checkpoint checkout; no continuation permitted")
     if checkpoint is not None and checkpoint.get("staged_tree") != after.get("staged_tree"):
         raise TakeoverRefused("checkpoint does not match the post-checkpoint index; no continuation permitted")
-    recorded = mapping.get("branch")
-    if after.get("branch") != recorded:
-        raise TakeoverRefused(f"checkout is on {after.get('branch')!r} but run-state records {recorded!r}")
+    actual = after.get("branch")
+    if not isinstance(actual, str) or not _BRANCH.fullmatch(actual) or ".." in actual:
+        raise TakeoverRefused("checkout branch is detached or unreadable; preserve it for reconciliation")
+    if actual != previous_execution and checkpoint is None:
+        raise TakeoverRefused("branch drift lacks a retained checkpoint; preserve checkout")
     for op in list(_load_state(layout)["issue_mappings"][str(issue)].get("publication_ops", [])):
         if op["status"] in _OP_UNRESOLVED:
             reconcile_publication(layout, worker, op_id=op["id"], readback=(readbacks or {}).get(op["id"]))
@@ -1910,6 +1948,22 @@ def takeover(
     def mutate(entry: dict[str, Any]) -> None:
         if entry.get("stop_id") != stop_id or entry.get("state") != "stopped_verified":
             raise TakeoverRefused("worker state changed after the stop was verified (a start raced the takeover)")
+        if (entry.get("branch") != recorded or entry.get("execution_branch", recorded) != previous_execution
+                or entry.get("checkout") != str(layout.checkout(worker))
+                or int(_takeover_of(entry).get("generation", 0)) != generation):
+            raise TakeoverRefused("worker scope, branch mapping or generation changed during takeover")
+        observed = entry.get("work_at_stop")
+        if not isinstance(observed, Mapping) or any(
+            observed.get(key) != after.get(key)
+            for key in ("head", "branch", "snapshot_tree", "staged_tree", "refs_fingerprint")
+        ):
+            raise TakeoverRefused("recorded checkout evidence changed during takeover")
+        if checkpoint is not None and not any(
+            c.get("ref") == checkpoint.get("ref") and c.get("status") == "preserved"
+            and c.get("refs_fingerprint") == after.get("refs_fingerprint")
+            for c in entry.get("checkpoints", []) if isinstance(c, Mapping)
+        ):
+            raise TakeoverRefused("retained checkpoint changed during takeover")
         _assert_engine(runner)
         present = _container_state(layout, worker, runner)
         if present is not None:
@@ -1917,9 +1971,12 @@ def takeover(
         prior = _takeover_of(entry)
         if prior.get("status") == "authorized":
             raise TakeoverRefused("another continuation is already authorized")
+        entry["execution_branch"] = actual
         entry["takeover"] = {
             "status": "authorized", "generation": int(prior.get("generation", 0)) + 1, "reason": reason,
             "authorized_at": _now(), "checkpoints": [c["ref"] for c in entry.get("checkpoints", []) if c.get("status") == "preserved"],
+            "execution_branch": actual, "previous_execution_branch": previous_execution,
+            "publisher_branch": recorded, "head": after["head"],
         }
 
     _mutate_mapping(layout, worker, mutate)
