@@ -91,6 +91,9 @@ _OP_UNRESOLVED = ("intended", "quarantined")
 _ENV_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _OID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _CKPT_REF = re.compile(r"^refs/checkpoints/ckpt-([0-9]{4,})$")
+_CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
+_INSPECT_NAME = re.compile(r"^epicws-git-[0-9a-f]{12}$")
+LAUNCH_PROTOCOL = "create-start-v1"
 
 Runner = Callable[..., subprocess.CompletedProcess]
 _P = ParamSpec("_P")
@@ -244,6 +247,32 @@ def _serialized_worker(
     return wrapped
 
 
+def _serialized_openhands_start(
+    func: Callable[Concatenate[Layout, str, _P], _R],
+) -> Callable[Concatenate[Layout, str, _P], _R]:
+    """Fence port selection and credential-home admission across workers of this root."""
+    @wraps(func)
+    def wrapped(layout: Layout, worker: str, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        try:
+            fd = os.open(layout.root / ".openhands-start.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        except OSError as exc:
+            raise LaunchRefused("cannot open OpenHands start lock") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise LaunchRefused("OpenHands start lock is not a regular file")
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise LaunchRefused("another OpenHands start is selecting a port; retry") from exc
+            try:
+                return func(layout, worker, *args, **kwargs)
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+    return wrapped
+
+
 # --------------------------------------------------------------------------- state
 
 
@@ -342,7 +371,7 @@ def _begin_start(layout: Layout, issue: int, worker: str, **fields: Any) -> None
             raise TakeoverRefused("takeover required: publication has an unresolved outcome")
         if pending.get("status") == "authorized":
             mapping["takeover"] = {**pending, "status": "consumed", "consumed_at": _now(), "consumed_by": fields.get("runtime")}
-        mapping.update(fields, state="starting", container_id=None, updated_at=_now())
+        mapping.update(fields, state="starting", container_id=None, launch_protocol=LAUNCH_PROTOCOL, updated_at=_now())
         state["issue_mappings"][key] = mapping
         return state
 
@@ -350,23 +379,25 @@ def _begin_start(layout: Layout, issue: int, worker: str, **fields: Any) -> None
 
 
 def _launch(layout: Layout, issue: int, worker: str, argv: Sequence[str], runner: Runner) -> str:
-    """Run the already-recorded ``starting`` launch; a definitive failure leaves a retryable record."""
+    """Create without running; persist the immutable ID before issuing an ID-bound start."""
 
     try:
-        result = runner(list(argv), capture_output=True, text=True, check=False, timeout=300.0)
+        created = runner(list(argv), capture_output=True, text=True, check=False, timeout=300.0)
     except (subprocess.TimeoutExpired, OSError) as exc:
-        # A timed-out or disconnected client does not prove the daemon never launched the
-        # container. Keep "starting" until the trusted controller reconciles the request.
-        raise EpicWorkspaceError("worker launch outcome is unknown; trusted reconciliation is required before retrying") from exc
-    if result.returncode != 0:
-        try:
-            absent = _container_state(layout, worker, runner) is None
-        except EpicWorkspaceError:
-            absent = False
-        if absent:
-            _record_worker(layout, issue, state="start_failed", start_failed_at=_now())
-        raise EpicWorkspaceError("worker launch failed; inspect its state before retrying")
-    return (result.stdout or "").strip()[:64]
+        raise EpicWorkspaceError("worker create outcome unknown; run worker-stop or takeover to settle") from exc
+    cid = (created.stdout or "").strip()
+    if created.returncode != 0 or not _CONTAINER_ID.fullmatch(cid):
+        # A create never starts a process. A late created container may occupy the name,
+        # but cannot write; worker-stop can remove it after verifying its scope.
+        raise EpicWorkspaceError("worker create failed or returned no ID; run worker-stop or takeover to settle")
+    _record_worker(layout, issue, container_id=cid)
+    try:
+        started = runner(["docker", "start", cid], capture_output=True, text=True, check=False, timeout=300.0)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise EpicWorkspaceError("worker start outcome unknown; run worker-stop or takeover to settle") from exc
+    if started.returncode != 0:
+        raise EpicWorkspaceError("worker start failed; run worker-stop or takeover to settle")
+    return cid
 
 
 def _issue_for_worker(state: Mapping[str, Any], worker: str) -> int:
@@ -415,8 +446,12 @@ def create_worker(
         raise LaunchRefused(f"invalid branch {branch!r}")
     checkout = layout.checkout(worker)
     recorded = _load_state(layout).get("issue_mappings", {}).get(str(int(issue)), {})
+    if recorded.get("worker") not in (None, worker):
+        raise LaunchRefused(f"issue #{int(issue)} already belongs to worker {recorded.get('worker')!r}")
     if recorded.get("state") == "retired":
         raise LaunchRefused(f"worker for issue #{int(issue)} is retired")
+    if not checkout.exists() and recorded.get("state") not in (None, "creating"):
+        raise LaunchRefused("recorded worker checkout is missing; refusing to replace its state")
     if checkout.exists():
         # A re-run must not record a branch the checkout is not on (KD-FE5EDF575D1E).
         actual = checkout_branch(checkout, runner=runner)
@@ -445,8 +480,8 @@ def create_worker(
 def _assert_engine(runner: Runner) -> str:
     try:
         result = runner(["docker", "version", "--format", "{{.Server.Version}}"], capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
-    except FileNotFoundError as exc:  # docker CLI missing
-        raise EngineUnavailable("docker CLI not found; refusing (no host fallback)") from exc
+    except OSError as exc:
+        raise EngineUnavailable("docker CLI unavailable; refusing (no host fallback)") from exc
     except subprocess.TimeoutExpired as exc:
         raise EngineUnavailable("container engine did not answer; refusing (no host fallback)") from exc
     if result.returncode != 0 or not (result.stdout or "").strip():
@@ -525,7 +560,7 @@ def build_launch_argv(
     if not _NETWORK.match(network) or network == "host":
         raise LaunchRefused(f"network mode {network!r} refused")
     argv = [
-        "docker", "run", "--detach",
+        "docker", "create",
         "--name", layout.container_name(worker),
         "--label", f"{LABEL_EPIC}={layout.epic}",
         "--label", f"{LABEL_WORKER}={worker}",
@@ -614,12 +649,83 @@ def _container_state(layout: Layout, worker: str, runner: Runner) -> str | None:
             ["docker", "ps", "--all", "--filter", f"label={LABEL_EPIC}={layout.epic}", "--filter", f"label={LABEL_WORKER}={worker}", "--format", "{{.State}}"],
             capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT,
         )
-    except subprocess.TimeoutExpired as exc:
+    except (subprocess.TimeoutExpired, OSError) as exc:
         raise EngineUnavailable("cannot read container state; treat worker as possibly running") from exc
     if result.returncode != 0:
         raise EngineUnavailable("cannot read container state; treat worker as possibly running")
     states = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
     return states[0] if states else None
+
+
+def _named_container(name: str, labels: Mapping[str, str], runner: Runner) -> str | None:
+    """Read one exact name and verify its labels before allowing removal."""
+    try:
+        found = runner(
+            ["docker", "ps", "--all", "--no-trunc", "--filter", f"name=^/{name}$", "--format", "{{.ID}}"],
+            capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT,
+        )
+        ids = (found.stdout or "").splitlines()
+        if found.returncode != 0 or len(ids) > 1 or any(not _CONTAINER_ID.fullmatch(cid) for cid in ids):
+            raise EngineUnavailable("cannot read exact container identity")
+        if not ids:
+            return None
+        result = runner(["docker", "inspect", "--format", "{{json .Config.Labels}}", ids[0]],
+                        capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
+        if result.returncode != 0:
+            raise EngineUnavailable("cannot read container scope")
+        actual = json.loads(result.stdout or "null")
+        if not isinstance(actual, dict) or any(actual.get(key) != value for key, value in labels.items()):
+            raise LaunchRefused(f"container named {name!r} does not have the expected scope; refusing removal")
+        return ids[0]
+    except (subprocess.TimeoutExpired, OSError, ValueError) as exc:
+        raise EngineUnavailable("cannot read exact container identity and scope") from exc
+
+
+def _id_present(cid: str, runner: Runner) -> bool:
+    if not _CONTAINER_ID.fullmatch(cid):
+        raise EpicWorkspaceError("invalid recorded container ID; refusing reconciliation")
+    try:
+        result = runner(["docker", "ps", "--all", "--no-trunc", "--filter", f"id={cid}", "--format", "{{.ID}}"],
+                        capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise EngineUnavailable("cannot verify container absence") from exc
+    ids = (result.stdout or "").splitlines()
+    if result.returncode != 0 or any(item != cid for item in ids) or len(ids) > 1:
+        raise EngineUnavailable("cannot verify container absence")
+    return bool(ids)
+
+
+def _remove_owned(name: str, labels: Mapping[str, str], runner: Runner, *, cid: str | None = None) -> None:
+    """Remove only a scope-checked ID; absence of that immutable ID is the stop proof."""
+    found = _named_container(name, labels, runner)
+    if cid is not None and found is not None and found != cid:
+        raise LaunchRefused("container identity changed; refusing removal")
+    target = cid or found
+    if target is not None:
+        if found == target:
+            try:
+                runner(["docker", "rm", "--force", target], capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+        if _id_present(target, runner):
+            raise EngineUnavailable("container remains present; stop is unverified")
+    # Check both exact name and scope after removal, including --rm disappearance.
+    if _named_container(name, labels, runner) is not None:
+        raise EngineUnavailable("container name remains present; stop is unverified")
+
+
+def _settle_checkpoint_writer(layout: Layout, worker: str, runner: Runner) -> None:
+    state = _load_state(layout)
+    marker = state["issue_mappings"][str(_issue_for_worker(state, worker))].get("checkpoint_inspection_unknown")
+    if not marker:
+        return
+    if not isinstance(marker, Mapping) or marker.get("protocol") != LAUNCH_PROTOCOL:
+        raise TakeoverRefused("legacy checkpoint inspection has no ID-bound stop proof; trusted reconciliation required")
+    name, cid = marker.get("name"), marker.get("container_id")
+    if not isinstance(name, str) or not _INSPECT_NAME.fullmatch(name) or not isinstance(cid, str):
+        raise TakeoverRefused("checkpoint inspection identity is malformed; preserving the hold")
+    _remove_owned(name, {"epic-workspace.inspect": "1"}, runner, cid=cid)
+    _mutate_mapping(layout, worker, lambda entry: entry.pop("checkpoint_inspection_unknown", None))
 
 
 def _stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner, image: str) -> dict[str, Any]:
@@ -634,18 +740,18 @@ def _stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner, im
     if state["issue_mappings"][str(issue)].get("state") == "retired":
         raise LaunchRefused(f"worker {worker!r} is retired")
     _assert_engine(runner)
-    try:
-        runner(["docker", "rm", "--force", layout.container_name(worker)], capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
-    except (subprocess.TimeoutExpired, OSError):
-        pass  # absence is decided by the readback below, never by the rm
+    _settle_checkpoint_writer(layout, worker, runner)
+    mapping = state["issue_mappings"][str(issue)]
+    if (mapping.get("state") == "starting" and not mapping.get("container_id")
+            and mapping.get("launch_protocol") != LAUNCH_PROTOCOL):
+        raise TakeoverRefused("legacy worker launch outcome is unknown; ID-bound stop proof is unavailable")
+    cid = mapping.get("container_id")
+    if cid is not None and (not isinstance(cid, str) or not _CONTAINER_ID.fullmatch(cid)):
+        raise TakeoverRefused("recorded worker container ID is invalid; refusing removal")
+    _remove_owned(layout.container_name(worker), {LABEL_EPIC: str(layout.epic), LABEL_WORKER: worker}, runner, cid=cid)
     remaining = _container_state(layout, worker, runner)
     if remaining is not None:
         raise EpicWorkspaceError(f"worker {worker!r} container still present ({remaining}); not verified stopped")
-    mapping = state["issue_mappings"][str(issue)]
-    if mapping.get("state") == "starting" and not mapping.get("container_id"):
-        # A lost docker-run response may still be in flight at the daemon even after an
-        # absence readback. Do not turn that ambiguity into continuation authority.
-        raise TakeoverRefused("worker launch outcome is unknown; trusted reconciliation is required before continuation")
     work, ignored_all = _inspect(layout, worker, runner=runner, image=image)
     stop_id = uuid.uuid4().hex
 
@@ -752,6 +858,7 @@ def _contained_git(
     input_data: str | None = None,
     cwd: str = INSPECT_TARGET,
     binary: bool = False,
+    checkpoint_owner: tuple[Layout, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run git against a worker checkout inside a throwaway container.
 
@@ -812,28 +919,54 @@ def _contained_git(
         image,
         "git", *_GIT_HARDENING, *extra_config, "-C", cwd, *args,
     ]
+    options: dict[str, Any] = {"input": input_data} if input_data is not None else {}
+    if checkpoint_owner is not None:
+        # Unlike disposable inspection scratch, the checkpoint store is reused. Persist its
+        # writer's ID before start so recovery can remove even a late start request by that ID.
+        create = list(argv)
+        create[1] = "create"
+        try:
+            result = runner(create, capture_output=True, text=True, check=False, timeout=timeout)
+        except (subprocess.TimeoutExpired, OSError):
+            return subprocess.CompletedProcess(argv, 124, "", "checkpoint create outcome unknown (never started)")
+        cid = (result.stdout or "").strip()
+        if result.returncode != 0 or not _CONTAINER_ID.fullmatch(cid):
+            return subprocess.CompletedProcess(argv, 124, "", "checkpoint create failed (never started)")
+        owner_layout, owner_worker = checkpoint_owner
+
+        def mark(entry: dict[str, Any]) -> None:
+            entry["checkpoint_inspection_unknown"] = {
+                "at": _now(), "protocol": LAUNCH_PROTOCOL, "name": name, "container_id": cid,
+            }
+
+        _mutate_mapping(owner_layout, owner_worker, mark)
+        try:
+            result = runner(["docker", "start", "--attach", *(["--interactive"] if input_data is not None else []), cid],
+                            capture_output=True, text=not binary, check=False, timeout=timeout, **options)
+        except (subprocess.TimeoutExpired, OSError):
+            result = subprocess.CompletedProcess(argv, 124, b"" if binary else "", "git inspection timed out or transport failed")
+        try:
+            _settle_checkpoint_writer(owner_layout, owner_worker, runner)
+        except EpicWorkspaceError:
+            return subprocess.CompletedProcess(argv, 124, b"" if binary else "", f"inspection cleanup unverified: {name}")
+        return result
     try:
-        options: dict[str, Any] = {"input": input_data} if input_data is not None else {}
         return runner(argv, capture_output=True, text=not binary, check=False, timeout=timeout, **options)
     except (subprocess.TimeoutExpired, OSError) as exc:
-        removed = False
+        detail = f"git {args[0] if args else ''} {'timed out' if isinstance(exc, subprocess.TimeoutExpired) else 'inspection transport failed'}"
         try:
-            removal = runner(["docker", "rm", "--force", name], capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
-            removed = removal.returncode == 0
-        except (subprocess.TimeoutExpired, OSError):
-            pass
-        failure = "timed out" if isinstance(exc, subprocess.TimeoutExpired) else "inspection transport failed"
-        detail = f"git {args[0] if args else ''} {failure}"
-        if not removed:
+            _remove_owned(name, {"epic-workspace.inspect": "1"}, runner)
+        except EpicWorkspaceError:
             detail += f"; inspection cleanup unverified: {name}"
-        return subprocess.CompletedProcess(argv, 124, "", detail)
+        return subprocess.CompletedProcess(argv, 124, b"" if binary else "", detail)
 
 
 class _Unreadable(Exception):
     pass
 
 
-def _raw_byte_preflight(checkout: Path, repo: Path, *, runner: Runner, image: str) -> None:
+def _raw_byte_preflight(checkout: Path, repo: Path, *, runner: Runner, image: str,
+                        checkpoint_owner: tuple[Layout, str] | None = None) -> None:
     """Fail closed unless contained Git round-trips CRLF against converting attributes."""
 
     def fail(result: subprocess.CompletedProcess, step: str) -> None:
@@ -849,15 +982,18 @@ def _raw_byte_preflight(checkout: Path, repo: Path, *, runner: Runner, image: st
         target = f"{SCRATCH_TARGET}/{fixture.name}"
         env = {"GIT_WORK_TREE": target, "GIT_INDEX_FILE": f"{target}/index"}
         added = _contained_git(checkout, ["add", "-f", "--", "raw.txt"], runner=runner, image=image,
-                               scratch=repo, env=env, cwd=target)
+                               scratch=repo, env=env, cwd=target, checkpoint_owner=checkpoint_owner)
         if added.returncode != 0:
             fail(added, "add")
         read = _contained_git(checkout, ["show", ":raw.txt"], runner=runner, image=image,
-                              scratch=repo, env=env, cwd=target, binary=True)
+                              scratch=repo, env=env, cwd=target, binary=True, checkpoint_owner=checkpoint_owner)
         if read.returncode != 0 or read.stdout != expected:
             fail(read, "CRLF did not round-trip")
     finally:
-        shutil.rmtree(fixture, ignore_errors=True)
+        if checkpoint_owner is None or not _load_state(checkpoint_owner[0])["issue_mappings"][str(
+            _issue_for_worker(_load_state(checkpoint_owner[0]), checkpoint_owner[1])
+        )].get("checkpoint_inspection_unknown"):
+            shutil.rmtree(fixture, ignore_errors=True)
 
 
 def _copy_worker_index(checkout: Path, repo: Path, index: Path) -> None:
@@ -1245,9 +1381,7 @@ def _checkpoint(
         return None
     if not work.get("readable"):
         return None  # kept intact as unique work; takeover and retirement refuse on it
-    mapping = _load_state(layout)["issue_mappings"][str(issue)]
-    if mapping.get("checkpoint_inspection_unknown"):
-        raise EpicWorkspaceError("checkpoint inspection cleanup is unknown; trusted reconciliation is required")
+    _settle_checkpoint_writer(layout, worker, runner)
     if not work.get("unique_work"):
         return None
     checkout = layout.checkout(worker)
@@ -1261,37 +1395,21 @@ def _checkpoint(
         "GIT_COMMITTER_NAME": "epic-workspace", "GIT_COMMITTER_EMAIL": "epic-workspace@localhost",
     }
 
-    def mark_unknown(detail: str) -> None:
-        if "inspection cleanup unverified" not in detail:
-            return
-
-        def mark(entry: dict[str, Any]) -> None:
-            entry["checkpoint_inspection_unknown"] = {"at": _now(), "detail": detail}
-            entry["takeover"] = {
-                "status": "required", "generation": int(_takeover_of(entry).get("generation", 0)),
-                "reason": "checkpoint inspection cleanup is unknown", "at": _now(),
-            }
-
-        _mutate_mapping(layout, worker, mark)
-
     def git(*args: str, env: Mapping[str, str] | None = None, input_data: str | None = None) -> str:
         result = _contained_git(
             checkout, args, runner=runner, image=image, scratch=repo, env={**base_env, **(env or {})},
-            timeout=GIT_WRITE_TIMEOUT, input_data=input_data,
+            timeout=GIT_WRITE_TIMEOUT, input_data=input_data, checkpoint_owner=(layout, worker),
         )
         if result.returncode != 0:
-            if result.returncode == 124:
-                mark_unknown(result.stderr or "")
             raise EpicWorkspaceError(f"checkpoint step {args[0]} failed: {(result.stderr or '').strip()[:200]}")
         return (result.stdout or "").strip()
 
     head = work["head"]
     try:
         try:
-            _raw_byte_preflight(checkout, repo, runner=runner, image=image)
+            _raw_byte_preflight(checkout, repo, runner=runner, image=image, checkpoint_owner=(layout, worker))
             _copy_worker_index(checkout, repo, index)
         except (_Unreadable, OSError) as exc:
-            mark_unknown(str(exc))
             raise EpicWorkspaceError(f"checkpoint index or raw-byte preflight unreadable: {exc}") from exc
         staged_tree = git("write-tree")
         if staged_tree != work["staged_tree"]:
@@ -1303,7 +1421,8 @@ def _checkpoint(
             git("add", "-f", "-A", "--", *ignored_all[offset:offset + 100], env={"GIT_LITERAL_PATHSPECS": "1"})
         tree = git("write-tree")
     finally:
-        _checkpoint_index(repo)
+        if not _load_state(layout)["issue_mappings"][str(issue)].get("checkpoint_inspection_unknown"):
+            _checkpoint_index(repo)
     mapping = _load_state(layout)["issue_mappings"][str(issue)]
     recorded = {c.get("ref"): c for c in mapping.get("checkpoints", []) if isinstance(c, Mapping)}
     present: dict[str, tuple[str, str, str]] = {}
@@ -1416,6 +1535,9 @@ def checkpoint_worker(layout: Layout, worker: str, *, reason: str, runner: Runne
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     _assert_engine(runner)
+    _settle_checkpoint_writer(layout, worker, runner)
+    if state["issue_mappings"][str(issue)].get("state") in ("starting", "running"):
+        raise EpicWorkspaceError("worker launch or execution is unresolved; run worker-stop before checkpoint")
     if _container_state(layout, worker, runner) is not None:
         raise EpicWorkspaceError("worker container is present; a checkpoint would compete with it. Stop it first")
     work, ignored_all = _inspect(layout, worker, runner=runner, image=image)
@@ -1442,6 +1564,7 @@ def release_checkpoint(
     if not _OID.match(published_commit):
         raise EpicWorkspaceError("published commit must be a full object id")
     _assert_engine(runner)
+    _settle_checkpoint_writer(layout, worker, runner)
     checkout = layout.checkout(worker)
     repo = _checkpoint_repo(layout, worker)
     if not all(isinstance(record.get(key), str) for key in ("staged_ref", "staged_commit", "staged_tree")):
@@ -1662,9 +1785,14 @@ def next_authorized_action(mapping: Mapping[str, Any]) -> dict[str, Any]:
     if mapping.get("state") == "retired":
         action = "none: worker retired"
     elif mapping.get("checkpoint_inspection_unknown"):
-        action = "trusted controller must reconcile the unknown checkpoint inspection before continuation"
-    elif mapping.get("state") == "starting" and not mapping.get("container_id"):
-        action = "trusted controller must reconcile the unknown worker launch before continuation"
+        marker = mapping["checkpoint_inspection_unknown"]
+        action = ("run worker-stop or takeover to settle the unknown checkpoint inspection before continuation"
+                  if isinstance(marker, Mapping) and marker.get("protocol") == LAUNCH_PROTOCOL else
+                  "preserve the legacy checkpoint hold; its old writer has no ID-bound stop proof")
+    elif mapping.get("state") == "starting":
+        action = ("preserve the legacy launch hold; its old request has no ID-bound stop proof"
+                  if not mapping.get("container_id") and mapping.get("launch_protocol") != LAUNCH_PROTOCOL else
+                  "run worker-stop or takeover to settle the unknown worker launch before continuation")
     elif takeover.get("status") == "required":
         action = "run takeover: reconcile files and publication before any successor writes"
     elif takeover.get("status") == "authorized":
@@ -1740,8 +1868,7 @@ def takeover(
     mapping = state["issue_mappings"][str(issue)]
     if mapping.get("state") == "retired":
         raise TakeoverRefused("worker is retired")
-    if mapping.get("checkpoint_inspection_unknown"):
-        raise TakeoverRefused("checkpoint inspection cleanup is unknown; trusted reconciliation is required")
+    _settle_checkpoint_writer(layout, worker, runner)
     if _takeover_of(mapping).get("status") == "authorized":
         return {**continuation_brief(layout, worker), "already_authorized": True}
     stopped = _stop_worker(layout, worker, reason=f"takeover: {reason}", runner=runner, image=image)
@@ -1919,7 +2046,10 @@ def _session_key(layout: Layout, worker: str) -> str:
 def _allocate_port(runner: Runner) -> int:
     import socket
 
-    used = runner(["docker", "ps", "--format", "{{.Ports}}"], capture_output=True, text=True, check=False)
+    try:
+        used = runner(["docker", "ps", "--format", "{{.Ports}}"], capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise EngineUnavailable("cannot read published ports") from exc
     if used.returncode != 0:
         raise EngineUnavailable("cannot read published ports")
     taken = set(int(m) for m in re.findall(r"127\.0\.0\.1:(\d+)->", used.stdout or ""))
@@ -1946,14 +2076,18 @@ def _validate_codex_home(path: Path | None, layout: Layout, runner: Runner) -> l
         raise LaunchRefused("codex home must be an existing directory outside the workspace root")
     if stat.S_IMODE(home.stat().st_mode) & 0o077:
         raise LaunchRefused("codex home must not be group/world accessible")
-    busy = runner(["docker", "ps", "--filter", "label=epic-workspace.codex-home=1", "--format", "{{.Names}}"],
-                  capture_output=True, text=True, check=False)
+    try:
+        busy = runner(["docker", "ps", "--all", "--filter", "label=epic-workspace.codex-home=1", "--format", "{{.Names}}"],
+                      capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise EngineUnavailable("cannot read codex-home usage") from exc
     if busy.returncode != 0 or (busy.stdout or "").strip():
         raise LaunchRefused("codex home is already mounted by another running worker (or unknown)")
     return [(str(home.resolve()), CODEX_HOME_TARGET)]
 
 
 @_serialized_worker
+@_serialized_openhands_start
 def start_openhands_worker(
     layout: Layout,
     worker: str,

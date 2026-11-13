@@ -435,7 +435,7 @@ def test_failed_raw_byte_preflight_refuses_inspection_and_retirement(tmp_path, c
 def test_checkpoint_gitdir_raw_byte_preflight_failure_keeps_checkout(tmp_path, capsys):
     class BadCheckpointGit(_GitBeforeAttrSource):
         def __call__(self, argv, **kwargs):
-            if "show" in argv and ":raw.txt" in argv and any("/control/checkpoints/" in arg for arg in argv):
+            if list(argv)[:2] == ["docker", "run"] and "show" in argv and ":raw.txt" in argv and any("/control/checkpoints/" in arg for arg in argv):
                 return subprocess.CompletedProcess(argv, 0, b"raw\nbytes\n", b"")
             return super().__call__(argv, **kwargs)
 
@@ -453,9 +453,16 @@ def test_checkpoint_gitdir_raw_byte_preflight_failure_keeps_checkout(tmp_path, c
 
 def test_unverified_preflight_container_cleanup_fences_checkpoint_repo(tmp_path, capsys):
     class UnknownPreflightCleanup(_GitBeforeAttrSource):
+        unavailable = False
+        failed = False
+
         def __call__(self, argv, **kwargs):
-            if "show" in argv and ":raw.txt" in argv and any("/control/checkpoints/" in arg for arg in argv):
-                return subprocess.CompletedProcess(argv, 124, "", "git show timed out; inspection cleanup unverified: epicws-git-test")
+            if not self.failed and list(argv)[:2] == ["docker", "run"] and "show" in argv and ":raw.txt" in argv and any("/control/checkpoints/" in arg for arg in argv):
+                self.failed = True
+                self.unavailable = True
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            if self.unavailable and list(argv)[:2] == ["docker", "ps"] and "--no-trunc" in argv:
+                return subprocess.CompletedProcess(argv, 1, "", "engine unavailable")
             return super().__call__(argv, **kwargs)
 
     repo = _seed_repo(tmp_path)
@@ -468,7 +475,9 @@ def test_unverified_preflight_container_cleanup_fences_checkpoint_repo(tmp_path,
     assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "r") == 2
     assert "inspection cleanup unverified" in capsys.readouterr().err
     assert _mapping(root, 6617)["checkpoint_inspection_unknown"]
-    assert _cli(root, 6615, FakeEngine(), "worker-checkpoint", "--worker", "w-a", "--reason", "r") == 2
+    assert _cli(root, 6615, engine, "worker-checkpoint", "--worker", "w-a", "--reason", "r") == 2
+    engine.unavailable = False
+    assert _cli(root, 6615, engine, "worker-checkpoint", "--worker", "w-a", "--reason", "r") == 0
     assert (checkout / "partial.py").read_text() == "keep\n"
 
 
@@ -697,7 +706,7 @@ def test_stop_is_fenced_while_a_start_is_actually_in_flight(tmp_path, capsys):
 
     class DelayedStart(FakeEngine):
         def __call__(self, argv, **kwargs):
-            if list(argv)[:2] == ["docker", "run"] and "--rm" not in argv:
+            if list(argv)[:2] == ["docker", "start"] and "--attach" not in argv:
                 entered.set()
                 assert finish.wait(10), "fixture start did not resume"
             return super().__call__(argv, **kwargs)
@@ -903,12 +912,13 @@ def test_failed_launch_leaves_a_retryable_record(tmp_path, capsys):
 
     class Failing(FakeEngine):
         def __call__(self, argv, **kwargs):
-            if list(argv)[:2] == ["docker", "run"] and "--rm" not in argv:
+            if list(argv)[:2] == ["docker", "create"] and "--rm" not in argv:
                 return subprocess.CompletedProcess(argv, 125, "", "no such image")
             return super().__call__(argv, **kwargs)
 
     assert _main(root, Failing(), server, "openhands-start", "--worker", "w-a") == 2
-    assert _mapping(root, 6617)["state"] == "start_failed"
+    assert _mapping(root, 6617)["state"] == "starting"
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "recover failed create") == 0
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
 
 
@@ -917,7 +927,7 @@ def test_timed_out_launch_stays_unknown_after_an_absence_readback(tmp_path, caps
 
     class TimedOut(FakeEngine):
         def __call__(self, argv, **kwargs):
-            if list(argv)[:2] == ["docker", "run"] and "--rm" not in argv:
+            if list(argv)[:2] == ["docker", "create"] and "--rm" not in argv:
                 raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
             return super().__call__(argv, **kwargs)
 
@@ -926,9 +936,9 @@ def test_timed_out_launch_stays_unknown_after_an_absence_readback(tmp_path, caps
     assert "unknown worker launch" in ew.next_authorized_action(_mapping(root, 6617))["action"]
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 2
     assert not engine.runs()
-    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "reconcile") == 2
-    assert "launch outcome is unknown" in capsys.readouterr().err
-    assert _mapping(root, 6617)["state"] == "starting" and not engine.runs()
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "reconcile") == 0
+    assert _mapping(root, 6617)["takeover"]["status"] == "authorized" and not engine.runs()
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
 
 
 # ------------------------------------------------------------------ hung git
@@ -947,9 +957,9 @@ def test_hung_contained_git_is_unreadable_unique_work_not_a_hang(tmp_path, capsy
     work = _work(root, engine, capsys, "w-a")
     assert work["readable"] is False and work["unique_work"] is True
     assert engine.timeouts and all(timeout and timeout > 0 for timeout in engine.timeouts)
-    # The abandoned inspection containers are removed by name, never the worker's.
-    removed = [c[-1] for c in engine.calls if c[1] == "rm"]
-    assert removed and all(name.startswith(f"{ew.CONTAINER_PREFIX}-git-") for name in removed)
+    # An already-absent --rm inspection is checked by exact name without removing a worker.
+    lookups = [c for c in engine.calls if c[1] == "ps" and any(a.startswith("name=^/epicws-git-") for a in c)]
+    assert lookups and not [c for c in engine.calls if c[1] == "rm"]
 
     assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "sleeping filter") == 0
     stop = _out(capsys)["work_at_stop"]
@@ -988,13 +998,18 @@ def test_unknown_checkpoint_container_cleanup_blocks_reuse_and_takeover(tmp_path
     root = tmp_path / "ws"
 
     class UnknownCleanup(FakeEngine):
+        unavailable = False
+        failed = False
+
         def __call__(self, argv, **kwargs):
             argv = list(argv)
-            if argv[:2] == ["docker", "run"] and "--rm" in argv and any(
+            if not self.failed and argv[:2] == ["docker", "run"] and "--rm" in argv and any(
                 "/control/checkpoints/" in item for item in argv
             ):
+                self.failed = True
+                self.unavailable = True
                 raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
-            if argv[:2] == ["docker", "rm"] and argv[-1].startswith("epicws-git-"):
+            if self.unavailable and argv[:2] == ["docker", "ps"] and "--no-trunc" in argv:
                 return subprocess.CompletedProcess(argv, 1, "", "cleanup outcome unknown")
             return super().__call__(argv, **kwargs)
 
@@ -1006,9 +1021,12 @@ def test_unknown_checkpoint_container_cleanup_blocks_reuse_and_takeover(tmp_path
     assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "r") == 2
     assert _mapping(root, 6617)["checkpoint_inspection_unknown"]
     assert "unknown checkpoint inspection" in ew.next_authorized_action(_mapping(root, 6617))["action"]
-    assert _cli(root, 6615, FakeEngine(), "takeover", "--worker", "w-a", "--reason", "retry") == 2
-    assert "cleanup is unknown" in capsys.readouterr().err
-    assert _cli(root, 6615, FakeEngine(), "worker-start", "--worker", "w-a", "--", "sleep", "60") == 2
+    assert _cli(root, 6615, engine, "takeover", "--worker", "w-a", "--reason", "retry") == 2
+    assert _cli(root, 6615, engine, "worker-start", "--worker", "w-a", "--", "sleep", "60") == 2
+    engine.unavailable = False
+    assert _cli(root, 6615, engine, "takeover", "--worker", "w-a", "--reason", "retry") == 0
+    assert not _mapping(root, 6617).get("checkpoint_inspection_unknown")
+    assert _mapping(root, 6617)["checkpoints"]
     assert (checkout / "partial.txt").read_text() == "keep\n"
 
 

@@ -243,6 +243,7 @@ def test_retirement_preserves_unique_work_and_unrelated_services(tmp_path, capsy
     # A clean worker's checkout is removed; its home and record stay.
     clean = _new_worker(root, engine, repo, "w-clean", 7100, branch="b/clean")
     assert _cli(root, 6615, engine, "worker-start", "--worker", "w-clean", "--", "sleep", "60") == 0
+    clean_id = ew._load_state(layout)["issue_mappings"]["7100"]["container_id"]
     capsys.readouterr()
     assert _cli(root, 6615, engine, "worker-retire", "--worker", "w-clean") == 0
     assert _out(capsys) == {"worker": "w-clean", "container_removed": True, "checkout_removed": True}
@@ -251,7 +252,7 @@ def test_retirement_preserves_unique_work_and_unrelated_services(tmp_path, capsy
     assert ew._load_state(layout)["issue_mappings"]["7100"]["state"] == "retired"
     assert engine.containers["unrelated-svc"] == "running" and engine.containers["other-epic-worker"] == "running"
     rm_targets = {c[-1] for c in engine.calls if c[1] == "rm"}
-    assert all(t.startswith("epicws-6615-w-") for t in rm_targets)
+    assert rm_targets == {clean_id}
 
 
 def _publish(root, engine, capsys, sha, kind="branch_push"):

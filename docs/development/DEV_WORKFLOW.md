@@ -374,11 +374,22 @@ independently reviewed, installed and verified, these commands run from outside 
   branch, and reconciles publication attempts from coordinator-supplied readback. It reads engine
   absence again while recording exactly one continuation. Per-worker controller locks fence overlapping
   starts, stops, checkpoints and takeovers. The successor's `worker-start` or `openhands-start` consumes
-  that authorization; a repeated takeover before a start returns the same continuation. A lost
-  launch response stays unknown even if an absence readback succeeds, until the trusted controller
-  reconciles the outstanding request. If a timed-out checkpoint container cannot be confirmed
-  removed, the run state also blocks reuse of that checkpoint repository and continuation until
-  trusted reconciliation.
+  that authorization; a repeated takeover before a start returns the same continuation. Worker
+  launches create an unstarted container first and record its full ID before sending a start for
+  that ID. A timed-out create can leave an unstarted container; `worker-stop` or `takeover` verifies
+  the exact name and labels before removing it. A timed-out start is settled by removing the recorded
+  ID and reading back its absence. A late start for that removed ID cannot start a replacement.
+  Checkpoint writers use the same create, record, start and ID-bound removal sequence; their
+  outstanding ID is recorded before the write starts. If cleanup or readback is unavailable, the
+  checkpoint and continuation remain blocked. Retry `worker-stop`, `worker-checkpoint`, or `takeover`
+  after the engine recovers; the checkpoint is then retried or an existing partial result adopted.
+  Read-only inspection uses disposable scratch. Its timeout cleanup checks exact name and inspection
+  scope; an already absent `--rm` container does not create a false cleanup failure. A late create
+  can leave an unstarted container that occupies its name until a later scoped stop removes it.
+  A legacy unresolved `docker run` without an ID or a legacy checkpoint-cleanup marker has no such
+  proof and is refused; engine absence alone cannot prove that its old request will not run later.
+  OpenHands port selection and credential-home admission are serialized within the workspace root;
+  a conflicting bind from outside that root is settled through the same stop and takeover path.
 - `continuation-brief` rebuilds the next authorized action, checkpoints, blocked operations and the
   engine-neutral successor prompt from run-state alone, so a Codex worker can continue a Claude
   worker's task (and back) without the predecessor writing a summary.
