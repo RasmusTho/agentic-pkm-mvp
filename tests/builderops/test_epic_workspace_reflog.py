@@ -126,6 +126,128 @@ def test_bad_reflog_evidence_fences_takeover_and_retirement(tmp_path, capsys, da
     assert checkout.is_dir() and not _entry(root).get("checkpoints")
 
 
+@pytest.mark.parametrize(("location", "header", "ending"), [
+    ("head", b"broken-identity 1 +0000", b"\n"),
+    ("branch", b"<fixture@example.invalid> 1 +0000", b"\n"),
+    ("linked", b"fixture fixture@example.invalid 1 +0000", b"\n"),
+    ("head", b"fixture <fixture@example.invalid 1 +0000", b"\n"),
+    ("branch", b"fixture fixture@example.invalid> 1 +0000", b"\n"),
+    ("linked", b"fixture <fixture@example.invalid> +0000", b"\n"),
+    ("head", b"fixture <fixture@example.invalid> nope +0000", b"\n"),
+    ("head", b"fixture <fixture@example.invalid> 0 +0000", b"\n"),
+    ("branch", b"fixture <fixture@example.invalid> 000 +0000", b"\n"),
+    ("branch", b"fixture <fixture@example.invalid> 1 0000", b"\n"),
+    ("linked", b"fixture <fixture@example.invalid> 1 +00:00", b"\n"),
+    ("head", b"fixture <fixture@example.invalid> 1 +0000 extra", b"\n"),
+    ("head", b"fixture <fixture@example.invalid> 1 +0000", b"\r\n"),
+])
+def test_malformed_raw_reflog_header_fences_lifecycle(tmp_path, capsys, location, header, ending):
+    root, engine, server = _setup(tmp_path, capsys)
+    layout = ew.Layout(root.resolve(), 6615)
+    checkout = layout.checkout("w-a")
+    head = _git(checkout, "rev-parse", "HEAD").encode()
+    if location == "linked":
+        linked = tmp_path / "linked"
+        _git(checkout, "worktree", "add", "--quiet", "--detach", str(linked), "HEAD")
+        [log] = (checkout / ".git" / "worktrees").glob("*/logs/HEAD")
+    elif location == "branch":
+        log = checkout / ".git" / "logs" / "refs" / "heads" / "b" / "a"
+    else:
+        log = checkout / ".git" / "logs" / "HEAD"
+    raw = head + b" " + head + b" " + header + b"\tprobe" + ending
+    with log.open("ab") as out:
+        out.write(raw)
+    if header == b"fixture <fixture@example.invalid> 0 +0000":
+        git_log = subprocess.run(["git", "-C", str(checkout), "reflog", "show", "--format=%gs"],
+                                 capture_output=True, check=True, env=GIT_ENV).stdout
+        assert b"probe" not in git_log  # Git skips the zero timestamp without an error.
+    engine.containers["unrelated-svc"] = "running"
+    assert ew.inspect_checkout(layout, "w-a", runner=engine)["readable"] is False
+    capsys.readouterr()
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "invalid reflog") == 2
+    assert _main(root, engine, server, "worker-start", "--worker", "w-a", "--", "sleep", "60") == 2
+    assert _main(root, engine, server, "worker-retire", "--worker", "w-a") == 2
+    assert checkout.is_dir() and log.read_bytes().endswith(raw)
+    assert not engine.runs() and engine.containers["unrelated-svc"] == "running"
+    assert not _entry(root).get("checkpoints")
+
+
+@pytest.mark.parametrize("caller", ["worker-start", "openhands-start", "worker-create"])
+def test_malformed_reflog_fences_previously_authorized_consumers(tmp_path, capsys, caller):
+    root, engine, server = _setup(tmp_path, capsys)
+    layout = ew.Layout(root.resolve(), 6615)
+    checkout = layout.checkout("w-a")
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "valid snapshot") == 0
+    assert _entry(root)["takeover"]["status"] == "authorized"
+    head = _git(checkout, "rev-parse", "HEAD")
+    with (checkout / ".git" / "logs" / "HEAD").open("ab") as out:
+        out.write(f"{head} {head} broken-identity 1 +0000\tprobe\n".encode())
+    args = {
+        "worker-start": (caller, "--worker", "w-a", "--", "sleep", "60"),
+        "openhands-start": (caller, "--worker", "w-a"),
+        "worker-create": (caller, "--worker", "w-a", "--issue", "6617", "--branch", "b/a", "--next-action", "implement"),
+    }[caller]
+    capsys.readouterr()
+    assert _main(root, engine, server, *args) == 2
+    assert not engine.runs() and checkout.is_dir()
+
+
+def test_valid_reflog_identity_remains_usable_for_clean_lifecycle(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    layout = ew.Layout(root.resolve(), 6615)
+    checkout = layout.checkout("w-a")
+    head = _git(checkout, "rev-parse", "HEAD").encode()
+    log = checkout / ".git" / "logs" / "HEAD"
+    records = [
+        head + b" " + head + b" Fixture Person <first.last+tag@example.invalid> 1700000000 -0730\tfirst\n",
+        head + b" " + head + " Renée Example <person@example.invalid> 1700000001 +0530\tsecond\n".encode(),
+        # Git itself can write an empty email, although the name is required.
+        head + b" " + head + b" Fixture <> 1700000002 +0000\n",
+    ]
+    with log.open("ab") as out:
+        out.writelines(records)
+    git_log = subprocess.run(["git", "-C", str(checkout), "reflog", "show", "--format=%gs"],
+                             capture_output=True, check=True, env=GIT_ENV).stdout
+    assert b"first" in git_log and b"second" in git_log
+    assert ew.inspect_checkout(layout, "w-a", runner=engine)["readable"] is True
+    assert log.read_bytes().endswith(b"".join(records))
+    capsys.readouterr()
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "valid identities") == 0
+    assert _main(root, engine, server, "worker-start", "--worker", "w-a", "--", "sleep", "60") == 0
+    assert _main(root, engine, server, "worker-retire", "--worker", "w-a") == 0
+    assert not checkout.exists()
+
+
+def test_valid_raw_reflog_retains_both_object_sides_and_bytes(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    layout = ew.Layout(root.resolve(), 6615)
+    checkout = layout.checkout("w-a")
+    head = _git(checkout, "rev-parse", "HEAD")
+    commits = []
+    for name, content in (("old.txt", b"old\r\nbytes\n"), ("new.txt", b"new\r\nbytes\n")):
+        (checkout / name).write_bytes(content)
+        _git(checkout, "add", name)
+        tree = _git(checkout, "write-tree")
+        commits.append(_git(checkout, "commit-tree", tree, "-p", head, "-m", name))
+        _git(checkout, "reset", "--quiet", "--hard", head)
+    old, new = commits
+    log = checkout / ".git" / "logs" / "HEAD"
+    raw = f"{old} {new} Fixture Name <f+tag@example.invalid> 1700000000 -0730\t".encode() + b"raw-\xff\n"
+    with log.open("ab") as out:
+        out.write(raw)
+    inspected = ew.inspect_checkout(layout, "w-a", runner=engine)
+    assert inspected["readable"] is True and inspected["unique_work"] is True
+    assert {old, new} <= set(inspected["retained_reflog"])
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "retain both sides") == 0
+    record = _entry(root)["checkpoints"][-1]
+    assert {old, new} <= set(record["retained_reflog"]) and log.read_bytes().endswith(raw)
+    store = layout.epic_dir / "control" / "checkpoints" / "w-a.git"
+    for oid, path, content in ((old, "old.txt", b"old\r\nbytes\n"), (new, "new.txt", b"new\r\nbytes\n")):
+        result = subprocess.run(["git", "--git-dir", str(store), "show", f"refs/retained/{oid}:{path}"],
+                                capture_output=True, check=True, env={**GIT_ENV, "GIT_ALTERNATE_OBJECT_DIRECTORIES": ""})
+        assert result.stdout == content
+
+
 def _unreachable_commit(checkout):
     head = _git(checkout, "rev-parse", "HEAD")
     tree = _git(checkout, "rev-parse", "HEAD^{tree}")

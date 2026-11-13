@@ -360,8 +360,10 @@ independently reviewed, installed and verified, these commands run from outside 
   a contained CRLF round-trip must pass before inspection or checkpointing. Paired checkpoint refs
   hold the worktree and the worker's staged index tree; retained refs hold objects from the worker's
   refs, both object IDs in every reflog entry, stash history and linked-worktree HEADs. The common
-  Git directory and each registered linked worktree's reflogs are inspected; malformed, missing,
-  unreadable or oversized reflog evidence keeps the checkout. A connectivity check without the checkout's object
+  Git directory and each registered linked worktree's reflogs are inspected; each raw record must
+  have a complete committer identity and date, including the name, email delimiters, nonzero
+  timestamp and timezone.
+  Malformed, missing, unreadable or oversized reflog evidence keeps the checkout. A connectivity check without the checkout's object
   directory must pass before the checkpoint is recorded. An unmerged or unreadable index is kept as
   unreadable work.
 - Unique work is: staged edits, uncommitted or untracked files, ignored files, commits reachable from any worker

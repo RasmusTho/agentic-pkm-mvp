@@ -99,7 +99,11 @@ _CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
 _INSPECT_NAME = re.compile(r"^epicws-git-[0-9a-f]{12}$")
 _REFLOG_LINE = re.compile(
     rb"^([0-9a-f]{40}|[0-9a-f]{64}) ([0-9a-f]{40}|[0-9a-f]{64}) "
-    rb"[^\x00\r\n\t]+ [0-9]+ [+-][0-9]{4}(?:\t[^\x00\r\n]*)?$"
+    # Git's generated ident is a nonempty name, <email> (which may be empty),
+    # nonzero timestamp, and numeric timezone. Git silently skips a malformed
+    # identity or zero timestamp during reflog traversal.
+    rb"[^ <>\x00\r\n\t](?:[^<>\x00\r\n\t]*[^ <>\x00\r\n\t])? "
+    rb"<[^<>\x00\r\n\t]*> 0*[1-9][0-9]* [+-][0-9]{4}(?:\t[^\x00\r\n]*)?$"
 )
 LAUNCH_PROTOCOL = "create-start-v1"
 
@@ -1199,7 +1203,9 @@ def _read_reflogs(checkout: Path) -> tuple[str, str, list[str], list[str]]:
         if total > MAX_REFLOG_BYTES or (data and not data.endswith(b"\n")):
             raise _Unreadable("oversized or incomplete reflog")
         digest.update(os.fsencode(path.relative_to(git_dir)) + b"\0" + hashlib.sha256(data).digest())
-        for line in data.splitlines():
+        # Only LF delimits raw records. splitlines() would also erase CR and
+        # could turn an invalid record into an apparently valid one.
+        for line in data.split(b"\n")[:-1]:
             match = _REFLOG_LINE.fullmatch(line)
             if (not match or len(match[1]) != len(match[2])
                     or not (match[1].strip(b"0") or match[2].strip(b"0"))):
