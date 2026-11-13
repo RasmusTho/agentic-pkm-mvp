@@ -356,10 +356,13 @@ independently reviewed, installed and verified, these commands run from outside 
 - `worker-stop` removes the container, reads absence back from the engine, then captures unique work
   in a controller-owned checkpoint repository under `control/checkpoints/<worker>.git`. The checkout
   is mounted read-only in a networkless inspection container; a separate index and configuration
-  keep worker filters from running. Checkpoint refs hold uncommitted and ignored content, and retained
-  refs hold objects from the worker's refs, stash history and linked-worktree HEADs. A connectivity
-  check without the checkout's object directory must pass before the checkpoint is recorded.
-- Unique work is: uncommitted or untracked files, ignored files, commits reachable from any worker
+  keep worker filters from running. Controller-owned Git attributes override worktree conversions, and
+  a contained CRLF round-trip must pass before inspection or checkpointing. Paired checkpoint refs
+  hold the worktree and the worker's staged index tree; retained refs hold objects from the worker's
+  refs, stash history and linked-worktree HEADs. A connectivity check without the checkout's object
+  directory must pass before the checkpoint is recorded. An unmerged or unreadable index is kept as
+  unreadable work.
+- Unique work is: staged edits, uncommitted or untracked files, ignored files, commits reachable from any worker
   ref, stash history or linked-worktree HEAD that are not
   reachable from a controller-owned `source.git` ref or a coordinator-recorded published head, and
   unreadable evidence. Worker remote-tracking and checkpoint-looking refs never prove publication.
@@ -389,8 +392,10 @@ independently reviewed, installed and verified, these commands run from outside 
 - `worker-retire` removes only the container carrying this epic/worker label pair, then the checkout
   only when nothing unique remains. It refuses while unique work, unreadable evidence, an unreleased
   checkpoint or an unresolved publication exists. `checkpoint-release` supersedes a checkpoint only
-  when the captured paths match a controller-proven published commit and its retained commits are
-  reachable from controller-held publication evidence.
+  when paths from both captured trees match a controller-proven published commit and its retained
+  commits are reachable from controller-held publication evidence. Different staged and worktree
+  bytes for the same path cannot both match one published commit, so the checkpoint remains preserved.
+  Older checkpoint records without staged-index evidence also remain preserved.
 - `worker-create` on an existing checkout reads the actual branch back and refuses a mismatch with the
   requested or recorded branch instead of recording it.
 
@@ -405,8 +410,9 @@ refresh tokens rotate. No API key and no host credential store is used.
 
 Known limits: BOB-1 has 2 vCPU and 4 GB RAM, so expect at most about two concurrent workers. The
 default engine's `docker0` bridge is missing, which is why the owned `epicws` bridge is used.
-An agent-server worker uses about 0.5 GB at rest. Ignored files are reported but not yet protected
-by a retirement policy. Nothing reclaims a workspace that may hold unique work until #6617 qualifies
+An agent-server worker uses about 0.5 GB at rest. A checkpoint containing ignored files or stash commits
+can remain unreleasable when publication cannot prove their captured content or reachability. Nothing
+reclaims a workspace that may hold unique work until #6617 qualifies
 preservation (KD-B5F8B2D2F2BB, KD-FE5EDF575D1E). The engine handoff and the disconnect-safe
 coordinator are #6618; non-progress handling is #6619.
 

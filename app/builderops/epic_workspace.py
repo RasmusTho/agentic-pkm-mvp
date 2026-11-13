@@ -77,6 +77,7 @@ EXTRA_MOUNT_PREFIX = "/mnt/"
 INSPECT_TARGET = "/inspect"
 SCRATCH_TARGET = "/scratch"
 CHECKPOINT_REF_PREFIX = "refs/checkpoints/"
+STAGED_REF_PREFIX = "refs/checkpoint-staged/"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 GIT_TIMEOUT = 120.0
 GIT_WRITE_TIMEOUT = 900.0
@@ -687,6 +688,7 @@ def _controller_dir(layout: Layout, *parts: str) -> Path:
 
 
 _GITDIR_CONFIG = "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = false\n"
+_RAW_ATTRIBUTES = "* -text -eol -crlf -ident -filter -working-tree-encoding\n"
 
 
 def _make_gitdir(path: Path, head: str | None) -> None:
@@ -699,7 +701,7 @@ def _make_gitdir(path: Path, head: str | None) -> None:
     if path.is_symlink() or (path.exists() and not path.is_dir()):
         raise EpicWorkspaceError(f"git dir {path} is not a plain directory; refusing")
     path.mkdir(mode=0o700, exist_ok=True)
-    for sub in ("objects", "objects/info", "objects/pack", "refs", "refs/heads", "refs/checkpoints"):
+    for sub in ("objects", "objects/info", "objects/pack", "refs", "refs/heads", "refs/checkpoints", "info"):
         entry = path / sub
         if entry.is_symlink():
             raise EpicWorkspaceError(f"git dir entry {entry} is a symlink; refusing")
@@ -710,6 +712,11 @@ def _make_gitdir(path: Path, head: str | None) -> None:
             raise EpicWorkspaceError(f"git dir entry {entry} is a symlink; refusing")
         if name == "HEAD" or not entry.exists():
             entry.write_text(content, encoding="utf-8")
+    attributes = path / "info" / "attributes"
+    if attributes.is_symlink() or (attributes.exists() and not attributes.is_file()):
+        raise EpicWorkspaceError(f"git dir entry {attributes} is not a plain file; refusing")
+    # info/attributes takes precedence over the worktree even on Git before 2.40.
+    attributes.write_text(_RAW_ATTRIBUTES, encoding="utf-8")
 
 
 @contextmanager
@@ -743,6 +750,8 @@ def _contained_git(
     env: Mapping[str, str] | None = None,
     timeout: float = GIT_TIMEOUT,
     input_data: str | None = None,
+    cwd: str = INSPECT_TARGET,
+    binary: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run git against a worker checkout inside a throwaway container.
 
@@ -751,10 +760,10 @@ def _contained_git(
 
     * ``scratch=None``: the worker's own git dir, used only for ref and commit plumbing, with
       fsmonitor, hooks, ignoreStat and replace objects neutralised.
-    * ``scratch=<controller dir>``: a controller-owned git dir (clean config, empty attribute
-      source, its own index) whose work tree is the read-only checkout and whose objects borrow the
-      checkout's through alternates. Filters cannot run: none are configured and no worker
-      attributes are read. Everything git writes lands in the scratch dir.
+    * ``scratch=<controller dir>``: a controller-owned git dir (clean config, neutral attributes,
+      its own index) whose work tree is the read-only checkout and whose objects borrow the
+      checkout's through alternates. Controller info/attributes neutralizes worker attributes;
+      filters cannot run because no drivers are configured. Git writes only to the scratch dir.
 
     A call that exceeds ``timeout`` is killed and reported as a failure, so a hung command is
     treated as unreadable evidence, never as a clean result.
@@ -801,11 +810,11 @@ def _contained_git(
         *(["--interactive"] if input_data is not None else []),
         *[arg for mount in mounts for arg in ("--mount", mount)],
         image,
-        "git", *_GIT_HARDENING, *extra_config, "-C", INSPECT_TARGET, *args,
+        "git", *_GIT_HARDENING, *extra_config, "-C", cwd, *args,
     ]
     try:
         options: dict[str, Any] = {"input": input_data} if input_data is not None else {}
-        return runner(argv, capture_output=True, text=True, check=False, timeout=timeout, **options)
+        return runner(argv, capture_output=True, text=not binary, check=False, timeout=timeout, **options)
     except (subprocess.TimeoutExpired, OSError) as exc:
         removed = False
         try:
@@ -822,6 +831,56 @@ def _contained_git(
 
 class _Unreadable(Exception):
     pass
+
+
+def _raw_byte_preflight(checkout: Path, repo: Path, *, runner: Runner, image: str) -> None:
+    """Fail closed unless contained Git round-trips CRLF against converting attributes."""
+
+    def fail(result: subprocess.CompletedProcess, step: str) -> None:
+        detail = result.stderr if isinstance(result.stderr, str) else ""
+        suffix = f"; {detail}" if result.returncode == 124 and "inspection cleanup unverified" in detail else ""
+        raise _Unreadable(f"raw-byte Git preflight failed: {step}{suffix}")
+
+    fixture = Path(tempfile.mkdtemp(prefix="raw-preflight-", dir=repo))
+    try:
+        (fixture / ".gitattributes").write_text("*.txt text eol=lf\n", encoding="utf-8")
+        expected = b"raw\r\nbytes\r\n"
+        (fixture / "raw.txt").write_bytes(expected)
+        target = f"{SCRATCH_TARGET}/{fixture.name}"
+        env = {"GIT_WORK_TREE": target, "GIT_INDEX_FILE": f"{target}/index"}
+        added = _contained_git(checkout, ["add", "-f", "--", "raw.txt"], runner=runner, image=image,
+                               scratch=repo, env=env, cwd=target)
+        if added.returncode != 0:
+            fail(added, "add")
+        read = _contained_git(checkout, ["show", ":raw.txt"], runner=runner, image=image,
+                              scratch=repo, env=env, cwd=target, binary=True)
+        if read.returncode != 0 or read.stdout != expected:
+            fail(read, "CRLF did not round-trip")
+    finally:
+        shutil.rmtree(fixture, ignore_errors=True)
+
+
+def _copy_worker_index(checkout: Path, repo: Path, index: Path) -> None:
+    """Copy index bytes, including split-index bases, without running worker Git on the host."""
+
+    def copy_plain(source: Path, destination: Path) -> None:
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as src:
+            if not stat.S_ISREG(os.fstat(src.fileno()).st_mode):
+                raise _Unreadable("worker index is not a regular file")
+            if destination.exists() or destination.is_symlink():
+                if destination.is_symlink() or not destination.is_file() or destination.read_bytes() != src.read():
+                    raise _Unreadable("controller index copy collision")
+            else:
+                with destination.open("xb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+    git_dir = checkout / ".git"
+    copy_plain(git_dir / "index", index)
+    for source in git_dir.glob("sharedindex.*"):
+        if not re.fullmatch(r"sharedindex\.(?:[0-9a-f]{40}|[0-9a-f]{64})", source.name):
+            raise _Unreadable("invalid split index name")
+        copy_plain(source, repo / source.name)
 
 
 def _assert_plain_git_metadata(checkout: Path) -> None:
@@ -966,9 +1025,22 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
             raise _Unreadable("rev-parse")
         head, abbrev = identity
         branch = None if abbrev == "HEAD" else abbrev
-        # Content: a fresh index in a controller-owned git dir, so skip-worktree, assume-unchanged,
-        # core.ignoreStat and worker-planted filters cannot hide an edit.
+        # Copy the real index into the controller dir. A staged-only edit must not disappear
+        # when the worktree happens to match HEAD, and an unmerged index cannot be checkpointed.
         with _scratch_gitdir(layout, head) as scratch:
+            _raw_byte_preflight(checkout, scratch, runner=runner, image=image)
+            _copy_worker_index(checkout, scratch, scratch / "index")
+            if git("ls-files", "--unmerged", "-z", scratch=scratch):
+                raise _Unreadable("unmerged worker index")
+            if any(entry.startswith("160000 ") for entry in git("ls-files", "--stage", "-z", scratch=scratch).split("\0")):
+                raise _Unreadable("nested repository in worker index")
+            staged_tree = git("write-tree", scratch=scratch).strip()
+            if not _OID.match(staged_tree):
+                raise _Unreadable("worker index tree")
+            staged_paths = [p for p in git("diff-index", "--cached", "--name-only", "-z", "--no-renames", head, scratch=scratch).split("\0") if p]
+            (scratch / "index").unlink()
+            # A fresh index also catches edits hidden by skip-worktree, assume-unchanged,
+            # core.ignoreStat or worker-planted filters.
             git("read-tree", head, scratch=scratch)
             status_changed, ignored_all = _parse_status(git(
                 "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching",
@@ -979,10 +1051,10 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
             ignored = ignored_all
             # The scratch index starts at HEAD rather than the worker's index, so its flags and
             # cached stat information cannot suppress a modified file. The scratch configuration
-            # and empty attribute source keep worker filters out of both add operations.
+            # and neutral attributes keep worker filters out of both add operations.
             git("add", "-A", "--", ".", scratch=scratch)
             indexed_changed = [p for p in git("diff-index", "--cached", "--name-only", "-z", head, scratch=scratch).split("\0") if p]
-            changed = sorted(set(status_changed) | set(indexed_changed))
+            changed = sorted(set(status_changed) | set(indexed_changed) | set(staged_paths))
             for offset in range(0, len(ignored), 100):
                 result = _contained_git(
                     checkout, ["add", "-f", "-A", "--", *ignored[offset:offset + 100]],
@@ -1041,6 +1113,8 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
                 unpublished = count(sha)
                 if unpublished:
                     (other_branches if ref.startswith("refs/heads/") else other_refs).append({"ref": ref, "unpublished": unpublished})
+    except _Unreadable as exc:
+        return {"present": True, "readable": False, "unique_work": True, "reason": str(exc)}, []
     except Exception:  # noqa: BLE001 - any failure to read evidence is unique work (fail safe)
         return {"present": True, "readable": False, "unique_work": True}, []
     summary = {
@@ -1049,6 +1123,9 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
         "head": head,
         "branch": branch,
         "snapshot_tree": snapshot_tree,
+        "staged_tree": staged_tree,
+        "staged_paths": staged_paths[:50],
+        "staged_count": len(staged_paths),
         "refs_fingerprint": refs_fingerprint,
         "retained_refs": [{"ref": ref, "sha": sha} for sha, ref in refs],
         "retained_heads": extra_heads,
@@ -1074,7 +1151,7 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
 def inspect_checkout(layout: Layout, worker: str, *, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
     """Classify a worker checkout's unique work without executing worker-controlled config.
 
-    Unique work is: uncommitted or untracked files (decided against a fresh index), ignored files,
+    Unique work is: staged edits, uncommitted or untracked files (also checked against a fresh index), ignored files,
     any commit reachable from any ref, the stash or a
     linked worktree HEAD that is not reachable from controller-held published evidence, and
     anything that cannot be read (fail safe). "Published" is never inferred from refs in the
@@ -1143,7 +1220,7 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
 # Unique work (uncommitted edits, ignored-but-unique files, detached commits) is captured into
 # ``refs/checkpoints/ckpt-NNNN`` of a controller-owned repo (``control/checkpoints/<worker>.git``), only
 # after the worker container is proven absent. The worker checkout is mounted read-only and never
-# written, and no worker-planted config, attribute or filter is consulted. Objects reachable from
+# written, and worker-planted configuration and filters cannot execute. Objects reachable from
 # worker refs, stash reflogs and linked-worktree HEADs are also retained in the controller repo.
 
 
@@ -1184,26 +1261,42 @@ def _checkpoint(
         "GIT_COMMITTER_NAME": "epic-workspace", "GIT_COMMITTER_EMAIL": "epic-workspace@localhost",
     }
 
+    def mark_unknown(detail: str) -> None:
+        if "inspection cleanup unverified" not in detail:
+            return
+
+        def mark(entry: dict[str, Any]) -> None:
+            entry["checkpoint_inspection_unknown"] = {"at": _now(), "detail": detail}
+            entry["takeover"] = {
+                "status": "required", "generation": int(_takeover_of(entry).get("generation", 0)),
+                "reason": "checkpoint inspection cleanup is unknown", "at": _now(),
+            }
+
+        _mutate_mapping(layout, worker, mark)
+
     def git(*args: str, env: Mapping[str, str] | None = None, input_data: str | None = None) -> str:
         result = _contained_git(
             checkout, args, runner=runner, image=image, scratch=repo, env={**base_env, **(env or {})},
             timeout=GIT_WRITE_TIMEOUT, input_data=input_data,
         )
         if result.returncode != 0:
-            if result.returncode == 124 and "inspection cleanup unverified" in (result.stderr or ""):
-                def mark_unknown(entry: dict[str, Any]) -> None:
-                    entry["checkpoint_inspection_unknown"] = {"at": _now(), "detail": result.stderr}
-                    entry["takeover"] = {
-                        "status": "required", "generation": int(_takeover_of(entry).get("generation", 0)),
-                        "reason": "checkpoint inspection cleanup is unknown", "at": _now(),
-                    }
-
-                _mutate_mapping(layout, worker, mark_unknown)
+            if result.returncode == 124:
+                mark_unknown(result.stderr or "")
             raise EpicWorkspaceError(f"checkpoint step {args[0]} failed: {(result.stderr or '').strip()[:200]}")
         return (result.stdout or "").strip()
 
     head = work["head"]
     try:
+        try:
+            _raw_byte_preflight(checkout, repo, runner=runner, image=image)
+            _copy_worker_index(checkout, repo, index)
+        except (_Unreadable, OSError) as exc:
+            mark_unknown(str(exc))
+            raise EpicWorkspaceError(f"checkpoint index or raw-byte preflight unreadable: {exc}") from exc
+        staged_tree = git("write-tree")
+        if staged_tree != work["staged_tree"]:
+            raise EpicWorkspaceError("worker index changed while the checkpoint was taken")
+        _checkpoint_index(repo)
         git("read-tree", head)
         git("add", "-A", "--", ".")
         for offset in range(0, len(ignored_all), 100):
@@ -1214,39 +1307,51 @@ def _checkpoint(
     mapping = _load_state(layout)["issue_mappings"][str(issue)]
     recorded = {c.get("ref"): c for c in mapping.get("checkpoints", []) if isinstance(c, Mapping)}
     present: dict[str, tuple[str, str, str]] = {}
-    for line in git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(tree)%00%(parent)", CHECKPOINT_REF_PREFIX.rstrip("/")).splitlines():
+    staged_present: dict[str, tuple[str, str, str]] = {}
+    for line in git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(tree)%00%(parent)",
+                    CHECKPOINT_REF_PREFIX.rstrip("/"), STAGED_REF_PREFIX.rstrip("/")).splitlines():
         parts = line.split("\0")
         if len(parts) != 4:
             raise EpicWorkspaceError("checkpoint ref is unreadable; preserving checkout")
         ref, commit, ref_tree, parents = parts
         parent_parts = parents.split()
         parent = parent_parts[0] if len(parent_parts) == 1 else ""
-        present[ref] = (commit, ref_tree, parent)
+        (staged_present if ref.startswith(STAGED_REF_PREFIX) else present)[ref] = (commit, ref_tree, parent)
     # A ref already holding this exact checkpoint (an earlier attempt, or a crash between update-ref
     # and the run-state write) can be adopted only after its objects are made self-contained.
     record: dict[str, Any] | None = None
     already_recorded = False
     for ref, (commit, ref_tree, parent) in sorted(present.items()):
-        if ref_tree == tree and parent == head:
+        staged_ref = STAGED_REF_PREFIX + ref.removeprefix(CHECKPOINT_REF_PREFIX)
+        staged_data = staged_present.get(staged_ref)
+        if ref_tree == tree and parent == head and staged_data and staged_data[1:] == (staged_tree, head):
+            staged_commit = staged_data[0]
             prior = recorded.get(ref)
             if (prior and prior.get("status") == "preserved" and prior.get("commit") == commit
-                    and prior.get("refs_fingerprint") == work["refs_fingerprint"]):
+                    and prior.get("refs_fingerprint") == work["refs_fingerprint"]
+                    and prior.get("staged_ref") == staged_ref and prior.get("staged_commit") == staged_commit
+                    and prior.get("staged_tree") == staged_tree):
                 record = dict(prior)
                 already_recorded = True
                 break
             if prior is None:
                 record = {
                     "ref": ref, "commit": commit, "tree": tree, "head": head, "branch": work["branch"], "reason": reason, "at": _now(),
+                    "staged_ref": staged_ref, "staged_commit": staged_commit, "staged_tree": staged_tree,
                     "uncommitted_count": work["uncommitted_count"], "ignored_count": work["ignored_count"], "status": "preserved", "adopted": True,
                 }
                 break
     if record is None:
-        numbers = [int(m.group(1)) for ref in (*present, *recorded) if isinstance(ref, str) and (m := _CKPT_REF.match(ref))]
+        staged_names = (CHECKPOINT_REF_PREFIX + ref.removeprefix(STAGED_REF_PREFIX) for ref in staged_present)
+        numbers = [int(m.group(1)) for ref in (*present, *recorded, *staged_names) if isinstance(ref, str) and (m := _CKPT_REF.match(ref))]
         ref = f"{CHECKPOINT_REF_PREFIX}ckpt-{(max(numbers) if numbers else 0) + 1:04d}"
+        staged_ref = STAGED_REF_PREFIX + ref.removeprefix(CHECKPOINT_REF_PREFIX)
         commit = git("commit-tree", tree, "-p", head, "-m", f"epic-workspace checkpoint ({worker}): {reason[:120]}")
-        git("update-ref", ref, commit, "")  # empty old value: the ref must not already exist
+        staged_commit = git("commit-tree", staged_tree, "-p", head, "-m", f"epic-workspace staged checkpoint ({worker}): {reason[:120]}")
+        git("update-ref", "--stdin", input_data=f"start\ncreate {ref} {commit}\ncreate {staged_ref} {staged_commit}\nprepare\ncommit\n")
         record = {
             "ref": ref, "commit": commit, "tree": tree, "head": head, "branch": work["branch"], "reason": reason, "at": _now(),
+            "staged_ref": staged_ref, "staged_commit": staged_commit, "staged_tree": staged_tree,
             "uncommitted_count": work["uncommitted_count"], "ignored_count": work["ignored_count"], "status": "preserved",
         }
 
@@ -1298,7 +1403,10 @@ def _checkpoint_present(checkout: Path, repo: Path, record: Mapping[str, Any], r
         return (result.stdout or "").strip() if result.returncode == 0 else None
 
     return (rev(f"{record['ref']}^{{tree}}") == record["tree"] and rev(f"{record['ref']}^{{commit}}") == record["commit"]
-            and rev(f"{record['ref']}^1") == record["head"])
+            and rev(f"{record['ref']}^1") == record["head"]
+            and rev(f"{record['staged_ref']}^{{tree}}") == record["staged_tree"]
+            and rev(f"{record['staged_ref']}^{{commit}}") == record["staged_commit"]
+            and rev(f"{record['staged_ref']}^1") == record["head"])
 
 
 @_serialized_worker
@@ -1336,6 +1444,10 @@ def release_checkpoint(
     _assert_engine(runner)
     checkout = layout.checkout(worker)
     repo = _checkpoint_repo(layout, worker)
+    if not all(isinstance(record.get(key), str) for key in ("staged_ref", "staged_commit", "staged_tree")):
+        raise EpicWorkspaceError("checkpoint lacks staged-index evidence; preserving it")
+    if not _checkpoint_present(checkout, repo, record, runner, image):
+        raise EpicWorkspaceError("checkpoint or staged-index evidence is unreadable; preserving it")
 
     def read(*args: str, env: Mapping[str, str] | None = None) -> str:
         result = _contained_git(checkout, args, runner=runner, image=image, scratch=repo, scratch_readonly=True, env=env)
@@ -1356,11 +1468,14 @@ def release_checkpoint(
         raise EpicWorkspaceError("checkpoint retained object evidence is malformed")
     if int(read("rev-list", "--count", *sorted(retained), "--not", *existing).strip() or 1) != 0:
         raise EpicWorkspaceError("checkpoint contains retained commits not published by the coordinator")
-    paths = [p for p in read("diff", "--name-only", "-z", f"{record['head']}", record["commit"]).split("\0") if p]
-    for offset in range(0, len(paths), 100):
-        differing = read("diff", "--name-only", record["commit"], published_commit, "--", *paths[offset:offset + 100], env={"GIT_LITERAL_PATHSPECS": "1"}).split()
-        if differing:
-            raise EpicWorkspaceError(f"checkpoint content not in the published commit: {differing[:5]}")
+    for captured in (record["commit"], record["staged_commit"]):
+        paths = [p for p in read("diff", "--no-renames", "--name-only", "-z", record["head"], captured).split("\0") if p]
+        for offset in range(0, len(paths), 100):
+            differing = read("diff", "--no-renames", "--name-only", "-z", captured, published_commit, "--",
+                             *paths[offset:offset + 100], env={"GIT_LITERAL_PATHSPECS": "1"}).split("\0")
+            differing = [p for p in differing if p]
+            if differing:
+                raise EpicWorkspaceError(f"checkpoint content not in the published commit: {differing[:5]}")
 
     def updater(current: dict[str, Any]) -> dict[str, Any]:
         entry = current["issue_mappings"][str(issue)]
@@ -1650,11 +1765,13 @@ def takeover(
         raise TakeoverRefused("checkout evidence is missing or unreadable; treated as unique work, no continuation permitted")
     if after.get("head") != stopped.get("head"):
         raise TakeoverRefused("checkout HEAD moved while the checkpoint was taken; no continuation permitted")
-    if any(after.get(key) != stopped.get(key) for key in ("snapshot_tree", "refs_fingerprint")):
+    if any(after.get(key) != stopped.get(key) for key in ("snapshot_tree", "staged_tree", "refs_fingerprint")):
         raise TakeoverRefused("checkout content or refs changed while the checkpoint was taken; no continuation permitted")
     checkpoint = stopped.get("checkpoint")
     if checkpoint is not None and checkpoint.get("tree") != after.get("snapshot_tree"):
         raise TakeoverRefused("checkpoint does not match the post-checkpoint checkout; no continuation permitted")
+    if checkpoint is not None and checkpoint.get("staged_tree") != after.get("staged_tree"):
+        raise TakeoverRefused("checkpoint does not match the post-checkpoint index; no continuation permitted")
     recorded = mapping.get("branch")
     if after.get("branch") != recorded:
         raise TakeoverRefused(f"checkout is on {after.get('branch')!r} but run-state records {recorded!r}")
@@ -1715,7 +1832,7 @@ def retire_worker(layout: Layout, worker: str, *, runner: Runner = subprocess.ru
         after, _ = _inspect(layout, worker, runner=runner, image=image)
         if (
             not after.get("readable") or after.get("unique_work")
-            or any(after.get(key) != work.get(key) for key in ("head", "branch", "snapshot_tree", "refs_fingerprint"))
+            or any(after.get(key) != work.get(key) for key in ("head", "branch", "snapshot_tree", "staged_tree", "refs_fingerprint"))
         ):
             reasons.append("checkout changed or became unreadable after the stop")
         _assert_engine(runner)

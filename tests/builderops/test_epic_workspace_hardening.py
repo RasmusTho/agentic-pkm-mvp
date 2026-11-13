@@ -10,6 +10,8 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
+import pytest
+
 from app.builderops import epic_run_state
 from app.builderops import epic_workspace as ew
 from tests.builderops.test_epic_workspace_isolation import FakeEngine, _cli, _seed_repo
@@ -251,6 +253,250 @@ def test_checkpoint_preserves_raw_bytes_despite_worker_attributes(tmp_path, caps
         capture_output=True, check=True,
     )
     assert result.stdout == b"one\r\ntwo\r\n"
+
+
+def test_staged_only_index_is_checkpointed_independently_and_gates_release(tmp_path, capsys):
+    repo = _seed_repo(tmp_path)
+    origin = tmp_path / "origin"
+    (origin / "remove me.txt").write_text("tracked\n")
+    _git(origin, "add", "remove me.txt")
+    _git(origin, "commit", "--quiet", "-m", "tracked file")
+    root = tmp_path / "ws"
+    engine = FakeEngine()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    checkout = _new_worker(root, engine, repo, "w-a", 6617)
+    _git(checkout, "update-index", "--split-index")
+    (checkout / "README.md").write_text("staged edit\n")
+    (checkout / "new file.txt").write_bytes(b"staged\r\nbytes\r\n")
+    _git(checkout, "add", "README.md", "new file.txt")
+    _git(checkout, "rm", "--quiet", "remove me.txt")
+    _git(checkout, "restore", "--worktree", "--source=HEAD", "README.md", "remove me.txt")
+    (checkout / "new file.txt").unlink()
+    _git(checkout, "update-index", "--assume-unchanged", "README.md")
+    before = {str(p.relative_to(checkout / ".git")): p.read_bytes() for p in (checkout / ".git").rglob("*") if p.is_file()}
+    work = ew.inspect_checkout(_layout(root), "w-a", runner=engine)
+    assert work["unique_work"] and set(work["staged_paths"]) == {"README.md", "new file.txt", "remove me.txt"}
+    assert set(work["staged_paths"]) <= set(work["uncommitted_paths"])
+    capsys.readouterr()
+    assert _cli(root, 6615, engine, "worker-retire", "--worker", "w-a") == 2
+    after = {str(p.relative_to(checkout / ".git")): p.read_bytes() for p in (checkout / ".git").rglob("*") if p.is_file()}
+    assert checkout.is_dir() and after == before
+    [record] = _mapping(root, 6617)["checkpoints"]
+    store = _layout(root).epic_dir / "control" / "checkpoints" / "w-a.git"
+
+    def saved(*args):
+        return subprocess.run(["git", "--git-dir", str(store), *args], capture_output=True, check=True).stdout
+
+    saved("fsck", "--full", "--strict", "--no-dangling")
+    assert saved("show", f"{record['staged_ref']}:README.md") == b"staged edit\n"
+    assert saved("show", f"{record['staged_ref']}:new file.txt") == b"staged\r\nbytes\r\n"
+    assert saved("show", f"{record['ref']}:README.md") == b"fixture\n"
+    assert saved("show", f"{record['ref']}:remove me.txt") == b"tracked\n"
+    assert subprocess.run(["git", "--git-dir", str(store), "cat-file", "-e", f"{record['staged_ref']}:remove me.txt"], capture_output=True).returncode != 0
+    base = _git(checkout, "rev-parse", "HEAD")
+    _publish(root, engine, capsys, base)
+    assert _cli(root, 6615, engine, "checkpoint-release", "--worker", "w-a", "--ref", record["ref"], "--published-commit", base) == 2
+    assert "checkpoint content not in the published commit" in capsys.readouterr().err
+    assert _mapping(root, 6617)["checkpoints"][0]["status"] == "preserved"
+
+
+def test_staged_and_worktree_checkpoint_can_release_when_both_are_published(tmp_path, capsys):
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = FakeEngine()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    checkout = _new_worker(root, engine, repo, "w-a", 6617)
+    (checkout / "new file.txt").write_text("both snapshots\n")
+    _git(checkout, "add", "new file.txt")
+    capsys.readouterr()
+    assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "r") == 0
+    record = _out(capsys)["work_at_stop"]["checkpoint"]
+    _git(checkout, "commit", "--quiet", "-m", "publish captured content")
+    sha = _git(checkout, "rev-parse", "HEAD")
+    _publish(root, engine, capsys, sha)
+    layout = _layout(root)
+
+    def save_record(value):
+        def update(state):
+            state["issue_mappings"]["6617"]["checkpoints"] = [value]
+            return state
+        epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=update,
+                                             expected_epic_issue_number=layout.epic)
+
+    # A pre-repair record cannot prove what was staged, even if its worktree was published.
+    save_record({k: v for k, v in record.items() if k not in ("staged_ref", "staged_commit", "staged_tree")})
+    assert _cli(root, 6615, engine, "checkpoint-release", "--worker", "w-a", "--ref", record["ref"], "--published-commit", sha) == 2
+    assert "lacks staged-index evidence" in capsys.readouterr().err
+    save_record(record)
+    assert _cli(root, 6615, engine, "checkpoint-release", "--worker", "w-a", "--ref", record["ref"], "--published-commit", sha) == 0
+
+
+def test_checkpoint_does_not_adopt_prior_ref_with_different_staged_tree(tmp_path, capsys):
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = FakeEngine()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    checkout = _new_worker(root, engine, repo, "w-a", 6617)
+    (checkout / "README.md").write_text("first staged\n")
+    _git(checkout, "add", "README.md")
+    _git(checkout, "restore", "--worktree", "--source=HEAD", "README.md")
+    capsys.readouterr()
+    assert _cli(root, 6615, engine, "worker-checkpoint", "--worker", "w-a", "--reason", "first") == 0
+    first = _out(capsys)["checkpoint"]
+    layout = _layout(root)
+    epic_run_state.update_epic_run_state(
+        layout.run_id, root=layout.run_state_dir, expected_epic_issue_number=layout.epic,
+        updater=lambda state: {**state, "issue_mappings": {**state["issue_mappings"], "6617": {**state["issue_mappings"]["6617"], "checkpoints": []}}},
+    )
+    (checkout / "README.md").write_text("second staged\n")
+    _git(checkout, "add", "README.md")
+    _git(checkout, "restore", "--worktree", "--source=HEAD", "README.md")
+    assert _cli(root, 6615, engine, "worker-checkpoint", "--worker", "w-a", "--reason", "second") == 0
+    second = _out(capsys)["checkpoint"]
+    assert second["ref"] != first["ref"] and second["tree"] == first["tree"]
+    assert _ckpt(root, "w-a", "show", f"{first['staged_ref']}:README.md") == "first staged"
+    assert _ckpt(root, "w-a", "show", f"{second['staged_ref']}:README.md") == "second staged"
+
+
+@pytest.mark.parametrize("condition", ["unmerged", "corrupt"])
+def test_unmerged_or_unreadable_index_refuses_checkpoint_and_retirement(tmp_path, capsys, condition):
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = FakeEngine()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    checkout = _new_worker(root, engine, repo, "w-a", 6617)
+    if condition == "unmerged":
+        blob = _git(checkout, "rev-parse", "HEAD:README.md")
+        entries = f"0 {'0' * 40}\tREADME.md\n100644 {blob} 1\tREADME.md\n100644 {blob} 2\tREADME.md\n"
+        subprocess.run(["git", "-C", str(checkout), "update-index", "--index-info"], input=entries, text=True, check=True)
+    else:
+        (checkout / ".git" / "index").write_bytes(b"not a git index")
+    work = ew.inspect_checkout(_layout(root), "w-a", runner=engine)
+    assert work["unique_work"] and not work["readable"]
+    capsys.readouterr()
+    assert _cli(root, 6615, engine, "worker-checkpoint", "--worker", "w-a", "--reason", "r") == 2
+    assert _cli(root, 6615, engine, "worker-retire", "--worker", "w-a") == 2
+    assert checkout.is_dir() and not _mapping(root, 6617).get("checkpoints")
+
+
+class _GitBeforeAttrSource(FakeEngine):
+    """Emulate Git 2.39 ignoring GIT_ATTR_SOURCE; the real pinned image is tested separately."""
+
+    def __call__(self, argv, **kwargs):
+        argv = list(argv)
+        if argv[:2] == ["docker", "run"] and "--rm" in argv:
+            argv = [item for i, item in enumerate(argv) if not (
+                item.startswith("GIT_ATTR_SOURCE=") or item == "--env" and argv[i + 1].startswith("GIT_ATTR_SOURCE=")
+            )]
+        return super().__call__(argv, **kwargs)
+
+
+def test_old_git_attributes_preserve_eol_only_changes_and_checkpoint_bytes(tmp_path, capsys):
+    repo = _seed_repo(tmp_path)
+    origin = tmp_path / "origin"
+    (origin / ".gitattributes").write_text("*.txt text eol=lf\n")
+    (origin / "notes.txt").write_bytes(b"one\ntwo\n")
+    _git(origin, "add", ".gitattributes", "notes.txt")
+    _git(origin, "commit", "--quiet", "-m", "attributes")
+    root = tmp_path / "ws"
+    engine = _GitBeforeAttrSource()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    checkout = _new_worker(root, engine, repo, "w-a", 6617)
+    (checkout / "notes.txt").write_bytes(b"one\r\ntwo\r\n")
+    assert ew.inspect_checkout(_layout(root), "w-a", runner=engine)["unique_work"]
+    capsys.readouterr()
+    assert _cli(root, 6615, engine, "worker-retire", "--worker", "w-a") == 2
+    assert checkout.is_dir()
+    record = _mapping(root, 6617)["checkpoints"][0]
+    store = _layout(root).epic_dir / "control" / "checkpoints" / "w-a.git"
+    shown = subprocess.run(["git", "--git-dir", str(store), "show", f"{record['ref']}:notes.txt"], capture_output=True, check=True)
+    assert shown.stdout == b"one\r\ntwo\r\n"
+
+
+def test_failed_raw_byte_preflight_refuses_inspection_and_retirement(tmp_path, capsys):
+    class NormalizingGit(_GitBeforeAttrSource):
+        def __call__(self, argv, **kwargs):
+            if "show" in argv and ":raw.txt" in argv:
+                return subprocess.CompletedProcess(argv, 0, b"raw\nbytes\n", b"")
+            return super().__call__(argv, **kwargs)
+
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = NormalizingGit()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    checkout = _new_worker(root, engine, repo, "w-a", 6617)
+    work = ew.inspect_checkout(_layout(root), "w-a", runner=engine)
+    assert work["unique_work"] and not work["readable"] and "raw-byte Git preflight failed" in work["reason"]
+    capsys.readouterr()
+    assert _cli(root, 6615, engine, "worker-retire", "--worker", "w-a") == 2
+    assert checkout.is_dir() and not _mapping(root, 6617).get("checkpoints")
+
+
+def test_checkpoint_gitdir_raw_byte_preflight_failure_keeps_checkout(tmp_path, capsys):
+    class BadCheckpointGit(_GitBeforeAttrSource):
+        def __call__(self, argv, **kwargs):
+            if "show" in argv and ":raw.txt" in argv and any("/control/checkpoints/" in arg for arg in argv):
+                return subprocess.CompletedProcess(argv, 0, b"raw\nbytes\n", b"")
+            return super().__call__(argv, **kwargs)
+
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = BadCheckpointGit()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    checkout = _new_worker(root, engine, repo, "w-a", 6617)
+    (checkout / "partial.py").write_text("keep\n")
+    capsys.readouterr()
+    assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "r") == 2
+    assert "raw-byte Git preflight" in capsys.readouterr().err
+    assert (checkout / "partial.py").read_text() == "keep\n" and not _mapping(root, 6617).get("checkpoints")
+
+
+def test_unverified_preflight_container_cleanup_fences_checkpoint_repo(tmp_path, capsys):
+    class UnknownPreflightCleanup(_GitBeforeAttrSource):
+        def __call__(self, argv, **kwargs):
+            if "show" in argv and ":raw.txt" in argv and any("/control/checkpoints/" in arg for arg in argv):
+                return subprocess.CompletedProcess(argv, 124, "", "git show timed out; inspection cleanup unverified: epicws-git-test")
+            return super().__call__(argv, **kwargs)
+
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = UnknownPreflightCleanup()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    checkout = _new_worker(root, engine, repo, "w-a", 6617)
+    (checkout / "partial.py").write_text("keep\n")
+    capsys.readouterr()
+    assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "r") == 2
+    assert "inspection cleanup unverified" in capsys.readouterr().err
+    assert _mapping(root, 6617)["checkpoint_inspection_unknown"]
+    assert _cli(root, 6615, FakeEngine(), "worker-checkpoint", "--worker", "w-a", "--reason", "r") == 2
+    assert (checkout / "partial.py").read_text() == "keep\n"
+
+
+def test_takeover_refuses_index_changed_after_checkpoint(tmp_path, capsys):
+    class LateIndexWrite(FakeEngine):
+        changed = False
+
+        def __call__(self, argv, **kwargs):
+            result = super().__call__(argv, **kwargs)
+            if not self.changed and "update-ref" in argv and "--rm" in argv:
+                self.changed = True
+                (checkout / "README.md").write_text("later staged work\n")
+                _git(checkout, "add", "README.md")
+                _git(checkout, "restore", "--worktree", "--source=HEAD", "README.md")
+            return result
+
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = LateIndexWrite()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    checkout = _new_worker(root, engine, repo, "w-a", 6617)
+    (checkout / "partial.py").write_text("original work\n")
+    capsys.readouterr()
+    assert _cli(root, 6615, engine, "takeover", "--worker", "w-a", "--reason", "r") == 2
+    assert "changed while the checkpoint" in capsys.readouterr().err
+    assert _mapping(root, 6617)["takeover"]["status"] == "required"
+    assert _git(checkout, "show", ":README.md") == "later staged work"
+    assert (checkout / "README.md").read_text() == "fixture\n"
 
 
 def test_controller_paths_that_are_symlinks_are_refused(tmp_path, capsys):
