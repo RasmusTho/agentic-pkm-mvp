@@ -770,11 +770,16 @@ def _settle_checkpoint_writer(layout: Layout, worker: str, runner: Runner) -> No
     _mutate_mapping(layout, worker, lambda entry: entry.pop("checkpoint_inspection_unknown", None))
 
 
-def _stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner, image: str) -> dict[str, Any]:
+def _stop_worker(
+    layout: Layout, worker: str, *, reason: str, runner: Runner, image: str, retain_identity: bool = True,
+) -> dict[str, Any]:
     """Remove the worker container, prove absence by engine readback, then preserve its work.
 
     Absence is recorded before any checkpoint so a failed checkpoint never hides that the
     container is gone; the checkout is never written to (checkpoints live in a controller-owned repo).
+    A detached or drifted checkout is checkpointed even without unique work so a continuation can be
+    bound to its identity; retirement passes ``retain_identity=False`` because it authorizes no
+    continuation and only unique work must be retained.
     """
 
     state = _load_state(layout)
@@ -816,7 +821,7 @@ def _stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner, im
     work["stop_id"] = stop_id
     drifted = work.get("branch") != mapping.get("execution_branch", mapping.get("branch"))
     work["checkpoint"] = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image,
-                                     force=drifted or work.get("branch") is None)
+                                     force=retain_identity and (drifted or work.get("branch") is None))
     return work
 
 
@@ -2194,7 +2199,7 @@ def retire_worker(layout: Layout, worker: str, *, runner: Runner = subprocess.ru
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
-    work = _stop_worker(layout, worker, reason="retirement", runner=runner, image=image)
+    work = _stop_worker(layout, worker, reason="retirement", runner=runner, image=image, retain_identity=False)
     entry = _load_state(layout)["issue_mappings"][str(issue)]
     reasons = []
     if not work.get("present"):

@@ -421,7 +421,13 @@ independently reviewed, installed and verified, these commands run from outside 
   on that branch have settled. Normal parent publisher and branch gates still apply.
 - `worker-retire` removes only the container carrying this epic/worker label pair, then the checkout
   only when nothing unique remains. It refuses while unique work, unreadable evidence, an unreleased
-  checkpoint or an unresolved publication exists. `checkpoint-release` supersedes a checkpoint only
+  checkpoint or an unresolved publication exists. Unlike takeover, retirement does not checkpoint a
+  clean detached or drifted checkout only to retain its identity, because it authorizes no
+  continuation. Such a checkout retires once its earlier checkpoints are released. This requires
+  that its HEAD, refs and stash are reachable from controller-held publication evidence, and that
+  no uncommitted or ignored content remains. Worker refs never count as that evidence. An
+  unpublished detached commit is unique work, so retirement checkpoints it and refuses.
+  `checkpoint-release` supersedes a checkpoint only
   when paths from both captured trees match a controller-proven published commit and its retained
   commits are reachable from controller-held publication evidence. Different staged and worktree
   bytes for the same path cannot both match one published commit, so the checkpoint remains preserved.
@@ -443,7 +449,16 @@ refresh tokens rotate. No API key and no host credential store is used.
 Known limits: BOB-1 has 2 vCPU and 4 GB RAM, so expect at most about two concurrent workers. The
 default engine's `docker0` bridge is missing, which is why the owned `epicws` bridge is used.
 An agent-server worker uses about 0.5 GB at rest. A checkpoint containing ignored files or stash commits
-can remain unreleasable when publication cannot prove their captured content or reachability. Nothing
+can remain unreleasable when publication cannot prove their captured content or reachability.
+A worker stopped inside a Git operation can leave a `*.lock` file under `.git`, such as `index.lock`
+or a ref lock. The controller treats any such lock as an unsettled Git transaction and therefore as unreadable unique
+work. Checkout and lock bytes are retained, no checkpoint is taken, takeover and retirement refuse,
+and the next action remains `takeover`, so no successor starts. The controller never deletes,
+clears or applies a lock and has no general Git or rebase recovery. An ordinary readable file-level
+partial write outside a Git operation is checkpointed and continued normally. The next technical
+action belongs to the owning workflow: reconcile the stopped Git transaction from the retained
+checkout and lock, then rerun `takeover`, which inspects again from the start. Until then the
+work is retained but not continued or reclaimed. Nothing
 reclaims a workspace that may hold unique work until #6617 qualifies
 preservation (KD-B5F8B2D2F2BB, KD-FE5EDF575D1E). The engine handoff and the disconnect-safe
 coordinator are #6618; non-progress handling is #6619.

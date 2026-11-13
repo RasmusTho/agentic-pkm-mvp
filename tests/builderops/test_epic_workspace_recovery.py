@@ -510,7 +510,51 @@ def test_detached_continuation_retains_identity_across_engines_and_takeovers(tmp
     assert _ckpt(root, "w-a", "rev-parse", f"refs/retained/{later}") == later
 
 
-@pytest.mark.parametrize("changed", ["branch", "head", "index_flags", "content", "refs"])
+def test_published_detached_checkout_retires_while_takeover_keeps_identity_checkpoint(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    checkout = ew.Layout(root.resolve(), 6615).checkout("w-a")
+    engine.containers["unrelated-svc"] = "running"
+    assert _main(root, engine, server, "worker-start", "--worker", "w-a", "--", "sleep", "60") == 0
+    worker_id = _state(root)["container_id"]
+    _git(checkout, "checkout", "--detach")
+    (checkout / "detached.py").write_text("detached commit\n")
+    _git(checkout, "add", "detached.py")
+    _git(checkout, "commit", "-m", "detached work")
+    head = _git(checkout, "rev-parse", "HEAD")
+    capsys.readouterr()
+
+    # An unpublished detached commit is unique work: retirement retains it and keeps the checkout.
+    assert _main(root, engine, server, "worker-retire", "--worker", "w-a") == 2
+    assert "checkout holds unique work" in capsys.readouterr().err
+    assert [c["head"] for c in _state(root)["checkpoints"]] == [head] and checkout.is_dir()
+    assert _ckpt(root, "w-a", "rev-parse", f"refs/retained/{head}") == head
+
+    assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push", "--expect-sha", head) == 0
+    op = _json(capsys)["id"]
+    done = _write(tmp_path / "push.json", {"branch": "b/a", "sha": head})
+    assert _main(root, engine, server, "publication-complete", "--worker", "w-a", "--op", op, "--result-file", done) == 0
+    # Takeover still binds the detached identity to a preserved checkpoint, though nothing is unique.
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "replace") == 0
+    assert _json(capsys)["execution_head"] == head
+    entry = _state(root)
+    assert entry["work_at_stop"]["unique_work"] is False and entry["work_at_stop"]["branch"] is None
+    bound = next(c for c in entry["checkpoints"] if c["ref"] == entry["execution_identity"]["checkpoint_ref"])
+    assert bound["status"] == "preserved" and bound["head"] == head
+    for checkpoint in entry["checkpoints"]:
+        if checkpoint["status"] == "preserved":
+            assert _main(root, engine, server, "checkpoint-release", "--worker", "w-a", "--ref", checkpoint["ref"], "--published-commit", head) == 0
+    capsys.readouterr()
+
+    # Retirement mints no identity-only checkpoint, so released evidence lets it finish.
+    count = len(_state(root)["checkpoints"])
+    assert _main(root, engine, server, "worker-retire", "--worker", "w-a") == 0
+    assert _json(capsys) == {"worker": "w-a", "container_removed": True, "checkout_removed": True}
+    assert len(_state(root)["checkpoints"]) == count and _state(root)["state"] == "retired" and not checkout.exists()
+    assert engine.containers["unrelated-svc"] == "running"
+    assert {c[-1] for c in engine.calls if c[1] == "rm" and "--force" in c} <= {worker_id}
+
+
+@pytest.mark.parametrize("changed",["branch", "head", "index_flags", "content", "refs"])
 def test_checkout_change_during_publication_reconciliation_fences_takeover(tmp_path, capsys, monkeypatch, changed):
     root, engine, server = _setup(tmp_path, capsys)
     checkout = ew.Layout(root.resolve(), 6615).checkout("w-a")
