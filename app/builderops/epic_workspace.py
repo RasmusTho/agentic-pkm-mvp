@@ -92,6 +92,7 @@ PUBLICATION_KINDS = ("branch_push", "pr_create")
 _OP_UNRESOLVED = ("intended", "quarantined", "absent_confirmed")
 _ENV_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _OID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _CKPT_REF = re.compile(r"^refs/checkpoints/ckpt-([0-9]{4,})$")
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
 _INSPECT_NAME = re.compile(r"^epicws-git-[0-9a-f]{12}$")
@@ -339,7 +340,10 @@ def _assert_no_pending_takeover(mapping: Mapping[str, Any]) -> None:
         raise TakeoverRefused("takeover required: reconcile the predecessor's work and publication before any successor writes")
 
 
-def _begin_start(layout: Layout, issue: int, worker: str, **fields: Any) -> None:
+def _begin_start(
+    layout: Layout, issue: int, worker: str, *, preflight: Mapping[str, Any] | None,
+    runner: Runner, inspection_image: str, **fields: Any,
+) -> None:
     """Gate and record a successor start in one locked update.
 
     The takeover gate, the "no earlier execution left unreconciled" check and the ``starting``
@@ -371,13 +375,36 @@ def _begin_start(layout: Layout, issue: int, worker: str, **fields: Any) -> None
             for op in mapping.get("publication_ops", []) if isinstance(op, Mapping)
         ):
             raise TakeoverRefused("takeover required: publication has an unresolved outcome")
+        if preflight is None or mapping.get("branch") != preflight.get("branch"):
+            raise TakeoverRefused("checkout start preflight is missing or stale; run takeover")
+        if pending.get("status") == "authorized":
+            if (pending.get("generation") != preflight.get("generation")
+                    or mapping.get("execution_identity") != preflight.get("identity")):
+                raise TakeoverRefused("checkout authorization changed after preflight; run takeover")
+            _identity, checkpoint = _authorization_record(mapping)
+            if checkpoint is not None and not _checkpoint_present(layout.checkout(worker), _checkpoint_repo(layout, worker), checkpoint, runner, inspection_image):
+                raise TakeoverRefused("authorized checkpoint changed after preflight; run takeover")
+        elif (preflight.get("identity") is not None
+              or mapping.get("execution_branch", mapping.get("branch")) != preflight.get("execution_branch")):
+            raise TakeoverRefused("checkout execution branch changed after preflight; run takeover")
+        _assert_engine(runner)
+        if _container_state(layout, worker, runner) is not None:
+            raise TakeoverRefused("worker container appeared after preflight; run takeover")
+        latest, _ = _inspect(layout, worker, runner=runner, image=inspection_image)
+        if _checkout_identity(latest) != preflight.get("checked_identity"):
+            raise TakeoverRefused("checkout changed after start preflight; run takeover")
         if pending.get("status") == "authorized":
             mapping["takeover"] = {**pending, "status": "consumed", "consumed_at": _now(), "consumed_by": fields.get("runtime")}
         mapping.update(fields, state="starting", container_id=None, launch_protocol=LAUNCH_PROTOCOL, updated_at=_now())
         state["issue_mappings"][key] = mapping
         return state
 
-    epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater, expected_epic_issue_number=layout.epic)
+    try:
+        epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater, expected_epic_issue_number=layout.epic)
+    except TakeoverRefused:
+        if preflight is not None and preflight.get("identity") is not None:
+            _fence_authorization(layout, worker, preflight.get("generation"))
+        raise
 
 
 def _launch(layout: Layout, issue: int, worker: str, argv: Sequence[str], runner: Runner) -> str:
@@ -457,14 +484,24 @@ def create_worker(
     if checkout.exists():
         # A re-run must not record a branch the checkout is not on (KD-FE5EDF575D1E).
         actual = checkout_branch(checkout, runner=runner)
-        if actual != branch:
+        pending = _takeover_of(recorded)
+        if pending.get("status") == "authorized":
+            try:
+                _check_authorized_checkout(layout, worker, recorded, runner=runner, image=DEFAULT_IMAGE)
+            except EpicWorkspaceError:
+                _fence_authorization(layout, worker, pending.get("generation"))
+                raise
+        detached = actual is None and pending.get("status") == "authorized" and recorded.get("execution_branch", recorded.get("branch")) is None
+        if actual != branch and not (detached and branch == recorded.get("branch")):
             raise LaunchRefused(f"checkout of worker {worker!r} is on {actual!r}, not the requested {branch!r}; refusing to record it")
         execution_branch = recorded.get("execution_branch", recorded.get("branch"))
-        if execution_branch not in (None, branch):
+        unfinished_create = ("execution_branch" not in recorded and recorded.get("branch") is None
+                             and recorded.get("state") in (None, "creating"))
+        if not detached and execution_branch != branch and not unfinished_create:
             raise LaunchRefused(f"issue #{int(issue)} is recorded on branch {execution_branch!r}, not {branch!r}")
         # A reconciled execution branch never rewrites the parent's publication branch.
         _reserve_worker(layout, issue, worker, branch=recorded.get("branch") or actual, checkout=str(checkout), next_action=next_action,
-                        **({} if recorded.get("state") else {"state": "created"}))
+                        **({"state": "created"} if recorded.get("state") in (None, "creating") else {}))
         layout.home(worker).mkdir(parents=True, exist_ok=True)
         return checkout
     _reserve_worker(layout, issue, worker, state="creating")
@@ -629,8 +666,9 @@ def start_worker(
     existing = _container_state(layout, worker, runner)
     if existing is not None:
         raise LaunchRefused(f"container for worker {worker!r} already exists ({existing}); stop it before a successor starts")
+    preflight = _preflight_start(layout, worker, state["issue_mappings"][str(issue)], runner=runner, image=DEFAULT_IMAGE)
     _begin_start(
-        layout, issue, worker,
+        layout, issue, worker, preflight=preflight, runner=runner, inspection_image=DEFAULT_IMAGE,
         # Plain container execution is a recorded bootstrap/diagnostic exception, never the
         # normal delivery path (#6615 owner revision 2026-11-12b).
         runtime="native-exception",
@@ -760,10 +798,12 @@ def _stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner, im
     stop_id = uuid.uuid4().hex
 
     def record_stop(entry: dict[str, Any]) -> None:
-        needs_takeover = bool(entry.get("started_at")) or bool(work.get("unique_work")) or any(
+        needs_takeover = (bool(entry.get("started_at")) or bool(work.get("unique_work"))
+                          or not work.get("readable") or work.get("branch") is None
+                          or work.get("branch") != entry.get("execution_branch", entry.get("branch")) or any(
             op.get("status") in _OP_UNRESOLVED
             for op in entry.get("publication_ops", []) if isinstance(op, Mapping)
-        )
+        ))
         entry.update(state="stopped_verified", stopped_at=_now(), stop_id=stop_id, stop_reason=reason, work_at_stop=work)
         if needs_takeover:
             entry["takeover"] = {"status": "required", "reason": reason, "at": _now(), "generation": int(_takeover_of(entry).get("generation", 0))}
@@ -775,7 +815,8 @@ def _stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner, im
     work = dict(work)
     work["stop_id"] = stop_id
     drifted = work.get("branch") != mapping.get("execution_branch", mapping.get("branch"))
-    work["checkpoint"] = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image, force=drifted)
+    work["checkpoint"] = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image,
+                                     force=drifted or work.get("branch") is None)
     return work
 
 
@@ -1001,8 +1042,8 @@ def _raw_byte_preflight(checkout: Path, repo: Path, *, runner: Runner, image: st
             shutil.rmtree(fixture, ignore_errors=True)
 
 
-def _copy_worker_index(checkout: Path, repo: Path, index: Path) -> None:
-    """Copy index bytes, including split-index bases, without running worker Git on the host."""
+def _copy_worker_index(checkout: Path, repo: Path, index: Path) -> str:
+    """Copy and fingerprint index bytes, including split-index bases, without host Git."""
 
     def copy_plain(source: Path, destination: Path) -> None:
         fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
@@ -1018,10 +1059,20 @@ def _copy_worker_index(checkout: Path, repo: Path, index: Path) -> None:
 
     git_dir = checkout / ".git"
     copy_plain(git_dir / "index", index)
-    for source in git_dir.glob("sharedindex.*"):
+    copies = [("index", index)]
+    for source in sorted(git_dir.glob("sharedindex.*")):
         if not re.fullmatch(r"sharedindex\.(?:[0-9a-f]{40}|[0-9a-f]{64})", source.name):
             raise _Unreadable("invalid split index name")
         copy_plain(source, repo / source.name)
+        copies.append((source.name, repo / source.name))
+    digest = hashlib.sha256()
+    for name, path in copies:
+        part = hashlib.sha256()
+        with path.open("rb") as saved:
+            for block in iter(lambda: saved.read(1024 * 1024), b""):
+                part.update(block)
+        digest.update(name.encode("ascii") + b"\0" + part.digest())
+    return digest.hexdigest()
 
 
 def _assert_plain_git_metadata(checkout: Path) -> None:
@@ -1043,6 +1094,8 @@ def _assert_plain_git_metadata(checkout: Path) -> None:
             mode = (Path(directory) / name).lstat().st_mode
             if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
                 raise _Unreadable("symlink or special git metadata")
+            if stat.S_ISREG(mode) and name.endswith(".lock"):
+                raise _Unreadable("unsettled git metadata lock")
 
 
 def _parse_status(raw: str) -> tuple[list[str], list[str]]:
@@ -1170,7 +1223,7 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
         # when the worktree happens to match HEAD, and an unmerged index cannot be checkpointed.
         with _scratch_gitdir(layout, head) as scratch:
             _raw_byte_preflight(checkout, scratch, runner=runner, image=image)
-            _copy_worker_index(checkout, scratch, scratch / "index")
+            index_fingerprint = _copy_worker_index(checkout, scratch, scratch / "index")
             if git("ls-files", "--unmerged", "-z", scratch=scratch):
                 raise _Unreadable("unmerged worker index")
             if any(entry.startswith("160000 ") for entry in git("ls-files", "--stage", "-z", scratch=scratch).split("\0")):
@@ -1265,6 +1318,7 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
         "branch": branch,
         "snapshot_tree": snapshot_tree,
         "staged_tree": staged_tree,
+        "index_fingerprint": index_fingerprint,
         "staged_paths": staged_paths[:50],
         "staged_count": len(staged_paths),
         "refs_fingerprint": refs_fingerprint,
@@ -1287,6 +1341,112 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
         "unique_work": bool(changed or ignored or unpublished_total),
     }
     return summary, ignored
+
+
+_IDENTITY_FIELDS = ("branch", "head", "snapshot_tree", "staged_tree", "index_fingerprint", "refs_fingerprint")
+
+
+def _checkout_identity(work: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract a complete immutable inspection identity, including a detached HEAD."""
+
+    branch = work.get("branch")
+    if (work.get("present") is not True or work.get("readable") is not True or any(k not in work for k in _IDENTITY_FIELDS)
+            or (branch is not None and (not isinstance(branch, str) or not _BRANCH.fullmatch(branch) or ".." in branch))
+            or any(not isinstance(work.get(k), str) or not _OID.fullmatch(work[k])
+                   for k in ("head", "snapshot_tree", "staged_tree"))
+            or any(not isinstance(work.get(k), str) or not _DIGEST.fullmatch(work[k])
+                   for k in ("index_fingerprint", "refs_fingerprint"))):
+        raise TakeoverRefused("checkout identity is missing or unreadable; preserve it and run takeover")
+    return {key: work[key] for key in _IDENTITY_FIELDS}
+
+
+def _fence_authorization(layout: Layout, worker: str, generation: Any) -> None:
+    def mutate(entry: dict[str, Any]) -> None:
+        pending = _takeover_of(entry)
+        if pending.get("status") == "authorized" and pending.get("generation") == generation:
+            entry["takeover"] = {**pending, "status": "required", "reason": "authorized checkout identity needs reconciliation"}
+
+    _mutate_mapping(layout, worker, mutate)
+
+
+def _authorization_record(mapping: Mapping[str, Any]) -> tuple[dict[str, Any], Mapping[str, Any] | None]:
+    """Validate the durable binding without consulting a live checkout or engine."""
+    pending = _takeover_of(mapping)
+    identity = mapping.get("execution_identity")
+    if not isinstance(identity, Mapping):
+        raise TakeoverRefused("authorized checkout identity is missing; run takeover to reconcile it")
+    expected = _checkout_identity({**identity, "present": True, "readable": True})
+    stopped = mapping.get("work_at_stop")
+    if (not isinstance(stopped, Mapping) or _checkout_identity(stopped) != expected
+            or mapping.get("execution_branch", mapping.get("branch")) != expected["branch"]
+            or pending.get("execution_branch") != expected["branch"]
+            or pending.get("head") != expected["head"] or pending.get("publisher_branch") != mapping.get("branch")):
+        raise TakeoverRefused("authorized checkout binding changed; run takeover to reconcile it")
+    if "checkpoint_ref" not in identity:
+        raise TakeoverRefused("authorized checkpoint binding is missing; run takeover to reconcile it")
+    checkpoint_ref = identity.get("checkpoint_ref")
+    checkpoint = None
+    if checkpoint_ref is not None:
+        checkpoints = mapping.get("checkpoints", [])
+        if not isinstance(checkpoints, list):
+            raise TakeoverRefused("authorized checkpoints are unreadable; run takeover to reconcile them")
+        checkpoint = next((c for c in checkpoints if isinstance(c, Mapping)
+                           and c.get("ref") == checkpoint_ref and c.get("status") == "preserved"), None)
+        if (not checkpoint or checkpoint.get("branch") != expected["branch"]
+                or checkpoint.get("head") != expected["head"] or checkpoint.get("tree") != expected["snapshot_tree"]
+                or checkpoint.get("staged_tree") != expected["staged_tree"]
+                or checkpoint.get("refs_fingerprint") != expected["refs_fingerprint"]
+                or not isinstance(checkpoint.get("staged_ref"), str)
+                or any(not isinstance(checkpoint.get(k), str) or not _OID.fullmatch(checkpoint[k])
+                       for k in ("commit", "staged_commit"))):
+            raise TakeoverRefused("authorized checkpoint binding changed; run takeover to reconcile it")
+    elif (expected["branch"] is None or stopped.get("unique_work")
+          or pending.get("previous_execution_branch") != expected["branch"]):
+        raise TakeoverRefused("checkout has no retained checkpoint; run takeover to reconcile it")
+    return dict(identity), checkpoint
+
+
+def _check_authorized_checkout(
+    layout: Layout, worker: str, mapping: Mapping[str, Any], *, runner: Runner, image: str,
+) -> dict[str, Any]:
+    """Preflight the saved authorization against its checkpoint and the actual checkout."""
+
+    identity, checkpoint = _authorization_record(mapping)
+    expected = _checkout_identity({**identity, "present": True, "readable": True})
+    if mapping.get("checkout") != str(layout.checkout(worker)):
+        raise TakeoverRefused("authorized checkout path changed; run takeover to reconcile it")
+    if checkpoint is not None and not _checkpoint_present(layout.checkout(worker), _checkpoint_repo(layout, worker), checkpoint, runner, image):
+        raise TakeoverRefused("authorized checkpoint is unreadable; run takeover to reconcile it")
+    actual, _ = _inspect(layout, worker, runner=runner, image=image)
+    if _checkout_identity(actual) != expected:
+        raise TakeoverRefused("authorized checkout changed; run takeover to reconcile it")
+    _assert_engine(runner)
+    if _container_state(layout, worker, runner) is not None:
+        raise TakeoverRefused("worker container is present; run takeover before continuation")
+    return identity
+
+
+def _preflight_start(
+    layout: Layout, worker: str, mapping: Mapping[str, Any], *, runner: Runner, image: str,
+) -> dict[str, Any] | None:
+    pending = _takeover_of(mapping)
+    if pending.get("status") == "authorized":
+        try:
+            identity = _check_authorized_checkout(layout, worker, mapping, runner=runner, image=image)
+        except EpicWorkspaceError:
+            _fence_authorization(layout, worker, pending.get("generation"))
+            raise
+        return {"identity": identity, "checked_identity": _checkout_identity({**identity, "present": True, "readable": True}),
+                "generation": pending.get("generation"), "branch": mapping.get("branch")}
+    if mapping.get("state") == "created" or (mapping.get("state") == "stopped_verified" and not mapping.get("started_at")):
+        work, _ = _inspect(layout, worker, runner=runner, image=image)
+        identity = _checkout_identity(work)
+        expected_branch = mapping.get("execution_branch", mapping.get("branch"))
+        if not isinstance(expected_branch, str) or identity["branch"] != expected_branch:
+            raise TakeoverRefused("checkout does not match its recorded execution branch; run takeover")
+        return {"identity": None, "checked_identity": identity, "generation": pending.get("generation"), "branch": mapping.get("branch"),
+                "execution_branch": expected_branch}
+    return None
 
 
 def inspect_checkout(layout: Layout, worker: str, *, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
@@ -1332,11 +1492,14 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
                 container = _container_state(layout, worker, runner) or "absent"
             except EngineUnavailable:
                 container = "unknown"
+        identity = mapping.get("execution_identity")
+        identity = identity if isinstance(identity, Mapping) else {}
         workers.append({
             "issue": int(key),
             "worker": worker,
             "branch": mapping.get("branch"),
             "execution_branch": mapping.get("execution_branch", mapping.get("branch")),
+            "execution_head": identity.get("head"),
             "recorded_state": mapping.get("state"),
             "container": container,
             "engine": mapping.get("engine"),
@@ -1415,9 +1578,11 @@ def _checkpoint(
     try:
         try:
             _raw_byte_preflight(checkout, repo, runner=runner, image=image, checkpoint_owner=(layout, worker))
-            _copy_worker_index(checkout, repo, index)
+            index_fingerprint = _copy_worker_index(checkout, repo, index)
         except (_Unreadable, OSError) as exc:
             raise EpicWorkspaceError(f"checkpoint index or raw-byte preflight unreadable: {exc}") from exc
+        if index_fingerprint != work["index_fingerprint"]:
+            raise EpicWorkspaceError("worker index changed while the checkpoint was taken")
         staged_tree = git("write-tree")
         if staged_tree != work["staged_tree"]:
             raise EpicWorkspaceError("worker index changed while the checkpoint was taken")
@@ -1646,7 +1811,9 @@ def begin_publication(layout: Layout, worker: str, *, kind: str, expect_sha: str
 
     if kind not in PUBLICATION_KINDS:
         raise EpicWorkspaceError(f"unknown publication kind {kind!r}")
-    if expect_sha is not None and not _OID.match(expect_sha):
+    if kind == "branch_push" and expect_sha is None:
+        raise EpicWorkspaceError("branch_push requires expect_sha before the effect")
+    if expect_sha is not None and (not isinstance(expect_sha, str) or not _OID.fullmatch(expect_sha)):
         raise EpicWorkspaceError("expect_sha must be a full object id")
 
     def mutate(entry: dict[str, Any]) -> dict[str, Any]:
@@ -1824,7 +1991,12 @@ def next_authorized_action(mapping: Mapping[str, Any]) -> dict[str, Any]:
     elif takeover.get("status") == "required":
         action = "run takeover: reconcile files and publication before any successor writes"
     elif takeover.get("status") == "authorized":
-        action = f"start exactly one continuation (generation {takeover.get('generation')}): {mapping.get('next_action')}"
+        try:
+            _authorization_record(mapping)
+        except EpicWorkspaceError:
+            action = "run takeover: reconcile the incomplete authorized checkout identity before any successor writes"
+        else:
+            action = f"start exactly one continuation (generation {takeover.get('generation')}): {mapping.get('next_action')}"
     else:
         action = str(mapping.get("next_action"))
     return {"action": action, "recorded_next_action": mapping.get("next_action"), "blocked_operations": blocked, "retry_authorized": retry}
@@ -1842,10 +2014,16 @@ def continuation_brief(layout: Layout, worker: str) -> dict[str, Any]:
         for c in mapping.get("checkpoints", []) if c.get("status") == "preserved"
     ]
     conversations = [*mapping.get("conversation_history", []), *([mapping["conversation"]] if isinstance(mapping.get("conversation"), Mapping) else [])]
+    identity = mapping.get("execution_identity")
+    observed = mapping.get("work_at_stop")
+    identity = identity if isinstance(identity, Mapping) else {}
+    observed = observed if isinstance(observed, Mapping) else {}
     brief: dict[str, Any] = {
         "schema": "epic_continuation_brief.v1",
         "epic": layout.epic, "issue": issue, "worker": worker, "branch": mapping.get("branch"),
         "execution_branch": mapping.get("execution_branch", mapping.get("branch")),
+        "execution_head": identity.get("head"),
+        "observed_checkout": {k: observed.get(k) for k in ("readable", "branch", "head")},
         "generation": _takeover_of(mapping).get("generation"),
         "next_authorized_action": action,
         "checkpoints": checkpoints,
@@ -1860,8 +2038,10 @@ def continuation_brief(layout: Layout, worker: str) -> dict[str, Any]:
 
 def _render_continuation_prompt(brief: Mapping[str, Any]) -> str:
     action = brief["next_authorized_action"]
+    execution = (f"detached HEAD `{brief['execution_head']}`" if brief["execution_branch"] is None
+                 else f"execution branch `{brief['execution_branch']}`")
     lines = [
-        f"You are continuing GitHub Issue #{brief['issue']} (epic #{brief['epic']}) on execution branch `{brief['execution_branch']}` in /workspace.",
+        f"You are continuing GitHub Issue #{brief['issue']} (epic #{brief['epic']}) on {execution} in /workspace.",
         f"The parent publisher/claim branch is `{brief['branch']}`; branch reconciliation does not grant publication authority.",
         "A previous worker was replaced. Do not rely on any summary from it: its work is in this checkout.",
         "First run `git status`, `git branch -a`, `git stash list` and `git log --oneline -5`; uncommitted and ignored files are real work, keep them.",
@@ -1901,12 +2081,27 @@ def takeover(
     recorded = mapping.get("branch")
     previous_execution = mapping.get("execution_branch", recorded)
     generation = int(_takeover_of(mapping).get("generation", 0))
-    if (not isinstance(recorded, str) or not isinstance(previous_execution, str)
+    prior_identity = mapping.get("execution_identity")
+    detached_previously_bound = False
+    if previous_execution is None and isinstance(prior_identity, Mapping):
+        try:
+            detached_previously_bound = (
+                _checkout_identity({**prior_identity, "present": True, "readable": True})["branch"] is None
+                and isinstance(prior_identity.get("checkpoint_ref"), str)
+            )
+        except TakeoverRefused:
+            pass
+    if (not isinstance(recorded, str) or not (isinstance(previous_execution, str) or detached_previously_bound)
             or mapping.get("checkout") != str(layout.checkout(worker))):
         raise TakeoverRefused("worker mapping scope or branch is unreadable; preserving checkout")
     _settle_checkpoint_writer(layout, worker, runner)
     if _takeover_of(mapping).get("status") == "authorized":
-        return {**continuation_brief(layout, worker), "already_authorized": True}
+        try:
+            _check_authorized_checkout(layout, worker, mapping, runner=runner, image=image)
+        except EpicWorkspaceError:
+            _fence_authorization(layout, worker, generation)
+        else:
+            return {**continuation_brief(layout, worker), "already_authorized": True}
     stopped = _stop_worker(layout, worker, reason=f"takeover: {reason}", runner=runner, image=image)
     stop_id = stopped.get("stop_id")
 
@@ -1928,7 +2123,7 @@ def takeover(
         raise TakeoverRefused("checkout evidence is missing or unreadable; treated as unique work, no continuation permitted")
     if after.get("head") != stopped.get("head"):
         raise TakeoverRefused("checkout HEAD moved while the checkpoint was taken; no continuation permitted")
-    if any(after.get(key) != stopped.get(key) for key in ("branch", "snapshot_tree", "staged_tree", "refs_fingerprint")):
+    if any(after.get(key) != stopped.get(key) for key in ("branch", "snapshot_tree", "staged_tree", "index_fingerprint", "refs_fingerprint")):
         raise TakeoverRefused("checkout content or refs changed while the checkpoint was taken; no continuation permitted")
     checkpoint = stopped.get("checkpoint")
     if checkpoint is not None and checkpoint.get("tree") != after.get("snapshot_tree"):
@@ -1936,10 +2131,9 @@ def takeover(
     if checkpoint is not None and checkpoint.get("staged_tree") != after.get("staged_tree"):
         raise TakeoverRefused("checkpoint does not match the post-checkpoint index; no continuation permitted")
     actual = after.get("branch")
-    if not isinstance(actual, str) or not _BRANCH.fullmatch(actual) or ".." in actual:
-        raise TakeoverRefused("checkout branch is detached or unreadable; preserve it for reconciliation")
-    if actual != previous_execution and checkpoint is None:
-        raise TakeoverRefused("branch drift lacks a retained checkpoint; preserve checkout")
+    identity = _checkout_identity(after)
+    if (actual is None or actual != previous_execution) and checkpoint is None:
+        raise TakeoverRefused("detached checkout or branch drift lacks a retained checkpoint; preserve checkout")
     for op in list(_load_state(layout)["issue_mappings"][str(issue)].get("publication_ops", [])):
         if op["status"] in _OP_UNRESOLVED:
             reconcile_publication(layout, worker, op_id=op["id"], readback=(readbacks or {}).get(op["id"]))
@@ -1955,12 +2149,11 @@ def takeover(
         observed = entry.get("work_at_stop")
         if not isinstance(observed, Mapping) or any(
             observed.get(key) != after.get(key)
-            for key in ("head", "branch", "snapshot_tree", "staged_tree", "refs_fingerprint")
+            for key in _IDENTITY_FIELDS
         ):
             raise TakeoverRefused("recorded checkout evidence changed during takeover")
         if checkpoint is not None and not any(
-            c.get("ref") == checkpoint.get("ref") and c.get("status") == "preserved"
-            and c.get("refs_fingerprint") == after.get("refs_fingerprint")
+            c == checkpoint and c.get("status") == "preserved"
             for c in entry.get("checkpoints", []) if isinstance(c, Mapping)
         ):
             raise TakeoverRefused("retained checkpoint changed during takeover")
@@ -1968,16 +2161,23 @@ def takeover(
         present = _container_state(layout, worker, runner)
         if present is not None:
             raise TakeoverRefused(f"worker container is present ({present}); not authorizing a continuation beside it")
+        latest, _ = _inspect(layout, worker, runner=runner, image=image)
+        if _checkout_identity(latest) != identity:
+            raise TakeoverRefused("checkout changed after checkpoint reconciliation; no continuation permitted")
+        if checkpoint is not None and not _checkpoint_present(layout.checkout(worker), _checkpoint_repo(layout, worker), checkpoint, runner, image):
+            raise TakeoverRefused("retained checkpoint is unreadable before authorization")
         prior = _takeover_of(entry)
         if prior.get("status") == "authorized":
             raise TakeoverRefused("another continuation is already authorized")
         entry["execution_branch"] = actual
+        entry["execution_identity"] = {**identity, "checkpoint_ref": checkpoint["ref"] if checkpoint is not None else None}
         entry["takeover"] = {
             "status": "authorized", "generation": int(prior.get("generation", 0)) + 1, "reason": reason,
             "authorized_at": _now(), "checkpoints": [c["ref"] for c in entry.get("checkpoints", []) if c.get("status") == "preserved"],
             "execution_branch": actual, "previous_execution_branch": previous_execution,
             "publisher_branch": recorded, "head": after["head"],
         }
+        _authorization_record(entry)
 
     _mutate_mapping(layout, worker, mutate)
     return {**continuation_brief(layout, worker), "already_authorized": False}
@@ -2169,6 +2369,7 @@ def start_openhands_worker(
     _assert_engine(runner)
     if _container_state(layout, worker, runner) is not None:
         raise LaunchRefused(f"container for worker {worker!r} already exists; stop it before a successor starts")
+    preflight = _preflight_start(layout, worker, state["issue_mappings"][str(issue)], runner=runner, image=DEFAULT_IMAGE)
     codex_mounts = _validate_codex_home(codex_home, layout, runner)
     key_file = _session_key_file(layout, worker)
     port = _allocate_port(runner)
@@ -2189,7 +2390,8 @@ def start_openhands_worker(
     if codex_mounts:
         argv[argv.index("--label"):argv.index("--label")] = ["--label", "epic-workspace.codex-home=1"]
     _begin_start(
-        layout, issue, worker, runtime="openhands", container=layout.container_name(worker), image=image, port=port,
+        layout, issue, worker, preflight=preflight, runner=runner, inspection_image=DEFAULT_IMAGE,
+        runtime="openhands", container=layout.container_name(worker), image=image, port=port,
         budget={"cpus": budget.cpus, "memory": budget.memory, "pids": budget.pids}, network=network,
         credentials={"claude": "oauth-token-env" if credential_env else None, "codex": "chatgpt-login-dir" if codex_mounts else None},
         started_at=_now(),
@@ -2473,7 +2675,7 @@ def _parser() -> argparse.ArgumentParser:
     pb = sub.add_parser("publication-begin", help="record the intent to push/open a PR before doing it")
     pb.add_argument("--worker", required=True)
     pb.add_argument("--kind", required=True, choices=PUBLICATION_KINDS)
-    pb.add_argument("--expect-sha")
+    pb.add_argument("--expect-sha", help="full intended commit; required for branch_push before its effect")
     pc = sub.add_parser("publication-complete", help="record an observed publication outcome")
     pc.add_argument("--worker", required=True)
     pc.add_argument("--op", required=True)

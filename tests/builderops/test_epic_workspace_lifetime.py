@@ -127,7 +127,9 @@ def test_death_after_create_before_record_can_settle_without_start(tmp_path, cap
 def test_death_after_intent_before_create_is_recoverable(tmp_path, capsys):
     root, engine, server = _setup(tmp_path, capsys)
     layout = _layout(root)
-    ew._begin_start(layout, 6617, "w-a", runtime="openhands", started_at=ew._now())
+    preflight = ew._preflight_start(layout, "w-a", _mapping(root, 6617), runner=engine, image=ew.DEFAULT_IMAGE)
+    ew._begin_start(layout, 6617, "w-a", preflight=preflight, runner=engine, inspection_image=ew.DEFAULT_IMAGE,
+                    runtime="openhands", started_at=ew._now())
     assert _mapping(root, 6617)["state"] == "starting"
     assert _cli(root, 6615, engine, "takeover", "--worker", "w-a", "--reason", "client died") == 0
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
@@ -136,7 +138,9 @@ def test_death_after_intent_before_create_is_recoverable(tmp_path, capsys):
 def test_legacy_unknown_run_without_id_is_not_cleared_by_absence(tmp_path, capsys):
     root, engine, _ = _setup(tmp_path, capsys)
     layout = _layout(root)
-    ew._begin_start(layout, 6617, "w-a", runtime="openhands", started_at=ew._now())
+    preflight = ew._preflight_start(layout, "w-a", _mapping(root, 6617), runner=engine, image=ew.DEFAULT_IMAGE)
+    ew._begin_start(layout, 6617, "w-a", preflight=preflight, runner=engine, inspection_image=ew.DEFAULT_IMAGE,
+                    runtime="openhands", started_at=ew._now())
     ew._record_worker(layout, 6617, launch_protocol=None)
     assert "legacy launch hold" in ew.next_authorized_action(_mapping(root, 6617))["action"]
     assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "legacy") == 2

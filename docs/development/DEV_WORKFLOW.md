@@ -372,13 +372,19 @@ independently reviewed, installed and verified, these commands run from outside 
   It removes any remaining container and proves absence by engine readback (a lease or timeout proves
   nothing), checkpoints the files, checks the post-checkpoint content and refs, validates the recorded
   mapping and reconciles publication attempts from coordinator-supplied readback. If the actual named
-  branch differs, takeover checkpoints even a clean checkout, compares the stopped and current HEAD,
-  branch, index, worktree and refs, and records the actual execution branch under the existing worker
-  and generation. The original publisher/claim branch is retained separately; this reconciliation
-  neither changes a claim nor authorizes publication. Detached or unreadable evidence remains fenced.
+  branch differs, or HEAD is detached, takeover checkpoints even a clean checkout and records the
+  actual execution identity under the existing worker and generation. Detached HEAD and its work are
+  independently retained in the controller checkpoint. Takeover compares HEAD, branch, staged tree,
+  raw index, worktree and refs after checkpointing and again before authorization; start checks that
+  identity and checkpoint again. If the checkout changed, start refuses and a new takeover records
+  the new work before continuation. A legacy authorization lacking that identity also requires a new
+  takeover. The original publisher/claim branch remains separate; this reconciliation neither changes
+  a claim nor authorizes publication. Unreadable evidence, unmerged indices and unsettled Git
+  metadata lock files remain fenced and preserved.
   It reads engine absence again while recording exactly one continuation. Per-worker controller locks fence overlapping
   starts, stops, checkpoints and takeovers. The successor's `worker-start` or `openhands-start` consumes
-  that authorization; a repeated takeover before a start returns the same continuation. Worker
+  that authorization; a repeated takeover before a start returns the same continuation only while
+  its checkout, checkpoint and engine checks still match. Worker
   launches create an unstarted container first and record its full ID before sending a start for
   that ID. A timed-out create can leave an unstarted container; `worker-stop` or `takeover` verifies
   the exact name and labels before removing it. A timed-out start is settled by removing the recorded
@@ -398,7 +404,11 @@ independently reviewed, installed and verified, these commands run from outside 
   engine-neutral successor prompt from run-state alone, so a Codex worker can continue a Claude
   worker's task (and back) without the predecessor writing a summary.
 - Publication goes through `publication-begin` (intent recorded before the effect), then
-  `publication-complete` or `publication-reconcile`. The coordinator reads GitHub; completion supplies
+  `publication-complete` or `publication-reconcile`. The coordinator supplies
+  the independently established full intended commit as `--expect-sha` when beginning every new
+  `branch_push`. Legacy pushes without a target remain quarantined on generic branch readback unless
+  operation-specific positive completion settles the original request. The coordinator reads GitHub;
+  completion supplies
   the observed `branch` and `sha`, plus a PR `number` for PR creation. Reconciliation supplies a complete
   branch readback with its `name`, `exists` and, when present, `sha`, or the queried `branch` with a
   complete `pull_requests` list whose sole match includes `number`, `branch` and `sha`. An unknown
@@ -417,7 +427,9 @@ independently reviewed, installed and verified, these commands run from outside 
   bytes for the same path cannot both match one published commit, so the checkpoint remains preserved.
   Older checkpoint records without staged-index evidence also remain preserved.
 - `worker-create` on an existing checkout reads the actual branch back and refuses a mismatch with the
-  requested or reconciled execution branch instead of recording it. It does not alter the publisher branch.
+  requested or reconciled execution branch instead of recording it. For an authorized detached checkout,
+  the existing publisher branch is supplied as `--branch` and the bound detached identity is checked.
+  It does not alter the publisher branch.
 
 Claude Code authenticates with a subscription token from `claude setup-token`. The token is stored
 as `CLAUDE_CODE_OAUTH_TOKEN` in `~ygg/.config/epic-workspace/claude.env` (mode 0600, outside the
