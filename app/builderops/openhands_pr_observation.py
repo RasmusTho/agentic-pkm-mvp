@@ -149,6 +149,9 @@ def _observe(reader: _Reader, number: int) -> dict[str, Any] | None:
     body = pr.get("body") or ""
     if not isinstance(body, str):
         raise ObservationError("PR body unreadable")
+    title = pr.get("title", "")
+    if not isinstance(title, str):
+        raise ObservationError("PR title unreadable")
     head_repo = head.get("repo")
     head_repository = head_repo.get("full_name") if isinstance(head_repo, dict) else None
     governing = _governing_number(body)
@@ -175,7 +178,7 @@ def _observe(reader: _Reader, number: int) -> dict[str, Any] | None:
     return {
         "repository": REPOSITORY, "number": number, "state": "open",
         "head_repository": head_repository if isinstance(head_repository, str) else "unknown",
-        "head_sha": _text(head.get("sha"), "head sha"), "body": body, "draft": pr["draft"],
+        "head_sha": _text(head.get("sha"), "head sha"), "title": title, "body": body, "draft": pr["draft"],
         "labels": [x["name"] for x in pr["labels"]],
         "base_ref": _text(base.get("ref"), "base ref"), "base_sha": _text(base.get("sha"), "base sha"),
         "governing_issue": {"body": issue["body"], "state": issue["state"]},

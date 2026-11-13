@@ -264,7 +264,7 @@ next authorized action.
 
 After all non-worktree readbacks agree, a dispatcher-backed handoff must transfer the exact
 dispatcher task before transferring the worktree. The current owner releases the task with
-`python3 -m app.dispatcher release <task-id> --agent <current-agent> --json` and re-reads the
+`python3 -m app.dispatcher release <task-id> --agent <current-agent> --expected-lease-id <observed-lease-id> --json` and re-reads the
 task as unleased (`claimed_by: null`, `lease_id: null`) and ready or blocked. Only then may the
 Issue be returned to `agent:ready`; the named successor runs the normal
 `scripts/issue_pickup_claim.sh` dispatcher-backed pickup for that same task and re-reads the task
@@ -284,6 +284,15 @@ must re-read and compare the receipt-bound branch, base, unpublished candidate H
 set against the registered worktree; a changed HEAD or file set requires a new handoff receipt and
 fresh validation, not acknowledgment. A connector-only transfer may instead declare and
 re-authenticate `writable_worktree: none`; it must not fabricate a local registration.
+
+For the native PR-cycle route, the trusted coordinator must also execute the existing registry's
+preparation and post-acknowledgment pin operations as specified in
+`docs/development/DEV_WORKFLOW.md :: OpenHands factory owner trial`. They record the actual
+transfer-time checkout and the whole acknowledgment second in the successor's current registration
+epoch. This is a technical readback in the existing handoff, not a new human approval. Later
+same-session work and authenticated moves preserve the pinned transfer while live authority and
+current-head review are checked separately. Unknown legacy transfer history requires maintenance;
+a fresh pickup cannot retroactively prove it.
 
 Only after the dispatcher release → successor claim/readback → worktree release → successor
 registration/readback → candidate revalidation sequence (or the authenticated connector-only `none`
@@ -335,8 +344,9 @@ The readiness root defaults to the target worktree when omitted.
 The wrapper runs workspace preflight and `dispatcher status`, derives the exact repo-qualified task id
 `github-<owner>--<repo>-issue-<N>` (matching the id `dispatcher pull` assigns; pass `--task-id` to
 override), and does not substitute a candidate returned by `dispatcher next`. When the
-dispatcher is available, it executes `dispatcher claim` for that exact task and verifies the returned
-task id, issue number, status, owner, lease id, lease resource, holder, expiry, and unreleased state
+dispatcher is available, it executes `dispatcher claim` for that exact task and verifies the persisted
+task, lease and unique claim event, including the exact Builder `--session` and claim-attempt identity,
+task id, repository, issue number, status, owner, lease id, lease resource, holder, expiry, and unreleased state
 before atomically replacing all `agent:*` state labels with exactly `agent:in-progress`. The replacement preserves
 non-agent labels (including `type:*`, `prio:*`, and `lane:*`). Database or singleton existence alone never produces a
 dispatcher-backed pickup receipt.
@@ -345,7 +355,8 @@ For same-owner recovery of an expired dispatcher lease on an already active Issu
 `--takeover-stale` wrapper option. This path requires an open Issue with exactly `agent:in-progress`
 and a strictly valid contract, the canonical repo-qualified task id and matching task repository for
 the selected Issue, an expired unreleased lease for that exact task held by the same `--agent`, and
-an active worktree registration owned by the current `--session`. It checks the repository binding
+an active worktree registration owned by the current `--session` and an existing claim event bound
+to that same Builder session. It checks the repository binding
 again in the post-claim task/lease/event readback. It heartbeats that same worktree registration,
 invokes the dispatcher's atomic
 `claim --takeover-stale --expected-lease-id <observed-id>`, verifies the claim event against that

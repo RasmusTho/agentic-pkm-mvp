@@ -193,8 +193,8 @@ if [[ -z "$AGENT_ID" ]]; then
   echo "--agent is required for pickup" >&2
   exit 2
 fi
-if [[ -z "$SESSION_ID" ]]; then
-  echo "--session is required for pickup" >&2
+if [[ -z "$SESSION_ID" || "$SESSION_ID" =~ [[:space:]] ]]; then
+  echo "--session must be a non-empty Builder session without whitespace" >&2
   exit 2
 fi
 
@@ -610,6 +610,7 @@ read_stale_dispatcher_lease() {
   EXPECTED_REPO="$REPO" \
   EXPECTED_ISSUE_NUMBER="$ISSUE_NUMBER" \
   EXPECTED_AGENT_ID="$AGENT_ID" \
+  EXPECTED_SESSION_ID="$SESSION_ID" \
   "$JSON_PYTHON_BIN" - <<'PY'
 import json
 import os
@@ -624,6 +625,7 @@ if not isinstance(payload, dict):
 
 task = payload.get("task")
 lease = payload.get("lease")
+events = payload.get("events")
 if payload.get("ok") is not True or not isinstance(task, dict) or not isinstance(lease, dict):
     raise SystemExit("dispatcher stale-lease read is missing task or lease evidence")
 try:
@@ -649,6 +651,14 @@ checks = {
         and expires_at <= datetime.now(timezone.utc)
     ),
 }
+matching_claims = [event for event in events or [] if isinstance(event, dict)
+                   and event.get("task_id") == task.get("task_id")
+                   and event.get("event_type") == "task.claimed"
+                   and event.get("lease_id") == lease.get("lease_id")
+                   and event.get("actor") == os.environ["EXPECTED_AGENT_ID"]]
+checks["predecessor Builder session"] = (len(matching_claims) == 1
+    and isinstance(matching_claims[0].get("payload"), dict)
+    and matching_claims[0]["payload"].get("session") == os.environ["EXPECTED_SESSION_ID"])
 failed = [name for name, ok in checks.items() if not ok]
 if failed:
     raise SystemExit("dispatcher stale-lease verification failed: " + ", ".join(failed))
@@ -665,6 +675,8 @@ verify_stale_takeover_readback() {
   EXPECTED_REPO="$REPO" \
   EXPECTED_ISSUE_NUMBER="$ISSUE_NUMBER" \
   EXPECTED_AGENT_ID="$AGENT_ID" \
+  EXPECTED_SESSION_ID="$SESSION_ID" \
+  EXPECTED_CLAIM_ID="$CLAIM_ATTEMPT_ID" \
   PREVIOUS_LEASE_ID="$old_lease_id" \
   PREVIOUS_EXPIRES_AT="$old_expires_at" \
   "$JSON_PYTHON_BIN" - <<'PY'
@@ -725,6 +737,9 @@ matching_events = [
 checks["unique claim event"] = len(matching_events) == 1
 if len(matching_events) == 1:
     event_payload = matching_events[0].get("payload")
+    checks["Builder session and attempt"] = (isinstance(event_payload, dict)
+        and event_payload.get("session") == os.environ["EXPECTED_SESSION_ID"]
+        and event_payload.get("claim_id") == os.environ["EXPECTED_CLAIM_ID"])
     takeover = event_payload.get("takeover") if isinstance(event_payload, dict) else None
     checks["takeover predecessor"] = (
         isinstance(takeover, dict)
@@ -797,8 +812,9 @@ PY
 
 release_dispatcher_claim() {
   local release_json
+  [[ -n "${RECEIPT_LEASE_ID:-}" ]] || return 1
   if ! release_json="$(
-    run_dispatcher release "$TASK_ID" --agent "$AGENT_ID" --json 2>/dev/null
+    run_dispatcher release "$TASK_ID" --agent "$AGENT_ID" --expected-lease-id "$RECEIPT_LEASE_ID" --json 2>/dev/null
   )"; then
     return 1
   fi
@@ -898,7 +914,8 @@ fi
 
 if [[ "$RECEIPT_COORDINATION_MODE" == "dispatcher-backed" ]]; then
   claim_json=""
-  claim_args=(claim "$TASK_ID" --agent "$AGENT_ID" --ttl-minutes "$TTL_MINUTES")
+  CLAIM_ATTEMPT_ID="$("$JSON_PYTHON_BIN" -c 'import uuid; print(uuid.uuid4().hex)')"
+  claim_args=(claim "$TASK_ID" --agent "$AGENT_ID" --session "$SESSION_ID" --claim-id "$CLAIM_ATTEMPT_ID" --ttl-minutes "$TTL_MINUTES")
   if [[ "$TAKEOVER_STALE" -eq 1 ]]; then
     claim_args+=(--takeover-stale --expected-lease-id "$PREVIOUS_LEASE_ID")
   fi
@@ -938,21 +955,20 @@ if [[ "$RECEIPT_COORDINATION_MODE" == "dispatcher-backed" ]]; then
     exit 0
   fi
 
-  if [[ "$claim_rc" -ne 0 ]]; then
-    # Provider-wide partial-sync metadata cannot prove why this exact task is
-    # absent: the kill switch still runs the essential agent:ready scan. Keep
-    # the dispatcher claim failure opaque and leave the label untouched rather
-    # than advertising a lease-bypassing fallback without task-specific proof.
-    echo "dispatcher claim failed for expected task $TASK_ID; agent:ready was not removed" >&2
+  claim_state=""
+  if ! claim_state="$(run_dispatcher show "$TASK_ID" --events --json)"; then
+    echo "dispatcher claim readback unavailable; claim-state-unknown no-release task_id=$TASK_ID" >&2
     exit 1
   fi
-
   validation=""
   if ! validation="$(
-    DISPATCHER_CLAIM_JSON="$claim_json" \
+    DISPATCHER_CLAIM_JSON="$claim_state" \
     EXPECTED_TASK_ID="$TASK_ID" \
+    EXPECTED_REPO="$REPO" \
     EXPECTED_ISSUE_NUMBER="$ISSUE_NUMBER" \
     EXPECTED_AGENT_ID="$AGENT_ID" \
+    EXPECTED_SESSION_ID="$SESSION_ID" \
+    EXPECTED_CLAIM_ID="$CLAIM_ATTEMPT_ID" \
     "$JSON_PYTHON_BIN" - <<'PY'
 import json
 import os
@@ -983,6 +999,7 @@ except ValueError:
     expiry_is_future = False
 checks = {
     "task id": task.get("task_id") == expected_task,
+    "task repository": task.get("repo") == os.environ["EXPECTED_REPO"],
     "issue number": task.get("issue_number") == expected_issue,
     "task status": task.get("status") in {"claimed", "in_progress"},
     "task owner": task.get("claimed_by") == expected_agent,
@@ -993,22 +1010,27 @@ checks = {
     "lease expiry": expiry_is_future,
     "lease active": lease.get("released_at") is None,
 }
+events = payload.get("events")
+matching = [event for event in events if isinstance(event, dict)
+            and event.get("task_id") == expected_task and event.get("event_type") == "task.claimed"
+            and event.get("actor") == expected_agent and event.get("lease_id") == lease_id] if isinstance(events, list) else []
+checks["exact claim event"] = (len(matching) == 1 and isinstance(matching[0].get("payload"), dict)
+    and matching[0]["payload"].get("session") == os.environ["EXPECTED_SESSION_ID"]
+    and matching[0]["payload"].get("claim_id") == os.environ["EXPECTED_CLAIM_ID"])
 failed = [name for name, ok in checks.items() if not ok]
 if failed:
     raise SystemExit("dispatcher claim verification failed: " + ", ".join(failed))
 print(f"{lease_id} {expected_agent}")
 PY
   )"; then
-    if release_dispatcher_claim; then
-      echo "claim-verification-failed cleanup=released task_id=$TASK_ID lease_id=unverified holder=$AGENT_ID evidence=verified-dispatcher-release" >&2
-    else
-      echo "claim-verification-failed cleanup-failed task_id=$TASK_ID lease_id=unverified holder=$AGENT_ID evidence=cleanup-failed" >&2
-    fi
-    echo "dispatcher availability is not an acquired claim; agent:ready was not removed" >&2
+    echo "claim-verification-failed claim-state-unknown no-release task_id=$TASK_ID command_exit=$claim_rc; agent:ready was not removed" >&2
     exit 1
   fi
 
   read -r RECEIPT_LEASE_ID RECEIPT_HOLDER <<< "$validation"
+  if [[ "$claim_rc" -ne 0 ]]; then
+    echo "claim response lost; exact attempt verified by dispatcher readback" >&2
+  fi
   label_transition_status=0
   if replace_ready_label_with_in_progress; then
     label_transition_status=0

@@ -281,10 +281,20 @@ point is `~ygg/epic-sandbox/bin/epicws`, which fixes the workspace root to
 into a worker. The dedicated BuilderOps engine and its services are not used.
 
 The new PR evidence adapter emits repository-specific requests; it is not yet wired to automatic
-merge. Upstream automation 1.30.1 runs as `epicws-6615-automation` on the BOB-1 default engine,
-loopback port 18810, pinned to image `sha256:b36bb669cf50846c3fa6c5157397dd47526721334a7a544b7df449d9b62f523d`,
-with its owned persistent SQLite database. Only public read-only discovery runs every five minutes;
-review, repair and merge activation await real lifecycle proofs. Status: `ssh bob-1-builder-system
+merge. Since 2026-11-13 (owner bootstrap receipt on #6618, comment 6840611036) the existing
+upstream Automation definition `35aca793-3940-48be-8139-f8513d589b8c` and its same SQLite state run
+under two enabled user units of the lingering `ygg` user: `epicws-6615-control.service` (upstream
+agent-server, SDK and tools 1.62.0; trusted control API on loopback port 18811) and
+`epicws-6615-automation.service` (Automation 1.30.1 with its required SDK 1.60.1 in a separate
+environment, loopback port 18810; server 1.62 and SDK 1.60.1 cannot share one environment). The former
+Docker automation container (image `sha256:b36bb669cf50846c3fa6c5157397dd47526721334a7a544b7df449d9b62f523d`)
+is stopped and preserved with its original environment; its state was backed up to
+`~/epic-sandbox/automation/state-pre-native-20261113T005031Z`. The definition's `*/5` cron runs the
+already-merged `8fe1df054` read-only contract and review collector from its uploaded tarball
+(`python3 collector.py`); a manual run and successive cron runs completed (comment 6841477071). The
+current owner continuation (comment 6842687488) reports both units running, the `c68` recovery
+controller unchanged and only these read-only scans active: completion, review, repair, merge and the
+other delivery effects of the source candidate below are not activated. Status: `ssh bob-1-builder-system
 'python3 ~/epic-sandbox/automation/status.py'`.
 
 `python -m app.builderops.openhands_pr_observation` is the read-only, unauthenticated collector for that
@@ -296,20 +306,213 @@ unauthenticated limit of about 60 requests per hour, roughly 3 per open PR) are 
 an incomplete scan with exit code 1. The transport timeout applies per socket operation and the
 120-second deadline is only checked between requests, so a scan is not a hard wall-clock bound.
 Owner, route, review, Verify, CI, closure and effect evidence have no trusted source there and stay
-`unknown`, so every PR waits and nothing can be reserved from this report. Nothing repeats a scan
-automatically, and the collector is not wired into the scheduled command.
+`unknown`, so every PR waits and nothing can be reserved from this report. The standalone CLI never
+repeats a scan. The scheduled trusted wrapper is distinct: it calls the collector core through
+authenticated host `gh` GET reads restricted to the same path allowlist, so the unauthenticated rate
+limit above applies only to the standalone CLI.
+
+The source candidate also has a one-shot host controller, `python -m
+app.builderops.openhands_pr_cycle --once --root <workspace-root> --epic 6615 --config
+<admission.json>`. Its controller-owned JSON contains an `admissions` array, initially empty;
+one trial entry names `number`, exact `head_sha`, dedicated pre-existing `worker`, `engine`,
+`model`, `native_session_owned: true`, `claimant`, `lease_id`, `session`, `owner_worktree`,
+`lifecycle_repo`, and explicit pytest
+`verify_targets`, and `test_venv`, an absolute host path to a secret-free test environment. The
+controller configuration must be owned by the controller and protected from other writers. The
+venv path and its contents must satisfy the ownership, mode, symlink and credential-shaped filename
+preflight; that filename check cannot prove arbitrary file contents are secret-free. It must be a
+controller-owned path outside the configured model workspace root (`--root`) and must not be that root
+or one of its ancestors: a venv in a worker checkout or home could fake passing tests, and an
+enclosing directory would mount the whole workspace. An agent-local test venv is never admissible as
+the independent verifier environment. A venv's Python
+symlink may point to the supported system Python path in the pinned container. The source reads the host GitHub identity, dispatcher claim and verification
+history, and uses the existing OpenHands lifecycle and a separate credential-free test container.
+That container mounts the configured host venv read-only at `/opt/pr-cycle-venv` and refuses to run tests
+when its in-container interpreter and pytest preflight fails. The source includes guarded native
+merge and PR-specific post-merge continuation. Review evidence binds the observed diff, exact closing
+contracts and check configuration; every closing criterion needs a review assessment. The native
+metadata reader connects the exact retained OpenHands conversation and live ACP session to that
+session's bounded Codex or Claude log, retaining only model, effort, timestamps and session identities.
+It requires the observed model to match the selected model; a Codex effort must be `high` or stronger
+(`xhigh`, `max`, `ultra`) and equal the API-selected `current_effort`. A session keeps one effort; a
+supported escalation starts a new conversation rather than changing effort mid-task. These are
+native-provided observations, not tamper-proof attestation. Missing, mixed or mismatched observations
+stop the review. Subscription authentication also requires the native login check; no model call is
+needed for this metadata read.
+
+`lifecycle_repo` is an absolute, controller-owned host checkout of the existing worktree lifecycle
+registry, outside every model workspace; it must expose the candidate's actual registered worktree,
+branch, session and generation. The controller reads that authority before binding it to the current
+coordination record. It refuses missing, expired, contradictory or model-controlled registrations.
+Admission fields alone are not current ownership proof. The default authority route requires a locally
+verifiable dispatcher claim; a claim on another host is not proof in this controller. For a genuinely unavailable dispatcher, the existing pickup wrapper and
+closure degraded-coordination reader provide the GitHub receipt route. To select it, the admission
+supplies `coordination_mode: github-label-only-fallback`, `owner_worktree`, `claimant`, `session`,
+`fallback_reason`, and `coordination_evidence` (`github-comment:<id>`). The receipt must match the
+live PR branch and exact owner worktree as well as the other caller fields. Any existing remote lease
+and worktree ownership must first be transferred and read back through their normal recovery procedure.
+A fallback receipt must not be fabricated or used to bypass an available dispatcher. The native
+controller binds the active registry owner to the unique current dispatcher claim event's Builder
+`session`; an ACP engine session is execution evidence and does not own the claim. The pickup wrapper
+passes that Builder session and a unique attempt identity into the claim transaction, then reads back
+the task, lease and exact event. A lost reply is reconciled from that attempt without a second claim
+or an unfenced release. Native claims without a bound session refuse. A rightful unchanged legacy
+owner may establish a bound claim through a fresh normal pickup when the registry proves that owner
+was continuously registered before the old release; a new claim cannot prove an earlier
+unknown transfer. Use the existing owner or maintenance route to re-establish missing predecessor
+authority and perform the normal handoff.
+
+A changed Builder session requires the existing authenticated handoff. Dispatcher events identify
+the latest session change and its predecessor, even when the current session subsequently reclaims
+its own expired lease. An atomic `release --expected-lease-id <observed-id>` fences the predecessor
+release and pickup cleanup; same-agent stale takeover is only a self-resume when the old claim event
+and live registry establish the same Builder session. The registry retains the branch's last ended
+owner (released, completed or merely expired) with its path, branch, generation, continuous-validity
+window and transfer anchor across re-registration or a proven path move. Only a release records a
+release time: an expired or completed owner, including one replaced when an earlier session
+returns, is never a handoff predecessor and needs owner or maintenance reconciliation. Equally
+recent ended registrations cannot establish their order, even for the same session, and require
+reconciliation. A heartbeat after expiry begins a new window; it does not fill the gap. The receipt must be
+written during both the predecessor's live claim window (including recorded heartbeats) and its
+continuous registration window. Equal dispatcher timestamps do not establish order. GitHub comments
+have second precision, so the entire receipt second must precede the release or successor pickup;
+the acknowledgment must follow successor registration and the candidate readbacks while the
+successor's pickup lease remains live. A later same-session reclaim preserves that handoff. The pending and
+acknowledged comments must carry identical receipt fields apart from the acknowledgment and must not
+show edits. Same-second edits cannot be distinguished by GitHub timestamps. The ordering relies on
+trusted GitHub and controller clocks and authorized actors; predecessor stop and live readback remain
+separate obligations.
+
+A historical fallback origin must identify an actual authenticated Issue pickup comment with the
+matching Issue, owner, session, path, branch and reason, without requiring the dispatcher still to be
+unavailable. When a same-session predecessor has multiple matching pickups, both handoff comments
+carry `predecessor_pickup_comment_id` naming its uniquely latest matching comment; tied or newer
+conflicting pickups remain unresolved. From the original claim through the current owner, each
+authenticated pickup must be the original receipt, the successor pickup bound to a valid handoff,
+or match the agent, session, branch and worktree of the proven owner for a complete GitHub comment
+second within that registration interval. Dispatcher claims
+must match the proven owner or the handoff's successor claim. A later pickup, mode change, return to
+an earlier session or subsequent handoff cannot resolve a competing claimant by itself. Review
+preparation and native authority both check that history; missing or conflicting evidence requires
+the existing owner or maintenance reconciliation. For dispatcher-to-fallback across hosts, the receiving host authenticates its actual
+current fallback comment and the existing handoff's predecessor release/readback; it does not claim
+to inspect a nonlocal dispatcher database. That remote readback is the immediate predecessor: the
+receiving host's own last registry owner is older history only if it was released before the remote
+claim, the transfer proof does not record it as the predecessor, and unreleased or overlapping local
+history refuses. The coordinator must establish the remote predecessor's
+stop, exact lease release and worktree release before acknowledging. For this cross-host case, both
+handoff comments also carry the same `predecessor_registration` mapping (`path`, `owner`, `branch`,
+`generation`, `status: active`, numeric `observed_at` and `expires_at`) and
+`predecessor_dispatcher` mapping (`task_id`, `lease_id`, `holder`, Builder `session`, and RFC3339
+`claimed_at`, `observed_at` and `expires_at`, plus `history_reconciled: true` only after the
+coordinator has reconciled earlier transfers). These are the trusted coordinator's actual remote
+readbacks before the receipt; the observations must remain live for the full receipt second. The
+acknowledgment's `prior_coordination_release.released_at` is the RFC3339 release event time, and
+`prior_worktree_release.released_at` is the numeric registry release time. The former must follow the
+receipt and precede the TARS pickup; the latter must follow the pickup and precede the new
+registration. The former session and the exact path, branch and generation must agree with the
+predecessor readback. A legacy remote claim's session is the trusted coordinator's observation, not
+a retroactive dispatcher event binding. The coordinator must reconcile any earlier session transfer
+before recording that observation; a fresh claim cannot establish missing transfer history. An older
+PR pickup is provenance and need not be rewritten when the coordinator's current readback names a
+later same-session lease. If neither an initial pickup nor a local predecessor is known, the normal
+authenticated handoff and remote readbacks are required; otherwise use maintenance to re-establish
+authority. On 2026-11-13 the owner reported
+that the approved TARS publication checkout had no dispatcher DB and that the existing #6618 Mac
+lease `54616511`, holder `codex-6618-pr-completion`, session `codex-6618-20261112`, had not been
+transferred. The coordinator must re-read those facts, release the exact old lease, establish readiness,
+perform the real TARS fallback pickup, release/register the worktrees and compare the candidate before
+the separate acknowledgment. No new dispatcher DB or invented TARS lease is needed. Ambiguous or
+contradictory history stops the affected merge and routes to ordinary owner/maintenance reconciliation.
+
+For the native controller, the existing handoff is two authenticated Issue or PR comments in the
+canonical order, each a YAML or JSON mapping under `lifecycle_handoff_receipt.v1` (optionally in one
+fenced code block). The current owner posts the receipt, without `successor_acknowledgment`, before its
+coordination release. After its own claim, registration and readbacks, the successor posts the
+acknowledgment as a new comment: the same receipt plus `successor_acknowledgment`. Editing the receipt
+comment instead does not count. The existing fields in `BUILDER_SUBAGENT_ROLES.md :: Handoff receipt`
+remain authoritative. Encode `current_lifecycle_owner` and `successor` as `{agent, session}`; use the
+exact branch, base (`main` or its current SHA), worktree, candidate HEAD and sorted changed-file paths,
+identical in the latest receipt and the acknowledgment. Include validation and review evidence,
+blockers, residual risk and the next authorized action. The `successor_acknowledgment` has the
+successor's `agent` and `session` and these readback mappings:
+
+- `prior_coordination_release`: `status: released` and, for a dispatcher predecessor, its exact
+  `task_id`, `lease_id` and `holder`, plus `readback` with `status: ready` or `blocked` and null
+  `claimed_by` and `lease_id`.
+- `successor_pickup`: `mode`, `agent`, `session`, and the current dispatcher `lease_id` or fallback
+  `evidence` (`github-comment:<id>`).
+- `prior_worktree_release`: `status: released`, `path`, former session as `owner`, `branch`, and
+  `generation`.
+- `successor_registration`: the `path`, `owner`, `branch`, `generation`, registration `epoch`, and
+  numeric `observed_at` returned by the preparation command below.
+- `candidate_readback`: the preparation command's `branch`, `base`, immutable `base_sha`, `head`,
+  sorted `changed_files`, `clean: true`, and numeric `observed_at`.
+
+Before posting the acknowledgment, the trusted coordinator reads the pending comment and the actual
+clean registered checkout using the normal lifecycle registry. Supply the exact transfer-time base
+SHA and the pending Issue or PR comment ID; include `--pr <number>` when either comment is on the
+PR. The output supplies the two acknowledgment mappings above:
+
+```bash
+python3 scripts/agent_worktree.py --cwd <host-repo> prepare-transfer \
+  --worktree <successor-worktree> --owner <successor-session> --workspace-root <model-workspace-root> --issue <number> \
+  --pending-comment-id <id> --base-sha <sha> [--pr <number>]
+```
+
+After posting the separate acknowledgment, wait until its complete GitHub timestamp second has
+elapsed and execute the following readback with the actual comment IDs. It pins the two comment
+digests and observed interval in the same existing registry row only if the same epoch remained live
+throughout that second. A release, expiry, path or generation change starts a new epoch; it cannot
+make an earlier gap valid. Repeating an exact completed pin reads back the existing proof.
+
+```bash
+python3 scripts/agent_worktree.py --cwd <host-repo> pin-transfer \
+  --worktree <successor-worktree> --owner <successor-session> --workspace-root <model-workspace-root> --issue <number> \
+  --pending-comment-id <id> --ack-comment-id <id> [--pr <number>]
+```
+
+These are technical readbacks in the existing handoff, not a per-PR approval. The historical pin is
+retained through same-session registration, reclaim and verified path moves. A new transfer retains
+the predecessor's bounded proof and move snapshots within the same registry record. When a path is
+reused and its row replaced, the consumer accepts the move only if the preserved snapshot proves
+the earlier released pinned interval. Snapshot and transfer nesting is limited to 32 levels; exceeding the bound
+or encountering incomplete older evidence refuses the affected continuation and requires the owner
+or maintenance workflow to reconcile the preserved registry and authenticated handoffs. A later
+pickup cannot manufacture past proof. The controller
+independently checks current live ownership and the clean current PR head. The transfer head must be
+an ancestor of the current head; the existing current-head scope review receives the intervening
+diff to assess dropped obligations and reverts along with intended fixes and refactors. Tests and CI
+remain bound to the current head. The controller never runs host Git against a model-owned checkout.
+Only a comment from the existing authenticated GitHub identity with OWNER, MEMBER or COLLABORATOR
+association is considered.
+
+The reviewer uses the public final response for its exact finished conversation. One bounded JSON
+report may be enclosed between `<BEGIN_PR_CYCLE_REPORT>` and `<END_PR_CYCLE_REPORT>` after plain
+public closeout text. The controller binds the report to the native execution observation, persists
+both before stopping the exact reviewer container, and reconciles an uncertain stop by checking that
+container's absence. Findings return to the existing repair owner after reviewer capacity is released.
+Exact closing Issue holds are checked again immediately before merge; a non-closing parent remains
+open. Dispatcher recovery records each reclaim and completion intent and reads back the actual lease
+and ordered events before proceeding. Older ambiguous effect records remain unknown.
+It is not installed
+or qualified by its tests. Do not schedule delivery until independent source review and actual host
+qualification have passed.
 
 Each epic directory holds a controller-owned bare mirror, one separate clone and home per worker,
 an integration checkout and the existing `epic_run_state` record (worker, branch, container,
 engine, model, budget and next action per Issue). Containers are replaceable; checkouts and
-run-state are unique work and survive container removal. The mirror is seeded from a git bundle,
-so BOB-1 holds no GitHub credentials. Publication stays with the coordinator, which fetches the
+run-state are unique work and survive container removal. The mirror is seeded from a git bundle.
+The trusted host has its existing GitHub CLI authentication; worker containers do not receive it.
+Publication stays with the coordinator, which fetches the
 worker branch and uses `publish-pr`.
 
 OpenHands is the normal execution and session-control surface. The default image in this source is
 the pinned upstream agent-server (`ghcr.io/openhands/agent-server:1.60.1-python`, by digest; it bundles
 claude-agent-acp 0.63.0 and codex-acp 2.2.2). The installed controller and image require separate
-runtime readback. Each worker gets a loopback-only
+runtime readback. The recorded #6618 exception is worker `w-6618`, stopped and replaced between runs
+(not hot-swapped) with the pinned upstream 1.62.0 image (`bd35862a…`, bundling native Claude Code
+2.1.312), per #6618 comments 6837205144 and 6842687488. Each worker gets a loopback-only
 port in 18700–18799 and a per-worker session key in the controller-only `control/` directory.
 Conversation history is kept in the worker's persistent home. `conversation-start --engine
 claude-code|codex [--model M]` creates the conversation through upstream `agent_settings`
@@ -453,8 +656,12 @@ subscription login in `~ygg/.config/epic-workspace/codex`, created once by the o
 `openhands-start --codex-home` mounts it at `/run/codex-home` for one worker at a time, because
 refresh tokens rotate. No API key and no host credential store is used.
 
-Known limits: BOB-1 has 2 vCPU and 4 GB RAM, so expect at most about two concurrent workers. The
-default engine's `docker0` bridge is missing, which is why the owned `epicws` bridge is used.
+Known limits: on the 3915 MiB, no-swap trial VM, native workers hit OOM at both 1000 and 1200 MiB;
+the current trial uses 1500 MiB and serial execution pending peak-memory and concurrency
+qualification. Test runs use an owned disk-backed temporary directory for `TMPDIR` and a separate
+pytest base directory per run to avoid accumulating temporary files in memory. These are trial
+observations, not a global worker budget minimum. The default engine's `docker0` bridge is missing,
+which is why the owned `epicws` bridge is used.
 An agent-server worker uses about 0.5 GB at rest. A checkpoint containing ignored files or stash commits
 can remain unreleasable when publication cannot prove their captured content or reachability.
 The reflog inspection requires the main and registered linked worktree HEAD logs, accepts up to

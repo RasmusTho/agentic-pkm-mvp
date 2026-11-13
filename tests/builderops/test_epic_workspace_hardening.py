@@ -1032,3 +1032,24 @@ def test_unknown_checkpoint_container_cleanup_blocks_reuse_and_takeover(tmp_path
 
 def test_git_identity_env_is_not_needed_by_the_controller():
     assert "GIT_AUTHOR_NAME" in GIT_ENV  # fixture-side only; the controller passes its own checkpoint identity
+
+
+def test_expected_container_identity_fences_stop_before_any_removal(tmp_path, capsys):
+    """The PR-cycle reviewer stop binds the exact container it observed (#6618 on #6617 stop)."""
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = FakeEngine()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    _new_worker(root, engine, repo, "w-a", 6617)
+    assert _cli(root, 6615, engine, "worker-start", "--worker", "w-a", "--model", "claude-sonnet-5-5", "--", "sleep", "60") == 0
+    recorded = _mapping(root, 6617)["container_id"]
+    layout = _layout(root)
+    for observed in ("e" * 64, recorded[:12]):
+        engine.calls.clear()
+        with pytest.raises(ew.EpicWorkspaceError, match="identity changed before stop"):
+            ew.stop_worker(layout, "w-a", reason="review completed", runner=engine, expected_container_id=observed)
+        assert not [call for call in engine.calls if call[1] == "rm"]
+        assert _mapping(root, 6617)["state"] == "running"
+    work = ew.stop_worker(layout, "w-a", reason="review completed", runner=engine, expected_container_id=recorded)
+    assert work["stop_id"] and _mapping(root, 6617)["state"] == "stopped_verified"
+    assert [call[-1] for call in engine.calls if call[1] == "rm"] == [recorded]

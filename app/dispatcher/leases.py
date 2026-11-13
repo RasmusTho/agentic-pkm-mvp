@@ -309,6 +309,8 @@ def claim(
     ttl_minutes: int = 90,
     takeover_stale: bool = False,
     expected_lease_id: str | None = None,
+    session: str | None = None,
+    claim_id: str | None = None,
 ) -> tuple[TaskRecord, LeaseRecord]:
     """Claim a task by creating a lease and updating task state.
 
@@ -321,6 +323,10 @@ def claim(
 
     Raises ValueError if task doesn't exist, is not ready, or is already claimed.
     """
+    if session is not None and (not session or session.strip() != session or any(c.isspace() for c in session)):
+        raise ValueError("Builder session must be a non-empty exact identifier")
+    if claim_id is not None and (not claim_id or claim_id.strip() != claim_id or any(c.isspace() for c in claim_id)):
+        raise ValueError("Claim attempt id must be a non-empty exact identifier")
     if expected_lease_id is not None:
         if not expected_lease_id or expected_lease_id.strip() != expected_lease_id:
             raise ValueError("Expected stale lease id must be a non-empty exact identifier")
@@ -330,6 +336,10 @@ def claim(
     lease_id = _make_lease_id()
     ttl_seconds = ttl_minutes * 60
     event_payload: dict[str, object] = {"ttl_minutes": ttl_minutes}
+    if session is not None:
+        event_payload["session"] = session
+    if claim_id is not None:
+        event_payload["claim_id"] = claim_id
 
     with ExitStack() as stack:
         stack.enter_context(_cleanup_guard_lock(store))
@@ -491,9 +501,11 @@ def heartbeat(
 
     Raises ValueError if task/lease not found or held by a different agent.
     """
-    now = _utc_now()
     with store._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        # Sample after acquiring the write lock: a stalled heartbeat must not
+        # renew a lease that expired while it was waiting for that lock.
+        now = _utc_now()
         task = conn.execute("SELECT * FROM dispatcher_tasks WHERE task_id = ?", (task_id,)).fetchone()
         if task is None:
             raise ValueError(f"Task {task_id} not found")
@@ -537,6 +549,7 @@ def release(
     task_id: str,
     agent_id: str,
     reason: str = "manual",
+    expected_lease_id: str | None = None,
 ) -> TaskRecord:
     """Release a task by removing its lease.
 
@@ -544,59 +557,49 @@ def release(
 
     Raises ValueError if task/lease not found or held by a different agent.
     """
-    task = store.get_task(task_id)
-    if task is None:
-        raise ValueError(f"Task {task_id} not found")
-
-    if task.lease_id is None:
-        raise ValueError(f"Task {task_id} has no active lease to release")
-
-    lease = store.get_lease(task.lease_id)
-    if lease is None:
-        raise ValueError(f"Lease {task.lease_id} not found")
-
-    if lease.holder != agent_id:
-        raise ValueError(
-            f"Cannot release lease {task.lease_id}: held by {lease.holder}, not {agent_id}"
+    if expected_lease_id is not None and (not expected_lease_id or expected_lease_id.strip() != expected_lease_id):
+        raise ValueError("Expected lease id must be a non-empty exact identifier")
+    with store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        task_row = conn.execute("SELECT * FROM dispatcher_tasks WHERE task_id = ?", (task_id,)).fetchone()
+        if task_row is None:
+            raise ValueError(f"Task {task_id} not found")
+        lease_id = task_row["lease_id"]
+        if lease_id is None:
+            raise ValueError(f"Task {task_id} has no active lease to release")
+        if expected_lease_id is not None and lease_id != expected_lease_id:
+            raise ValueError(f"Cannot release task {task_id}: expected lease changed")
+        lease_row = conn.execute("SELECT * FROM dispatcher_leases WHERE lease_id = ?", (lease_id,)).fetchone()
+        if lease_row is None or lease_row["released_at"] is not None:
+            raise ValueError(f"Lease {lease_id} is unavailable")
+        if lease_row["holder"] != agent_id:
+            raise ValueError(f"Cannot release lease {lease_id}: held by {lease_row['holder']}, not {agent_id}")
+        if expected_lease_id is not None and task_row["claimed_by"] != agent_id:
+            raise ValueError(f"Cannot release lease {lease_id}: task holder changed")
+        now = _utc_now()
+        updated = conn.execute("UPDATE dispatcher_leases SET released_at = ?, release_reason = ? WHERE lease_id = ? AND holder = ? AND released_at IS NULL", (now, reason, lease_id, agent_id))
+        if updated.rowcount != 1:
+            raise ValueError(f"Cannot release lease {lease_id}: lease changed concurrently")
+        sync_state = json.loads(task_row["sync_state"] or "{}")
+        if not isinstance(sync_state, dict):
+            sync_state = {}
+        sync_state.pop("last_pull_at", None)
+        sync_state["ready_scan_invalidated_at"] = now
+        updated = conn.execute(
+            "UPDATE dispatcher_tasks SET lease_id = NULL, claimed_by = NULL, last_heartbeat_at = NULL, "
+            "lease_expires_at = NULL, status = ?, sync_state = ?, updated_at = ? "
+            "WHERE task_id = ? AND lease_id = ? AND claimed_by IS ?",
+            ("ready" if task_row["blocked_reason"] is None else "blocked", json.dumps(sync_state, sort_keys=True, ensure_ascii=False), now, task_id, lease_id, task_row["claimed_by"]),
         )
-
-    now = _utc_now()
-    lease.released_at = now
-    lease.release_reason = reason
-    store.upsert_lease(lease)
-
-    task.lease_id = None
-    task.claimed_by = None
-    task.last_heartbeat_at = None
-    task.lease_expires_at = None
-
-    # The ready scan predates this lease and may predate the GitHub label
-    # transition to agent:in-progress. Keep an invalidation timestamp as well
-    # as clearing the scan evidence, so a pull already in flight cannot restore
-    # its older ready snapshot after this release commits.
-    task.sync_state = dict(task.sync_state or {})
-    task.sync_state.pop("last_pull_at", None)
-    task.sync_state["ready_scan_invalidated_at"] = now
-
-    if task.blocked_reason is None:
-        task.status = "ready"
-    else:
-        task.status = "blocked"
-
-    task.updated_at = now
-    store.upsert_task(task)
-
-    event = EventRecord(
-        event_id=_make_event_id(),
-        timestamp=now,
-        task_id=task_id,
-        event_type="task.released",
-        actor=agent_id,
-        lease_id=lease.lease_id,
-        payload={"reason": reason},
-    )
-    store.append_event(event)
-
+        if updated.rowcount != 1:
+            raise ValueError(f"Cannot release lease {lease_id}: task changed concurrently")
+        event = EventRecord(_make_event_id(), now, task_id, "task.released", agent_id, lease_id, {"reason": reason})
+        conn.execute("INSERT INTO dispatcher_events (event_id, timestamp, task_id, event_type, actor, lease_id, payload) VALUES (?, ?, ?, ?, ?, ?, ?)", (event.event_id, event.timestamp, event.task_id, event.event_type, event.actor, event.lease_id, json.dumps(event.payload, sort_keys=True, ensure_ascii=False)))
+        conn.commit()
+    if store._event_writer is not None:
+        store._event_writer.append(event)
+    task = store.get_task(task_id)
+    assert task is not None, f"task {task_id} missing after successful release"
     return task
 
 

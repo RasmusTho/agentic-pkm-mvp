@@ -781,6 +781,7 @@ def _settle_checkpoint_writer(layout: Layout, worker: str, runner: Runner) -> No
 
 def _stop_worker(
     layout: Layout, worker: str, *, reason: str, runner: Runner, image: str, retain_identity: bool = True,
+    expected_container_id: str | None = None,
 ) -> dict[str, Any]:
     """Remove the worker container, prove absence by engine readback, then preserve its work.
 
@@ -788,13 +789,18 @@ def _stop_worker(
     container is gone; the checkout is never written to (checkpoints live in a controller-owned repo).
     A detached or drifted checkout is checkpointed even without unique work so a continuation can be
     bound to its identity; retirement passes ``retain_identity=False`` because it authorizes no
-    continuation and only unique work must be retained.
+    continuation and only unique work must be retained. ``expected_container_id`` fences a caller
+    that observed one exact container: a different recorded ID refuses before any removal.
     """
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     if state["issue_mappings"][str(issue)].get("state") == "retired":
         raise LaunchRefused(f"worker {worker!r} is retired")
+    if expected_container_id is not None and (
+            not _CONTAINER_ID.fullmatch(expected_container_id)
+            or state["issue_mappings"][str(issue)].get("container_id") != expected_container_id):
+        raise EpicWorkspaceError("worker container identity changed before stop")
     _assert_engine(runner)
     _settle_checkpoint_writer(layout, worker, runner)
     mapping = state["issue_mappings"][str(issue)]
@@ -835,8 +841,10 @@ def _stop_worker(
 
 
 @_serialized_worker
-def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
-    return _stop_worker(layout, worker, reason=reason, runner=runner, image=image)
+def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE,
+                expected_container_id: str | None = None) -> dict[str, Any]:
+    return _stop_worker(layout, worker, reason=reason, runner=runner, image=image,
+                        expected_container_id=expected_container_id)
 
 
 def _controller_dir(layout: Layout, *parts: str) -> Path:
@@ -2491,6 +2499,8 @@ def _http(method: str, port: int, key: str, path: str, body: Mapping[str, Any] |
     try:
         with opener.open(request, timeout=timeout) as response:
             raw = response.read(1_048_577)
+            if len(raw) > 1_048_576:
+                raise ValueError("agent-server response exceeds size bound")
             return response.status, json.loads(raw) if raw else None
     except urllib.error.HTTPError as exc:
         return exc.code, None
@@ -2689,6 +2699,7 @@ def start_conversation(
     engine: str,
     model: str | None,
     prompt: str,
+    operation_id: str | None = None,
     http: Callable[..., tuple[int, Any]] = _http,
 ) -> dict[str, Any]:
     """Create one OpenHands conversation for the worker's task.
@@ -2706,6 +2717,10 @@ def start_conversation(
     issue = _issue_for_worker(state, worker)
     conversation_id = str(uuid.uuid4())
     record: dict[str, Any] = {"id": conversation_id, "engine": engine, "model": model, "status": "creating", "at": _now()}
+    if operation_id is not None:
+        if not re.fullmatch(r"pr-completion-[0-9a-f]{64}", operation_id):
+            raise LaunchRefused("invalid PR completion operation id")
+        record["operation_id"] = operation_id
     reserved = _reserve_conversation(layout, issue, worker, record)
     mapping = reserved["issue_mappings"][str(issue)]
     port, key = int(mapping["port"]), _session_key(layout, worker)
@@ -2792,7 +2807,8 @@ def classify_failure(text: str) -> str:
     return "task_failure" if text else "unclassified"
 
 
-def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http, limit: int = 50) -> dict[str, Any]:
+def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http,
+                        limit: int = 50, include_messages: bool = True) -> dict[str, Any]:
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     mapping = state["issue_mappings"][str(issue)]
@@ -2814,7 +2830,7 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
     last_agent_message = next(
         (e for e in reversed(items) if isinstance(e, Mapping) and e.get("kind") == "MessageEvent" and e.get("source") == "agent"),
         None,
-    )
+    ) if include_messages else None
     return {
         "issue": issue,
         "worker": worker,

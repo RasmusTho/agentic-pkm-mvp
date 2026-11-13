@@ -303,6 +303,8 @@ def _cmd_claim(args: argparse.Namespace, store: SqliteStore) -> int:
             ttl_minutes=args.ttl_minutes,
             takeover_stale=args.takeover_stale,
             expected_lease_id=args.expected_lease_id,
+            session=args.session,
+            claim_id=args.claim_id,
         )
         _emit({
             "ok": True,
@@ -325,7 +327,7 @@ def _cmd_heartbeat(args: argparse.Namespace, store: SqliteStore) -> int:
 
 def _cmd_release(args: argparse.Namespace, store: SqliteStore) -> int:
     try:
-        task = lease_module.release(store, task_id=args.task_id, agent_id=args.agent)
+        task = lease_module.release(store, task_id=args.task_id, agent_id=args.agent, expected_lease_id=args.expected_lease_id)
         _emit({"ok": True, "task": _compact_task(task)}, args.json)
         return 0
     except ValueError as exc:
@@ -1441,6 +1443,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("task_id")
     p.add_argument("--agent", required=True)
     p.add_argument("--ttl-minutes", type=int, default=90, dest="ttl_minutes")
+    p.add_argument("--session", default=None, help="Builder lifecycle session bound to this claim")
+    p.add_argument("--claim-id", default=None, help="Caller-generated claim attempt identity")
     p.add_argument("--takeover-stale", action="store_true")
     p.add_argument(
         "--expected-lease-id",
@@ -1457,6 +1461,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("release", help="Release a task lease")
     p.add_argument("task_id")
     p.add_argument("--agent", required=True)
+    p.add_argument("--expected-lease-id", default=None, help="Release only this observed lease")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("update", help="Update task status or add note")
