@@ -106,6 +106,35 @@ the path is later recreated. It is not a `removed`
 tombstone and cannot resume cleanup. Ordinary-missing restart reconciliation
 continues to process only a previously durable `removal_pending` transition.
 
+Handoff transfer proofs on the unmerged #6618 branch are repository candidate
+support only. They are not deployed or activated, and they do not complete any
+child Issue. The handoff procedure is owned by
+[DEV_WORKFLOW](DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental).
+`agent_worktree.py prepare-transfer` and `pin-transfer` write a
+`transfer_registration` proof into the successor's existing row, and only in
+the repository's default lifecycle registry, under its lock. There is no new
+ledger. Preparation needs an active registration and a clean checkout that
+matches the pending comment. It binds the comment digest, the candidate
+readback and the current registration epoch. Pinning adds the acknowledgment
+digest only if that same epoch stayed live through the acknowledgment's whole
+second. Release, expiry, a path change or a generation change starts a new
+epoch. Repeating an exact prepare or pin reads back the stored proof, and a
+pinned proof cannot be replaced. Same-session re-registration, reclaim and
+verified path moves keep the row's prior-owner, previous-registration and
+transfer snapshots. A new transfer embeds its predecessor's snapshot, including
+that predecessor's earlier proof and moves. Nesting is capped at 32 levels
+(`MAX_TRANSFER_HISTORY`); deeper or malformed snapshot evidence makes the
+record invalid instead of being truncated. When a path is reused, the PR-cycle
+authority read ignores a released former path only if that path is absent and
+the active row's preserved previous registration proves the release. A
+conflicting released row refuses. Several conditions refuse instead of
+repairing anything: a predecessor that expired or completed without release,
+an unpinned predecessor transfer, tied ended predecessors, and local history
+that is unreleased or overlaps a reconciled remote predecessor. The owner or
+the existing maintenance route above must then reconcile the preserved
+registry. These proofs are technical readbacks, not owner approval. They grant
+no cleanup, retirement or merge authority and trigger no implicit cleanup.
+
 Remote branch disposition is not a broad-janitor action. The bounded
 `targeted_remote_cleanup` production entrypoint accepts at most five caller-supplied
 candidates and requires each to bind the repository, fully qualified source ref,
