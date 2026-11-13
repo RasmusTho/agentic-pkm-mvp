@@ -6,9 +6,9 @@ import json
 import subprocess
 
 from app.builderops import epic_workspace as ew
-from tests.builderops.test_epic_workspace_isolation import FakeEngine, _seed_repo
-from tests.builderops.test_epic_workspace_lifecycle import _git
-from tests.builderops.test_epic_workspace_openhands import FakeAgentServer, _main, _setup
+from tests.builderops.test_epic_workspace_isolation import FakeEngine
+from tests.builderops.test_epic_workspace_lifecycle import _ckpt, _git
+from tests.builderops.test_epic_workspace_openhands import _main, _setup
 
 
 class StuckEngine(FakeEngine):
@@ -55,7 +55,7 @@ def test_partial_work_and_ambiguous_publication_are_reconciled_before_takeover(t
     (checkout / "partial.py").write_text("def half():\n")
     assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "branch_push") == 0
     push = _json(capsys)
-    pushed = _write(tmp_path / "push.json", {"sha": "a" * 40})
+    pushed = _write(tmp_path / "push.json", {"sha": "a" * 40, "branch": "b/a"})
     assert _main(root, engine, server, "publication-complete", "--worker", "w-a", "--op", push["id"], "--result-file", pushed) == 0
     assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create") == 0
     pr_op = _json(capsys)
@@ -88,7 +88,7 @@ def test_partial_work_and_ambiguous_publication_are_reconciled_before_takeover(t
     assert mapping["conversation"]["status"] == ew.CONVERSATION_ENDED and mapping["conversation"]["id"] == predecessor
     assert mapping["state"] == "stopped_verified" and mapping["takeover"]["status"] == "authorized"
     assert [c["ref"] for c in mapping["checkpoints"]] == ["refs/checkpoints/ckpt-0001"]
-    assert _git(checkout, "show", "refs/checkpoints/ckpt-0001:partial.py") == "def half():"
+    assert _ckpt(root, "w-a", "show", "refs/checkpoints/ckpt-0001:partial.py") == "def half():"
     ops = {op["id"]: op for op in mapping["publication_ops"]}
     assert ops[push["id"]]["status"] == "confirmed"
     assert ops[pr_op["id"]]["status"] == "quarantined"
@@ -103,7 +103,7 @@ def test_partial_work_and_ambiguous_publication_are_reconciled_before_takeover(t
     assert _main(root, engine, server, "publication-begin", "--worker", "w-a", "--kind", "pr_create") == 2
 
     # Coordinator readback shows the PR exists: adopted, never created again.
-    readback = _write(tmp_path / "rb.json", {"complete": True, "pull_requests": [{"number": 6630, "url": "https://example.invalid/pr/6630", "state": "open"}]})
+    readback = _write(tmp_path / "rb.json", {"complete": True, "branch": "b/a", "pull_requests": [{"number": 6630, "url": "https://example.invalid/pr/6630", "state": "open", "branch": "b/a", "sha": "a" * 40}]})
     assert _main(root, engine, server, "publication-reconcile", "--worker", "w-a", "--op", pr_op["id"], "--readback-file", readback) == 0
     done = _json(capsys)
     assert done["status"] == "confirmed" and done["result"]["number"] == 6630
@@ -122,7 +122,11 @@ def test_readback_quarantines_doubt_and_permits_one_retry_only_on_proven_absence
 
     doubtful = (
         {"complete": False, "pull_requests": []},
-        {"complete": True, "pull_requests": [{"number": 1}, {"number": 2}]},
+        {"complete": True, "pull_requests": []},  # absence without the queried branch proves nothing
+        {"complete": True, "branch": "other", "pull_requests": []},
+        {"complete": True, "branch": "b/a", "pull_requests": [{"number": 1}, {"number": 2}]},
+        {"complete": True, "branch": "b/a", "pull_requests": [{"number": 1}]},
+        {"complete": True, "branch": "b/a", "pull_requests": [{"number": 1, "branch": "other", "sha": "a" * 40}]},
         {"complete": True},
     )
     for number, readback in enumerate(doubtful):
@@ -133,7 +137,7 @@ def test_readback_quarantines_doubt_and_permits_one_retry_only_on_proven_absence
     assert _json(capsys)["status"] == "quarantined"  # no readback at all
 
     # Takeover applies the coordinator's readback per operation: proven absence, not a guess.
-    absent = _write(tmp_path / "absent.json", {pr_op: {"complete": True, "pull_requests": []}})
+    absent = _write(tmp_path / "absent.json", {pr_op: {"complete": True, "branch": "b/a", "pull_requests": []}})
     assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "r", "--readback-file", absent) == 0
     taken = _json(capsys)
     assert taken["next_authorized_action"]["blocked_operations"] == []

@@ -306,9 +306,10 @@ run-state are unique work and survive container removal. The mirror is seeded fr
 so BOB-1 holds no GitHub credentials. Publication stays with the coordinator, which fetches the
 worker branch and uses `publish-pr`.
 
-OpenHands is the normal execution and session-control surface. `openhands-start` runs the pinned
-upstream agent-server image (`ghcr.io/openhands/agent-server:1.60.1-python`, by digest; it bundles
-claude-agent-acp 0.63.0 and codex-acp 2.2.2) as the worker container. Each worker gets a loopback-only
+OpenHands is the normal execution and session-control surface. The default image in this source is
+the pinned upstream agent-server (`ghcr.io/openhands/agent-server:1.60.1-python`, by digest; it bundles
+claude-agent-acp 0.63.0 and codex-acp 2.2.2). The installed controller and image require separate
+runtime readback. Each worker gets a loopback-only
 port in 18700–18799 and a per-worker session key in the controller-only `control/` directory.
 Conversation history is kept in the worker's persistent home. `conversation-start --engine
 claude-code|codex [--model M]` creates the conversation through upstream `agent_settings`
@@ -348,34 +349,48 @@ The third command is the emergency stop for every container of one epic. The fou
 previous controller release. Workers must not hot-replace the active release. A candidate controller
 is installed as a new `<sha>` directory between reconciled runs.
 
-Preservation, takeover and retirement (#6617). Commands run from outside any worker:
+Preservation, takeover and retirement are implemented in the #6617 source candidate. The running
+pinned controller has not been upgraded or qualified by this source change. After the candidate is
+independently reviewed, installed and verified, these commands run from outside any worker:
 
-- `worker-stop` removes the container, reads absence back from the engine, then writes a checkpoint
-  ref `refs/checkpoints/ckpt-NNNN` inside the worker's own checkout (contained, no network, working
-  tree and index untouched). It captures uncommitted, untracked and ignored files. Commits on any
-  local branch and the stash already live in refs and are reported, not copied.
-- Unique work is: uncommitted or untracked files, ignored files that are not an explicit disposable
-  cache (`__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.hypothesis`, `node_modules`,
-  `.venv`), commits on any local branch or in the stash that no remote ref contains, and any evidence
-  that cannot be read (for example a failing `rev-parse HEAD`).
+- `worker-stop` removes the container, reads absence back from the engine, then captures unique work
+  in a controller-owned checkpoint repository under `control/checkpoints/<worker>.git`. The checkout
+  is mounted read-only in a networkless inspection container; a separate index and configuration
+  keep worker filters from running. Checkpoint refs hold uncommitted and ignored content, and retained
+  refs hold objects from the worker's refs, stash history and linked-worktree HEADs. A connectivity
+  check without the checkout's object directory must pass before the checkpoint is recorded.
+- Unique work is: uncommitted or untracked files, ignored files, commits reachable from any worker
+  ref, stash history or linked-worktree HEAD that are not
+  reachable from a controller-owned `source.git` ref or a coordinator-recorded published head, and
+  unreadable evidence. Worker remote-tracking and checkpoint-looking refs never prove publication.
+  Cache-looking names do not prove that their contents are disposable. A nested Git repository is
+  treated as unreadable work and kept intact because a gitlink does not capture its worktree.
 - `takeover --worker W --reason R [--readback-file F]` is the only way to continue a replaced worker.
   It removes any remaining container and proves absence by engine readback (a lease or timeout proves
-  nothing), checkpoints the files, confirms the checkout is on the branch run-state records, applies
-  coordinator-supplied GitHub readback to unresolved publication attempts and records exactly one
-  continuation. Until then `worker-start`, `openhands-start` and `conversation-start` refuse. A repeated
-  takeover returns the same continuation; `conversation-start --continuation` consumes it.
+  nothing), checkpoints the files, checks the post-checkpoint content and refs, confirms the recorded
+  branch, and reconciles publication attempts from coordinator-supplied readback. It reads engine
+  absence again while recording exactly one continuation. Per-worker controller locks fence overlapping
+  starts, stops, checkpoints and takeovers. The successor's `worker-start` or `openhands-start` consumes
+  that authorization; a repeated takeover before a start returns the same continuation. A lost
+  launch response stays unknown even if an absence readback succeeds, until the trusted controller
+  reconciles the outstanding request. If a timed-out checkpoint container cannot be confirmed
+  removed, the run state also blocks reuse of that checkpoint repository and continuation until
+  trusted reconciliation.
 - `continuation-brief` rebuilds the next authorized action, checkpoints, blocked operations and the
   engine-neutral successor prompt from run-state alone, so a Codex worker can continue a Claude
   worker's task (and back) without the predecessor writing a summary.
 - Publication goes through `publication-begin` (intent recorded before the effect), then
-  `publication-complete` or `publication-reconcile`. The coordinator reads GitHub and supplies
-  `{"complete": true, "branch": {"exists": .., "sha": ..}, "pull_requests": [..]}`; the controller holds
-  no GitHub credentials. An unknown outcome is quarantined for that operation only and is never
-  replayed; only readback that proves absence authorizes one retry.
+  `publication-complete` or `publication-reconcile`. The coordinator reads GitHub; completion supplies
+  the observed `branch` and `sha`, plus a PR `number` for PR creation. Reconciliation supplies a complete
+  branch readback with its `name`, `exists` and, when present, `sha`, or the queried `branch` with a
+  complete `pull_requests` list whose sole match includes `number`, `branch` and `sha`. An unknown
+  outcome is quarantined for that operation only and is never replayed; only readback that proves
+  absence authorizes one retry.
 - `worker-retire` removes only the container carrying this epic/worker label pair, then the checkout
   only when nothing unique remains. It refuses while unique work, unreadable evidence, an unreleased
-  checkpoint or an unresolved publication exists. `checkpoint-release` supersedes a checkpoint once every
-  path it captured is identical in a commit already contained in a remote ref.
+  checkpoint or an unresolved publication exists. `checkpoint-release` supersedes a checkpoint only
+  when the captured paths match a controller-proven published commit and its retained commits are
+  reachable from controller-held publication evidence.
 - `worker-create` on an existing checkout reads the actual branch back and refuses a mismatch with the
   requested or recorded branch instead of recording it.
 

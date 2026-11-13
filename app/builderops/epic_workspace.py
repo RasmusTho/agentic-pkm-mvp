@@ -22,6 +22,8 @@ Stdlib only so the pinned controller runs on the VM's system Python.
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
 import os
 import re
@@ -29,10 +31,14 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Concatenate, Iterator, Mapping, ParamSpec, Sequence, TypeVar
 
 from app.builderops import epic_run_state
 
@@ -69,15 +75,25 @@ _NETWORK = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 _MOUNT_PATH = re.compile(r"^/[A-Za-z0-9._/@+-]*$")
 EXTRA_MOUNT_PREFIX = "/mnt/"
 INSPECT_TARGET = "/inspect"
+SCRATCH_TARGET = "/scratch"
 CHECKPOINT_REF_PREFIX = "refs/checkpoints/"
-CHECKPOINT_INDEX = f"{INSPECT_TARGET}/.git/epic-checkpoint.index"
-# Ignored paths that are rebuildable caches. Every other ignored path is potentially unique work.
-DISPOSABLE_CACHE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", "node_modules", ".venv"})
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+GIT_TIMEOUT = 120.0
+GIT_WRITE_TIMEOUT = 900.0
+ENGINE_TIMEOUT = 30.0
+MAX_PUBLISHED_TIPS = 5000
+MAX_DETAIL_QUERIES = 64
+MAX_RETAINED_REFS = 5000
+MAX_GIT_METADATA_ENTRIES = 200_000
 PUBLICATION_KINDS = ("branch_push", "pr_create")
 _OP_UNRESOLVED = ("intended", "quarantined")
 _ENV_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_OID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_CKPT_REF = re.compile(r"^refs/checkpoints/ckpt-([0-9]{4,})$")
 
 Runner = Callable[..., subprocess.CompletedProcess]
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 class EpicWorkspaceError(RuntimeError):
@@ -170,8 +186,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _run(runner: Runner, argv: Sequence[str], *, check: bool = True, cwd: Path | None = None) -> subprocess.CompletedProcess:
-    result = runner(list(argv), capture_output=True, text=True, cwd=str(cwd) if cwd else None, check=False)
+def _run(
+    runner: Runner, argv: Sequence[str], *, check: bool = True, cwd: Path | None = None, timeout: float | None = None
+) -> subprocess.CompletedProcess:
+    kwargs: dict[str, Any] = {"timeout": timeout} if timeout is not None else {}
+    try:
+        result = runner(list(argv), capture_output=True, text=True, cwd=str(cwd) if cwd else None, check=False, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        raise EpicWorkspaceError(f"{argv[0]} {argv[1] if len(argv) > 1 else ''} timed out; outcome unknown") from exc
     if check and result.returncode != 0:
         raise EpicWorkspaceError(f"{argv[0]} {argv[1] if len(argv) > 1 else ''} failed: {(result.stderr or '').strip()[:400]}")
     return result
@@ -183,6 +205,42 @@ def _is_within(path: Path, base: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+@contextmanager
+def _worker_lifecycle_lock(layout: Layout, worker: str) -> Iterator[None]:
+    """Fence overlapping controller effects for this worker, including across processes."""
+
+    directory = _controller_dir(layout, "lifecycle-locks")
+    path = directory / f"{validate_worker_id(worker)}.lock"
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as exc:
+        raise EpicWorkspaceError("cannot safely open worker lifecycle lock") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise EpicWorkspaceError("worker lifecycle lock is not a regular file")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise LaunchRefused("another lifecycle operation is in progress for this worker") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _serialized_worker(
+    func: Callable[Concatenate[Layout, str, _P], _R],
+) -> Callable[Concatenate[Layout, str, _P], _R]:
+    @wraps(func)
+    def wrapped(layout: Layout, worker: str, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with _worker_lifecycle_lock(layout, worker):
+            return func(layout, worker, *args, **kwargs)
+
+    return wrapped
 
 
 # --------------------------------------------------------------------------- state
@@ -237,10 +295,77 @@ def _reserve_worker(layout: Layout, issue: int, worker: str, **fields: Any) -> d
     )
 
 
+def _takeover_of(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = mapping.get("takeover")
+    return value if isinstance(value, Mapping) else {}
+
+
 def _assert_no_pending_takeover(mapping: Mapping[str, Any]) -> None:
-    pending = mapping.get("takeover")
-    if isinstance(pending, Mapping) and pending.get("status") == "required":
+    if mapping.get("checkpoint_inspection_unknown"):
+        raise TakeoverRefused("checkpoint inspection cleanup is unknown; trusted reconciliation is required")
+    if _takeover_of(mapping).get("status") == "required":
         raise TakeoverRefused("takeover required: reconcile the predecessor's work and publication before any successor writes")
+
+
+def _begin_start(layout: Layout, issue: int, worker: str, **fields: Any) -> None:
+    """Gate and record a successor start in one locked update.
+
+    The takeover gate, the "no earlier execution left unreconciled" check and the ``starting``
+    record are decided under the run-state lock, so a concurrent stop or takeover cannot slip in
+    between the check and the launch. An authorized continuation is consumed here, exactly once,
+    by whichever start path launches the successor.
+    """
+
+    key = str(int(issue))
+
+    def updater(state: dict[str, Any]) -> dict[str, Any]:
+        mapping = dict(state.get("issue_mappings", {}).get(key, {}))
+        if mapping.get("worker") != worker:
+            raise LaunchRefused(f"issue #{key} does not belong to worker {worker!r}")
+        _assert_no_pending_takeover(mapping)
+        recorded = mapping.get("state")
+        if recorded == "retired":
+            raise LaunchRefused(f"worker {worker!r} is retired")
+        if recorded in ("starting", "running"):
+            raise LaunchRefused(
+                f"worker {worker!r} is recorded as {recorded!r} without a verified stop; "
+                "run takeover (or worker-stop) so the earlier execution is proven gone and reconciled first"
+            )
+        pending = _takeover_of(mapping)
+        if recorded == "stopped_verified" and mapping.get("started_at") and pending.get("status") != "authorized":
+            raise TakeoverRefused("takeover required before starting a successor")
+        if pending.get("status") != "authorized" and any(
+            op.get("status") in _OP_UNRESOLVED
+            for op in mapping.get("publication_ops", []) if isinstance(op, Mapping)
+        ):
+            raise TakeoverRefused("takeover required: publication has an unresolved outcome")
+        if pending.get("status") == "authorized":
+            mapping["takeover"] = {**pending, "status": "consumed", "consumed_at": _now(), "consumed_by": fields.get("runtime")}
+        mapping.update(fields, state="starting", container_id=None, updated_at=_now())
+        state["issue_mappings"][key] = mapping
+        return state
+
+    epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater, expected_epic_issue_number=layout.epic)
+
+
+def _launch(layout: Layout, issue: int, worker: str, argv: Sequence[str], runner: Runner) -> str:
+    """Run the already-recorded ``starting`` launch; a definitive failure leaves a retryable record."""
+
+    try:
+        result = runner(list(argv), capture_output=True, text=True, check=False, timeout=300.0)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        # A timed-out or disconnected client does not prove the daemon never launched the
+        # container. Keep "starting" until the trusted controller reconciles the request.
+        raise EpicWorkspaceError("worker launch outcome is unknown; trusted reconciliation is required before retrying") from exc
+    if result.returncode != 0:
+        try:
+            absent = _container_state(layout, worker, runner) is None
+        except EpicWorkspaceError:
+            absent = False
+        if absent:
+            _record_worker(layout, issue, state="start_failed", start_failed_at=_now())
+        raise EpicWorkspaceError("worker launch failed; inspect its state before retrying")
+    return (result.stdout or "").strip()[:64]
 
 
 def _issue_for_worker(state: Mapping[str, Any], worker: str) -> int:
@@ -272,10 +397,11 @@ def init_workspace(root: Path, epic: int, repo_url: str, *, runner: Runner = sub
     return layout
 
 
+@_serialized_worker
 def create_worker(
     layout: Layout,
-    *,
     worker: str,
+    *,
     issue: int,
     branch: str,
     base: str = "main",
@@ -288,6 +414,8 @@ def create_worker(
         raise LaunchRefused(f"invalid branch {branch!r}")
     checkout = layout.checkout(worker)
     recorded = _load_state(layout).get("issue_mappings", {}).get(str(int(issue)), {})
+    if recorded.get("state") == "retired":
+        raise LaunchRefused(f"worker for issue #{int(issue)} is retired")
     if checkout.exists():
         # A re-run must not record a branch the checkout is not on (KD-FE5EDF575D1E).
         actual = checkout_branch(checkout, runner=runner)
@@ -315,9 +443,11 @@ def create_worker(
 
 def _assert_engine(runner: Runner) -> str:
     try:
-        result = runner(["docker", "version", "--format", "{{.Server.Version}}"], capture_output=True, text=True, check=False)
+        result = runner(["docker", "version", "--format", "{{.Server.Version}}"], capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
     except FileNotFoundError as exc:  # docker CLI missing
         raise EngineUnavailable("docker CLI not found; refusing (no host fallback)") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise EngineUnavailable("container engine did not answer; refusing (no host fallback)") from exc
     if result.returncode != 0 or not (result.stdout or "").strip():
         raise EngineUnavailable("container engine unavailable; refusing (no host fallback)")
     return result.stdout.strip()
@@ -433,6 +563,7 @@ def build_launch_argv(
     return argv
 
 
+@_serialized_worker
 def start_worker(
     layout: Layout,
     worker: str,
@@ -458,17 +589,12 @@ def start_worker(
     existing = _container_state(layout, worker, runner)
     if existing is not None:
         raise LaunchRefused(f"container for worker {worker!r} already exists ({existing}); stop it before a successor starts")
-    result = _run(runner, argv)
-    container_id = (result.stdout or "").strip()[:64]
-    _record_worker(
-        layout,
-        issue,
-        state="running",
+    _begin_start(
+        layout, issue, worker,
         # Plain container execution is a recorded bootstrap/diagnostic exception, never the
         # normal delivery path (#6615 owner revision 2026-11-12b).
         runtime="native-exception",
         container=layout.container_name(worker),
-        container_id=container_id,
         image=image,
         engine=engine,
         model=model,
@@ -476,49 +602,134 @@ def start_worker(
         network=network,
         started_at=_now(),
     )
+    container_id = _launch(layout, issue, worker, argv, runner)
+    _record_worker(layout, issue, state="running", container_id=container_id)
     return container_id
 
 
 def _container_state(layout: Layout, worker: str, runner: Runner) -> str | None:
-    result = runner(
-        ["docker", "ps", "--all", "--filter", f"label={LABEL_EPIC}={layout.epic}", "--filter", f"label={LABEL_WORKER}={worker}", "--format", "{{.State}}"],
-        capture_output=True, text=True, check=False,
-    )
+    try:
+        result = runner(
+            ["docker", "ps", "--all", "--filter", f"label={LABEL_EPIC}={layout.epic}", "--filter", f"label={LABEL_WORKER}={worker}", "--format", "{{.State}}"],
+            capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise EngineUnavailable("cannot read container state; treat worker as possibly running") from exc
     if result.returncode != 0:
         raise EngineUnavailable("cannot read container state; treat worker as possibly running")
     states = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
     return states[0] if states else None
 
 
-def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
+def _stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner, image: str) -> dict[str, Any]:
     """Remove the worker container, prove absence by engine readback, then preserve its work.
 
     Absence is recorded before any checkpoint so a failed checkpoint never hides that the
-    container is gone; the checkout is never touched except for the checkpoint refs.
+    container is gone; the checkout is never written to (checkpoints live in a controller-owned repo).
     """
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
+    if state["issue_mappings"][str(issue)].get("state") == "retired":
+        raise LaunchRefused(f"worker {worker!r} is retired")
     _assert_engine(runner)
-    runner(["docker", "rm", "--force", layout.container_name(worker)], capture_output=True, text=True, check=False)
+    try:
+        runner(["docker", "rm", "--force", layout.container_name(worker)], capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError):
+        pass  # absence is decided by the readback below, never by the rm
     remaining = _container_state(layout, worker, runner)
     if remaining is not None:
         raise EpicWorkspaceError(f"worker {worker!r} container still present ({remaining}); not verified stopped")
-    work, ignored_all = _inspect(layout.checkout(worker), runner=runner, image=image)
     mapping = state["issue_mappings"][str(issue)]
-    needs_takeover = bool(work.get("unique_work")) or any(op.get("status") in _OP_UNRESOLVED for op in mapping.get("publication_ops", []))
-    fields: dict[str, Any] = {"state": "stopped_verified", "stopped_at": _now(), "stop_reason": reason, "work_at_stop": work}
-    if needs_takeover:
-        # Anything that could still be written or published needs reconciliation before a successor writes.
-        fields["takeover"] = {"status": "required", "reason": reason, "at": _now(), "generation": int((mapping.get("takeover") or {}).get("generation", 0))}
-    conversation = mapping.get("conversation")
-    if isinstance(conversation, Mapping):
-        # The hosting container is verified absent, so this conversation can no longer write.
-        fields["conversation"] = {**conversation, "status": CONVERSATION_ENDED, "ended_at": _now()}
-    _record_worker(layout, issue, **fields)
+    if mapping.get("state") == "starting" and not mapping.get("container_id"):
+        # A lost docker-run response may still be in flight at the daemon even after an
+        # absence readback. Do not turn that ambiguity into continuation authority.
+        raise TakeoverRefused("worker launch outcome is unknown; trusted reconciliation is required before continuation")
+    work, ignored_all = _inspect(layout, worker, runner=runner, image=image)
+    stop_id = uuid.uuid4().hex
+
+    def record_stop(entry: dict[str, Any]) -> None:
+        needs_takeover = bool(entry.get("started_at")) or bool(work.get("unique_work")) or any(
+            op.get("status") in _OP_UNRESOLVED
+            for op in entry.get("publication_ops", []) if isinstance(op, Mapping)
+        )
+        entry.update(state="stopped_verified", stopped_at=_now(), stop_id=stop_id, stop_reason=reason, work_at_stop=work)
+        if needs_takeover:
+            entry["takeover"] = {"status": "required", "reason": reason, "at": _now(), "generation": int(_takeover_of(entry).get("generation", 0))}
+        conversation = entry.get("conversation")
+        if isinstance(conversation, Mapping):
+            entry["conversation"] = {**conversation, "status": CONVERSATION_ENDED, "ended_at": _now()}
+
+    _mutate_mapping(layout, worker, record_stop)
     work = dict(work)
+    work["stop_id"] = stop_id
     work["checkpoint"] = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image)
     return work
+
+
+@_serialized_worker
+def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
+    return _stop_worker(layout, worker, reason=reason, runner=runner, image=image)
+
+
+def _controller_dir(layout: Layout, *parts: str) -> Path:
+    """A controller-owned directory under ``control/``; a symlink anywhere on the path is refused."""
+
+    path = layout.epic_dir
+    for part in ("control", *parts):
+        path = path / part
+        if path.is_symlink():
+            raise EpicWorkspaceError(f"controller path {path} is a symlink; refusing")
+        path.mkdir(mode=0o700, exist_ok=True)
+        if not path.is_dir() or path.is_symlink():
+            raise EpicWorkspaceError(f"controller path {path} is not a plain directory; refusing")
+    return path
+
+
+_GITDIR_CONFIG = "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = false\n"
+
+
+def _make_gitdir(path: Path, head: str | None) -> None:
+    """Create (or re-verify) a minimal controller-owned git dir without running git.
+
+    Its config is the controller's own, so no worker-planted filter, hook or fsmonitor setting
+    can be read from it; objects of the worker checkout are borrowed through alternates.
+    """
+
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise EpicWorkspaceError(f"git dir {path} is not a plain directory; refusing")
+    path.mkdir(mode=0o700, exist_ok=True)
+    for sub in ("objects", "objects/info", "objects/pack", "refs", "refs/heads", "refs/checkpoints"):
+        entry = path / sub
+        if entry.is_symlink():
+            raise EpicWorkspaceError(f"git dir entry {entry} is a symlink; refusing")
+        entry.mkdir(mode=0o700, exist_ok=True)
+    for name, content in (("config", _GITDIR_CONFIG), ("HEAD", f"{head}\n" if head else "ref: refs/heads/epic-scratch\n")):
+        entry = path / name
+        if entry.is_symlink():
+            raise EpicWorkspaceError(f"git dir entry {entry} is a symlink; refusing")
+        if name == "HEAD" or not entry.exists():
+            entry.write_text(content, encoding="utf-8")
+
+
+@contextmanager
+def _scratch_gitdir(layout: Layout, head: str | None = None) -> Iterator[Path]:
+    path = Path(tempfile.mkdtemp(prefix="git-", dir=_controller_dir(layout, "scratch")))
+    try:
+        _make_gitdir(path, head)
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+_GIT_HARDENING = (
+    "--no-optional-locks",
+    "-c", "core.fsmonitor=false", "-c", "core.ignoreStat=false", "-c", "core.hooksPath=/dev/null",
+    "-c", "core.sparseCheckout=false", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false",
+    "-c", "core.commitGraph=false", "-c", "core.multiPackIndex=false",
+    "-c", "pack.threads=1", "-c", "pack.windowMemory=64m",
+    "-c", f"safe.directory={INSPECT_TARGET}", "-c", f"safe.directory={SCRATCH_TARGET}",
+)
 
 
 def _contained_git(
@@ -527,46 +738,111 @@ def _contained_git(
     *,
     runner: Runner,
     image: str,
-    writable: bool = False,
+    scratch: Path | None = None,
+    scratch_readonly: bool = False,
     env: Mapping[str, str] | None = None,
+    timeout: float = GIT_TIMEOUT,
+    input_data: str | None = None,
 ) -> subprocess.CompletedProcess:
     """Run git against a worker checkout inside a throwaway container.
 
-    The checkout's ``.git/config`` and ``.gitattributes`` are worker-controlled (fsmonitor,
-    filter drivers, hooks). Running git on the host would execute that config as the
-    controller user, so inspection runs contained: no network, no capabilities, uid 1000, only
-    this checkout mounted. The mount is read-only unless a checkpoint write is requested.
+    The checkout is always mounted read-only. Its ``.git/config``, attributes and hooks are
+    worker-controlled, so two modes exist:
+
+    * ``scratch=None``: the worker's own git dir, used only for ref and commit plumbing, with
+      fsmonitor, hooks, ignoreStat and replace objects neutralised.
+    * ``scratch=<controller dir>``: a controller-owned git dir (clean config, empty attribute
+      source, its own index) whose work tree is the read-only checkout and whose objects borrow the
+      checkout's through alternates. Filters cannot run: none are configured and no worker
+      attributes are read. Everything git writes lands in the scratch dir.
+
+    A call that exceeds ``timeout`` is killed and reported as a failure, so a hung command is
+    treated as unreadable evidence, never as a clean result.
     """
 
+    git_dir = checkout / ".git"
+    if checkout.is_symlink() or git_dir.is_symlink() or not git_dir.is_dir() or (git_dir / "objects").is_symlink():
+        raise EpicWorkspaceError("checkout or git directory is missing or a symlink")
     source = str(checkout.resolve(strict=True))
     if not _MOUNT_PATH.match(source):
         raise EpicWorkspaceError("checkout path contains unsafe characters")
-    extra_env: list[str] = []
-    for key, value in (env or {}).items():
+    environment: dict[str, str] = {
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0", "GIT_ATTR_NOSYSTEM": "1",
+    }
+    mounts = [f"type=bind,source={source},target={INSPECT_TARGET},readonly"]
+    extra_config: list[str] = []
+    if scratch is None:
+        environment["GIT_DIR"] = f"{INSPECT_TARGET}/.git"
+    else:
+        scratch_source = str(scratch.resolve(strict=True))
+        if scratch.is_symlink() or not _MOUNT_PATH.match(scratch_source):
+            raise EpicWorkspaceError("scratch path is a symlink or contains unsafe characters")
+        mounts.append(f"type=bind,source={scratch_source},target={SCRATCH_TARGET}" + (",readonly" if scratch_readonly else ""))
+        environment.update({
+            "GIT_DIR": SCRATCH_TARGET, "GIT_WORK_TREE": INSPECT_TARGET, "GIT_INDEX_FILE": f"{SCRATCH_TARGET}/index",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": f"{INSPECT_TARGET}/.git/objects", "GIT_ATTR_SOURCE": EMPTY_TREE,
+        })
+        extra_config = ["-c", f"core.excludesFile={INSPECT_TARGET}/.git/info/exclude"]
+    environment.update(env or {})
+    env_args: list[str] = []
+    for key, value in environment.items():
         if not _ENV_KEY.match(key) or "\n" in value or "\x00" in value:
             raise EpicWorkspaceError(f"invalid environment entry {key!r}")
-        extra_env += ["--env", f"{key}={value}"]
-    mount = f"type=bind,source={source},target={INSPECT_TARGET}" + ("" if writable else ",readonly")
+        env_args += ["--env", f"{key}={value}"]
+    name = f"{CONTAINER_PREFIX}-git-{uuid.uuid4().hex[:12]}"
     argv = [
-        "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
-        "--security-opt", "no-new-privileges", "--user", WORKER_UID_GID, "--pids-limit", "64",
-        "--memory", "256m", "--tmpfs", "/tmp:rw,nosuid,size=16m", "--env", "HOME=/tmp",
-        "--env", "GIT_CONFIG_NOSYSTEM=1", "--env", "GIT_CONFIG_GLOBAL=/dev/null", *extra_env,
-        "--mount", mount,
+        "docker", "run", "--rm", "--name", name, "--label", "epic-workspace.inspect=1",
+        "--network", "none", "--read-only", "--cap-drop", "ALL",
+        # The writable scratch mount is owned by the controller, which need not have the
+        # worker image's UID. Files the controller cannot read remain unreadable evidence.
+        "--security-opt", "no-new-privileges", "--user", f"{os.geteuid()}:{os.getegid()}", "--pids-limit", "64",
+        "--memory", "256m", "--tmpfs", "/tmp:rw,nosuid,size=16m", "--env", "HOME=/tmp", *env_args,
+        *(["--interactive"] if input_data is not None else []),
+        *[arg for mount in mounts for arg in ("--mount", mount)],
         image,
-        "git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-        "-c", f"safe.directory={INSPECT_TARGET}", "-C", INSPECT_TARGET, *args,
+        "git", *_GIT_HARDENING, *extra_config, "-C", INSPECT_TARGET, *args,
     ]
-    return runner(argv, capture_output=True, text=True, check=False)
+    try:
+        options: dict[str, Any] = {"input": input_data} if input_data is not None else {}
+        return runner(argv, capture_output=True, text=True, check=False, timeout=timeout, **options)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        removed = False
+        try:
+            removal = runner(["docker", "rm", "--force", name], capture_output=True, text=True, check=False, timeout=ENGINE_TIMEOUT)
+            removed = removal.returncode == 0
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        failure = "timed out" if isinstance(exc, subprocess.TimeoutExpired) else "inspection transport failed"
+        detail = f"git {args[0] if args else ''} {failure}"
+        if not removed:
+            detail += f"; inspection cleanup unverified: {name}"
+        return subprocess.CompletedProcess(argv, 124, "", detail)
 
 
 class _Unreadable(Exception):
     pass
 
 
-def is_disposable_cache(path: str) -> bool:
-    parts = [part for part in path.split("/") if part]
-    return bool(parts) and (any(part in DISPOSABLE_CACHE_DIRS for part in parts) or parts[-1].endswith(".pyc"))
+def _assert_plain_git_metadata(checkout: Path) -> None:
+    """Do not let Git silently skip symlinked or unreadable worker metadata."""
+
+    git_dir = checkout / ".git"
+    if git_dir.is_symlink() or not git_dir.is_dir():
+        raise _Unreadable("git directory")
+    count = 0
+
+    def fail(exc: OSError) -> None:
+        raise exc
+
+    for directory, dirs, files in os.walk(git_dir, followlinks=False, onerror=fail):
+        for name in (*dirs, *files):
+            count += 1
+            if count > MAX_GIT_METADATA_ENTRIES:
+                raise _Unreadable("too many git metadata entries")
+            mode = (Path(directory) / name).lstat().st_mode
+            if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise _Unreadable("symlink or special git metadata")
 
 
 def _parse_status(raw: str) -> tuple[list[str], list[str]]:
@@ -588,71 +864,224 @@ def _parse_status(raw: str) -> tuple[list[str], list[str]]:
     return changed, ignored
 
 
-def _inspect(checkout: Path, *, runner: Runner, image: str) -> tuple[dict[str, Any], list[str]]:
-    """Return (summary, every non-disposable ignored path). Unreadable evidence is unique work."""
+def _source_tips(layout: Layout) -> list[str]:
+    """Object ids of controller-owned ``source.git`` refs (read without running git)."""
 
+    source = layout.source
+    if source.is_symlink() or not source.is_dir():
+        raise _Unreadable("controller source repository")
+    refs: dict[str, str] = {}
+    symbolic: dict[str, str] = {}
+    packed_path = source / "packed-refs"
+    if packed_path.is_symlink():
+        raise _Unreadable("symlinked packed controller refs")
+    try:
+        packed = packed_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        packed = ""
+    for line in packed.splitlines():
+        if not line or line[0] in "#^":
+            continue
+        sha, _, ref = line.partition(" ")
+        if not _OID.match(sha) or not ref.startswith("refs/"):
+            raise _Unreadable("packed controller ref")
+        refs[ref] = sha
+    refs_dir = source / "refs"
+    if refs_dir.is_symlink() or not refs_dir.is_dir():
+        raise _Unreadable("controller refs directory")
+
+    def fail(exc: OSError) -> None:
+        raise exc
+
+    for directory, dirs, files in os.walk(refs_dir, followlinks=False, onerror=fail):
+        if any((Path(directory) / name).is_symlink() for name in dirs):
+            raise _Unreadable("symlinked controller refs")
+        for name in files:
+            path = Path(directory) / name
+            ref = "refs/" + path.relative_to(refs_dir).as_posix()
+            if path.is_symlink() or not path.is_file():
+                raise _Unreadable("controller ref")
+            value = path.read_text(encoding="utf-8").strip()
+            # A loose ref always overrides a packed value, including symbolic refs.
+            refs.pop(ref, None)
+            if _OID.match(value):
+                refs[ref] = value
+            elif value.startswith("ref: refs/"):
+                symbolic[ref] = value[5:]
+            else:
+                raise _Unreadable("malformed controller ref")
+    for ref in symbolic:
+        target = ref
+        seen: set[str] = set()
+        while target in symbolic:
+            if target in seen:
+                raise _Unreadable("cyclic controller ref")
+            seen.add(target)
+            target = symbolic[target]
+        if target not in refs:
+            raise _Unreadable("unresolved controller ref")
+    return sorted(set(refs.values()))
+
+
+def _published_tips(layout: Layout, worker: str) -> list[str]:
+    """Everything that counts as published, from controller-held evidence only.
+
+    That is the refs of ``source.git`` plus the commit ids the coordinator recorded in
+    run-state when it completed or reconciled a publication from GitHub readback. Nothing the worker
+    can write (remote-tracking refs, tags, checkpoint-looking refs) is ever consulted.
+    """
+
+    tips = set(_source_tips(layout))
+    for mapping in _load_state(layout).get("issue_mappings", {}).values():
+        if isinstance(mapping, Mapping) and mapping.get("worker") == worker:
+            for head in mapping.get("published_heads", []):
+                if isinstance(head, Mapping) and isinstance(head.get("sha"), str) and _OID.match(head["sha"]):
+                    tips.add(head["sha"])
+    if len(tips) > MAX_PUBLISHED_TIPS:
+        raise _Unreadable("published tips")
+    return sorted(tips)
+
+
+def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tuple[dict[str, Any], list[str]]:
+    """Return (summary, ignored paths). Unreadable evidence is unique work."""
+
+    checkout = layout.checkout(worker)
+    if checkout.is_symlink():
+        return {"present": True, "readable": False, "unique_work": True}, []
     if not checkout.is_dir():
-        return {"present": False}, []
+        return {"present": False, "readable": False, "unique_work": True}, []
 
-    def git(*args: str) -> str:
-        result = _contained_git(checkout, args, runner=runner, image=image)
-        if result.returncode != 0:
+    def git(*args: str, scratch: Path | None = None) -> str:
+        result = _contained_git(checkout, args, runner=runner, image=image, scratch=scratch)
+        if result.returncode != 0 or (result.stderr or "").strip():
             raise _Unreadable(args[0])
         return result.stdout or ""
 
     try:
+        _assert_plain_git_metadata(checkout)
         _assert_engine(runner)
-        head = git("rev-parse", "HEAD").strip()
-        abbrev = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+        tips = _published_tips(layout, worker)
+        identity = git("rev-parse", "HEAD", "--abbrev-ref", "HEAD").split()
+        if len(identity) != 2 or not _OID.match(identity[0]):
+            raise _Unreadable("rev-parse")
+        head, abbrev = identity
         branch = None if abbrev == "HEAD" else abbrev
-        changed, ignored_all = _parse_status(git("status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"))
-        ignored = [path for path in ignored_all if not is_disposable_cache(path)]
-        head_unpublished = int(git("rev-list", "--count", "HEAD", "--not", "--remotes").strip() or 0)
-        other_branches: list[dict[str, Any]] = []
-        checkpoint_refs: list[str] = []
+        # Content: a fresh index in a controller-owned git dir, so skip-worktree, assume-unchanged,
+        # core.ignoreStat and worker-planted filters cannot hide an edit.
+        with _scratch_gitdir(layout, head) as scratch:
+            git("read-tree", head, scratch=scratch)
+            status_changed, ignored_all = _parse_status(git(
+                "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching",
+                "--ignore-submodules=none", "--no-renames", scratch=scratch,
+            ))
+            # A cache-looking name does not prove its contents are reproducible. Preserve
+            # all ignored paths until a separate, qualified disposal decision exists.
+            ignored = ignored_all
+            # The scratch index starts at HEAD rather than the worker's index, so its flags and
+            # cached stat information cannot suppress a modified file. The scratch configuration
+            # and empty attribute source keep worker filters out of both add operations.
+            git("add", "-A", "--", ".", scratch=scratch)
+            indexed_changed = [p for p in git("diff-index", "--cached", "--name-only", "-z", head, scratch=scratch).split("\0") if p]
+            changed = sorted(set(status_changed) | set(indexed_changed))
+            for offset in range(0, len(ignored), 100):
+                result = _contained_git(
+                    checkout, ["add", "-f", "-A", "--", *ignored[offset:offset + 100]],
+                    runner=runner, image=image, scratch=scratch, env={"GIT_LITERAL_PATHSPECS": "1"},
+                )
+                if result.returncode != 0 or (result.stderr or "").strip():
+                    raise _Unreadable("add ignored paths")
+            gitlinks = [
+                entry.split("\t", 1)[1] for entry in git("ls-files", "--stage", "-z", scratch=scratch).split("\0")
+                if entry.startswith("160000 ") and "\t" in entry
+            ]
+            # A gitlink does not capture a nested worktree's ignored or uncommitted files.
+            if gitlinks:
+                raise _Unreadable("nested repository")
+            snapshot_tree = git("write-tree", scratch=scratch).strip()
+            if not _OID.match(snapshot_tree):
+                raise _Unreadable("snapshot tree")
+        refs = [tuple(line.split(" ", 1)) for line in git("for-each-ref", "--format=%(objectname) %(refname)").splitlines() if line]
+        if len(refs) > MAX_RETAINED_REFS or any(len(item) != 2 or not _OID.match(item[0]) for item in refs):
+            raise _Unreadable("refs")
         stash_shas: list[str] = []
-        for line in git("for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/stash", CHECKPOINT_REF_PREFIX.rstrip("/")).splitlines():
-            sha, _, ref = line.partition(" ")
-            if ref.startswith(CHECKPOINT_REF_PREFIX):
-                checkpoint_refs.append(ref)
-            elif ref == "refs/stash":
-                stash_shas = [s for s in git("reflog", "show", "--format=%H", "refs/stash").split() if s] or [sha]
-            elif ref != f"refs/heads/{branch}":
-                count = int(git("rev-list", "--count", sha, "--not", "--remotes").strip() or 0)
-                if count:
-                    other_branches.append({"ref": ref, "unpublished": count})
-        stash_unpublished = int(git("rev-list", "--count", *stash_shas, "--not", "--remotes").strip() or 0) if stash_shas else 0
-    except (EpicWorkspaceError, _Unreadable, ValueError):
+        if any(ref == "refs/stash" for _sha, ref in refs):
+            stash_shas = [sha for sha in git("reflog", "show", "--format=%H", "refs/stash").split() if _OID.match(sha)]
+        extra_heads = sorted({
+            line.split(" ", 1)[1] for line in git("worktree", "list", "--porcelain").splitlines()
+            if line.startswith("HEAD ") and _OID.match(line.split(" ", 1)[1])
+        })
+        refs_fingerprint = hashlib.sha256(
+            json.dumps([refs, extra_heads, stash_shas], ensure_ascii=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        existing: list[str] = []
+        if tips:
+            existing = [sha for sha in git("rev-list", "--no-walk", "--ignore-missing", *tips).split() if _OID.match(sha)]
+        not_published = ["--not", *existing] if existing else []
+
+        def count(*positive: str) -> int:
+            return int(git("rev-list", "--count", *positive, *not_published).strip() or 0)
+
+        unpublished_total = count("--all", *extra_heads, *stash_shas)
+        head_unpublished = 0
+        other_branches: list[dict[str, Any]] = []
+        other_refs: list[dict[str, Any]] = []
+        stash_unpublished = 0
+        detail_truncated = False
+        if unpublished_total:
+            head_unpublished = count("HEAD")
+            stash_unpublished = count(*stash_shas) if stash_shas else 0
+            queries = 0
+            for sha, ref in refs:
+                if ref == "refs/stash" or ref == f"refs/heads/{branch}":
+                    continue
+                if queries >= MAX_DETAIL_QUERIES:
+                    detail_truncated = True
+                    break
+                queries += 1
+                unpublished = count(sha)
+                if unpublished:
+                    (other_branches if ref.startswith("refs/heads/") else other_refs).append({"ref": ref, "unpublished": unpublished})
+    except Exception:  # noqa: BLE001 - any failure to read evidence is unique work (fail safe)
         return {"present": True, "readable": False, "unique_work": True}, []
     summary = {
         "present": True,
         "readable": True,
         "head": head,
         "branch": branch,
+        "snapshot_tree": snapshot_tree,
+        "refs_fingerprint": refs_fingerprint,
+        "retained_refs": [{"ref": ref, "sha": sha} for sha, ref in refs],
+        "retained_heads": extra_heads,
+        "retained_stash": stash_shas,
         "uncommitted_paths": changed[:50],
         "uncommitted_count": len(changed),
         "ignored_paths": ignored[:50],
         "ignored_count": len(ignored),
         "disposable_ignored_count": len(ignored_all) - len(ignored),
+        "published_tip_count": len(existing),
+        "unpublished_total": unpublished_total,
         "unpublished_commits": head_unpublished,
         "other_branches": other_branches,
+        "other_refs": other_refs,
+        "detail_truncated": detail_truncated,
         "stash_entries": len(stash_shas),
         "stash_unpublished": stash_unpublished,
-        "checkpoint_refs": sorted(checkpoint_refs),
-        "unique_work": bool(changed or ignored or head_unpublished or other_branches or stash_unpublished),
+        "unique_work": bool(changed or ignored or unpublished_total),
     }
     return summary, ignored
 
 
-def inspect_checkout(checkout: Path, *, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
-    """Classify a checkout's unique work without executing worker-controlled config on the host.
+def inspect_checkout(layout: Layout, worker: str, *, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
+    """Classify a worker checkout's unique work without executing worker-controlled config.
 
-    Unique work is: uncommitted or untracked files, ignored files that are not explicitly
-    disposable caches, commits on any local branch or in the stash that no remote ref contains,
-    and anything that cannot be read (fail safe).
+    Unique work is: uncommitted or untracked files (decided against a fresh index), ignored files,
+    any commit reachable from any ref, the stash or a
+    linked worktree HEAD that is not reachable from controller-held published evidence, and
+    anything that cannot be read (fail safe). "Published" is never inferred from refs in the
+    checkout.
     """
 
-    return _inspect(checkout, runner=runner, image=image)[0]
+    return _inspect(layout, worker, runner=runner, image=image)[0]
 
 
 def checkout_branch(checkout: Path, *, runner: Runner, image: str = DEFAULT_IMAGE) -> str | None:
@@ -695,9 +1124,9 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
             "model": mapping.get("model"),
             "next_action": mapping.get("next_action"),
             "next_authorized_action": next_authorized_action(mapping),
-            "takeover": (mapping.get("takeover") or {}).get("status"),
+            "takeover": _takeover_of(mapping).get("status"),
             "checkpoints": [c.get("ref") for c in mapping.get("checkpoints", []) if c.get("status") == "preserved"],
-            "work": inspect_checkout(layout.checkout(worker), runner=runner),
+            "work": inspect_checkout(layout, worker, runner=runner),
         })
     return {
         "schema": SCHEMA,
@@ -712,9 +1141,24 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
 # --------------------------------------------------------------------------- preservation and takeover
 #
 # Unique work (uncommitted edits, ignored-but-unique files, detached commits) is captured into
-# ``refs/checkpoints/ckpt-NNNN`` inside the worker's own checkout by a contained writable git, only
-# after the worker container is proven absent. The checkpoint never alters the working tree or the
-# real index. Commits on local branches and the stash already live in refs and are reported, not copied.
+# ``refs/checkpoints/ckpt-NNNN`` of a controller-owned repo (``control/checkpoints/<worker>.git``), only
+# after the worker container is proven absent. The worker checkout is mounted read-only and never
+# written, and no worker-planted config, attribute or filter is consulted. Objects reachable from
+# worker refs, stash reflogs and linked-worktree HEADs are also retained in the controller repo.
+
+
+def _checkpoint_repo(layout: Layout, worker: str) -> Path:
+    repo = _controller_dir(layout, "checkpoints") / f"{validate_worker_id(worker)}.git"
+    _make_gitdir(repo, None)
+    return repo
+
+
+def _checkpoint_index(repo: Path) -> Path:
+    index = repo / "epic-checkpoint.index"
+    if index.is_symlink():
+        raise EpicWorkspaceError("checkpoint index path is a symlink; refusing")
+    index.unlink(missing_ok=True)
+    return index
 
 
 def _checkpoint(
@@ -724,43 +1168,119 @@ def _checkpoint(
         return None
     if not work.get("readable"):
         return None  # kept intact as unique work; takeover and retirement refuse on it
-    if not (work["uncommitted_count"] or work["ignored_count"] or (work["branch"] is None and work["unpublished_commits"])):
+    mapping = _load_state(layout)["issue_mappings"][str(issue)]
+    if mapping.get("checkpoint_inspection_unknown"):
+        raise EpicWorkspaceError("checkpoint inspection cleanup is unknown; trusted reconciliation is required")
+    if not work.get("unique_work"):
         return None
     checkout = layout.checkout(worker)
-    if not (checkout / ".git").is_dir() or (checkout / ".git").is_symlink():
-        raise EpicWorkspaceError("checkout .git is not a plain directory; cannot checkpoint")
+    if (checkout / ".git" / "epic-checkpoint.index").is_symlink():
+        raise EpicWorkspaceError("worker checkpoint index path is a symlink; refusing")
+    repo = _checkpoint_repo(layout, worker)
+    index = _checkpoint_index(repo)
     base_env = {
-        "GIT_INDEX_FILE": CHECKPOINT_INDEX,
+        "GIT_INDEX_FILE": f"{SCRATCH_TARGET}/{index.name}",
         "GIT_AUTHOR_NAME": "epic-workspace", "GIT_AUTHOR_EMAIL": "epic-workspace@localhost",
         "GIT_COMMITTER_NAME": "epic-workspace", "GIT_COMMITTER_EMAIL": "epic-workspace@localhost",
     }
 
-    def git(*args: str, env: Mapping[str, str] | None = None) -> str:
-        result = _contained_git(checkout, args, runner=runner, image=image, writable=True, env={**base_env, **(env or {})})
+    def git(*args: str, env: Mapping[str, str] | None = None, input_data: str | None = None) -> str:
+        result = _contained_git(
+            checkout, args, runner=runner, image=image, scratch=repo, env={**base_env, **(env or {})},
+            timeout=GIT_WRITE_TIMEOUT, input_data=input_data,
+        )
         if result.returncode != 0:
+            if result.returncode == 124 and "inspection cleanup unverified" in (result.stderr or ""):
+                def mark_unknown(entry: dict[str, Any]) -> None:
+                    entry["checkpoint_inspection_unknown"] = {"at": _now(), "detail": result.stderr}
+                    entry["takeover"] = {
+                        "status": "required", "generation": int(_takeover_of(entry).get("generation", 0)),
+                        "reason": "checkpoint inspection cleanup is unknown", "at": _now(),
+                    }
+
+                _mutate_mapping(layout, worker, mark_unknown)
             raise EpicWorkspaceError(f"checkpoint step {args[0]} failed: {(result.stderr or '').strip()[:200]}")
         return (result.stdout or "").strip()
 
     head = work["head"]
-    git("read-tree", head)
-    git("add", "-A", "--", ".")
-    for offset in range(0, len(ignored_all), 100):
-        git("add", "-f", "-A", "--", *ignored_all[offset:offset + 100], env={"GIT_LITERAL_PATHSPECS": "1"})
-    tree = git("write-tree")
+    try:
+        git("read-tree", head)
+        git("add", "-A", "--", ".")
+        for offset in range(0, len(ignored_all), 100):
+            git("add", "-f", "-A", "--", *ignored_all[offset:offset + 100], env={"GIT_LITERAL_PATHSPECS": "1"})
+        tree = git("write-tree")
+    finally:
+        _checkpoint_index(repo)
     mapping = _load_state(layout)["issue_mappings"][str(issue)]
-    for prior in mapping.get("checkpoints", []):
-        if prior.get("tree") == tree and prior.get("head") == head and prior.get("status") == "preserved" and _checkpoint_present(checkout, prior, runner, image):
-            return prior
-    commit = git("commit-tree", tree, "-p", head, "-m", f"epic-workspace checkpoint ({worker}): {reason[:120]}")
-    ref = f"{CHECKPOINT_REF_PREFIX}ckpt-{len(mapping.get('checkpoints', [])) + 1:04d}"
-    git("update-ref", ref, commit, "")  # empty old value: the ref must not already exist
-    record = {
-        "ref": ref, "commit": commit, "tree": tree, "head": head, "branch": work["branch"], "reason": reason, "at": _now(),
-        "uncommitted_count": work["uncommitted_count"], "ignored_count": work["ignored_count"], "status": "preserved",
-    }
-    if not _checkpoint_present(checkout, record, runner, image):
-        raise EpicWorkspaceError(f"checkpoint {ref} could not be read back")
+    recorded = {c.get("ref"): c for c in mapping.get("checkpoints", []) if isinstance(c, Mapping)}
+    present: dict[str, tuple[str, str, str]] = {}
+    for line in git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(tree)%00%(parent)", CHECKPOINT_REF_PREFIX.rstrip("/")).splitlines():
+        parts = line.split("\0")
+        if len(parts) != 4:
+            raise EpicWorkspaceError("checkpoint ref is unreadable; preserving checkout")
+        ref, commit, ref_tree, parents = parts
+        parent_parts = parents.split()
+        parent = parent_parts[0] if len(parent_parts) == 1 else ""
+        present[ref] = (commit, ref_tree, parent)
+    # A ref already holding this exact checkpoint (an earlier attempt, or a crash between update-ref
+    # and the run-state write) can be adopted only after its objects are made self-contained.
+    record: dict[str, Any] | None = None
+    already_recorded = False
+    for ref, (commit, ref_tree, parent) in sorted(present.items()):
+        if ref_tree == tree and parent == head:
+            prior = recorded.get(ref)
+            if (prior and prior.get("status") == "preserved" and prior.get("commit") == commit
+                    and prior.get("refs_fingerprint") == work["refs_fingerprint"]):
+                record = dict(prior)
+                already_recorded = True
+                break
+            if prior is None:
+                record = {
+                    "ref": ref, "commit": commit, "tree": tree, "head": head, "branch": work["branch"], "reason": reason, "at": _now(),
+                    "uncommitted_count": work["uncommitted_count"], "ignored_count": work["ignored_count"], "status": "preserved", "adopted": True,
+                }
+                break
+    if record is None:
+        numbers = [int(m.group(1)) for ref in (*present, *recorded) if isinstance(ref, str) and (m := _CKPT_REF.match(ref))]
+        ref = f"{CHECKPOINT_REF_PREFIX}ckpt-{(max(numbers) if numbers else 0) + 1:04d}"
+        commit = git("commit-tree", tree, "-p", head, "-m", f"epic-workspace checkpoint ({worker}): {reason[:120]}")
+        git("update-ref", ref, commit, "")  # empty old value: the ref must not already exist
+        record = {
+            "ref": ref, "commit": commit, "tree": tree, "head": head, "branch": work["branch"], "reason": reason, "at": _now(),
+            "uncommitted_count": work["uncommitted_count"], "ignored_count": work["ignored_count"], "status": "preserved",
+        }
 
+    retained = {head, *work["retained_heads"], *work["retained_stash"]}
+    retained.update(item["sha"] for item in work["retained_refs"])
+    if len(retained) > MAX_RETAINED_REFS or any(not _OID.match(sha) for sha in retained):
+        raise EpicWorkspaceError("too many or invalid retained objects; preserving checkout")
+    existing_retained = dict(
+        line.split(" ", 1) for line in git("for-each-ref", "--format=%(refname) %(objectname)", "refs/retained").splitlines()
+    )
+    create_refs: list[str] = []
+    for sha in sorted(retained):
+        ref = f"refs/retained/{sha}"
+        if ref in existing_retained and existing_retained[ref] != sha:
+            raise EpicWorkspaceError("retained ref collision; preserving checkout")
+        if ref not in existing_retained:
+            create_refs.append(f"create {ref} {sha}\n")
+    if create_refs:
+        git("update-ref", "--stdin", input_data="".join(create_refs))
+    # Repack reachable objects from the read-only checkout into the controller-owned repo. A
+    # subsequent connectivity check with alternates disabled proves the ref is independently
+    # readable; interruption leaves the checkout intact and the next attempt can retry.
+    git("repack", "-a", "-d")
+    git("fsck", "--connectivity-only", "--no-reflogs", env={"GIT_ALTERNATE_OBJECT_DIRECTORIES": ""})
+    record.update(
+        refs_fingerprint=work["refs_fingerprint"], retained_refs=work["retained_refs"],
+        retained_heads=work["retained_heads"], retained_stash=work["retained_stash"],
+    )
+    if not _checkpoint_present(checkout, repo, record, runner, image):
+        raise EpicWorkspaceError(f"checkpoint {record['ref']} could not be read back")
+    return record if already_recorded else _record_checkpoint(layout, issue, record)
+
+
+def _record_checkpoint(layout: Layout, issue: int, record: dict[str, Any]) -> dict[str, Any]:
     def updater(state: dict[str, Any]) -> dict[str, Any]:
         entry = state["issue_mappings"][str(issue)]
         entry["checkpoints"] = [*entry.get("checkpoints", []), record]
@@ -771,15 +1291,17 @@ def _checkpoint(
     return record
 
 
-def _checkpoint_present(checkout: Path, record: Mapping[str, Any], runner: Runner, image: str) -> bool:
-    result = _contained_git(checkout, ["rev-parse", "--verify", "--quiet", f"{record['ref']}^{{tree}}"], runner=runner, image=image)
-    commit = _contained_git(checkout, ["rev-parse", "--verify", "--quiet", f"{record['ref']}^{{commit}}"], runner=runner, image=image)
-    return (
-        result.returncode == 0 and (result.stdout or "").strip() == record["tree"]
-        and commit.returncode == 0 and (commit.stdout or "").strip() == record["commit"]
-    )
+def _checkpoint_present(checkout: Path, repo: Path, record: Mapping[str, Any], runner: Runner, image: str) -> bool:
+    def rev(spec: str) -> str | None:
+        result = _contained_git(checkout, ["rev-parse", "--verify", "--quiet", spec], runner=runner, image=image, scratch=repo, scratch_readonly=True,
+                                env={"GIT_ALTERNATE_OBJECT_DIRECTORIES": ""})
+        return (result.stdout or "").strip() if result.returncode == 0 else None
+
+    return (rev(f"{record['ref']}^{{tree}}") == record["tree"] and rev(f"{record['ref']}^{{commit}}") == record["commit"]
+            and rev(f"{record['ref']}^1") == record["head"])
 
 
+@_serialized_worker
 def checkpoint_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any] | None:
     """Checkpoint a worker whose container is already proven absent; refuse otherwise."""
 
@@ -788,16 +1310,20 @@ def checkpoint_worker(layout: Layout, worker: str, *, reason: str, runner: Runne
     _assert_engine(runner)
     if _container_state(layout, worker, runner) is not None:
         raise EpicWorkspaceError("worker container is present; a checkpoint would compete with it. Stop it first")
-    work, ignored_all = _inspect(layout.checkout(worker), runner=runner, image=image)
-    if work.get("present") and not work.get("readable"):
-        raise EpicWorkspaceError("checkout is unreadable; it is kept intact as unique work and cannot be checkpointed")
+    work, ignored_all = _inspect(layout, worker, runner=runner, image=image)
+    if not work.get("readable"):
+        raise EpicWorkspaceError("checkout is missing or unreadable; it is treated as unique work and cannot be checkpointed")
     return _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image)
 
 
+@_serialized_worker
 def release_checkpoint(
     layout: Layout, worker: str, *, ref: str, published_commit: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE
 ) -> dict[str, Any]:
-    """Mark a checkpoint superseded once every path it captured is identical in a published commit."""
+    """Mark a checkpoint superseded once every path it captured is identical in a published commit.
+
+    ``published_commit`` must itself be reachable from controller-held published evidence.
+    """
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
@@ -805,19 +1331,31 @@ def release_checkpoint(
     record = next((c for c in mapping.get("checkpoints", []) if c.get("ref") == ref), None)
     if record is None or record.get("status") != "preserved":
         raise EpicWorkspaceError(f"no preserved checkpoint {ref!r} for worker {worker!r}")
-    if not re.fullmatch(r"[0-9a-f]{40,64}", published_commit):
+    if not _OID.match(published_commit):
         raise EpicWorkspaceError("published commit must be a full object id")
     _assert_engine(runner)
     checkout = layout.checkout(worker)
+    repo = _checkpoint_repo(layout, worker)
 
     def read(*args: str, env: Mapping[str, str] | None = None) -> str:
-        result = _contained_git(checkout, args, runner=runner, image=image, env=env)
+        result = _contained_git(checkout, args, runner=runner, image=image, scratch=repo, scratch_readonly=True, env=env)
         if result.returncode != 0:
             raise EpicWorkspaceError(f"cannot verify release: {args[0]} failed")
         return result.stdout or ""
 
-    if int(read("rev-list", "--count", published_commit, "--not", "--remotes").strip() or 1) != 0:
-        raise EpicWorkspaceError("commit is not contained in a remote ref; not published")
+    try:
+        tips = _published_tips(layout, worker)
+    except (_Unreadable, OSError, UnicodeError, epic_run_state.EpicRunStateError) as exc:
+        raise EpicWorkspaceError("cannot verify release: published evidence is unreadable") from exc
+    existing = [sha for sha in read("rev-list", "--no-walk", "--ignore-missing", *tips).split() if _OID.match(sha)] if tips else []
+    if not existing or int(read("rev-list", "--count", published_commit, "--not", *existing).strip() or 1) != 0:
+        raise EpicWorkspaceError("commit is not reachable from controller-held published evidence; not published")
+    retained = {record["head"], *record.get("retained_heads", []), *record.get("retained_stash", [])}
+    retained.update(item["sha"] for item in record.get("retained_refs", []))
+    if not all(isinstance(sha, str) and _OID.match(sha) for sha in retained):
+        raise EpicWorkspaceError("checkpoint retained object evidence is malformed")
+    if int(read("rev-list", "--count", *sorted(retained), "--not", *existing).strip() or 1) != 0:
+        raise EpicWorkspaceError("checkpoint contains retained commits not published by the coordinator")
     paths = [p for p in read("diff", "--name-only", "-z", f"{record['head']}", record["commit"]).split("\0") if p]
     for offset in range(0, len(paths), 100):
         differing = read("diff", "--name-only", record["commit"], published_commit, "--", *paths[offset:offset + 100], env={"GIT_LITERAL_PATHSPECS": "1"}).split()
@@ -856,12 +1394,13 @@ def _mutate_mapping(layout: Layout, worker: str, mutate: Callable[[dict[str, Any
     return box[0]
 
 
+@_serialized_worker
 def begin_publication(layout: Layout, worker: str, *, kind: str, expect_sha: str | None = None) -> dict[str, Any]:
     """Record the intent to publish the worker's branch. Refused while an earlier attempt is unresolved."""
 
     if kind not in PUBLICATION_KINDS:
         raise EpicWorkspaceError(f"unknown publication kind {kind!r}")
-    if expect_sha is not None and not re.fullmatch(r"[0-9a-f]{40,64}", expect_sha):
+    if expect_sha is not None and not _OID.match(expect_sha):
         raise EpicWorkspaceError("expect_sha must be a full object id")
 
     def mutate(entry: dict[str, Any]) -> dict[str, Any]:
@@ -899,15 +1438,44 @@ def complete_publication(layout: Layout, worker: str, *, op_id: str, result: Map
         op = _find_op(entry, op_id)
         if op["status"] != "intended":
             raise EpicWorkspaceError(f"{op_id} is {op['status']}, not intended")
+        sha = result.get("sha")
+        if not isinstance(sha, str) or not _OID.match(sha):
+            raise EpicWorkspaceError("result sha must be a full object id")
+        if result.get("branch") != op["branch"] or op.get("expect_sha") not in (None, sha):
+            raise EpicWorkspaceError("publication readback does not match the intended branch and head")
+        if op["kind"] == "pr_create" and (
+            type(result.get("number")) is not int or result["number"] <= 0
+        ):
+            raise EpicWorkspaceError("pull request readback must include its positive number")
         op.update(status="confirmed", confirmed_at=_now(), result=_publication_result(result))
+        _record_published_head(entry, op)
         return dict(op)
 
     return _mutate_mapping(layout, worker, mutate)
 
 
 def _publication_result(value: Mapping[str, Any]) -> dict[str, Any]:
-    allowed = {"number": int, "url": str, "sha": str, "state": str}
-    return {k: value[k] for k, t in allowed.items() if isinstance(value.get(k), t) and not isinstance(value.get(k), bool)}
+    allowed = {"number": int, "url": str, "sha": str, "state": str, "branch": str}
+    result = {k: value[k] for k, t in allowed.items() if isinstance(value.get(k), t) and not isinstance(value.get(k), bool)}
+    if "sha" in result and not _OID.match(result["sha"]):
+        del result["sha"]
+    return result
+
+
+def _record_published_head(entry: dict[str, Any], op: Mapping[str, Any]) -> None:
+    """Remember the commit GitHub readback showed on the remote branch or PR head.
+
+    This is the only worker-independent evidence that commits are published: squash merges leave
+    worker commits out of main, so the exact head the coordinator observed is what counts.
+    """
+
+    sha = (op.get("result") or {}).get("sha")
+    if not isinstance(sha, str) or not _OID.match(sha):
+        return
+    heads = list(entry.get("published_heads", []))
+    if sha not in [h.get("sha") for h in heads if isinstance(h, Mapping)]:
+        heads.append({"sha": sha, "op": op["id"], "kind": op["kind"], "at": _now()})
+    entry["published_heads"] = heads
 
 
 def _judge_readback(op: Mapping[str, Any], readback: Mapping[str, Any] | None) -> tuple[str, dict[str, Any], str | None]:
@@ -919,21 +1487,31 @@ def _judge_readback(op: Mapping[str, Any], readback: Mapping[str, Any] | None) -
         branch = readback.get("branch")
         if not isinstance(branch, Mapping) or not isinstance(branch.get("exists"), bool):
             return "quarantined", {}, "branch readback malformed"
+        if branch.get("name") != op["branch"]:
+            return "quarantined", {}, "branch readback does not identify the intended branch"
         if not branch["exists"]:
             return "absent_confirmed", {}, None
         sha = branch.get("sha")
-        if not isinstance(sha, str):
-            return "quarantined", {}, "branch sha missing"
+        if not isinstance(sha, str) or not _OID.match(sha):
+            return "quarantined", {}, "branch sha missing or malformed"
         if op.get("expect_sha") in (None, sha):
-            return "confirmed", {"sha": sha}, None
+            return "confirmed", {"sha": sha, "branch": op["branch"]}, None
         return "quarantined", {"sha": sha}, "remote branch differs from the intended commit"
     prs = readback.get("pull_requests")
+    if readback.get("branch") != op["branch"]:
+        return "quarantined", {}, "pull request readback does not identify the intended branch"
     if not isinstance(prs, list) or not all(isinstance(pr, Mapping) for pr in prs):
         return "quarantined", {}, "pull request readback malformed"
     if not prs:
         return "absent_confirmed", {}, None
     if len(prs) == 1:
-        return "confirmed", _publication_result(prs[0]), None
+        pr = prs[0]
+        sha = pr.get("sha")
+        if (type(pr.get("number")) is not int or pr["number"] <= 0 or pr.get("branch") != op["branch"]
+                or not isinstance(sha, str) or not _OID.match(sha)
+                or op.get("expect_sha") not in (None, sha)):
+            return "quarantined", {}, "pull request readback does not establish the intended branch and head"
+        return "confirmed", _publication_result(pr), None
     return "quarantined", {}, "several pull requests exist for the branch"
 
 
@@ -949,6 +1527,8 @@ def reconcile_publication(layout: Layout, worker: str, *, op_id: str, readback: 
         op.pop("reason", None)
         if reason:
             op["reason"] = reason
+        if status == "confirmed":
+            _record_published_head(entry, op)
         return dict(op)
 
     return _mutate_mapping(layout, worker, mutate)
@@ -963,9 +1543,13 @@ def next_authorized_action(mapping: Mapping[str, Any]) -> dict[str, Any]:
     ops = [op for op in mapping.get("publication_ops", []) if isinstance(op, Mapping)]
     blocked = [{"id": op["id"], "kind": op["kind"], "status": op["status"], "reason": op.get("reason")} for op in ops if op["status"] in _OP_UNRESOLVED]
     retry = [op["kind"] for op in ops if op["status"] == "absent_confirmed" and not op.get("superseded_by")]
-    takeover = mapping.get("takeover") if isinstance(mapping.get("takeover"), Mapping) else {}
+    takeover = _takeover_of(mapping)
     if mapping.get("state") == "retired":
         action = "none: worker retired"
+    elif mapping.get("checkpoint_inspection_unknown"):
+        action = "trusted controller must reconcile the unknown checkpoint inspection before continuation"
+    elif mapping.get("state") == "starting" and not mapping.get("container_id"):
+        action = "trusted controller must reconcile the unknown worker launch before continuation"
     elif takeover.get("status") == "required":
         action = "run takeover: reconcile files and publication before any successor writes"
     elif takeover.get("status") == "authorized":
@@ -990,14 +1574,13 @@ def continuation_brief(layout: Layout, worker: str) -> dict[str, Any]:
     brief: dict[str, Any] = {
         "schema": "epic_continuation_brief.v1",
         "epic": layout.epic, "issue": issue, "worker": worker, "branch": mapping.get("branch"),
-        "generation": (mapping.get("takeover") or {}).get("generation"),
+        "generation": _takeover_of(mapping).get("generation"),
         "next_authorized_action": action,
         "checkpoints": checkpoints,
         "publication_operations": [
             {k: op.get(k) for k in ("id", "kind", "status", "result", "reason")} for op in mapping.get("publication_ops", [])
         ],
         "predecessors": [{k: c.get(k) for k in ("id", "engine", "model", "status")} for c in conversations],
-        "history_path": f"{CONTAINER_HOME}/openhands/conversations",
     }
     brief["prompt"] = _render_continuation_prompt(brief)
     return brief
@@ -1012,16 +1595,14 @@ def _render_continuation_prompt(brief: Mapping[str, Any]) -> str:
         f"Next authorized action: {action['action']}",
     ]
     if brief["checkpoints"]:
-        lines.append("Safety checkpoints (read-only history, do not delete): " + ", ".join(c["ref"] for c in brief["checkpoints"]))
+        lines.append("Controller-held safety checkpoints of the predecessor's uncommitted and ignored files (the files themselves are still in this checkout): " + ", ".join(c["ref"] for c in brief["checkpoints"]))
     if action["blocked_operations"]:
         lines.append("Do NOT attempt these publication operations; their outcome is unknown and only the coordinator reconciles them: " + ", ".join(f"{b['kind']} ({b['id']})" for b in action["blocked_operations"]))
-    lines += [
-        "You have no GitHub credentials: never push or open pull requests; commit locally and record the state in `.codex-tmp/epic-continuation.md`.",
-        f"Earlier conversation history, if you need it, is under {brief['history_path']}.",
-    ]
+    lines.append("You have no GitHub credentials: never push or open pull requests; commit locally and record the state in `.codex-tmp/epic-continuation.md`.")
     return "\n".join(lines)
 
 
+@_serialized_worker
 def takeover(
     layout: Layout,
     worker: str,
@@ -1044,21 +1625,52 @@ def takeover(
     mapping = state["issue_mappings"][str(issue)]
     if mapping.get("state") == "retired":
         raise TakeoverRefused("worker is retired")
-    current = mapping.get("takeover")
-    if isinstance(current, Mapping) and current.get("status") == "authorized":
+    if mapping.get("checkpoint_inspection_unknown"):
+        raise TakeoverRefused("checkpoint inspection cleanup is unknown; trusted reconciliation is required")
+    if _takeover_of(mapping).get("status") == "authorized":
         return {**continuation_brief(layout, worker), "already_authorized": True}
-    work = stop_worker(layout, worker, reason=f"takeover: {reason}", runner=runner, image=image)
-    if not work.get("readable", work.get("present") is False):
-        raise TakeoverRefused("checkout evidence is unreadable; treated as unique work, no continuation permitted")
+    stopped = _stop_worker(layout, worker, reason=f"takeover: {reason}", runner=runner, image=image)
+    stop_id = stopped.get("stop_id")
+
+    def require_reconciliation(entry: dict[str, Any]) -> None:
+        if entry.get("stop_id") != stop_id or entry.get("state") != "stopped_verified":
+            raise TakeoverRefused("worker state changed after the stop was verified")
+        prior = _takeover_of(entry)
+        entry["takeover"] = {
+            "status": "required", "generation": int(prior.get("generation", 0)),
+            "reason": reason, "at": _now(),
+        }
+
+    # Any later failed validation must leave the start gate closed, even if the first
+    # inspection happened to report a clean checkout.
+    _mutate_mapping(layout, worker, require_reconciliation)
+    # Authorize only from evidence read after the checkpoint, never from the pre-checkpoint view.
+    after, _ignored = _inspect(layout, worker, runner=runner, image=image)
+    if not after.get("present") or not after.get("readable"):
+        raise TakeoverRefused("checkout evidence is missing or unreadable; treated as unique work, no continuation permitted")
+    if after.get("head") != stopped.get("head"):
+        raise TakeoverRefused("checkout HEAD moved while the checkpoint was taken; no continuation permitted")
+    if any(after.get(key) != stopped.get(key) for key in ("snapshot_tree", "refs_fingerprint")):
+        raise TakeoverRefused("checkout content or refs changed while the checkpoint was taken; no continuation permitted")
+    checkpoint = stopped.get("checkpoint")
+    if checkpoint is not None and checkpoint.get("tree") != after.get("snapshot_tree"):
+        raise TakeoverRefused("checkpoint does not match the post-checkpoint checkout; no continuation permitted")
     recorded = mapping.get("branch")
-    if work.get("present") and work.get("branch") != recorded:
-        raise TakeoverRefused(f"checkout is on {work.get('branch')!r} but run-state records {recorded!r}")
+    if after.get("branch") != recorded:
+        raise TakeoverRefused(f"checkout is on {after.get('branch')!r} but run-state records {recorded!r}")
     for op in list(_load_state(layout)["issue_mappings"][str(issue)].get("publication_ops", [])):
         if op["status"] in _OP_UNRESOLVED:
             reconcile_publication(layout, worker, op_id=op["id"], readback=(readbacks or {}).get(op["id"]))
-
+    # The engine is read again immediately before authorizing: a container that appeared since the
+    # stop was verified is a competing writer.
     def mutate(entry: dict[str, Any]) -> None:
-        prior = entry.get("takeover") if isinstance(entry.get("takeover"), Mapping) else {}
+        if entry.get("stop_id") != stop_id or entry.get("state") != "stopped_verified":
+            raise TakeoverRefused("worker state changed after the stop was verified (a start raced the takeover)")
+        _assert_engine(runner)
+        present = _container_state(layout, worker, runner)
+        if present is not None:
+            raise TakeoverRefused(f"worker container is present ({present}); not authorizing a continuation beside it")
+        prior = _takeover_of(entry)
         if prior.get("status") == "authorized":
             raise TakeoverRefused("another continuation is already authorized")
         entry["takeover"] = {
@@ -1070,6 +1682,7 @@ def takeover(
     return {**continuation_brief(layout, worker), "already_authorized": False}
 
 
+@_serialized_worker
 def retire_worker(layout: Layout, worker: str, *, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
     """Remove this worker's container and, only when nothing unique remains, its checkout.
 
@@ -1080,10 +1693,12 @@ def retire_worker(layout: Layout, worker: str, *, runner: Runner = subprocess.ru
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
-    work = stop_worker(layout, worker, reason="retirement", runner=runner, image=image)
+    work = _stop_worker(layout, worker, reason="retirement", runner=runner, image=image)
     entry = _load_state(layout)["issue_mappings"][str(issue)]
     reasons = []
-    if work.get("present"):
+    if not work.get("present"):
+        reasons.append("checkout evidence is missing")
+    else:
         if not work.get("readable"):
             reasons.append("checkout evidence is unreadable")
         elif work.get("unique_work"):
@@ -1092,8 +1707,30 @@ def retire_worker(layout: Layout, worker: str, *, runner: Runner = subprocess.ru
         reasons.append("unreleased checkpoints exist")
     if any(op.get("status") in _OP_UNRESOLVED for op in entry.get("publication_ops", [])):
         reasons.append("a publication attempt is unresolved")
+    if entry.get("checkpoint_inspection_unknown"):
+        reasons.append("checkpoint inspection cleanup is unknown")
+    if not reasons and work.get("present"):
+        # Refuse if the checkout changed after the stop's inspection, even when the new
+        # state happens to have the same path counts. The lifecycle lock fences our own starts.
+        after, _ = _inspect(layout, worker, runner=runner, image=image)
+        if (
+            not after.get("readable") or after.get("unique_work")
+            or any(after.get(key) != work.get(key) for key in ("head", "branch", "snapshot_tree", "refs_fingerprint"))
+        ):
+            reasons.append("checkout changed or became unreadable after the stop")
+        _assert_engine(runner)
+        if _container_state(layout, worker, runner) is not None:
+            reasons.append("worker container reappeared after the stop")
     if reasons:
-        _record_worker(layout, issue, retirement_refused={"at": _now(), "reasons": reasons})
+        def record_refusal(current: dict[str, Any]) -> None:
+            current["retirement_refused"] = {"at": _now(), "reasons": reasons}
+            if any("changed or became unreadable" in reason or "reappeared" in reason for reason in reasons):
+                current["takeover"] = {
+                    "status": "required", "generation": int(_takeover_of(current).get("generation", 0)),
+                    "reason": "retirement evidence changed", "at": _now(),
+                }
+
+        _mutate_mapping(layout, worker, record_refusal)
         raise UniqueWorkPresent("; ".join(reasons) + "; container removed, checkout kept")
     checkout = layout.checkout(worker)
     removed = False
@@ -1199,6 +1836,7 @@ def _validate_codex_home(path: Path | None, layout: Layout, runner: Runner) -> l
     return [(str(home.resolve()), CODEX_HOME_TARGET)]
 
 
+@_serialized_worker
 def start_openhands_worker(
     layout: Layout,
     worker: str,
@@ -1242,14 +1880,13 @@ def start_openhands_worker(
     )
     if codex_mounts:
         argv[argv.index("--label"):argv.index("--label")] = ["--label", "epic-workspace.codex-home=1"]
-    result = _run(runner, argv)
-    _record_worker(
-        layout, issue, state="starting", runtime="openhands", container=layout.container_name(worker),
-        container_id=(result.stdout or "").strip()[:64], image=image, port=port,
+    _begin_start(
+        layout, issue, worker, runtime="openhands", container=layout.container_name(worker), image=image, port=port,
         budget={"cpus": budget.cpus, "memory": budget.memory, "pids": budget.pids}, network=network,
         credentials={"claude": "oauth-token-env" if credential_env else None, "codex": "chatgpt-login-dir" if codex_mounts else None},
         started_at=_now(),
     )
+    _record_worker(layout, issue, container_id=_launch(layout, issue, worker, argv, runner))
     key = _session_key(layout, worker)
     deadline = time.monotonic() + ready_timeout
     while True:
@@ -1296,10 +1933,12 @@ def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mappi
                 "continue it, or stop the worker (verified) before a successor conversation starts"
             )
         _assert_no_pending_takeover(mapping)
-        pending = mapping.get("takeover")
-        if isinstance(pending, Mapping) and pending.get("status") == "authorized":
-            # The single permitted continuation is consumed by this conversation.
+        pending = _takeover_of(mapping)
+        if pending.get("status") == "authorized":
+            # Normally consumed when the worker started; a continuation still pending is spent here.
             mapping["takeover"] = {**pending, "status": "consumed", "conversation_id": record["id"], "consumed_at": _now()}
+        elif pending.get("status") == "consumed" and not pending.get("conversation_id"):
+            mapping["takeover"] = {**pending, "conversation_id": record["id"]}
         history = list(mapping.get("conversation_history", []))
         if isinstance(prior, Mapping):
             history.append(dict(prior))
@@ -1312,6 +1951,7 @@ def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mappi
     )
 
 
+@_serialized_worker
 def start_conversation(
     layout: Layout,
     worker: str,
@@ -1375,6 +2015,7 @@ def reconcile_conversation(port: int, key: str, conversation_id: str, *, http: C
     return "unknown"
 
 
+@_serialized_worker
 def reconcile_worker_conversation(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http) -> dict[str, Any]:
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
@@ -1558,7 +2199,7 @@ def main(
             init_workspace(root, args.epic, args.repo_url, runner=runner)
             out: Any = {"initialized": str(layout.epic_dir)}
         elif args.cmd == "worker-create":
-            out = {"checkout": str(create_worker(layout, worker=args.worker, issue=args.issue, branch=args.branch, base=args.base, next_action=args.next_action, runner=runner))}
+            out = {"checkout": str(create_worker(layout, args.worker, issue=args.issue, branch=args.branch, base=args.base, next_action=args.next_action, runner=runner))}
         elif args.cmd == "worker-start":
             command = [c for c in args.command if c != "--"] or ["sleep", "infinity"]
             mounts = [tuple(m.split(":", 1)) for m in args.mount]

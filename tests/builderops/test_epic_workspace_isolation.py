@@ -23,6 +23,8 @@ class FakeEngine:
         self.ports: dict[str, int] = {}
         self.inspections: list[list[str]] = []
         self.writable_inspections = 0
+        self.timeouts: list[float | None] = []
+        self.hang_inspections = False
 
     def __call__(self, argv, **kwargs):
         argv = list(argv)
@@ -46,23 +48,46 @@ class FakeEngine:
             state = self.containers.get(worker)
             return subprocess.CompletedProcess(argv, 0, f"{state}\n" if state else "", "")
         if argv[1] == "run" and "--rm" in argv:
-            # Contained inspection: emulate by running the same git argv against the mount source.
+            # Contained git: emulate by running the same git argv on the host with the mount targets
+            # mapped back to their sources. The mount flags are what a real engine would enforce.
             self.inspections.append(argv)
-            mount = next(argv[i + 1] for i, a in enumerate(argv) if a == "--mount")
-            fields = dict(f.split("=", 1) for f in mount.split(",") if "=" in f)
-            assert fields["target"] == ew.INSPECT_TARGET
-            readonly = mount.endswith(",readonly")
-            self.writable_inspections += 0 if readonly else 1
+            self.timeouts.append(kwargs.get("timeout"))
+            if kwargs.get("input") is not None:
+                assert "--interactive" in argv, "Docker must forward stdin to contained git"
+            if self.hang_inspections:
+                if kwargs.get("timeout") is None:
+                    raise AssertionError("contained git call without a timeout would hang")
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "--mount"]
+            targets = {}
+            for mount in mounts:
+                fields = dict(f.split("=", 1) for f in mount.split(",") if "=" in f)
+                targets[fields["target"]] = fields["source"]
+                if fields["target"] == ew.INSPECT_TARGET:
+                    assert mount.endswith(",readonly"), "the worker checkout must be mounted read-only"
+                else:
+                    assert fields["target"] == ew.SCRATCH_TARGET
+                    self.writable_inspections += 0 if mount.endswith(",readonly") else 1
             assert argv[argv.index("--network") + 1] == "none"
-            env = {k: v.replace(ew.INSPECT_TARGET, fields["source"]) for k, v in (argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "--env") if k.startswith("GIT_")}
+
+            def host(text):
+                for target in sorted(targets, key=len, reverse=True):
+                    text = text.replace(target, targets[target])
+                return text
+
+            env = {k: host(v) for k, v in (argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "--env") if k.startswith("GIT_")}
             kwargs = {**kwargs, "env": {**os.environ, **env}}
             git = argv[argv.index("git"):]
-            git = [fields["source"] if a == ew.INSPECT_TARGET else a for a in git]
-            i = git.index(f"safe.directory={ew.INSPECT_TARGET}") if f"safe.directory={ew.INSPECT_TARGET}" in git else None
-            if i is None:
-                i = next(k for k, a in enumerate(git) if a.startswith("safe.directory="))
-            del git[i - 1:i + 1]
-            return subprocess.run(git, **kwargs)
+            cleaned = []
+            skip = False
+            for position, arg in enumerate(git):
+                if skip:
+                    skip = False
+                elif arg == "-c" and git[position + 1].startswith("safe.directory="):
+                    skip = True
+                else:
+                    cleaned.append(host(arg))
+            return subprocess.run(cleaned, **kwargs)
         if argv[1] == "run":
             labels = [argv[i + 1] for i, a in enumerate(argv) if a == "--label"]
             worker = next(v.split("=", 1)[1] for v in labels if v.startswith(f"{ew.LABEL_WORKER}="))
@@ -174,7 +199,7 @@ def test_production_launch_enforces_workspace_and_resource_boundaries(tmp_path, 
     # Workers have separate clones: an edit in one is invisible to the other.
     (layout.checkout("w-a") / "only-a.txt").write_text("a\n")
     assert not (layout.checkout("w-b") / "only-a.txt").exists()
-    assert ew.inspect_checkout(layout.checkout("w-b"), runner=engine)["unique_work"] is False
+    assert ew.inspect_checkout(layout, "w-b", runner=engine)["unique_work"] is False
 
 
 def test_issue_cannot_be_reassigned_and_worker_git_config_never_runs_on_host(tmp_path, capsys):

@@ -62,6 +62,27 @@ def _git(checkout, *args):
     return subprocess.run(["git", "-C", str(checkout), *args], check=True, capture_output=True, text=True, env=GIT_ENV).stdout.strip()
 
 
+def _ckpt(root, worker, *args):
+    """Read the controller-held checkpoint repo (its objects borrow the worker checkout's)."""
+
+    layout = ew.Layout(root.resolve(), 6615)
+    env = {
+        **GIT_ENV,
+        "GIT_DIR": str(layout.epic_dir / "control" / "checkpoints" / f"{worker}.git"),
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(layout.checkout(worker) / ".git" / "objects"),
+    }
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True, env=env).stdout.strip()
+
+
+def _snapshot(path):
+    """Every file under ``path`` with size and mtime, to prove nothing was written."""
+
+    return {
+        str(p.relative_to(path)): (p.lstat().st_size, p.lstat().st_mtime_ns)
+        for p in sorted(path.rglob("*")) if not p.is_dir()
+    }
+
+
 def _out(capsys):
     return json.loads(capsys.readouterr().out)
 
@@ -86,16 +107,18 @@ def test_replacement_preserves_work_and_reconstructs_next_action(tmp_path, capsy
     (checkout / ".git" / "info" / "exclude").write_text("*.txt\n")
     (checkout / "notes.txt").write_text("ignored but unique\n")
     capsys.readouterr()
+    before = _snapshot(checkout / ".git")
 
     # The worker is replaced: container removed, work checkpointed before anything else happens.
     assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "replaced mid-write") == 0
     stop = _out(capsys)["work_at_stop"]
     ref = stop["checkpoint"]["ref"]
     assert ref == "refs/checkpoints/ckpt-0001"
-    assert _git(checkout, "show", f"{ref}:app/partial.py") == "def half_done():"
-    assert _git(checkout, "show", f"{ref}:README.md") == "half edited"
-    assert _git(checkout, "show", f"{ref}:notes.txt") == "ignored but unique"
-    assert _git(checkout, "rev-parse", f"{ref}^") == stop["head"]
+    assert _snapshot(checkout / ".git") == before, "the worker's git dir must not be written by the controller"
+    assert _ckpt(root, "w-a", "show", f"{ref}:app/partial.py") == "def half_done():"
+    assert _ckpt(root, "w-a", "show", f"{ref}:README.md") == "half edited"
+    assert _ckpt(root, "w-a", "show", f"{ref}:notes.txt") == "ignored but unique"
+    assert _ckpt(root, "w-a", "rev-parse", f"{ref}^") == stop["head"]
     # The working tree and the real index are untouched by the checkpoint.
     assert (checkout / "app" / "partial.py").read_text() == "def half_done():\n"
     assert [line.strip() for line in _git(checkout, "status", "--porcelain").splitlines()] == ["M README.md", "?? app/"]
@@ -191,7 +214,7 @@ def test_retirement_preserves_unique_work_and_unrelated_services(tmp_path, capsy
         worker = f"w-{name}"
         checkout = _new_worker(root, engine, repo, worker, 7000 + number, branch=f"b/{name}")
         mutate(checkout)
-        work = ew.inspect_checkout(checkout, runner=engine)
+        work = ew.inspect_checkout(layout, worker, runner=engine)
         assert work["unique_work"] is True, name
         if name == "other-branch":
             assert [b["ref"] for b in work["other_branches"]] == ["refs/heads/side"] and work["unpublished_commits"] == 0
@@ -207,13 +230,18 @@ def test_retirement_preserves_unique_work_and_unrelated_services(tmp_path, capsy
         assert checkout.is_dir()
         assert ew._load_state(layout)["issue_mappings"][str(7000 + number)]["retirement_refused"]["reasons"]
 
-    # Disposable caches alone are not unique work; the clean worker's checkout is removed, its home and record stay.
+    # Names alone do not make ignored contents disposable.
+    cache = _new_worker(root, engine, repo, "w-cache", 7099, branch="b/cache")
+    (cache / ".git" / "info" / "exclude").write_text("__pycache__/\n*.pyc\n")
+    (cache / "__pycache__").mkdir()
+    (cache / "__pycache__" / "x.cpython-312.pyc").write_bytes(b"\0")
+    work = ew.inspect_checkout(layout, "w-cache", runner=engine)
+    assert work["unique_work"] is True and work["ignored_count"] == 1
+    assert _cli(root, 6615, engine, "worker-retire", "--worker", "w-cache") == 2
+    assert cache.is_dir()
+
+    # A clean worker's checkout is removed; its home and record stay.
     clean = _new_worker(root, engine, repo, "w-clean", 7100, branch="b/clean")
-    (clean / ".git" / "info" / "exclude").write_text("__pycache__/\n*.pyc\n")
-    (clean / "__pycache__").mkdir()
-    (clean / "__pycache__" / "x.cpython-312.pyc").write_bytes(b"\0")
-    work = ew.inspect_checkout(clean, runner=engine)
-    assert work["unique_work"] is False and work["disposable_ignored_count"] == 1 and work["ignored_count"] == 0
     assert _cli(root, 6615, engine, "worker-start", "--worker", "w-clean", "--", "sleep", "60") == 0
     capsys.readouterr()
     assert _cli(root, 6615, engine, "worker-retire", "--worker", "w-clean") == 0
@@ -224,6 +252,18 @@ def test_retirement_preserves_unique_work_and_unrelated_services(tmp_path, capsy
     assert engine.containers["unrelated-svc"] == "running" and engine.containers["other-epic-worker"] == "running"
     rm_targets = {c[-1] for c in engine.calls if c[1] == "rm"}
     assert all(t.startswith("epicws-6615-w-") for t in rm_targets)
+
+
+def _publish(root, engine, capsys, sha, kind="branch_push"):
+    """Publish through the real coordinator path: intent, then completion with the observed head."""
+
+    assert _cli(root, 6615, engine, "publication-begin", "--worker", "w-a", "--kind", kind, "--expect-sha", sha) == 0
+    op = _out(capsys)["id"]
+    result = root.parent / f"{op}.json"
+    result.write_text(json.dumps({"sha": sha, "branch": "b/a", **({"number": 6630} if kind == "pr_create" else {})}))
+    assert _cli(root, 6615, engine, "publication-complete", "--worker", "w-a", "--op", op, "--result-file", str(result)) == 0
+    capsys.readouterr()
+    return op
 
 
 def test_checkpoint_release_gates_retirement_on_published_content(tmp_path, capsys):
@@ -237,18 +277,24 @@ def test_checkpoint_release_gates_retirement_on_published_content(tmp_path, caps
     assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "replace") == 0
     ref = _out(capsys)["work_at_stop"]["checkpoint"]["ref"]
 
-    # The successor commits the same content; the coordinator publishes it (remote-tracking ref updated).
+    # The successor commits the same content; the coordinator publishes it and records the observed head.
     _git(checkout, "add", "app.py")
     _git(checkout, "commit", "--quiet", "-m", "work")
     sha = _git(checkout, "rev-parse", "HEAD")
     assert _cli(root, 6615, engine, "worker-retire", "--worker", "w-a") == 2  # unpublished commit
-    _git(checkout, "update-ref", "refs/remotes/origin/b/a", sha)
     capsys.readouterr()
+    base = _git(checkout, "rev-parse", "origin/main")
+    assert _cli(root, 6615, engine, "checkpoint-release", "--worker", "w-a", "--ref", ref, "--published-commit", sha) == 2
+    assert "not published" in capsys.readouterr().err  # nothing controller-held says so yet
+    _publish(root, engine, capsys, sha)
     assert _cli(root, 6615, engine, "worker-retire", "--worker", "w-a") == 2
     assert "unreleased checkpoints" in capsys.readouterr().err
-    base = _git(checkout, "rev-parse", "origin/main")
     assert _cli(root, 6615, engine, "checkpoint-release", "--worker", "w-a", "--ref", ref, "--published-commit", base) == 2
     assert "not in the published commit" in capsys.readouterr().err
     assert _cli(root, 6615, engine, "checkpoint-release", "--worker", "w-a", "--ref", ref, "--published-commit", sha) == 0
+    # Retirement also captured the later, then-unpublished commit independently.
+    for checkpoint in ew._load_state(ew.Layout(root.resolve(), 6615))["issue_mappings"]["6617"]["checkpoints"]:
+        if checkpoint["status"] == "preserved":
+            assert _cli(root, 6615, engine, "checkpoint-release", "--worker", "w-a", "--ref", checkpoint["ref"], "--published-commit", sha) == 0
     assert _cli(root, 6615, engine, "worker-retire", "--worker", "w-a") == 0
     assert not checkout.exists()
