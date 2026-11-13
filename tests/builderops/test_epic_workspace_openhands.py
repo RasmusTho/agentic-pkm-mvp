@@ -117,10 +117,12 @@ def test_one_writer_per_worker_and_unknown_creates_are_never_repeated(tmp_path, 
     assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex", "--prompt-file", str(prompt)) == 2
     assert "could still write" in capsys.readouterr().err and len(posts()) == 1
 
-    # Only a verified container stop ends it; then a successor conversation (other engine) may start.
+    # A verified stop ends it; takeover authorizes the successor conversation (other engine).
     assert _main(root, engine, server, "worker-stop", "--worker", "w-a", "--reason", "simulated handoff") == 0
     layout = ew.Layout(root.resolve(), 6615)
     assert ew._load_state(layout)["issue_mappings"]["6617"]["conversation"]["status"] == ew.CONVERSATION_ENDED
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 2
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "verified handoff") == 0
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
     server.lose_next_create = True  # applied by the server, response lost
     capsys.readouterr()
@@ -132,6 +134,7 @@ def test_one_writer_per_worker_and_unknown_creates_are_never_repeated(tmp_path, 
 
     # Lost response and not (yet) visible: stays unknown, blocks a new create, is never re-POSTed.
     assert _main(root, engine, server, "worker-stop", "--worker", "w-a", "--reason", "r") == 0
+    assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "verified handoff") == 0
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
     server.lose_next_create, server.create_not_applied = True, True
     capsys.readouterr()

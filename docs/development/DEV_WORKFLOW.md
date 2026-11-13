@@ -306,9 +306,10 @@ run-state are unique work and survive container removal. The mirror is seeded fr
 so BOB-1 holds no GitHub credentials. Publication stays with the coordinator, which fetches the
 worker branch and uses `publish-pr`.
 
-OpenHands is the normal execution and session-control surface. `openhands-start` runs the pinned
-upstream agent-server image (`ghcr.io/openhands/agent-server:1.60.1-python`, by digest; it bundles
-claude-agent-acp 0.63.0 and codex-acp 2.2.2) as the worker container. Each worker gets a loopback-only
+OpenHands is the normal execution and session-control surface. The default image in this source is
+the pinned upstream agent-server (`ghcr.io/openhands/agent-server:1.60.1-python`, by digest; it bundles
+claude-agent-acp 0.63.0 and codex-acp 2.2.2). The installed controller and image require separate
+runtime readback. Each worker gets a loopback-only
 port in 18700–18799 and a per-worker session key in the controller-only `control/` directory.
 Conversation history is kept in the worker's persistent home. `conversation-start --engine
 claude-code|codex [--model M]` creates the conversation through upstream `agent_settings`
@@ -348,6 +349,101 @@ The third command is the emergency stop for every container of one epic. The fou
 previous controller release. Workers must not hot-replace the active release. A candidate controller
 is installed as a new `<sha>` directory between reconciled runs.
 
+Preservation, takeover and retirement are implemented in the #6617 source candidate. The running
+pinned controller has not been upgraded or qualified by this source change. After the candidate is
+independently reviewed, installed and verified, these commands run from outside any worker:
+
+- `worker-stop` removes the container, reads absence back from the engine, then captures unique work
+  in a controller-owned checkpoint repository under `control/checkpoints/<worker>.git`. The checkout
+  is mounted read-only in a networkless inspection container; a separate index and configuration
+  keep worker filters from running. Controller-owned Git attributes override worktree conversions, and
+  a contained CRLF round-trip must pass before inspection or checkpointing. Paired checkpoint refs
+  hold the worktree and the worker's staged index tree; retained refs hold objects from the worker's
+  refs, both object IDs in every reflog entry, stash history and linked-worktree HEADs. The common
+  Git directory and each registered linked worktree's reflogs are inspected; each raw record must
+  have a complete committer identity and date, including the name, email delimiters, nonzero
+  timestamp and timezone.
+  Malformed, missing, unreadable or oversized reflog evidence keeps the checkout. A connectivity check without the checkout's object
+  directory must pass before the checkpoint is recorded. An unmerged or unreadable index is kept as
+  unreadable work.
+- Unique work is: staged edits, uncommitted or untracked files, ignored files, commits reachable from any worker
+  ref, reflog, stash history or linked-worktree HEAD that are not
+  reachable from a controller-owned `source.git` ref or a coordinator-recorded published head, and
+  unreadable evidence. Worker remote-tracking and checkpoint-looking refs never prove publication.
+  Cache-looking names do not prove that their contents are disposable. A nested Git repository is
+  treated as unreadable work and kept intact because a gitlink does not capture its worktree.
+- `takeover --worker W --reason R [--readback-file F]` is the only way to continue a replaced worker.
+  It removes any remaining container and proves absence by engine readback (a lease or timeout proves
+  nothing), checkpoints the files, checks the post-checkpoint content and refs, validates the recorded
+  mapping and reconciles publication attempts from coordinator-supplied readback. If the actual named
+  branch differs, or HEAD is detached, takeover checkpoints even a clean checkout and records the
+  actual execution identity under the existing worker and generation. Detached HEAD and its work are
+  independently retained in the controller checkpoint. Takeover compares HEAD, branch, staged tree,
+  raw index, worktree, refs and reflog identity after checkpointing and again before authorization; start checks that
+  identity and checkpoint again. If the checkout changed, start refuses and a new takeover records
+  the new work before continuation. A legacy authorization lacking that identity also requires a new
+  takeover. The original publisher/claim branch remains separate; this reconciliation neither changes
+  a claim nor authorizes publication. Unreadable evidence, unmerged indices and unsettled Git
+  metadata lock files remain fenced and preserved.
+  It reads engine absence again while recording exactly one continuation. Per-worker controller locks fence overlapping
+  starts, stops, checkpoints and takeovers. The successor's `worker-start` or `openhands-start` consumes
+  that authorization; a repeated takeover before a start returns the same continuation only while
+  its checkout, checkpoint and engine checks still match. Worker
+  launches create an unstarted container first and record its full ID before sending a start for
+  that ID. A timed-out create can leave an unstarted container; `worker-stop` or `takeover` verifies
+  the exact name and labels before removing it. A timed-out start is settled by removing the recorded
+  ID and reading back its absence. A late start for that removed ID cannot start a replacement.
+  Checkpoint writers use the same create, record, start and ID-bound removal sequence; their
+  outstanding ID is recorded before the write starts. If cleanup or readback is unavailable, the
+  checkpoint and continuation remain blocked. Retry `worker-stop`, `worker-checkpoint`, or `takeover`
+  after the engine recovers; the checkpoint is then retried or an existing partial result adopted.
+  Read-only inspection uses disposable scratch. Its timeout cleanup checks exact name and inspection
+  scope; an already absent `--rm` container does not create a false cleanup failure. A late create
+  can leave an unstarted container that occupies its name until a later scoped stop removes it.
+  A legacy unresolved `docker run` without an ID or a legacy checkpoint-cleanup marker has no such
+  proof and is refused; engine absence alone cannot prove that its old request will not run later.
+  OpenHands port selection and credential-home admission are serialized within the workspace root;
+  a conflicting bind from outside that root is settled through the same stop and takeover path.
+- `continuation-brief` rebuilds the next authorized action, checkpoints, blocked operations and the
+  engine-neutral successor prompt from run-state alone, so a Codex worker can continue a Claude
+  worker's task (and back) without the predecessor writing a summary.
+- Publication goes through `publication-begin` (intent recorded before the effect), then
+  `publication-complete` or `publication-reconcile`. The coordinator supplies
+  the independently established full intended commit as `--expect-sha` when beginning every new
+  `branch_push`. Legacy pushes without a target remain quarantined on generic branch readback unless
+  operation-specific positive completion settles the original request. The coordinator reads GitHub;
+  completion supplies
+  the observed `branch` and `sha`, plus a PR `number` for PR creation. Reconciliation supplies a complete
+  branch readback with its `name`, `exists` and, when present, `sha`, or the queried `branch` with a
+  complete `pull_requests` list whose sole match includes `number`, `branch` and `sha`. An unknown
+  outcome is quarantined for that operation only and is never replayed. A missing branch or empty PR
+  list does not establish that an old request has finished. Older `absent_confirmed` records from
+  such readbacks remain unresolved. This controller has no authenticated no-effect settlement receipt;
+  a later matching positive readback can confirm the original operation when no other create attempt
+  could have produced that PR. A confirmed push keeps its
+  evidence, and a different, explicitly specified head can use a new push intent after all prior pushes
+  on that branch have settled. Normal parent publisher and branch gates still apply.
+- `worker-retire` removes only the container carrying this epic/worker label pair, then the checkout
+  only when nothing unique remains. It refuses while unique work, unreadable evidence, an unreleased
+  checkpoint or an unresolved publication exists. Unlike takeover, retirement does not checkpoint a
+  clean detached or drifted checkout only to retain its identity, because it authorizes no
+  continuation. Such a checkout retires once its earlier checkpoints are released. This requires
+  that its HEAD, refs, reflogs and stash are reachable from controller-held publication evidence, and that
+  no uncommitted or ignored content remains. Worker refs never count as that evidence. An
+  unpublished detached or reflog-only commit is unique work, so retirement checkpoints it and refuses.
+  Registered linked checkouts share the common Git directory and cannot be inspected through this
+  checkout's mount, so retirement retains the common checkout while any remain registered.
+  `checkpoint-release` supersedes a checkpoint only
+  when paths from both captured trees match a controller-proven published commit and its retained
+  commits are reachable from controller-held publication evidence. Different staged and worktree
+  bytes for the same path cannot both match one published commit, so the checkpoint remains preserved.
+  Older checkpoint records without staged-index or reflog coverage evidence also remain preserved;
+  a previously released record without that reflog proof likewise blocks checkout retirement.
+- `worker-create` on an existing checkout reads the actual branch back and refuses a mismatch with the
+  requested or reconciled execution branch instead of recording it. For an authorized detached checkout,
+  the existing publisher branch is supplied as `--branch` and the bound detached identity is checked.
+  It does not alter the publisher branch.
+
 Claude Code authenticates with a subscription token from `claude setup-token`. The token is stored
 as `CLAUDE_CODE_OAUTH_TOKEN` in `~ygg/.config/epic-workspace/claude.env` (mode 0600, outside the
 workspace root) and passed with `--env-file` (`openhands-start --claude-env-file`). Upstream OpenHands
@@ -359,8 +455,22 @@ refresh tokens rotate. No API key and no host credential store is used.
 
 Known limits: BOB-1 has 2 vCPU and 4 GB RAM, so expect at most about two concurrent workers. The
 default engine's `docker0` bridge is missing, which is why the owned `epicws` bridge is used.
-An agent-server worker uses about 0.5 GB at rest. Ignored files are reported but not yet protected
-by a retirement policy. Nothing reclaims a workspace that may hold unique work until #6617 qualifies
+An agent-server worker uses about 0.5 GB at rest. A checkpoint containing ignored files or stash commits
+can remain unreleasable when publication cannot prove their captured content or reachability.
+The reflog inspection requires the main and registered linked worktree HEAD logs, accepts up to
+32 MiB of reflog bytes and 5,000 distinct retained objects, and does not reconstruct expired or
+deleted entries or arbitrary unreachable Git objects. A checkout with a `.git` file instead of the
+supported plain common Git directory remains unreadable and retained.
+A worker stopped inside a Git operation can leave a `*.lock` file under `.git`, such as `index.lock`
+or a ref lock. The controller treats any such lock as an unsettled Git transaction and therefore as unreadable unique
+work. Checkout and lock bytes are retained, no checkpoint is taken, takeover and retirement refuse,
+and the next action remains `takeover`, so no successor starts. The controller never deletes,
+clears or applies a lock and has no general Git or rebase recovery. An ordinary readable file-level
+partial write outside a Git operation is checkpointed and continued normally. The next technical
+action belongs to the owning workflow: reconcile the stopped Git transaction from the retained
+checkout and lock, then rerun `takeover`, which inspects again from the start. Until then the
+work is retained but not continued or reclaimed. Nothing
+reclaims a workspace that may hold unique work until #6617 qualifies
 preservation (KD-B5F8B2D2F2BB, KD-FE5EDF575D1E). The engine handoff and the disconnect-safe
 coordinator are #6618; non-progress handling is #6619.
 

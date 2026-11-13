@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import uuid
 from pathlib import Path
 
 
@@ -22,6 +23,11 @@ class FakeEngine:
         self.labels: dict[str, list[str]] = {}
         self.ports: dict[str, int] = {}
         self.inspections: list[list[str]] = []
+        self.writable_inspections = 0
+        self.timeouts: list[float | None] = []
+        self.hang_inspections = False
+        self.ids: dict[str, str] = {}
+        self.pending: dict[str, list[str]] = {}
 
     def __call__(self, argv, **kwargs):
         argv = list(argv)
@@ -33,6 +39,30 @@ class FakeEngine:
             return subprocess.CompletedProcess(argv, 1, "", "Cannot connect to the Docker daemon")
         if argv[1] == "version":
             return subprocess.CompletedProcess(argv, 0, "29.1.3\n", "")
+        if argv[1] == "ps" and "--no-trunc" in argv:
+            name_filter = next((a[7:-1] for a in argv if a.startswith("name=^/") and a.endswith("$")), None)
+            id_filter = next((a[3:] for a in argv if a.startswith("id=")), None)
+            matches = []
+            for name, cid in self.ids.items():
+                worker = name.removeprefix("epicws-6615-")
+                if worker not in self.containers and cid not in self.pending:
+                    continue
+                if name_filter is not None and name != name_filter:
+                    continue
+                if id_filter is not None and cid != id_filter:
+                    continue
+                matches.append(cid)
+            return subprocess.CompletedProcess(argv, 0, "".join(f"{cid}\n" for cid in matches), "")
+        if argv[1] == "inspect":
+            cid = argv[-1]
+            name = next((n for n, value in self.ids.items() if value == cid), None)
+            if name is None:
+                return subprocess.CompletedProcess(argv, 1, "", "not found")
+            if cid in self.pending:
+                labels = [self.pending[cid][i + 1] for i, item in enumerate(self.pending[cid]) if item == "--label"]
+            else:
+                labels = self.labels.get(name.removeprefix("epicws-6615-"), [])
+            return subprocess.CompletedProcess(argv, 0, json.dumps(dict(label.split("=", 1) for label in labels)), "")
         if argv[1] == "ps" and not any(a.startswith(f"label={ew.LABEL_WORKER}=") for a in argv):
             if "{{.Ports}}" in argv:
                 return subprocess.CompletedProcess(argv, 0, "".join(f"127.0.0.1:{p}->8000/tcp\n" for p in self.ports.values()), "")
@@ -45,19 +75,83 @@ class FakeEngine:
             state = self.containers.get(worker)
             return subprocess.CompletedProcess(argv, 0, f"{state}\n" if state else "", "")
         if argv[1] == "run" and "--rm" in argv:
-            # Contained inspection: emulate by running the same git argv against the mount source.
+            # Contained git: emulate by running the same git argv on the host with the mount targets
+            # mapped back to their sources. The mount flags are what a real engine would enforce.
             self.inspections.append(argv)
-            mount = next(argv[i + 1] for i, a in enumerate(argv) if a == "--mount")
-            fields = dict(f.split("=", 1) for f in mount.split(",") if "=" in f)
-            assert fields["target"] == ew.INSPECT_TARGET and mount.endswith(",readonly")
+            self.timeouts.append(kwargs.get("timeout"))
+            if kwargs.get("input") is not None:
+                assert "--interactive" in argv, "Docker must forward stdin to contained git"
+            if self.hang_inspections:
+                if kwargs.get("timeout") is None:
+                    raise AssertionError("contained git call without a timeout would hang")
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "--mount"]
+            targets = {}
+            for mount in mounts:
+                fields = dict(f.split("=", 1) for f in mount.split(",") if "=" in f)
+                targets[fields["target"]] = fields["source"]
+                if fields["target"] == ew.INSPECT_TARGET:
+                    assert mount.endswith(",readonly"), "the worker checkout must be mounted read-only"
+                else:
+                    assert fields["target"] == ew.SCRATCH_TARGET
+                    self.writable_inspections += 0 if mount.endswith(",readonly") else 1
             assert argv[argv.index("--network") + 1] == "none"
+
+            def host(text):
+                for target in sorted(targets, key=len, reverse=True):
+                    text = text.replace(target, targets[target])
+                return text
+
+            env = {k: host(v) for k, v in (argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "--env") if k.startswith("GIT_")}
+            kwargs = {**kwargs, "env": {**os.environ, **env}}
             git = argv[argv.index("git"):]
-            git = [fields["source"] if a == ew.INSPECT_TARGET else a for a in git]
-            i = git.index(f"safe.directory={ew.INSPECT_TARGET}") if f"safe.directory={ew.INSPECT_TARGET}" in git else None
-            if i is None:
-                i = next(k for k, a in enumerate(git) if a.startswith("safe.directory="))
-            del git[i - 1:i + 1]
-            return subprocess.run(git, capture_output=True, text=True, check=False)
+            cleaned = []
+            skip = False
+            for position, arg in enumerate(git):
+                if skip:
+                    skip = False
+                elif arg == "-c" and git[position + 1].startswith("safe.directory="):
+                    skip = True
+                else:
+                    cleaned.append(host(arg))
+            return subprocess.run(cleaned, **kwargs)
+        if argv[1] == "create":
+            name = argv[argv.index("--name") + 1]
+            if name in self.ids and (self.ids[name] in self.pending or name.removeprefix("epicws-6615-") in self.containers):
+                return subprocess.CompletedProcess(argv, 125, "", "name already in use")
+            cid = uuid.uuid4().hex * 2
+            self.ids[name] = cid
+            if "--rm" in argv:
+                self.pending[cid] = argv
+            else:
+                labels = [argv[i + 1] for i, a in enumerate(argv) if a == "--label"]
+                worker = next(v.split("=", 1)[1] for v in labels if v.startswith(f"{ew.LABEL_WORKER}="))
+                self.containers[worker] = "created"
+                self.labels[worker] = labels
+            return subprocess.CompletedProcess(argv, 0, cid + "\n", "")
+        if argv[1] == "start":
+            cid = argv[-1]
+            name = next((n for n, value in self.ids.items() if value == cid), None)
+            if name is None:
+                return subprocess.CompletedProcess(argv, 1, "", "not found")
+            if cid in self.pending:
+                create = self.pending[cid]
+                synthetic = ["docker", "run", *create[2:]]
+                try:
+                    result = self(synthetic, **kwargs)
+                except (subprocess.TimeoutExpired, OSError):
+                    raise
+                del self.pending[cid]
+                self.ids.pop(name, None)
+                return result
+            worker = name.removeprefix("epicws-6615-")
+            if worker not in self.containers:
+                return subprocess.CompletedProcess(argv, 1, "", "not found")
+            self.containers[worker] = "running"
+            create = next(c for c in reversed(self.calls) if c[1] == "create" and c[c.index("--name") + 1] == name)
+            if "--publish" in create:
+                self.ports[worker] = int(create[create.index("--publish") + 1].split(":")[1])
+            return subprocess.CompletedProcess(argv, 0, name + "\n", "")
         if argv[1] == "run":
             labels = [argv[i + 1] for i, a in enumerate(argv) if a == "--label"]
             worker = next(v.split("=", 1)[1] for v in labels if v.startswith(f"{ew.LABEL_WORKER}="))
@@ -68,6 +162,10 @@ class FakeEngine:
             return subprocess.CompletedProcess(argv, 0, "c0ffee" * 10 + "\n", "")
         if argv[1] == "rm":
             name = argv[-1]
+            name = next((n for n, cid in self.ids.items() if cid == name), name)
+            cid = self.ids.pop(name, None)
+            if cid:
+                self.pending.pop(cid, None)
             for worker in list(self.containers):
                 if name.endswith(f"-{worker}"):
                     del self.containers[worker]
@@ -76,7 +174,7 @@ class FakeEngine:
         raise AssertionError(f"unexpected docker call {argv}")
 
     def runs(self) -> list[list[str]]:
-        return [c for c in self.calls if c[1] == "run"]
+        return [c for c in self.calls if c[1] == "create" and "--rm" not in c]
 
 
 def _seed_repo(tmp_path: Path) -> str:
@@ -169,7 +267,7 @@ def test_production_launch_enforces_workspace_and_resource_boundaries(tmp_path, 
     # Workers have separate clones: an edit in one is invisible to the other.
     (layout.checkout("w-a") / "only-a.txt").write_text("a\n")
     assert not (layout.checkout("w-b") / "only-a.txt").exists()
-    assert ew.inspect_checkout(layout.checkout("w-b"), runner=engine)["unique_work"] is False
+    assert ew.inspect_checkout(layout, "w-b", runner=engine)["unique_work"] is False
 
 
 def test_issue_cannot_be_reassigned_and_worker_git_config_never_runs_on_host(tmp_path, capsys):
