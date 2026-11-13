@@ -171,6 +171,19 @@ mypy, current-head CI and guarded delivery. #6618, #6619, #6620 and full automat
 remain unfinished. The [epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental)
 owns the operating boundary.
 
+**#6618 PR-cycle source candidate (2026-11-13).** The unmerged
+[#6618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6618) branch adds repository candidate
+support only. It covers OpenHands PR intake and evidence binding, a one-shot PR-cycle controller with
+explicit admission, and claimant-history fencing for dispatcher and fallback handoffs. It also adds
+review preparation bound to the exact head, contracts and native model metadata, and guarded merge
+mechanisms. Review repair is not automated; it is routed back to the current owner. The limits of
+these mechanisms, and the refusal conditions for missing or conflicting authority, are in the
+[epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental),
+which remains the normative owner. The running baseline controller `c68dd18db4dc` and worker image
+`sha256:3c3c2472b35ea3ccb0df57df7cc9d2303f582dcb2987b259124c9df946d56644` are untouched by this
+candidate. No runtime release, activation or child completion is claimed. Automatic PR activation,
+controlled quota handoff, disconnect-safe operation and whole-epic acceptance remain unfinished.
+
 The August 22 baseline formerly here and the dated October 5 observations above are historical.
 Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those
 older paragraphs. Infrastructure-reference review on 2026-10-21 does not revalidate the other
