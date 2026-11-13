@@ -359,11 +359,13 @@ independently reviewed, installed and verified, these commands run from outside 
   keep worker filters from running. Controller-owned Git attributes override worktree conversions, and
   a contained CRLF round-trip must pass before inspection or checkpointing. Paired checkpoint refs
   hold the worktree and the worker's staged index tree; retained refs hold objects from the worker's
-  refs, stash history and linked-worktree HEADs. A connectivity check without the checkout's object
+  refs, both object IDs in every reflog entry, stash history and linked-worktree HEADs. The common
+  Git directory and each registered linked worktree's reflogs are inspected; malformed, missing,
+  unreadable or oversized reflog evidence keeps the checkout. A connectivity check without the checkout's object
   directory must pass before the checkpoint is recorded. An unmerged or unreadable index is kept as
   unreadable work.
 - Unique work is: staged edits, uncommitted or untracked files, ignored files, commits reachable from any worker
-  ref, stash history or linked-worktree HEAD that are not
+  ref, reflog, stash history or linked-worktree HEAD that are not
   reachable from a controller-owned `source.git` ref or a coordinator-recorded published head, and
   unreadable evidence. Worker remote-tracking and checkpoint-looking refs never prove publication.
   Cache-looking names do not prove that their contents are disposable. A nested Git repository is
@@ -375,7 +377,7 @@ independently reviewed, installed and verified, these commands run from outside 
   branch differs, or HEAD is detached, takeover checkpoints even a clean checkout and records the
   actual execution identity under the existing worker and generation. Detached HEAD and its work are
   independently retained in the controller checkpoint. Takeover compares HEAD, branch, staged tree,
-  raw index, worktree and refs after checkpointing and again before authorization; start checks that
+  raw index, worktree, refs and reflog identity after checkpointing and again before authorization; start checks that
   identity and checkpoint again. If the checkout changed, start refuses and a new takeover records
   the new work before continuation. A legacy authorization lacking that identity also requires a new
   takeover. The original publisher/claim branch remains separate; this reconciliation neither changes
@@ -424,14 +426,17 @@ independently reviewed, installed and verified, these commands run from outside 
   checkpoint or an unresolved publication exists. Unlike takeover, retirement does not checkpoint a
   clean detached or drifted checkout only to retain its identity, because it authorizes no
   continuation. Such a checkout retires once its earlier checkpoints are released. This requires
-  that its HEAD, refs and stash are reachable from controller-held publication evidence, and that
+  that its HEAD, refs, reflogs and stash are reachable from controller-held publication evidence, and that
   no uncommitted or ignored content remains. Worker refs never count as that evidence. An
-  unpublished detached commit is unique work, so retirement checkpoints it and refuses.
+  unpublished detached or reflog-only commit is unique work, so retirement checkpoints it and refuses.
+  Registered linked checkouts share the common Git directory and cannot be inspected through this
+  checkout's mount, so retirement retains the common checkout while any remain registered.
   `checkpoint-release` supersedes a checkpoint only
   when paths from both captured trees match a controller-proven published commit and its retained
   commits are reachable from controller-held publication evidence. Different staged and worktree
   bytes for the same path cannot both match one published commit, so the checkpoint remains preserved.
-  Older checkpoint records without staged-index evidence also remain preserved.
+  Older checkpoint records without staged-index or reflog coverage evidence also remain preserved;
+  a previously released record without that reflog proof likewise blocks checkout retirement.
 - `worker-create` on an existing checkout reads the actual branch back and refuses a mismatch with the
   requested or reconciled execution branch instead of recording it. For an authorized detached checkout,
   the existing publisher branch is supplied as `--branch` and the bound detached identity is checked.
@@ -450,6 +455,10 @@ Known limits: BOB-1 has 2 vCPU and 4 GB RAM, so expect at most about two concurr
 default engine's `docker0` bridge is missing, which is why the owned `epicws` bridge is used.
 An agent-server worker uses about 0.5 GB at rest. A checkpoint containing ignored files or stash commits
 can remain unreleasable when publication cannot prove their captured content or reachability.
+The reflog inspection requires the main and registered linked worktree HEAD logs, accepts up to
+32 MiB of reflog bytes and 5,000 distinct retained objects, and does not reconstruct expired or
+deleted entries or arbitrary unreachable Git objects. A checkout with a `.git` file instead of the
+supported plain common Git directory remains unreadable and retained.
 A worker stopped inside a Git operation can leave a `*.lock` file under `.git`, such as `index.lock`
 or a ref lock. The controller treats any such lock as an unsettled Git transaction and therefore as unreadable unique
 work. Checkout and lock bytes are retained, no checkpoint is taken, takeover and retirement refuse,

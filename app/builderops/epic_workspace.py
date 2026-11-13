@@ -86,6 +86,7 @@ MAX_PUBLISHED_TIPS = 5000
 MAX_DETAIL_QUERIES = 64
 MAX_RETAINED_REFS = 5000
 MAX_GIT_METADATA_ENTRIES = 200_000
+MAX_REFLOG_BYTES = 32 * 1024 * 1024
 PUBLICATION_KINDS = ("branch_push", "pr_create")
 # Older candidates treated an empty readback as proof of absence. Such records
 # do not prove a request has stopped and must be reconciled again.
@@ -96,6 +97,10 @@ _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _CKPT_REF = re.compile(r"^refs/checkpoints/ckpt-([0-9]{4,})$")
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
 _INSPECT_NAME = re.compile(r"^epicws-git-[0-9a-f]{12}$")
+_REFLOG_LINE = re.compile(
+    rb"^([0-9a-f]{40}|[0-9a-f]{64}) ([0-9a-f]{40}|[0-9a-f]{64}) "
+    rb"[^\x00\r\n\t]+ [0-9]+ [+-][0-9]{4}(?:\t[^\x00\r\n]*)?$"
+)
 LAUNCH_PROTOCOL = "create-start-v1"
 
 Runner = Callable[..., subprocess.CompletedProcess]
@@ -1096,11 +1101,120 @@ def _assert_plain_git_metadata(checkout: Path) -> None:
             count += 1
             if count > MAX_GIT_METADATA_ENTRIES:
                 raise _Unreadable("too many git metadata entries")
-            mode = (Path(directory) / name).lstat().st_mode
+            path = Path(directory) / name
+            mode = path.lstat().st_mode
             if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
                 raise _Unreadable("symlink or special git metadata")
             if stat.S_ISREG(mode) and name.endswith(".lock"):
                 raise _Unreadable("unsettled git metadata lock")
+            if (path.relative_to(git_dir).parts[0] in ("refs", "logs", "worktrees", "packed-refs")
+                    and (not mode & 0o444 or (stat.S_ISDIR(mode) and not mode & 0o111))):
+                raise _Unreadable("unreadable ref or reflog metadata")
+
+
+def _reflog_identity(content_fingerprint: str, oids: Sequence[str]) -> str:
+    return hashlib.sha256(json.dumps(
+        [content_fingerprint, list(oids)], separators=(",", ":"),
+    ).encode("ascii")).hexdigest()
+
+
+def _valid_reflog_evidence(value: Mapping[str, Any]) -> bool:
+    content = value.get("reflog_content_fingerprint")
+    fingerprint = value.get("reflog_fingerprint")
+    oids = value.get("retained_reflog")
+    return bool(
+        isinstance(content, str) and _DIGEST.fullmatch(content)
+        and isinstance(fingerprint, str) and _DIGEST.fullmatch(fingerprint)
+        and isinstance(oids, list) and len(oids) <= MAX_RETAINED_REFS
+        and all(isinstance(oid, str) and _OID.fullmatch(oid) and set(oid) != {"0"} for oid in oids)
+        and oids == sorted(set(oids)) and fingerprint == _reflog_identity(content, oids)
+    )
+
+
+def _retained_marker(value: Mapping[str, Any]) -> str | None:
+    """Bind every retained source to the existing checkpoint commit pair."""
+
+    refs = value.get("retained_refs")
+    groups = [value.get("retained_heads"), value.get("retained_stash"), value.get("retained_reflog")]
+    head = value.get("head")
+    fingerprint = value.get("refs_fingerprint")
+    if (not _valid_reflog_evidence(value) or not isinstance(head, str) or not _OID.fullmatch(head)
+            or not isinstance(fingerprint, str) or not _DIGEST.fullmatch(fingerprint)
+            or not isinstance(refs, list) or len(refs) > MAX_RETAINED_REFS
+            or not all(isinstance(item, Mapping) and isinstance(item.get("ref"), str)
+                       and item["ref"].startswith("refs/") and isinstance(item.get("sha"), str)
+                       and _OID.fullmatch(item["sha"]) for item in refs)
+            or not all(isinstance(group, list) and len(group) <= MAX_RETAINED_REFS
+                       and all(isinstance(oid, str) and _OID.fullmatch(oid) for oid in group) for group in groups)):
+        return None
+    manifest = [head, fingerprint, refs, *groups, value["reflog_fingerprint"]]
+    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
+    return f"epic-retained-v1 {digest}"
+
+
+def _read_reflogs(checkout: Path) -> tuple[str, str, list[str], list[str]]:
+    """Read common and linked-worktree reflogs, including both sides of every entry.
+
+    Git's reflog commands can silently skip broken lines and missing objects. Read and
+    validate the metadata instead; object and connectivity checks still run in contained Git.
+    """
+
+    git_dir = checkout / ".git"
+    roots = [git_dir / "logs"]
+    worktrees = git_dir / "worktrees"
+    if worktrees.exists():
+        if worktrees.is_symlink() or not worktrees.is_dir():
+            raise _Unreadable("linked worktree metadata")
+        for worktree in sorted(worktrees.iterdir()):
+            if worktree.is_symlink() or not worktree.is_dir():
+                raise _Unreadable("linked worktree metadata")
+            roots.append(worktree / "logs")
+
+    files: list[Path] = []
+    for root in roots:
+        if root.is_symlink() or not root.is_dir() or not (root / "HEAD").is_file():
+            raise _Unreadable("missing reflog evidence")
+
+        def fail(exc: OSError) -> None:
+            raise exc
+
+        for directory, dirs, names in os.walk(root, followlinks=False, onerror=fail):
+            if not (Path(directory).stat().st_mode & 0o555):
+                raise _Unreadable("unreadable reflog directory")
+            dirs.sort()
+            files.extend(Path(directory) / name for name in sorted(names))
+
+    digest = hashlib.sha256()
+    oids: set[str] = set()
+    stash: set[str] = set()
+    total = 0
+    for path in sorted(files):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, "rb") as src:
+            mode = os.fstat(src.fileno()).st_mode
+            if not stat.S_ISREG(mode) or not mode & 0o444:
+                raise _Unreadable("unreadable reflog")
+            data = src.read(MAX_REFLOG_BYTES - total + 1)
+        total += len(data)
+        if total > MAX_REFLOG_BYTES or (data and not data.endswith(b"\n")):
+            raise _Unreadable("oversized or incomplete reflog")
+        digest.update(os.fsencode(path.relative_to(git_dir)) + b"\0" + hashlib.sha256(data).digest())
+        for line in data.splitlines():
+            match = _REFLOG_LINE.fullmatch(line)
+            if (not match or len(match[1]) != len(match[2])
+                    or not (match[1].strip(b"0") or match[2].strip(b"0"))):
+                raise _Unreadable("malformed reflog")
+            for raw in (match[1], match[2]):
+                if raw.strip(b"0"):
+                    oid = raw.decode("ascii")
+                    oids.add(oid)
+                    if path == git_dir / "logs" / "refs" / "stash":
+                        stash.add(oid)
+            if len(oids) > MAX_RETAINED_REFS:
+                raise _Unreadable("too many reflog objects")
+    content = digest.hexdigest()
+    retained = sorted(oids)
+    return content, _reflog_identity(content, retained), retained, sorted(stash)
 
 
 def _parse_status(raw: str) -> tuple[list[str], list[str]]:
@@ -1274,15 +1388,15 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
         refs = [tuple(line.split(" ", 1)) for line in git("for-each-ref", "--format=%(objectname) %(refname)").splitlines() if line]
         if len(refs) > MAX_RETAINED_REFS or any(len(item) != 2 or not _OID.match(item[0]) for item in refs):
             raise _Unreadable("refs")
-        stash_shas: list[str] = []
-        if any(ref == "refs/stash" for _sha, ref in refs):
-            stash_shas = [sha for sha in git("reflog", "show", "--format=%H", "refs/stash").split() if _OID.match(sha)]
-        extra_heads = sorted({
-            line.split(" ", 1)[1] for line in git("worktree", "list", "--porcelain").splitlines()
-            if line.startswith("HEAD ") and _OID.match(line.split(" ", 1)[1])
-        })
+        reflog_content_fingerprint, reflog_fingerprint, reflog_shas, stash_shas = _read_reflogs(checkout)
+        worktree_listing = git("worktree", "list", "--porcelain")
+        worktree_heads = [line[5:] for line in worktree_listing.splitlines() if line.startswith("HEAD ")]
+        worktree_count = sum(line.startswith("worktree ") for line in worktree_listing.splitlines())
+        if not worktree_heads or len(worktree_heads) != worktree_count or any(not _OID.fullmatch(sha) for sha in worktree_heads):
+            raise _Unreadable("worktree heads")
+        extra_heads = sorted(set(worktree_heads))
         refs_fingerprint = hashlib.sha256(
-            json.dumps([refs, extra_heads, stash_shas], ensure_ascii=True, separators=(",", ":")).encode()
+            json.dumps([refs, worktree_listing, stash_shas], ensure_ascii=True, separators=(",", ":")).encode()
         ).hexdigest()
         existing: list[str] = []
         if tips:
@@ -1292,7 +1406,7 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
         def count(*positive: str) -> int:
             return int(git("rev-list", "--count", *positive, *not_published).strip() or 0)
 
-        unpublished_total = count("--all", *extra_heads, *stash_shas)
+        unpublished_total = count("--all", head, *extra_heads, *reflog_shas)
         head_unpublished = 0
         other_branches: list[dict[str, Any]] = []
         other_refs: list[dict[str, Any]] = []
@@ -1327,8 +1441,12 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
         "staged_paths": staged_paths[:50],
         "staged_count": len(staged_paths),
         "refs_fingerprint": refs_fingerprint,
+        "reflog_content_fingerprint": reflog_content_fingerprint,
+        "reflog_fingerprint": reflog_fingerprint,
+        "retained_reflog": reflog_shas,
         "retained_refs": [{"ref": ref, "sha": sha} for sha, ref in refs],
         "retained_heads": extra_heads,
+        "linked_worktrees": worktree_count - 1,
         "retained_stash": stash_shas,
         "uncommitted_paths": changed[:50],
         "uncommitted_count": len(changed),
@@ -1348,7 +1466,7 @@ def _inspect(layout: Layout, worker: str, *, runner: Runner, image: str) -> tupl
     return summary, ignored
 
 
-_IDENTITY_FIELDS = ("branch", "head", "snapshot_tree", "staged_tree", "index_fingerprint", "refs_fingerprint")
+_IDENTITY_FIELDS = ("branch", "head", "snapshot_tree", "staged_tree", "index_fingerprint", "refs_fingerprint", "reflog_fingerprint")
 
 
 def _checkout_identity(work: Mapping[str, Any]) -> dict[str, Any]:
@@ -1360,7 +1478,7 @@ def _checkout_identity(work: Mapping[str, Any]) -> dict[str, Any]:
             or any(not isinstance(work.get(k), str) or not _OID.fullmatch(work[k])
                    for k in ("head", "snapshot_tree", "staged_tree"))
             or any(not isinstance(work.get(k), str) or not _DIGEST.fullmatch(work[k])
-                   for k in ("index_fingerprint", "refs_fingerprint"))):
+                   for k in ("index_fingerprint", "refs_fingerprint", "reflog_fingerprint"))):
         raise TakeoverRefused("checkout identity is missing or unreadable; preserve it and run takeover")
     return {key: work[key] for key in _IDENTITY_FIELDS}
 
@@ -1401,6 +1519,10 @@ def _authorization_record(mapping: Mapping[str, Any]) -> tuple[dict[str, Any], M
                 or checkpoint.get("head") != expected["head"] or checkpoint.get("tree") != expected["snapshot_tree"]
                 or checkpoint.get("staged_tree") != expected["staged_tree"]
                 or checkpoint.get("refs_fingerprint") != expected["refs_fingerprint"]
+                or checkpoint.get("reflog_fingerprint") != expected["reflog_fingerprint"]
+                or not _valid_reflog_evidence(checkpoint) or not _valid_reflog_evidence(stopped)
+                or checkpoint.get("retained_reflog") != stopped.get("retained_reflog")
+                or checkpoint.get("reflog_content_fingerprint") != stopped.get("reflog_content_fingerprint")
                 or not isinstance(checkpoint.get("staged_ref"), str)
                 or any(not isinstance(checkpoint.get(k), str) or not _OID.fullmatch(checkpoint[k])
                        for k in ("commit", "staged_commit"))):
@@ -1458,8 +1580,8 @@ def inspect_checkout(layout: Layout, worker: str, *, runner: Runner = subprocess
     """Classify a worker checkout's unique work without executing worker-controlled config.
 
     Unique work is: staged edits, uncommitted or untracked files (also checked against a fresh index), ignored files,
-    any commit reachable from any ref, the stash or a
-    linked worktree HEAD that is not reachable from controller-held published evidence, and
+    any commit reachable from any ref, reflog, stash or linked worktree HEAD that is not
+    reachable from controller-held published evidence, and
     anything that cannot be read (fail safe). "Published" is never inferred from refs in the
     checkout.
     """
@@ -1531,7 +1653,7 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
 # ``refs/checkpoints/ckpt-NNNN`` of a controller-owned repo (``control/checkpoints/<worker>.git``), only
 # after the worker container is proven absent. The worker checkout is mounted read-only and never
 # written, and worker-planted configuration and filters cannot execute. Objects reachable from
-# worker refs, stash reflogs and linked-worktree HEADs are also retained in the controller repo.
+# worker refs, all reflogs and linked-worktree HEADs are also retained in the controller repo.
 
 
 def _checkpoint_repo(layout: Layout, worker: str) -> Path:
@@ -1556,6 +1678,9 @@ def _checkpoint(
         return None
     if not work.get("readable"):
         return None  # kept intact as unique work; takeover and retirement refuse on it
+    marker = _retained_marker(work)
+    if marker is None:
+        raise EpicWorkspaceError("checkpoint retained evidence is incomplete; preserving checkout")
     _settle_checkpoint_writer(layout, worker, runner)
     if not work.get("unique_work") and not force:
         return None
@@ -1626,12 +1751,17 @@ def _checkpoint(
             if (prior and prior.get("status") == "preserved" and prior.get("commit") == commit
                     and prior.get("branch") == work["branch"]
                     and prior.get("refs_fingerprint") == work["refs_fingerprint"]
+                    and prior.get("reflog_fingerprint") == work["reflog_fingerprint"]
+                    and prior.get("reflog_content_fingerprint") == work["reflog_content_fingerprint"]
+                    and prior.get("retained_reflog") == work["retained_reflog"]
+                    and _retained_marker(prior) == marker
                     and prior.get("staged_ref") == staged_ref and prior.get("staged_commit") == staged_commit
                     and prior.get("staged_tree") == staged_tree):
                 record = dict(prior)
                 already_recorded = True
                 break
-            if prior is None:
+            if (prior is None and git("show", "-s", "--format=%B", commit).splitlines()[-1:] == [marker]
+                    and git("show", "-s", "--format=%B", staged_commit).splitlines()[-1:] == [marker]):
                 record = {
                     "ref": ref, "commit": commit, "tree": tree, "head": head, "branch": work["branch"], "reason": reason, "at": _now(),
                     "staged_ref": staged_ref, "staged_commit": staged_commit, "staged_tree": staged_tree,
@@ -1643,8 +1773,8 @@ def _checkpoint(
         numbers = [int(m.group(1)) for ref in (*present, *recorded, *staged_names) if isinstance(ref, str) and (m := _CKPT_REF.match(ref))]
         ref = f"{CHECKPOINT_REF_PREFIX}ckpt-{(max(numbers) if numbers else 0) + 1:04d}"
         staged_ref = STAGED_REF_PREFIX + ref.removeprefix(CHECKPOINT_REF_PREFIX)
-        commit = git("commit-tree", tree, "-p", head, "-m", f"epic-workspace checkpoint ({worker}): {reason[:120]}")
-        staged_commit = git("commit-tree", staged_tree, "-p", head, "-m", f"epic-workspace staged checkpoint ({worker}): {reason[:120]}")
+        commit = git("commit-tree", tree, "-p", head, "-m", f"epic-workspace checkpoint ({worker}): {reason[:120]}", "-m", marker)
+        staged_commit = git("commit-tree", staged_tree, "-p", head, "-m", f"epic-workspace staged checkpoint ({worker}): {reason[:120]}", "-m", marker)
         git("update-ref", "--stdin", input_data=f"start\ncreate {ref} {commit}\ncreate {staged_ref} {staged_commit}\nprepare\ncommit\n")
         record = {
             "ref": ref, "commit": commit, "tree": tree, "head": head, "branch": work["branch"], "reason": reason, "at": _now(),
@@ -1652,7 +1782,7 @@ def _checkpoint(
             "uncommitted_count": work["uncommitted_count"], "ignored_count": work["ignored_count"], "status": "preserved",
         }
 
-    retained = {head, *work["retained_heads"], *work["retained_stash"]}
+    retained = {head, *work["retained_heads"], *work["retained_stash"], *work["retained_reflog"]}
     retained.update(item["sha"] for item in work["retained_refs"])
     if len(retained) > MAX_RETAINED_REFS or any(not _OID.match(sha) for sha in retained):
         raise EpicWorkspaceError("too many or invalid retained objects; preserving checkout")
@@ -1676,6 +1806,8 @@ def _checkpoint(
     record.update(
         refs_fingerprint=work["refs_fingerprint"], retained_refs=work["retained_refs"],
         retained_heads=work["retained_heads"], retained_stash=work["retained_stash"],
+        reflog_content_fingerprint=work["reflog_content_fingerprint"],
+        reflog_fingerprint=work["reflog_fingerprint"], retained_reflog=work["retained_reflog"],
     )
     if not _checkpoint_present(checkout, repo, record, runner, image):
         raise EpicWorkspaceError(f"checkpoint {record['ref']} could not be read back")
@@ -1694,16 +1826,60 @@ def _record_checkpoint(layout: Layout, issue: int, record: dict[str, Any]) -> di
 
 
 def _checkpoint_present(checkout: Path, repo: Path, record: Mapping[str, Any], runner: Runner, image: str) -> bool:
+    ref = record.get("ref")
+    staged_ref = record.get("staged_ref")
+    marker = _retained_marker(record)
+    if (not isinstance(ref, str) or not _CKPT_REF.fullmatch(ref)
+            or staged_ref != STAGED_REF_PREFIX + ref.removeprefix(CHECKPOINT_REF_PREFIX)
+            or marker is None
+            or any(not isinstance(record.get(k), str) or not _OID.fullmatch(record[k])
+                   for k in ("head", "tree", "commit", "staged_tree", "staged_commit"))):
+        return False
+    groups = [record.get("retained_heads"), record.get("retained_stash"), record.get("retained_reflog")]
+    refs = record.get("retained_refs")
+    if (not all(isinstance(group, list) and all(isinstance(oid, str) and _OID.fullmatch(oid) for oid in group)
+                for group in groups)
+            or not isinstance(refs, list)
+            or not all(isinstance(item, Mapping) and isinstance(item.get("ref"), str)
+                       and isinstance(item.get("sha"), str) and _OID.fullmatch(item["sha"]) for item in refs)):
+        return False
+    retained = {record["head"], *(item["sha"] for item in refs)}
+    for group in groups:
+        if isinstance(group, list):
+            retained.update(group)
+    if len(retained) > MAX_RETAINED_REFS:
+        return False
+
     def rev(spec: str) -> str | None:
         result = _contained_git(checkout, ["rev-parse", "--verify", "--quiet", spec], runner=runner, image=image, scratch=repo, scratch_readonly=True,
                                 env={"GIT_ALTERNATE_OBJECT_DIRECTORIES": ""})
         return (result.stdout or "").strip() if result.returncode == 0 else None
 
-    return (rev(f"{record['ref']}^{{tree}}") == record["tree"] and rev(f"{record['ref']}^{{commit}}") == record["commit"]
+    present = (rev(f"{record['ref']}^{{tree}}") == record["tree"] and rev(f"{record['ref']}^{{commit}}") == record["commit"]
             and rev(f"{record['ref']}^1") == record["head"]
             and rev(f"{record['staged_ref']}^{{tree}}") == record["staged_tree"]
             and rev(f"{record['staged_ref']}^{{commit}}") == record["staged_commit"]
             and rev(f"{record['staged_ref']}^1") == record["head"])
+    if not present:
+        return False
+    for commit in (record["commit"], record["staged_commit"]):
+        message = _contained_git(checkout, ["show", "-s", "--format=%B", commit], runner=runner, image=image,
+                                 scratch=repo, scratch_readonly=True, env={"GIT_ALTERNATE_OBJECT_DIRECTORIES": ""})
+        if message.returncode != 0 or (message.stdout or "").strip().splitlines()[-1:] != [marker]:
+            return False
+    result = _contained_git(checkout, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/retained"],
+                            runner=runner, image=image, scratch=repo, scratch_readonly=True,
+                            env={"GIT_ALTERNATE_OBJECT_DIRECTORIES": ""})
+    if result.returncode != 0:
+        return False
+    lines = (result.stdout or "").splitlines()
+    observed = {line for line in lines}
+    if any(f"refs/retained/{sha} {sha}" not in observed for sha in retained):
+        return False
+    check = _contained_git(checkout, ["fsck", "--connectivity-only", "--no-reflogs"],
+                           runner=runner, image=image, scratch=repo, scratch_readonly=True,
+                           env={"GIT_ALTERNATE_OBJECT_DIRECTORIES": ""})
+    return check.returncode == 0
 
 
 @_serialized_worker
@@ -1747,8 +1923,10 @@ def release_checkpoint(
     repo = _checkpoint_repo(layout, worker)
     if not all(isinstance(record.get(key), str) for key in ("staged_ref", "staged_commit", "staged_tree")):
         raise EpicWorkspaceError("checkpoint lacks staged-index evidence; preserving it")
+    if not _valid_reflog_evidence(record):
+        raise EpicWorkspaceError("checkpoint lacks complete reflog evidence; preserving it")
     if not _checkpoint_present(checkout, repo, record, runner, image):
-        raise EpicWorkspaceError("checkpoint or staged-index evidence is unreadable; preserving it")
+        raise EpicWorkspaceError("checkpoint or retained object evidence is unreadable; preserving it")
 
     def read(*args: str, env: Mapping[str, str] | None = None) -> str:
         result = _contained_git(checkout, args, runner=runner, image=image, scratch=repo, scratch_readonly=True, env=env)
@@ -1763,7 +1941,7 @@ def release_checkpoint(
     existing = [sha for sha in read("rev-list", "--no-walk", "--ignore-missing", *tips).split() if _OID.match(sha)] if tips else []
     if not existing or int(read("rev-list", "--count", published_commit, "--not", *existing).strip() or 1) != 0:
         raise EpicWorkspaceError("commit is not reachable from controller-held published evidence; not published")
-    retained = {record["head"], *record.get("retained_heads", []), *record.get("retained_stash", [])}
+    retained = {record["head"], *record["retained_heads"], *record["retained_stash"], *record["retained_reflog"]}
     retained.update(item["sha"] for item in record.get("retained_refs", []))
     if not all(isinstance(sha, str) and _OID.match(sha) for sha in retained):
         raise EpicWorkspaceError("checkpoint retained object evidence is malformed")
@@ -1780,6 +1958,8 @@ def release_checkpoint(
 
     def updater(current: dict[str, Any]) -> dict[str, Any]:
         entry = current["issue_mappings"][str(issue)]
+        if not any(c == record and c.get("status") == "preserved" for c in entry.get("checkpoints", []) if isinstance(c, Mapping)):
+            raise EpicWorkspaceError("checkpoint changed during release; preserving it")
         entry["checkpoints"] = [
             {**c, "status": "released", "released_at": _now(), "released_by": published_commit} if c.get("ref") == ref else c
             for c in entry.get("checkpoints", [])
@@ -2128,13 +2308,19 @@ def takeover(
         raise TakeoverRefused("checkout evidence is missing or unreadable; treated as unique work, no continuation permitted")
     if after.get("head") != stopped.get("head"):
         raise TakeoverRefused("checkout HEAD moved while the checkpoint was taken; no continuation permitted")
-    if any(after.get(key) != stopped.get(key) for key in ("branch", "snapshot_tree", "staged_tree", "index_fingerprint", "refs_fingerprint")):
+    if any(after.get(key) != stopped.get(key) for key in _IDENTITY_FIELDS):
         raise TakeoverRefused("checkout content or refs changed while the checkpoint was taken; no continuation permitted")
     checkpoint = stopped.get("checkpoint")
     if checkpoint is not None and checkpoint.get("tree") != after.get("snapshot_tree"):
         raise TakeoverRefused("checkpoint does not match the post-checkpoint checkout; no continuation permitted")
     if checkpoint is not None and checkpoint.get("staged_tree") != after.get("staged_tree"):
         raise TakeoverRefused("checkpoint does not match the post-checkpoint index; no continuation permitted")
+    if checkpoint is not None and (
+        checkpoint.get("reflog_fingerprint") != after.get("reflog_fingerprint")
+        or checkpoint.get("retained_reflog") != after.get("retained_reflog")
+        or not _valid_reflog_evidence(checkpoint)
+    ):
+        raise TakeoverRefused("checkpoint does not match the post-checkpoint reflogs; no continuation permitted")
     actual = after.get("branch")
     identity = _checkout_identity(after)
     if (actual is None or actual != previous_execution) and checkpoint is None:
@@ -2208,9 +2394,32 @@ def retire_worker(layout: Layout, worker: str, *, runner: Runner = subprocess.ru
         if not work.get("readable"):
             reasons.append("checkout evidence is unreadable")
         elif work.get("unique_work"):
-            reasons.append("checkout holds unique work (uncommitted, ignored, or unpublished commits/stash)")
-    if any(c.get("status") == "preserved" for c in entry.get("checkpoints", [])):
+            reasons.append("checkout holds unique work (uncommitted, ignored, or unpublished commits/reflogs)")
+        if work.get("readable") and work.get("linked_worktrees"):
+            reasons.append("linked checkouts share Git metadata and cannot be inspected for retirement")
+    checkpoints = entry.get("checkpoints", [])
+    if not isinstance(checkpoints, list) or any(not isinstance(c, Mapping) for c in checkpoints):
+        reasons.append("checkpoint records are unreadable")
+        checkpoints = []
+    if any(c.get("status") == "preserved" for c in checkpoints):
         reasons.append("unreleased checkpoints exist")
+    if any(c.get("status") not in ("preserved", "released") or not _valid_reflog_evidence(c) for c in checkpoints):
+        reasons.append("checkpoint reflog coverage is unknown")
+    if not reasons and any(
+        not _checkpoint_present(layout.checkout(worker), _checkpoint_repo(layout, worker), c, runner, image)
+        for c in checkpoints if c.get("status") == "released"
+    ):
+        reasons.append("released checkpoint evidence is unreadable")
+    checkpoint_path = layout.epic_dir / "control" / "checkpoints" / f"{validate_worker_id(worker)}.git"
+    if not reasons and (checkpoint_path.exists() or checkpoint_path.is_symlink()):
+        repo = _checkpoint_repo(layout, worker)
+        refs = _contained_git(layout.checkout(worker), ["for-each-ref", "--format=%(refname)",
+                              CHECKPOINT_REF_PREFIX.rstrip("/"), STAGED_REF_PREFIX.rstrip("/")],
+                              runner=runner, image=image, scratch=repo, scratch_readonly=True,
+                              env={"GIT_ALTERNATE_OBJECT_DIRECTORIES": ""})
+        known = {c.get(key) for c in checkpoints for key in ("ref", "staged_ref")}
+        if refs.returncode != 0 or any(ref not in known for ref in (refs.stdout or "").splitlines()):
+            reasons.append("unrecorded checkpoint refs require reconciliation")
     if any(op.get("status") in _OP_UNRESOLVED for op in entry.get("publication_ops", [])):
         reasons.append("a publication attempt is unresolved")
     if entry.get("checkpoint_inspection_unknown"):
@@ -2221,7 +2430,7 @@ def retire_worker(layout: Layout, worker: str, *, runner: Runner = subprocess.ru
         after, _ = _inspect(layout, worker, runner=runner, image=image)
         if (
             not after.get("readable") or after.get("unique_work")
-            or any(after.get(key) != work.get(key) for key in ("head", "branch", "snapshot_tree", "staged_tree", "refs_fingerprint"))
+            or any(after.get(key) != work.get(key) for key in _IDENTITY_FIELDS)
         ):
             reasons.append("checkout changed or became unreadable after the stop")
         _assert_engine(runner)
