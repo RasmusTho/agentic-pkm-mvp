@@ -434,6 +434,44 @@ def _fallback_comment(comments: list[Any], *, comment_id: int, issue: int, agent
     return created
 
 
+def _pickup_issue(body: str, *, governing: int, closing: Sequence[int]) -> int:
+    """Name the one Issue whose claim owns execution: the PR's pickup, else the governing Issue.
+
+    The publication contract admits a pickup for the governing or an exact closing
+    Issue. Contract, review and closure scope stay bound to their own Issues.
+    """
+    receipts = re.findall(r"(?m)^Pickup-Receipt:[ \t]*(.+)$", body)
+    if len(receipts) > 1:
+        raise CycleError("original pickup provenance is ambiguous")
+    if not receipts:
+        return governing
+    match = re.match(r"pickup-claim-complete issue=([1-9][0-9]*) ", receipts[0])
+    if match is None or int(match[1]) not in {governing, *closing}:
+        raise CycleError("original pickup provenance cannot establish the governing owner")
+    return int(match[1])
+
+
+def _assert_scope_holds(governing: Mapping[str, Any], *, number: int, claim: int, closing: Sequence[int]) -> None:
+    """Apply governing-parent holds; a distinct open parent may only be a waiting validation hub."""
+    if claim == number or number in closing:
+        _assert_unheld_issue(governing)
+        return
+    labels = governing.get("labels")
+    if not isinstance(labels, list) or any(not isinstance(x, dict) or not isinstance(x.get("name"), str) for x in labels):
+        raise CycleError("Issue labels are held or unreadable")
+    names = {x["name"].casefold() for x in labels}
+    if "agent:blocked" in names:
+        # LABEL_TAXONOMY: a parent validation hub waiting on child slices is
+        # agent:blocked with exactly action:wait-dependency. Any other state holds.
+        body = governing.get("body")
+        if ({x for x in names if x.startswith(("agent:", "action:"))} != {"agent:blocked", "action:wait-dependency"}
+                or not names & {"type:epic", "type:feature"} or not isinstance(body, str)
+                or any(not re.search(rf"(?<![\w#])#{child}(?!\d)", body) for child in closing)):
+            raise CycleError("Issue labels are held or unreadable")
+        names -= {"agent:blocked"}
+    _assert_unheld_issue({"labels": [{"name": name} for name in names]})
+
+
 def _pickup_origin(body: str, *, issue: int, closing: Sequence[int], branch: str,
                    comments: list[Any]) -> tuple[dict[str, str], Any]:
     """Bind the original PR pickup to its authenticated source when available."""
@@ -1440,24 +1478,30 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
         issue = closure._issue(executor, cwd, completion.REPOSITORY, authority.governing_issue)
         if issue.get("state") != "open" or issue.get("body") != pr["governing_issue"]["body"]:
             raise CycleError("governing Issue contract or state drifted")
-        _assert_unheld_issue(issue)
+        claim = _pickup_issue(body or "", governing=authority.governing_issue, closing=refs)
+        _assert_scope_holds(issue, number=authority.governing_issue, claim=claim, closing=refs)
+        if claim != authority.governing_issue:
+            claimed = closure._issue(executor, cwd, completion.REPOSITORY, claim)
+            if claimed.get("state") != "open":
+                raise CycleError("claimed closing Issue is not open")
+            _assert_unheld_issue(claimed)
         _assert_review_threads_clear(executor, cwd, int(pr["number"]))
         branch = live.get("head", {}).get("ref")
         if not isinstance(branch, str) or not branch:
             raise CycleError("head branch identity unavailable")
         registration, lifecycle_records = _lifecycle_owner(layout, entry, branch)
-        issue_comments = _api_pages(executor, cwd, f"/issues/{authority.governing_issue}/comments")
+        issue_comments = _api_pages(executor, cwd, f"/issues/{claim}/comments")
         pr_comments = _api_pages(executor, cwd, f"/issues/{pr['number']}/comments")
-        origin, fallback_origin_at = _pickup_origin(body or "", issue=authority.governing_issue,
+        origin, fallback_origin_at = _pickup_origin(body or "", issue=claim,
                                                     closing=refs, branch=branch, comments=issue_comments)
         original_at = fallback_origin_at
-        task_id = github_issue_task_id(completion.REPOSITORY, authority.governing_issue)
+        task_id = github_issue_task_id(completion.REPOSITORY, claim)
         prior_registration = registration.get("prior_owner")
         if prior_registration is not None and not isinstance(prior_registration, Mapping):
             raise CycleError("predecessor registration evidence is malformed")
         pickup_reference = _predecessor_pickup_reference(
             [*issue_comments, *pr_comments], registration.get("transfer_registration"),
-            issue=authority.governing_issue, pr_number=int(pr["number"]))
+            issue=claim, pr_number=int(pr["number"]))
         lineage: dict[str, Any] | None = None
         dispatcher_events: Sequence[Mapping[str, Any]] | None = None
         changed_owner = False
@@ -1486,20 +1530,20 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             if not isinstance(owner_path, str) or not Path(owner_path).is_absolute() or str(Path(owner_path).resolve()) != owner_path:
                 raise CycleError("fallback owner worktree is unavailable")
             owner = closure._degraded_coordination_snapshot(
-                executor, Path(owner_path), completion.REPOSITORY, authority.governing_issue,
+                executor, Path(owner_path), completion.REPOSITORY, claim,
                 entry.get("fallback_reason"), entry.get("coordination_evidence"), entry.get("claimant"),
                 entry.get("session"), branch)
             if owner.get("comment_author") != "RasmusTho":
                 raise CycleError("fallback pickup receipt was not authored by the authorized account")
             fallback_pickup_at = _fallback_comment(
-                issue_comments, comment_id=owner["comment_id"], issue=authority.governing_issue,
+                issue_comments, comment_id=owner["comment_id"], issue=claim,
                 agent=entry["claimant"], session=entry["session"], branch=branch,
                 path=owner_path, reason=entry["fallback_reason"])
             for comment in issue_comments:
                 if not _authenticated_comment(comment) or not isinstance(comment.get("body"), str):
                     continue
                 match = closure.PICKUP_RECEIPT_RE.fullmatch(comment["body"])
-                if (match and int(match["issue"]) == authority.governing_issue and comment["id"] != owner["comment_id"]
+                if (match and int(match["issue"]) == claim and comment["id"] != owner["comment_id"]
                         and closure._parse_timestamp(comment["created_at"], "pickup receipt") == fallback_pickup_at):
                     raise CycleError("fallback pickup ordering is ambiguous")
             proof = registration.get("transfer_registration")
@@ -1508,7 +1552,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             remote_evidence = False
             if len(pinned_ack) == 1:
                 try:
-                    parsed, _, _ = agent_worktree._transfer_comment(pinned_ack[0], issue=authority.governing_issue,
+                    parsed, _, _ = agent_worktree._transfer_comment(pinned_ack[0], issue=claim,
                                                                     pr=int(pr["number"]))
                     remote_evidence = isinstance(parsed.get("predecessor_dispatcher"), dict)
                 except agent_worktree.WorktreeLifecycleError as exc:
@@ -1527,7 +1571,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                 changed_owner = True
                 prior_session, prior_path = prior_registration.get("owner"), prior_registration.get("path")
                 prior_agent, fallback_origin_at, _ = _fallback_predecessor(
-                    issue_comments, issue=authority.governing_issue, branch=branch,
+                    issue_comments, issue=claim, branch=branch,
                     prior=prior_registration, before=fallback_pickup_at, comment_id=pickup_reference)
             elif isinstance(proof, Mapping) or origin.get("mode") == closure.DISPATCHER_MODE or not origin:
                 changed_owner, remote_prior = True, True
@@ -1537,7 +1581,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             task, events, lease = closure._dispatcher_inspect(executor, cwd, task_id)
             dispatcher_events = events
             owner = closure._dispatcher_snapshot_from_task(task, task_id, repository=completion.REPOSITORY,
-                        issue_number=authority.governing_issue, pr_number=int(pr["number"]), lease=lease)
+                        issue_number=claim, pr_number=int(pr["number"]), lease=lease)
             closure._validate_claimant_history(events, owner)
             if (owner["lease_holder"] != entry.get("claimant") or owner["lease_id"] != entry.get("lease_id")
                     or not isinstance(entry.get("session"), str) or not entry["session"].strip()):
@@ -1548,7 +1592,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             if isinstance(proof, Mapping) and proof.get("state") == "pinned" and len(pinned) == 1:
                 try:
                     pinned_receipt, pinned_at, digest = agent_worktree._transfer_comment(
-                        pinned[0], issue=authority.governing_issue, pr=int(pr["number"]))
+                        pinned[0], issue=claim, pr=int(pr["number"]))
                 except agent_worktree.WorktreeLifecycleError as exc:
                     raise CycleError("pinned handoff comment is unavailable or unauthenticated") from exc
                 handoff_ack = pinned_receipt.get("successor_acknowledgment")
@@ -1561,11 +1605,11 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                     if match is None or pinned_pickup.get("session") != registration["owner"]:
                         raise CycleError("historical fallback pickup is unavailable")
                     historical_pickup = _fallback_comment(issue_comments, comment_id=int(match[1]),
-                        issue=authority.governing_issue, agent=entry["claimant"], session=registration["owner"],
+                        issue=claim, agent=entry["claimant"], session=registration["owner"],
                         branch=branch, path=proof["path"], reason="dispatcher_db_missing")
                     current_lineage = _dispatcher_migration_lineage(
                         events, owner, origin={}, registration={**registration, "prior_owner": None},
-                        comments=issue_comments, issue=authority.governing_issue, branch=branch)
+                        comments=issue_comments, issue=claim, branch=branch)
                     own_claims = [closure._parse_timestamp(event.get("timestamp"), "dispatcher claim")
                                   for event in events if event.get("task_id") == task_id
                                   and event.get("event_type") == "task.claimed"
@@ -1591,7 +1635,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                     same_session_transfer = (proof, pinned_receipt, handoff_ack)
             if same_session_transfer is None:
                 lineage = _dispatcher_migration_lineage(events, owner, origin=origin, registration=registration,
-                                                        comments=[*issue_comments, *pr_comments], issue=authority.governing_issue,
+                                                        comments=[*issue_comments, *pr_comments], issue=claim,
                                                         branch=branch, predecessor_pickup_id=pickup_reference)
             changed_owner = lineage is not None
             if same_session_transfer is not None:
@@ -1626,7 +1670,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             if isinstance(prior_registration, Mapping):
                 predecessor_anchor = _validate_predecessor_anchor(
                     prior_registration, [*issue_comments, *pr_comments],
-                    issue=authority.governing_issue, pr_number=int(pr["number"]), records=lifecycle_records)
+                    issue=claim, pr_number=int(pr["number"]), records=lifecycle_records)
             if isinstance(prior_registration, Mapping) and prior_session != prior_registration.get("owner"):
                 if not remote_prior:
                     raise CycleError("predecessor session differs from the released registry owner")
@@ -1635,18 +1679,18 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                 raise CycleError("candidate changed-file readback is unavailable")
             if predecessor_anchor is not None:
                 _verify_predecessor_transfer(predecessor_anchor, comments=[*issue_comments, *pr_comments],
-                    events=dispatcher_events, issue=authority.governing_issue, pr_number=int(pr["number"]),
+                    events=dispatcher_events, issue=claim, pr_number=int(pr["number"]),
                     branch=branch, head=pr["head_sha"], files=sorted(x["filename"] for x in files),
                     registration=registration, entry={**entry, "base_sha": live.get("base", {}).get("sha")},
                     remote_context=remote_prior)
             if same_session_transfer is not None:
                 _verify_predecessor_transfer(same_session_transfer, comments=[*issue_comments, *pr_comments],
-                    events=dispatcher_events, issue=authority.governing_issue, pr_number=int(pr["number"]),
+                    events=dispatcher_events, issue=claim, pr_number=int(pr["number"]),
                     branch=branch, head=pr["head_sha"], files=sorted(x["filename"] for x in files),
                     registration=registration, entry={**entry, "base_sha": live.get("base", {}).get("sha")},
                     remote_context=remote_prior, current_transfer=True)
             else:
-                _handoff_record([*issue_comments, *pr_comments], issue=authority.governing_issue, pr_number=int(pr["number"]),
+                _handoff_record([*issue_comments, *pr_comments], issue=claim, pr_number=int(pr["number"]),
                             branch=branch, head=pr["head_sha"],
                             files=sorted(x["filename"] for x in files), current=registration,
                             entry={**entry, "base_sha": live.get("base", {}).get("sha")}, coordination=owner,
@@ -1656,12 +1700,12 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                             remote_prior=remote_prior)
         anchors = _claimant_history(registration=registration, records=lifecycle_records,
             comments=[*issue_comments, *pr_comments], issue_comments=issue_comments, events=dispatcher_events,
-            origin=origin, origin_at=original_at, issue=authority.governing_issue,
+            origin=origin, origin_at=original_at, issue=claim,
             pr_number=int(pr["number"]), branch=branch, entry=entry)
         if changed_owner and len(anchors) > 2:
             for anchor in anchors[:-2]:
                 _verify_predecessor_transfer(anchor, comments=[*issue_comments, *pr_comments],
-                    events=dispatcher_events, issue=authority.governing_issue, pr_number=int(pr["number"]),
+                    events=dispatcher_events, issue=claim, pr_number=int(pr["number"]),
                     branch=branch, head=pr["head_sha"], files=sorted(x["filename"] for x in files),
                     registration=registration, entry={**entry, "base_sha": live.get("base", {}).get("sha")},
                     remote_context=remote_prior)
@@ -1675,7 +1719,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
         for issue_key, other in state["issue_mappings"].items():
             if not isinstance(other, dict) or other.get("worker") == entry["worker"]:
                 continue
-            if issue_key == str(authority.governing_issue) and not other.get("branch"):
+            if issue_key in {str(claim), str(authority.governing_issue)} and not other.get("branch"):
                 raise CycleError("another worker may write the candidate")
             if other.get("branch") == branch:
                 other_worker = other.get("worker")
@@ -1685,7 +1729,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
         return {"number": pr["number"], "head_sha": pr["head_sha"], "body": body,
                 "title": live.get("title"), "branch": branch, "governing_issue": authority.governing_issue,
                 "governing_issue_hashes": closure._issue_hashes(issue),
-                "closing_issues": refs, "owner": owner, "base_ref": "main",
+                "closing_issues": refs, "claim_issue": claim, "owner": owner, "base_ref": "main",
                 "worktree_owner": {k: registration[k] for k in ("path", "branch", "owner", "generation", "expires_at")},
                 "coordination_mode": entry.get("coordination_mode", "dispatcher-backed")}
     except closure.ClosureError as exc:
@@ -1780,19 +1824,20 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
     authority = resolve_native_issue_authority(pr.get("body"))
     if authority is None:
         raise CycleError("native issue authority is unavailable")
-    issue_comments = _api_pages(executor, cwd, f"/issues/{authority.governing_issue}/comments")
+    claim = _pickup_issue(pr.get("body", ""), governing=authority.governing_issue, closing=authority.closing_issues)
+    issue_comments = _api_pages(executor, cwd, f"/issues/{claim}/comments")
     pr_comments = _api_pages(executor, cwd, f"/issues/{pr['number']}/comments")
-    origin, origin_at = _pickup_origin(pr.get("body", ""), issue=authority.governing_issue,
+    origin, origin_at = _pickup_origin(pr.get("body", ""), issue=claim,
         closing=authority.closing_issues, branch=branch, comments=issue_comments)
     if proof is None and origin.get("path"):
         _validate_original_moves(registration, records, origin["path"])
     events = None
     if entry.get("coordination_mode", closure.DISPATCHER_MODE) == closure.DISPATCHER_MODE:
         _, events, _ = closure._dispatcher_inspect(executor, cwd,
-            github_issue_task_id(completion.REPOSITORY, authority.governing_issue))
+            github_issue_task_id(completion.REPOSITORY, claim))
     _claimant_history(registration=registration, records=records, comments=[*issue_comments, *pr_comments],
         issue_comments=issue_comments, events=events, origin=origin, origin_at=origin_at,
-        issue=authority.governing_issue, pr_number=int(pr["number"]), branch=branch, entry=entry)
+        issue=claim, pr_number=int(pr["number"]), branch=branch, entry=entry)
     if proof is None:
         return
     _validate_transfer_move(registration, records)
@@ -2035,9 +2080,13 @@ def reconcile_native(layout: workspace.Layout, saved: dict[str, Any]) -> dict[st
         raise CycleError("recorded merge intent identity is invalid")
     try:
         governor = intent["governing_issue"]
+        # Intents before an explicit claim Issue were always claimed on the governor.
+        claim = intent.get("claim_issue", governor)
         mode = intent.get("coordination_mode")
         owner = intent.get("owner")
-        if governor in intent["closing_issues"]:
+        if type(claim) is not int or claim not in {governor, *intent["closing_issues"]}:
+            raise CycleError("recorded claim Issue is outside the PR scope")
+        if claim in intent["closing_issues"]:
             # Old intents predate the explicit mode; their authenticated snapshots
             # retain either the fallback mode or the exact dispatcher lease fields.
             if mode is None and isinstance(owner, dict):
@@ -2117,10 +2166,10 @@ def reconcile_native(layout: workspace.Layout, saved: dict[str, Any]) -> dict[st
                 raise CycleError("owner-doc comment result is not established")
             sent[key] = "observed"
             _save(layout, saved)
-        if governor in intent["closing_issues"] and mode == "dispatcher-backed":
+        if claim in intent["closing_issues"] and mode == "dispatcher-backed":
             if not isinstance(owner, dict):
                 raise CycleError("recorded dispatcher coordination is ambiguous")
-            _dispatcher_after_merge(layout, saved, owner, executor, cwd, governor, number)
+            _dispatcher_after_merge(layout, saved, owner, executor, cwd, claim, number)
         cleanup = saved.setdefault("label_cleanup", {})
         for target in intent["closing_issues"]:
             issue = closure._issue(executor, cwd, completion.REPOSITORY, target)

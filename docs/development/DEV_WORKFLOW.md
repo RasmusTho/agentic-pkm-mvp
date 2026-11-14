@@ -330,6 +330,12 @@ the disposable container then requires the pinned image's actual interpreter to 
 fails otherwise (3.11, 3.14 and mismatches are refused). A venv built for a different minor than the
 image's Python is not usable. Image Python is checked only by that in-container preflight, not before create. The source reads the host GitHub identity, dispatcher claim and verification
 history, and uses the existing OpenHands lifecycle and a separate credential-free test container.
+Claim and ownership history bind to the Issue named by the PR's single `Pickup-Receipt` (the
+governing Issue or an exact closing child; the governing Issue when absent), while contract, review,
+closure and owner-doc scope stay on the governing and closing Issues (`PR_HOT_PATH.md :: Multi-Issue
+PR Scope`). For a child claim, a distinct open governing parent may only carry the validation-hub
+state `agent:blocked` + `action:wait-dependency` on a `type:epic`/`type:feature` whose body names
+every closing child; any other parent or child hold still stops the cycle.
 That container mounts the configured host venv read-only at `/opt/pr-cycle-venv` and refuses to run tests
 when its in-container interpreter and pytest preflight fails. The source includes guarded native
 merge and PR-specific post-merge continuation. Review evidence binds the observed diff, exact closing

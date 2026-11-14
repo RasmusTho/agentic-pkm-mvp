@@ -418,9 +418,15 @@ def test_host_authority_uses_real_contract_and_dispatcher_not_body_flags(tmp_pat
     live["body"] = child_body
     child_pr = {**pr, "body": child_body}
     monkeypatch.setattr(cycle.closure, "_closing_issue_references", lambda *args: [6619])
-    assert cycle.native_authority(layout, child_pr, entry)["closing_issues"] == [6619]
-    with pytest.raises(cycle.CycleError, match="transfer registration is unproved"):
+    # A child pickup selects the child's claim; the parent's lease cannot be borrowed.
+    with pytest.raises(cycle.CycleError, match="wrong branch or task"):
+        cycle.native_authority(layout, child_pr, entry)
+    with pytest.raises(cycle.CycleError, match="wrong branch or task"):
         cycle.native_authority(layout, child_pr, fallback)
+    child_body = child_body.replace("task_id=child", f"task_id={cycle.github_issue_task_id(cycle.completion.REPOSITORY, 6619)}")
+    live["body"] = child_body
+    with pytest.raises(cycle.CycleError, match="native authority unavailable"):
+        cycle.native_authority(layout, {**pr, "body": child_body}, entry)
     live["body"] = fallback_body
     monkeypatch.setattr(cycle.closure, "_closing_issue_references", lambda *args: [6618])
     status_code[0] = 1
