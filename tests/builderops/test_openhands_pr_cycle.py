@@ -156,11 +156,11 @@ def test_finished_review_runs_sandbox_and_ci_but_does_not_infer_merge_authority(
     monkeypatch.setattr(cycle, "sandbox_verify", verify)
     monkeypatch.setattr(cycle, "ci_once", lambda number, root: calls.append("ci") or {"exit_code": 0})
     result = cycle.advance(layout, config, fetch=fetch, http=server)
-    assert calls == ["stop", "sandbox", "ci"]
+    assert calls == ["stop", "ci", "sandbox"]
     assert result["results"][1]["action"] == "wait"
     assert result["results"][1]["reason"] == "review execution or sandbox verification is incomplete"
     cycle.advance(layout, config, fetch=fetch, http=server)
-    assert calls == ["stop", "sandbox", "ci", "ci"]
+    assert calls == ["stop", "ci", "sandbox", "ci", "sandbox"]
     assert len([c for c in server.calls if c[0] == "POST"]) == 1
 
 

@@ -193,8 +193,13 @@ candidate. No runtime release, activation or child completion is claimed. Automa
 controlled quota handoff, disconnect-safe operation and whole-epic acceptance remain unfinished.
 The source repair retains pre-origin, continuous-registration and predecessor chronology, preserves
 ownership on cross-branch path reuse, and adds bounded merge and sandbox-verification recovery. It
-still needs current-head CI and the parent's guarded delivery; see the #6619 snapshot above for
-dated review evidence.
+also checks CI before running a fresh sandbox Verify in an advancement that can merge, with
+cooperative test-environment updates serialized by the cycle lock. This is source-candidate
+behavior; independent current-head review, CI and the parent's guarded delivery remain required.
+See the #6619 snapshot above for dated review evidence.
+Last reviewed (#6618 Verify source): 2026-11-14 UTC. Last verified against:
+`app/builderops/openhands_pr_cycle.py` and the focused Python 3.12 cycle tests with synthetic
+external-effect ports; no running-controller or activation result is implied.
 
 The August 22 baseline formerly here and the dated October 5 observations above are historical.
 Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those

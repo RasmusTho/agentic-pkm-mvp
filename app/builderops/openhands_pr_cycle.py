@@ -3341,10 +3341,12 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     if any(old_identity == identity for old_identity, _ in merge_obligations):
         return {"number": pr["number"], "action": "wait", "identity": identity,
                 "reason": "merge outcome remains unknown; do not repeat"}
+    same_head_merge_unknown = any(old_head == pr["head_sha"] for _, old_head in merge_obligations)
     saved = _find(layout, pr["number"], identity)
     operation_id = saved.get("review_operation")
     exhausted: dict[str, Any] | None = None
     owner_wait: str | None = None
+    verified_this_advancement = False
     if operation_id:
         worker_record = _mapping(layout, entry["worker"])
         conversation = worker_record.get("conversation")
@@ -3407,14 +3409,22 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                 else:
                     pr["review_outcome"] = "changes_requested"
                     exhausted = gate
-            if pr["review_outcome"] == "pass":
+            if pr["review_outcome"] == "pass" and not same_head_merge_unknown:
                 authority = entry.get("review_disposition")
                 if authority is not None:
                     saved["review_disposition"] = authority  # audit copy, never an authority input
                 else:
                     saved.pop("review_disposition", None)
+                # A venv path does not identify its mutable contents. A saved result
+                # cannot authorize a later advancement's merge.
+                # Clear it before even checking CI so an interruption cannot leave an
+                # earlier pass eligible after a failed or unknown verification.
+                saved.pop("verification", None)
+                saved.pop("ci", None)
                 _save(layout, saved)
-                if "verification" not in saved:
+                saved["ci"] = ci_once(pr["number"], Path(__file__).resolve().parents[2])
+                _save(layout, saved)
+                if saved["ci"].get("exit_code") == 0:
                     verification = sandbox_verify(layout, entry["worker"], pr["head_sha"],
                                                   entry["verify_targets"], entry["test_venv"], saved)
                     with workspace._worker_lifecycle_lock(layout, entry["worker"]):
@@ -3429,11 +3439,9 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                         saved["verification"] = {**verification, "stop_id": saved["stop_intent"]["stop_id"],
                                                  "disposition_sha256": gate.get("disposition_sha256")}
                         _save(layout, saved, expected_worker=entry["worker"], expected_assignment=current)
-                with workspace._worker_lifecycle_lock(layout, entry["worker"]):
-                    _review_verification_lineage(_mapping(layout, entry["worker"]), saved)
-                if saved["verification"].get("passed") is True:
-                    saved["ci"] = ci_once(pr["number"], Path(__file__).resolve().parents[2])
-                    _save(layout, saved)
+                    with workspace._worker_lifecycle_lock(layout, entry["worker"]):
+                        _review_verification_lineage(_mapping(layout, entry["worker"]), saved)
+                    verified_this_advancement = True
     pending = _reconciliation(saved)
     if pending is not None:
         # The archived review finished; restate it so a crash before intake cannot leave it unresolved.
@@ -3447,13 +3455,14 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     decision = completion.intake([pr], run_id=layout.run_id, root=layout.run_state_dir,
                                  expected_run_id=layout.run_id, expected_root=layout.run_state_dir,
                                  expected_epic_issue_number=layout.epic)[0]
-    if (pr["review_outcome"] == "pass" and isinstance(saved.get("verification"), dict)
+    if (same_head_merge_unknown and pr["review_outcome"] == "pass" and decision["action"] == "wait"
+            and decision["reason"] == "active or unknown writable owner"):
+        return {"number": pr["number"], "action": "wait", "identity": identity,
+                "reason": "earlier merge at this head remains unknown; do not repeat"}
+    if (verified_this_advancement and pr["review_outcome"] == "pass" and isinstance(saved.get("verification"), dict)
             and saved["verification"].get("passed") is True and isinstance(saved.get("ci"), dict)
             and saved["ci"].get("exit_code") == 0 and decision["action"] == "wait"
             and decision["reason"] == "active or unknown writable owner"):
-        if any(old_head == pr["head_sha"] for _, old_head in merge_obligations):
-            return {"number": pr["number"], "action": "wait", "identity": identity,
-                    "reason": "earlier merge at this head remains unknown; do not repeat"}
         return merge_once(layout, pr, entry, saved)
     if decision["action"] in ("independent-review", "reconcile"):
         op = decision["operation_id"]

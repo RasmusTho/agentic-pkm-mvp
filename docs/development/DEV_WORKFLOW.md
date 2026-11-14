@@ -383,6 +383,15 @@ The trusted owning workflow must hold the same lock for the entire admission rea
 replacement, including disposition revocation. A busy lock requires a later retry. Programmatic
 callers with file-backed admissions must pass the `Path` to `advance`, not an earlier file snapshot;
 the existing list argument is for admissions supplied directly by the caller.
+The trusted workflow must also hold that same cycle lock throughout provisioning, updating or
+replacing an admitted test environment and its dependencies. If a test environment is shared by
+multiple epics, the writer must hold every affected epic's cycle lock in a consistent order for the
+whole update. The lock prevents cooperative updates during verification and the subsequent merge
+decision; the container's read-only mount alone cannot prevent a host-side update. The epic cycle
+accepts an operator-provisioned venv and has no separate repository-owned upgrade command. The
+hash-named environment made by `openhands_test_environment.prepare` via
+`scripts/setup_openhands_factory.sh` belongs to the separate macOS factory and is not the epic
+cycle's automatic provisioning or upgrade path.
 The venv path and its contents must satisfy the ownership, mode, symlink and credential-shaped filename
 preflight; that filename check cannot prove arbitrary file contents are secret-free. It must be a
 controller-owned path outside the configured model workspace root (`--root`) and must not be that root
@@ -423,8 +432,14 @@ report and every finding and limitation, including a report that labels itself c
 ordinary owning-workflow action, not a new human approval requirement. The item decision is
 `nonblocking` only when the owning workflow has examined the evidence and can support that conclusion;
 uncertain or contradictory evidence waits. The controller rechecks the same binding before premerge.
-A truly informational P3 with a supported nonblocking disposition proceeds to sandbox verification,
-current-head CI and the guarded merge gate; the saved report is kept verbatim.
+A truly informational P3 with a supported nonblocking disposition proceeds to current-head CI,
+sandbox verification and the guarded merge gate; the saved report is kept verbatim. Pending or
+failed CI waits without starting a sandbox. After CI is green, each advancement that can merge runs
+Verify again under its cycle lock: a receipt from an earlier advancement cannot establish the
+current contents of a mutable venv. Failed or interrupted verification cannot reuse an earlier pass.
+The existing immediate premerge CI, authority and fencing refreshes still apply. Independent review
+and native execution proof remain reusable under their existing bindings; identical reauthorization
+alone does not establish that otherwise applicable evidence became invalid.
 P0/P1, any protected finding at any severity, a P3 with a defect category, P2 without a verified
 Known Defects disposition, gaps and incomplete assessments all wait for the owning workflow. A legacy
 or non-conforming report is never edited and never passed. When it has no known blocker, the original

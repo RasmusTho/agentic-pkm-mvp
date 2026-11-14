@@ -212,7 +212,7 @@ def test_owning_session_can_explicitly_dispose_of_safe_deleted_item(tmp_path, mo
     effects = prior._merge_ports(layout, monkeypatch, identity)
     result = cycle.advance(layout, config, fetch=fetch, http=server)
     assert result["results"][1]["action"] == "merged"
-    assert calls == ["stop", "stop", "sandbox", "ci", "ci"]
+    assert calls == ["stop", "stop", "ci", "sandbox", "ci"]
     assert effects == ["merge", "comment", "comment"]
 
 
@@ -236,7 +236,7 @@ def test_known_legacy_p3_progresses_only_after_bound_owner_disposition(tmp_path,
     result = cycle.advance(layout, config, fetch=fetch, http=server)
     saved = cycle._find(layout, 10, identity)
     assert result["results"][1]["action"] == "merged"
-    assert calls == ["stop", "stop", "sandbox", "ci", "ci"] and effects == ["merge", "comment", "comment"]
+    assert calls == ["stop", "stop", "ci", "sandbox", "ci"] and effects == ["merge", "comment", "comment"]
     assert saved["report_reconciliations"][0]["archived"] == pending["archived"]
     assert saved["report_reconciliations"][0]["archived"]["review"] == original
     assert saved["review_disposition"] == manifest
@@ -318,10 +318,9 @@ def test_changed_disposition_cannot_authorize_later_effects(tmp_path, monkeypatc
     result = cycle.advance(layout, config, fetch=fetch, http=server)
     saved = cycle._find(layout, 10, identity)
     assert result["results"][1]["action"] == "wait" and effects == []
-    assert calls == (["stop", "sandbox"] if during == "sandbox" else ["stop", "sandbox", "ci"])
+    assert calls == ["stop", "ci", "sandbox"]
     assert "merge_intent" not in saved
-    if during == "sandbox":
-        assert "verification" not in saved
+    assert "verification" not in saved
 
 
 def make_bound_reports():

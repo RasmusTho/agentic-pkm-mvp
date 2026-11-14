@@ -186,7 +186,7 @@ def test_current_valid_real_p3_progresses_with_owner_disposition(tmp_path, monke
     effects = prior._merge_ports(layout, monkeypatch, identity)
     result = cycle.advance(layout, config, fetch=fetch, http=server)
     assert result["results"][1]["action"] == "merged"
-    assert calls == ["stop", "sandbox", "ci", "ci"]
+    assert calls == ["stop", "ci", "sandbox", "ci"]
     assert effects == ["merge", "comment", "comment"]
 
 
@@ -223,7 +223,7 @@ def test_main_reads_current_file_after_same_lock_owner_update(tmp_path, monkeypa
     assert status == 0
     if change == "allowed":
         assert output["results"][1]["action"] == "merged"
-        assert calls == ["stop", "sandbox", "ci", "ci"] and effects == ["merge", "comment", "comment"]
+        assert calls == ["stop", "ci", "sandbox", "ci"] and effects == ["merge", "comment", "comment"]
     else:
         assert output["results"][1]["action"] == "wait"
         assert calls == ["stop"] and effects == []
@@ -261,7 +261,7 @@ def test_owner_cannot_update_file_during_verification(tmp_path, monkeypatch):
     effects = prior._merge_ports(layout, monkeypatch, identity)
     result = cycle.advance(layout, path, fetch=fetch, http=server)
     assert result["results"][1]["action"] == "merged"
-    assert calls == ["stop", "sandbox", "ci", "ci"] and effects == ["merge", "comment", "comment"]
+    assert calls == ["stop", "ci", "sandbox", "ci"] and effects == ["merge", "comment", "comment"]
     with cycle._single_advancement(layout):
         assert json.loads(path.read_text(encoding="utf-8"))["admissions"][0]["review_disposition"]
 
@@ -299,7 +299,9 @@ def test_changed_file_disposition_invalidates_saved_verification(tmp_path, monke
     path = tmp_path / "admission.json"
     path.write_text(json.dumps({"admissions": config}), encoding="utf-8")
     path.chmod(0o600)
-    monkeypatch.setattr(cycle, "ci_once", lambda *args: calls.append("ci") or {"exit_code": 1})
+    statuses = iter([0, 1, 0, 1])
+    monkeypatch.setattr(cycle, "ci_once", lambda *args: calls.append("ci") or {"exit_code": next(statuses)})
+    effects = prior._merge_ports(layout, monkeypatch, identity)
     real_advance = cycle.advance
     monkeypatch.setattr(cycle, "advance", lambda layout, source: real_advance(layout, source, fetch=fetch, http=server))
     argv = ["--once", "--root", str(tmp_path), "--epic", "6615", "--config", str(path)]
@@ -313,17 +315,19 @@ def test_changed_file_disposition_invalidates_saved_verification(tmp_path, monke
     capsys.readouterr()
     second = cycle._find(layout, 10, identity)["verification"]["disposition_sha256"]
     assert first != second and second == support.digest(config[0]["review_disposition"])
-    assert calls == ["stop", "sandbox", "ci", "sandbox", "ci"]
+    assert calls == ["stop", "ci", "sandbox", "ci", "ci", "sandbox", "ci"] and effects == []
 
 
-def test_revoked_then_restored_file_disposition_cannot_reuse_verification(tmp_path, monkeypatch, capsys):
+def test_revoked_disposition_waits_then_restores_with_current_verify(tmp_path, monkeypatch, capsys):
     layout, config, server, identity, cid, calls = support.case(tmp_path, monkeypatch)
     report = prior._finish(server, cid, identity, prior.reconciled())
     config[0]["review_disposition"] = support.owner_disposition(report)
     path = tmp_path / "admission.json"
     path.write_text(json.dumps({"admissions": config}), encoding="utf-8")
     path.chmod(0o600)
-    monkeypatch.setattr(cycle, "ci_once", lambda *args: calls.append("ci") or {"exit_code": 1})
+    statuses = iter([0, 1, 0, 1])
+    monkeypatch.setattr(cycle, "ci_once", lambda *args: calls.append("ci") or {"exit_code": next(statuses)})
+    effects = prior._merge_ports(layout, monkeypatch, identity)
     real_advance = cycle.advance
     monkeypatch.setattr(cycle, "advance", lambda layout, source: real_advance(layout, source, fetch=fetch, http=server))
     argv = ["--once", "--root", str(tmp_path), "--epic", "6615", "--config", str(path)]
@@ -339,9 +343,9 @@ def test_revoked_then_restored_file_disposition_cannot_reuse_verification(tmp_pa
     saved = cycle._find(layout, 10, identity)
     assert saved["review_gate"]["outcome"] == "changes_requested"
     assert "verification" not in saved and "ci" not in saved
-    assert calls == ["stop", "sandbox", "ci"]
+    assert calls == ["stop", "ci", "sandbox", "ci"] and effects == []
     with cycle._single_advancement(layout):
         path.write_text(json.dumps({"admissions": config}), encoding="utf-8")
     assert cycle.main(argv) == 0
     capsys.readouterr()
-    assert calls == ["stop", "sandbox", "ci", "sandbox", "ci"]
+    assert calls == ["stop", "ci", "sandbox", "ci", "ci", "sandbox", "ci"] and effects == []
