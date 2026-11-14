@@ -339,7 +339,11 @@ every closing child; any other parent or child hold still stops the cycle.
 That container mounts the configured host venv read-only at `/opt/pr-cycle-venv` and refuses to run tests
 when its in-container interpreter and pytest preflight fails. The source includes guarded native
 merge and PR-specific post-merge continuation. Review evidence binds the observed diff, exact closing
-contracts and check configuration; every closing criterion needs a review assessment. The native
+contracts and check configuration; every closing criterion needs a review assessment. A `findings`
+report whose only findings are well-formed, unprotected P3 items with covered acceptance, Verify,
+source and owner-doc assessments proceeds to sandbox verification, current-head CI and the guarded
+merge gate; the saved report is kept verbatim with its P3 items. P0/P1, P2 without a verified Known
+Defects disposition, and malformed, unknown or protected-category findings still wait. The native
 metadata reader connects the exact retained OpenHands conversation and live ACP session to that
 session's bounded Codex or Claude log, retaining only model, effort, timestamps and session identities.
 It requires the observed model to match the selected model; a Codex effort must be `high` or stronger
@@ -594,7 +598,7 @@ The third command is the emergency stop for every container of one epic. The fou
 previous controller release. Workers must not hot-replace the active release. A candidate controller
 is installed as a new `<sha>` directory between reconciled runs.
 
-Preservation, takeover and retirement are implemented in the #6617 source merged in #6627. The
+Preservation, takeover and retirement are implemented in the #6617 source merged in #6626. The
 running pinned controller has not been upgraded or qualified by this source change. After that source
 is installed and verified, these commands run from outside any worker:
 

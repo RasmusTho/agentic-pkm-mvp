@@ -1861,6 +1861,57 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
     pr["review_material"]["transfer_to_current"] = material
 
 
+_FINDING_FIELDS = {"severity", "category", "summary", "file", "line", "failure_scenario", "suggested_fix"}
+# Protected classes from verification-and-closure FULL_PATH :: Severity routing must be P0/P1, never P3.
+_PROTECTED_CATEGORY = re.compile(
+    r"acceptance|verif|criteri|contract|closure|merge|false.?green|receipt|\bci\b|secret|credential|auth"
+    r"|security|vault|data.?loss|corrupt|migration|durab|concurren|race|multi.?writer|irreversib"
+    r"|side.?effect|integrity|protected|inconclusive|unknown|blocking", re.I)
+
+
+def review_gate(review: Any) -> dict[str, Any]:
+    """Derive the severity-policy gate from an immutable public report.
+
+    P3 is informational only when well formed, unprotected and backed by covered assessments.
+    Any P0/P1, P2 without a canonical Known Defects disposition, or malformed/unknown finding blocks.
+    """
+    if not isinstance(review, dict) or review.get("verdict") not in ("pass", "findings"):
+        return {"outcome": "changes_requested", "blocking": ["malformed report"], "informational": []}
+    findings = review.get("findings")
+    if not isinstance(findings, list) or (review["verdict"] == "pass") != (findings == []):
+        return {"outcome": "changes_requested", "blocking": ["verdict and findings disagree"], "informational": []}
+    blocking: list[str] = []
+    informational: list[dict[str, Any]] = []
+    for index, item in enumerate(findings):
+        severity = item.get("severity") if isinstance(item, dict) else None
+        if severity in ("P0", "P1"):
+            blocking.append(f"finding {index}: {severity}")
+        elif severity == "P2":
+            # No verified registry disposition is readable here; the owning workflow keeps it.
+            blocking.append(f"finding {index}: P2 without verified Known Defects disposition")
+        elif (severity != "P3" or not set(item) <= _FINDING_FIELDS
+              or not all(isinstance(item.get(k), str) and item[k].strip() for k in ("category", "summary", "file"))
+              or not isinstance(item.get("line"), int) or isinstance(item.get("line"), bool) or item["line"] < 1
+              or _PROTECTED_CATEGORY.search(item["category"])):
+            blocking.append(f"finding {index}: malformed, unknown or protected")
+        else:
+            informational.append({"index": index, "severity": "P3", "category": item["category"],
+                                  "file": item["file"], "line": item["line"]})
+    if informational and not blocking:
+        scope, owner_doc = review.get("scope_assessment"), review.get("owner_doc")
+        children = review.get("closing_assessments", {})
+        if (not isinstance(scope, dict)
+                or not all(isinstance(scope.get(k), str) and scope[k].strip() for k in ("acceptance", "verify_coverage"))
+                or not isinstance(owner_doc, dict) or not isinstance(owner_doc.get("inspected_paths"), list)
+                or not owner_doc["inspected_paths"] or not isinstance(review.get("covered_sources"), list)
+                or not isinstance(children, dict)
+                or any(not isinstance(child, dict) or child.get("acceptance") != "covered"
+                       or child.get("verify_coverage") != "covered" for child in children.values())):
+            blocking.append("informational findings lack covered acceptance, Verify, source or owner-doc evidence")
+    return {"outcome": "changes_requested" if blocking else "pass", "blocking": blocking,
+            "informational": informational}
+
+
 def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, Any],
               saved: Mapping[str, Any]) -> dict[str, Any]:
     """Refresh exact review, source, issue and CI evidence immediately before native merge."""
@@ -1874,7 +1925,7 @@ def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, 
             or saved["conversation_provenance"].get("reviewer") != proof.get("conversation_id")
             or (entry["engine"] == "codex" and proof.get("effort") not in ("high", "xhigh", "max", "ultra"))
             or not isinstance(review, dict)
-            or review.get("verdict") != "pass" or review.get("findings") != []
+            or review_gate(review)["outcome"] != "pass"
             or not isinstance(tests, dict) or tests.get("passed") is not True
             or tests.get("head_sha") != pr["head_sha"] or tests.get("targets") != entry["verify_targets"]):
         raise CycleError("review execution or sandbox verification is incomplete")
@@ -2375,7 +2426,8 @@ def _review_prompt(pr: Mapping[str, Any], identity: str, targets: list[str]) -> 
             "Do not write or publish. In your final public response put one JSON "
             "object between <BEGIN_PR_CYCLE_REPORT> and <END_PR_CYCLE_REPORT>. Public closeout text may precede "
             "the delimiter, but do not put other JSON objects there. Include identity, head_sha, "
-            "verdict (pass or findings), findings (array), "
+            "verdict (pass or findings), findings (array of objects with severity P0, P1, P2 or P3, category, "
+            "summary, file, line, failure_scenario and suggested_fix), "
             "verify_targets (array of exact targets reviewed), covered_sources (sorted array of every changed "
             "app/, scripts/ or tests/ path examined), scope_assessment (acceptance, verify_coverage, "
             "limitations), owner_doc (outcome, inspected_paths and rationale), "
@@ -2733,7 +2785,12 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                 raise CycleError("public report and native execution proof do not bind the same conversation")
             _save(layout, saved)
             pr["effect_outcomes"][operation_id] = _outcome(operation_id, f"openhands:{operation_id}")
-            pr["review_outcome"] = "pass" if review["verdict"] == "pass" and not review["findings"] else "changes_requested"
+            # The saved report stays verbatim; the policy gate is re-derived from it on every tick.
+            gate = review_gate(review)
+            if saved.get("review_gate") != gate:
+                saved["review_gate"] = gate
+                _save(layout, saved)
+            pr["review_outcome"] = gate["outcome"]
             pr["independent_review_identity"] = identity
             _release_reviewer(layout, entry["worker"], saved, worker_record)
             if pr["review_outcome"] == "pass":
