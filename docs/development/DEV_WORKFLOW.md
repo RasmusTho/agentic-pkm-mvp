@@ -346,7 +346,10 @@ It requires the observed model to match the selected model; a Codex effort must 
 (`xhigh`, `max`, `ultra`) and equal the API-selected `current_effort`. A session keeps one effort; a
 supported escalation starts a new conversation rather than changing effort mid-task. These are
 native-provided observations, not tamper-proof attestation. Missing, mixed or mismatched observations
-stop the review. Subscription authentication also requires the native login check; no model call is
+stop the review. In a Claude log the reader skips only API-error records and the exact zero-usage
+`<synthetic>` "No response requested." control record that same-conversation steering writes, after
+checking its session and timestamp; any other synthetic record refuses, and real inference by one
+model is still required. Subscription authentication also requires the native login check; no model call is
 needed for this metadata read.
 
 `lifecycle_repo` is an absolute, controller-owned host checkout of the existing worktree lifecycle
