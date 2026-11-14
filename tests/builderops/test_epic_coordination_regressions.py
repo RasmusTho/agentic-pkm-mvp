@@ -86,6 +86,8 @@ class Harness:
                     raise TimeoutError("local regression synchronization failed")
                 return 429, None
             return 200, {"success": True}
+        if "/events/count" in path:
+            return 200, len(self.events[cid])
         if "/events/search" in path:
             return 200, {"items": list(reversed(self.events[cid]))}
         info = {"id": cid, "execution_status": self.execution,
@@ -301,8 +303,9 @@ def test_authority_change_after_reservation_prevents_the_post(make_harness):
     h.fetch = original
     h.run("C")
     assert h.posts == [h.cids[9000002]]
-    effect = next(r for r in h.state()["dispatch_decisions"] if r.get("kind") == "epic_coordination_effect")
-    assert effect["outcome"] == "delivered" and effect["attempts"] == 1 and effect["previous_refusal"]
+    attempts = [r for r in h.state()["dispatch_decisions"] if r.get("kind") == "epic_coordination_effect"]
+    assert [r["outcome"] for r in attempts] == ["refused", "delivered"]
+    assert [r["attempts"] for r in attempts] == [0, 1]
 
 
 def test_fifo_blocker_does_not_hold_independent_peer(make_harness):

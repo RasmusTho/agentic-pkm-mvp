@@ -16,6 +16,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -91,10 +92,13 @@ class Harness:
             if self.post_mode == "lost":
                 raise OSError("synthetic lost reply")
             return (429, None) if self.post_mode == "full" else (200, {"success": True})
+        if "/events/count" in path:
+            return 200, len(self.events.get(cid, []))
         if "/events/search" in path:
             if self.event_hook:
                 self.event_hook(issue, cid)
-            return 200, {"items": list(reversed(self.events.get(cid, [])))}
+            limit = int(parse_qs(urlsplit(path).query).get("limit", ["100"])[0])
+            return 200, {"items": list(reversed(self.events.get(cid, [])))[:limit]}
         if self.get_hook:
             self.get_hook(issue, cid)
         return 200, self.info(issue, cid)

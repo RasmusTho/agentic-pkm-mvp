@@ -830,6 +830,16 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
   test cache and validation evidence and compares them with the decision, including on replay. Missing
   or changed evidence, a new event, or active execution refuses the affected send. These observations
   are not atomic with the worker or GitHub, so changes after the final read remain outside the fence.
+  In this candidate, coordination compares the unfiltered event count with the count under the
+  supported wide-time filter, then checks the unfiltered count again after the bounded newest page.
+  The selected 1.62 reader counts indexed entries without parsing them in the unfiltered case, but
+  skips unreadable payloads in the filtered case. Unequal, unavailable, invalid or changing counts,
+  or a short page when the history fits, hold the directive. The filtered scan is admitted only for
+  at most 2,000 indexed events and uses a ten-second client timeout; larger histories hold with an
+  explicit scan-limit gap. An event outside the wide-time filter can cause a conservative hold.
+  Concurrent appends may increase server work after admission, and a client timeout cannot cancel the
+  upstream scan. Changes invisible to the server's index or cache, and changes after the final read,
+  remain outside the check. No actual event damage is implied.
   The upstream message endpoint
   can supersede a running ACP prompt or goal loop; callers must intend that effect. A user event with
   the marker must be read back before delivery is reported. A lost reply or missing event is unknown,
@@ -858,7 +868,12 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
   a replay still observes current authority. Decisions,
   effects and remaining actions live in the existing `dispatch_decisions` and `stop_conditions`;
   GitHub Issues, PRs and CI remain authoritative. Issue maintenance, handoff and lifecycle actions
-  remain explicit coordinator obligations and are not performed by `coordinate`.
+  remain explicit coordinator obligations and are not performed by `coordinate`. A fresh authorized
+  judgment can follow a refused zero-attempt blocker decision with a new linked decision; the old
+  decision and refusal remain as evidence. A reserved, unknown, delivered or run-deferred attempt
+  cannot be rebound or resent. A refusal containing conflicting POST or marker evidence holds the
+  writer as an unknown effect until reconciled. Three successive known-not-sent refusals trigger a
+  bounded owning-workflow investigation; new work evidence or a changed blocker permits renewed judgment.
 
 The source tests use simulated engine, GitHub and agent-server boundaries; they do not demonstrate a
 real model's reaction. After independent review and trusted integration, an operator can create a

@@ -3138,27 +3138,58 @@ def classify_failure(text: str) -> str:
     return "task_failure" if text else "unclassified"
 
 
+EVENT_INTEGRITY_SCAN_LIMIT = 2000
+_EVENT_VALID_COUNT_QUERY = "timestamp__gte=0001-01-01T00%3A00%3A00Z"
+
+
 def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http,
-                        runner: Runner = subprocess.run, limit: int = 50, include_messages: bool = True) -> dict[str, Any]:
+                        runner: Runner = subprocess.run, limit: int = 50, include_messages: bool = True,
+                        require_event_count: bool = False) -> dict[str, Any]:
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     mapping = state["issue_mappings"][str(issue)]
     record = mapping.get("conversation")
     if not isinstance(record, Mapping):
         return {"issue": issue, "worker": worker, "conversation": None}
+    count_error = None
+    def event_count(port: int, key: str, path: str) -> tuple[int, Any]:
+        try:
+            return http("GET", port, key, path, None, 10.0)
+        except (OSError, ValueError, KeyError, UnicodeError):
+            return 0, None
     try:
         with _endpoint_session(layout, worker, issue, mapping, runner) as (port, key):
             cid = str(record["id"])
             code, info = http("GET", port, key, f"/conversations/{cid}", None, 10.0)
             if code != 200 or not _conversation_bound(info, layout, issue, worker, cid):
                 raise ValueError("conversation identity mismatch")
-            ecode, events = http("GET", port, key, f"/conversations/{cid}/events/search?limit={int(limit)}&sort_order=TIMESTAMP_DESC", None, 10.0)
+            if require_event_count:
+                before_code, before_count = event_count(port, key, f"/conversations/{cid}/events/count")
+                if before_code != 200 or type(before_count) is not int or before_count < 0:
+                    count_error = "event_count_unavailable_or_inconsistent"
+                elif before_count > EVENT_INTEGRITY_SCAN_LIMIT:
+                    count_error = "event_count_scan_limit_exceeded"
+                else:
+                    valid_code, valid_count = event_count(port, key,
+                        f"/conversations/{cid}/events/count?{_EVENT_VALID_COUNT_QUERY}")
+                    if valid_code != 200 or type(valid_count) is not int or valid_count != before_count:
+                        count_error = "event_count_unavailable_or_inconsistent"
+            if count_error:
+                ecode, events, after_code, after_count = 0, {}, 0, None
+            else:
+                ecode, events = http("GET", port, key, f"/conversations/{cid}/events/search?limit={int(limit)}&sort_order=TIMESTAMP_DESC", None, 10.0)
+                if require_event_count:
+                    after_code, after_count = event_count(port, key, f"/conversations/{cid}/events/count")
     except LifecycleBusy:
         return {"issue": issue, "worker": worker, "conversation": dict(record), "reachable": False, "lifecycle_busy": True}
     except (OSError, ValueError, KeyError, UnicodeError):
         return {"issue": issue, "worker": worker, "conversation": dict(record), "reachable": False}
     # The server returns the newest page first; retain chronological order within that page.
     items = list(reversed(events.get("items", []))) if ecode == 200 and isinstance(events, Mapping) else []
+    count_valid = (not require_event_count or
+                   (not count_error and before_code == after_code == 200 and type(before_count) is int and before_count >= 0
+                    and type(after_count) is int and before_count == after_count
+                    and len(items) == min(before_count, limit)))
     errors = [
         f"{e.get('code') or ''} {e.get('detail') or e.get('error') or ''}".strip()
         for e in items if isinstance(e, Mapping) and e.get("kind") == "ConversationErrorEvent"
@@ -3176,6 +3207,9 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
         "conversation": dict(record),
         "reachable": code == 200,
         "events_reachable": ecode == 200 and isinstance(events, Mapping) and isinstance(events.get("items"), list),
+        "event_count": before_count if require_event_count and count_valid else None,
+        "event_count_valid": count_valid,
+        "event_count_error": count_error,
         "execution_status": info.get("execution_status") if isinstance(info, Mapping) else None,
         "event_kinds": [e.get("kind") for e in items if isinstance(e, Mapping)][-limit:],
         # Only identity/kind crosses into the coordinator; never copy message or tool content.

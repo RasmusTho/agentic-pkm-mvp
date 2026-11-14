@@ -72,8 +72,8 @@ class PerConversationServer(FakeAgentServer):
             if mode in ("lost_reply", "drop"):
                 raise OSError("reply lost")
             return (429, None) if mode == "full" else (200, {"success": True})
-        if method == "GET" and "/events/search" in path:
-            if parts[2] in self.event_down:
+        if method == "GET" and ("/events/search" in path or "/events/count" in path):
+            if "/events/search" in path and parts[2] in self.event_down:
                 return 503, None
             self.events = self.streams.get(parts[2], [])
         return super().__call__(method, port, key, path, body, timeout)

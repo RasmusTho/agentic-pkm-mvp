@@ -45,6 +45,7 @@ LADDER = ("change_approach", "bounded_diagnosis", "handoff")
 # Active work is diagnosed first; unlinked conversation errors cannot authorize superseding it.
 ACTIVE_LADDER = ("bounded_diagnosis", "change_approach", "handoff")
 ACTIVE_OPERATION_SECONDS = 1800.0
+BLOCKER_REFUSAL_LIMIT = 3
 BLOCKER_FILE = ".codex-tmp/worker-blocker.json"
 BLOCKER_SCHEMA = "worker_blocker.v1"
 REPAIR_WORKFLOW = "issue-maintenance-change-control :: Repair technical constraints and resume"
@@ -194,18 +195,23 @@ def _failure_signature(layout: ew.Layout, worker: str, http: Callable[..., tuple
     """Return the error signature, failure class, evidence gap, execution status and activity."""
 
     try:
-        status = ew.conversation_status(layout, worker, http=http, runner=runner, include_messages=False)
+        status = ew.conversation_status(layout, worker, http=http, runner=runner, include_messages=False,
+                                        require_event_count=True)
     except Exception:  # noqa: BLE001 - any transport/decode failure is a gap for this item only
         return None, None, "conversation_unreachable", None, {}
     if status.get("conversation") is None:
         return "none", None, None, None, {}
     if status.get("reachable") is not True:
         return None, None, "lifecycle_busy" if status.get("lifecycle_busy") else "conversation_unreachable", None, {}
+    if status.get("event_count_error"):
+        return None, None, str(status["event_count_error"]), None, {}
     if status.get("events_reachable") is not True:
         return None, None, "event_stream_unavailable", None, {}
+    if status.get("event_count_valid") is not True:
+        return None, None, "event_count_unavailable_or_inconsistent", None, {}
     # Activity is diagnosis input only; events and tool counts never count as progress.
     activity = {"latest_event": status.get("latest_event"), "event_kinds_tail": list(status.get("event_kinds") or [])[-5:],
-                "event_refs": status.get("event_refs")}
+                "event_refs": status.get("event_refs"), "event_count": status.get("event_count")}
     latest = activity["latest_event"]
     if activity["event_refs"] is None:
         return None, None, "event_identity_unavailable", str(status.get("execution_status") or ""), activity
@@ -281,12 +287,13 @@ def directive_evidence(obs: Mapping[str, Any]) -> dict[str, Any] | None:
     if (obs.get("gaps") or not isinstance(parts, Mapping) or not isinstance(activity, Mapping)
             or set(parts) != {"checkout", "failure", "validation", "pr", "tests"}
             or any(value is None for value in parts.values())
+            or type(activity.get("event_count")) is not int or activity["event_count"] < 0
             or execution not in {"idle", "finished", "error", "stuck"}):
         return None
     latest = activity.get("latest_event")
     head = {"id": latest.get("id"), "kind": latest.get("kind")} if isinstance(latest, Mapping) else None
     blocker = obs.get("blocker")
-    return {"parts": dict(parts), "execution_status": execution, "event_head": head,
+    return {"parts": dict(parts), "execution_status": execution, "event_head": head, "event_count": activity["event_count"],
             "blocker_digest": blocker.get("digest") if isinstance(blocker, Mapping) else None}
 
 
@@ -636,6 +643,74 @@ def _upsert(records: list[Any], new: list[dict[str, Any]]) -> None:
     records.extend(r for r in new if r["id"] not in present)
 
 
+def _ambiguous_refusal(row: Mapping[str, Any]) -> bool:
+    return (row.get("outcome") == "refused" and
+            (type(row.get("attempts")) is not int or row.get("attempts") != 0
+             or "post_status" in row or row.get("event_id") is not None or row.get("event_timestamp") is not None))
+
+
+def _rejudge_refused_blocker(state: dict[str, Any], judged: dict[str, Any], tick: str) -> None:
+    """Bind a fresh blocker judgment to a new decision only after known-zero-attempt refusals."""
+    result = judged["result"]
+    if result.get("replayed") or result.get("action") != "repair_technical_dependency":
+        return
+    decision = next((row for row in judged["decisions"] if row["id"] == result.get("decision_id")), None)
+    if decision is None or decision.get("directive_evidence") is None:
+        return
+    root = decision["id"]
+    records = state["dispatch_decisions"]
+    lineage = [row for row in records if isinstance(row, dict) and row.get("kind") == KIND
+               and (row.get("id") == root or row.get("root_decision_id") == root)]
+    if not lineage:
+        return
+    ids = {row["id"] for row in lineage}
+    effects = [row for row in records if isinstance(row, Mapping) and row.get("decision_id") in ids]
+    latest = lineage[-1]
+    latest_effects = [row for row in effects if row.get("decision_id") == latest["id"]]
+    inconsistent = any(_ambiguous_refusal(row) for row in effects)
+    if inconsistent or len(latest_effects) > 1:
+        result.update(state="unknown_effect", action=None, decision_id=None,
+                      next_action="The saved directive attempt has conflicting evidence. Reconcile the original "
+                                  "attempt and marker through the owning workflow; do not resend. Peers continue.")
+        return
+    # A decision with no effect remains its own authority, including on a later replay. Any
+    # uncertain or delivered member prevents this recovery path from creating another send.
+    if len(latest_effects) != 1 or any(row.get("outcome") != "refused" for row in effects):
+        result["decision_id"] = latest["id"]
+        return
+
+    stops = [row for row in state["stop_conditions"] if isinstance(row, dict)
+             and row.get("stop") == "blocker_refusals_exhausted" and row.get("root_decision_id") == root]
+    stop = stops[-1] if stops else None
+    parts = decision["directive_evidence"]["parts"]
+    work = {name: parts[name] for name in ("checkout", "tests", "validation", "pr")}
+    if stop and not stop.get("resolved_tick"):
+        if work != stop.get("work_evidence"):
+            stop["resolved_tick"] = tick
+        else:
+            result.update(state="stopped_blocker_refusals", action=None, decision_id=None,
+                          next_action=stop["next_action"])
+            return
+    previous_count = stop.get("refusal_count", 0) if stop else 0
+    if len(effects) - previous_count >= BLOCKER_REFUSAL_LIMIT:
+        next_action = ("Investigate repeated pre-send changes to the worker's evidence, endpoint and source authority "
+                       f"through {REPAIR_WORKFLOW}; preserve the writer. Reconsider after new checkout, test, "
+                       "validation or PR evidence, or a changed or resolved blocker.")
+        state["stop_conditions"].append({"id": f"coord-stop:{root}:refusals:{tick}", "kind": KIND, "schema": SCHEMA,
+                                         "issue": decision["issue"], "worker": decision["worker"],
+                                         "stop": "blocker_refusals_exhausted", "root_decision_id": root,
+                                         "first_tick": tick, "refusal_count": len(effects), "work_evidence": work,
+                                         "owner": "coordinator", "next_action": next_action,
+                                         "unblocks_when": "new work evidence or a changed or resolved blocker"})
+        result.update(state="stopped_blocker_refusals", action=None, decision_id=None, next_action=next_action)
+        return
+
+    # Tick uniqueness is maintained by judge_item's seen-tick replay fence, including when the
+    # new evidence equals an earlier snapshot. The old judgment and refusal stay intact.
+    decision.update(id=f"{root}:rejudge:{tick}", root_decision_id=root, supersedes_decision_id=latest["id"])
+    result["decision_id"] = decision["id"]
+
+
 def _runtime_state(layout: ew.Layout, worker: str, mapping: Mapping[str, Any], runner: ew.Runner) -> str:
     return ew._worker_inspect(layout, worker, mapping, runner)
 
@@ -737,6 +812,8 @@ def _coordinate_item(layout: ew.Layout, key: str, mapping: Mapping[str, Any], *,
         authority = ({"kind": "unavailable"} if obs["gaps"].get("authority") == "unavailable"
                      else authority_for(current, issue) if readback is not None else {"kind": "none"})
         judged = judge_item(issue, worker, entry.get("coordination"), obs, authority, tick=tick, limit=stall_limit, assignment=observed)
+        if apply:
+            _rejudge_refused_blocker(current, judged, tick)
         entry["coordination"] = judged["coordination"]
         if judged["result"]["next_action"]:
             entry["next_action"] = judged["result"]["next_action"]
@@ -756,7 +833,7 @@ def _coordinate_item(layout: ew.Layout, key: str, mapping: Mapping[str, Any], *,
         item.update(runtime_state=runtime_hold["state"], remaining_outcome=runtime_hold["remaining_outcome"])
     if apply:
         try:
-            may_apply = not item.get("evidence_gaps") and item["state"] not in {"authority_stop", "unknown", "unknown_effect", "stopped_no_progress", "waiting_transient", "waiting_active_or_backoff",
+            may_apply = not item.get("evidence_gaps") and item["state"] not in {"authority_stop", "unknown", "unknown_effect", "stopped_no_progress", "stopped_blocker_refusals", "waiting_transient", "waiting_active_or_backoff",
                                               *(value[1] for value in HOLD_CLASSES.values())}
             item["effects"] = reconciled + (effects.apply_item(layout, issue, worker, tick, decision_id=item.get("decision_id"), observed=observed,
                                                                http=http, runner=runner, fetch=fetch)
@@ -770,7 +847,7 @@ def _coordinate_item(layout: ew.Layout, key: str, mapping: Mapping[str, Any], *,
                 if item["state"] != "authority_stop":
                     item["state"] = "run_deferred" if deferred else "unknown_effect"
                     item["next_action"] = ("Reconcile the conversation and use its existing /run endpoint when safe; do not resend the directive."
-                                           if deferred else "Reconcile the unknown directive in its original conversation; do not resend. Peers continue.")
+                                           if deferred else "Reconcile the unknown directive in its original conversation using its marker if available; do not resend. Peers continue.")
         except Exception as exc:  # noqa: BLE001 - one item's effect failure must not stop its peers
             item["effects"] = [{"outcome": "error", "error": type(exc).__name__}]
     return item
