@@ -430,7 +430,11 @@ def _begin_start(
             if (pending.get("generation") != preflight.get("generation")
                     or mapping.get("execution_identity") != preflight.get("identity")):
                 raise TakeoverRefused("checkout authorization changed after preflight; run takeover")
-            _identity, checkpoint = _authorization_record(mapping)
+            try:
+                _identity, checkpoint = _authorization_record(mapping)
+            except TakeoverRefused as exc:
+                # Preflight already accepted this binding, so a refusal here means it changed since.
+                raise TakeoverRefused(f"authorized checkpoint changed after preflight ({exc})") from exc
             if checkpoint is not None and not _checkpoint_present(layout.checkout(worker), _checkpoint_repo(layout, worker), checkpoint, runner, inspection_image):
                 raise TakeoverRefused("authorized checkpoint changed after preflight; run takeover")
         elif (preflight.get("identity") is not None
@@ -2449,7 +2453,16 @@ def takeover(
     def require_reconciliation(entry: dict[str, Any]) -> None:
         if entry.get("stop_id") != stop_id or entry.get("state") != "stopped_verified":
             raise TakeoverRefused("worker state changed after the stop was verified")
-        _completed_stop(entry, stop_id)
+        try:
+            _completed_stop(entry, stop_id)
+        except TakeoverRefused:
+            recorded = entry.get("work_at_stop")
+            if (isinstance(recorded, Mapping) and recorded.get("stop_id") == stop_id
+                    and recorded.get("present") is True and recorded.get("readable") is False):
+                raise TakeoverRefused(
+                    "checkout evidence is missing or unreadable; treated as unique work, no continuation permitted"
+                ) from None
+            raise
         prior = _takeover_of(entry)
         entry["takeover"] = {
             "status": "required", "generation": int(prior.get("generation", 0)),
