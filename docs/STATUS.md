@@ -176,9 +176,10 @@ owns the operating boundary.
 Last reviewed (#6617 delivery): 2026-11-14 UTC. Last verified against: controller-supplied independent
 GitHub readback for #6617 and #6626.
 
-**#6619 coordinator source candidate (2026-11-14).** The unmerged [#6619](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6619) integration candidate adds bounded progress judgment and assignment-fenced OpenHands directives on the #6627 source tree `73be38919b26269ac07497d02d7234e7d40e3da4`. It also composes the #6618 PR-cycle source repairs described below. The [epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental) owns the behavior and its limits. The candidate has not been independently reviewed, installed or live-qualified; simulated tests do not prove a real worker response. The hosting controller and image remain frozen. The real quota recovery is external bootstrap evidence, not the separate controlled autonomous-handoff acceptance.
+**#6619 coordinator source candidate (2026-11-14).** The [#6619](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6619) integration candidate adds bounded progress judgment and assignment-fenced OpenHands directives on the #6627 source tree `73be38919b26269ac07497d02d7234e7d40e3da4`. It also composes the #6618 PR-cycle source repairs described below. The [epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental) owns the behavior and its limits.
+Before-publication verification snapshot (2026-11-14, source `4903b406c820378c398b28e614d79c648e2d8e40`; delivery status lives in the live Issue and its receipts, not here): independent Opus convergence found no P0/P1; a current-head independent scope refresh, full Ruff, 330 affected tests (0 failed, 0 skipped) and exact verify passed. Real owned coordinator, OpenHands and Claude runs covered the no-progress and unsupported-dependency/held-peer cases with the authority input explicitly SIMULATED; worker, action, file and checkpoint evidence were real. An initially failed format fixture and a validator correction are disclosed in the [public receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6619#issuecomment-6872271808). Full mypy was killed by the container memory limit, so no passing full typecheck is claimed; current-head CI and guarded delivery remain required. This implies no running-baseline or controller upgrade, automatic activation or whole-epic qualification. #6618, #6620 and full parent acceptance are unfinished, and #6619 closure and future CI results are not asserted here. The hosting controller and image remain frozen. The real quota recovery is external bootstrap evidence, not the separate controlled autonomous-handoff acceptance.
 
-**#6618 PR-cycle source candidate (2026-11-14).** The unmerged
+**#6618 PR-cycle source candidate (2026-11-14).** The
 [#6618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6618) repair is composed into this
 repository candidate. It covers OpenHands PR intake and evidence binding, a one-shot PR-cycle controller with
 explicit admission, and claimant-history fencing for dispatcher and fallback handoffs. It also adds
@@ -192,8 +193,8 @@ candidate. No runtime release, activation or child completion is claimed. Automa
 controlled quota handoff, disconnect-safe operation and whole-epic acceptance remain unfinished.
 The source repair retains pre-origin, continuous-registration and predecessor chronology, preserves
 ownership on cross-branch path reuse, and adds bounded merge and sandbox-verification recovery. It
-still needs fresh independent review of the publishable commit, affected checks, CI and the parent's
-guarded delivery.
+still needs current-head CI and the parent's guarded delivery; see the #6619 snapshot above for
+dated review evidence.
 
 The August 22 baseline formerly here and the dated October 5 observations above are historical.
 Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those
