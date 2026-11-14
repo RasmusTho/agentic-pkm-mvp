@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import selectors
 import signal
 import socket
 import socketserver
@@ -26,7 +27,8 @@ import subprocess
 import sys
 import tempfile
 import threading
-from typing import Any, Callable, Iterator, cast
+import time
+from typing import Any, BinaryIO, Callable, Iterator, cast
 from uuid import UUID, uuid4
 from urllib.parse import urlencode, quote
 
@@ -5184,6 +5186,120 @@ def _rpc_via_supervisor(channel: str, request: dict[str, Any]) -> dict[str, Any]
     return result
 
 
+# The normal guest handler accepts 64 KiB lines and its RPC read times out at
+# 35 seconds (the supervised worker wait is 25 seconds). Leave 25 seconds for
+# SSH/setup/draining, without letting activity reset the whole-exchange deadline.
+_NORMAL_SSH_WIRE_BYTES = 65536
+_NORMAL_SSH_STDERR_BYTES = 65536
+_NORMAL_SSH_EXCHANGE_SECONDS = 60.0
+_NORMAL_SSH_CLEANUP_SECONDS = 5.0
+
+
+def _normal_ssh_exchange(argv: list[str], request: bytes) -> tuple[int, bytes]:
+    """Bound one local child; its exit/cleanup says nothing about remote effects."""
+    if len(request) > _NORMAL_SSH_WIRE_BYTES:
+        raise PostgresDeployError()
+    deadline = time.monotonic() + _NORMAL_SSH_EXCHANGE_SECONDS
+    process = None
+    selector = None
+    failed = False
+    try:
+        # Unbuffered binary pipes make close non-flushing, including after a
+        # partially written request. Never use communicate, even for cleanup.
+        process = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        selector = selectors.DefaultSelector()
+        for stream, event in (
+            (process.stdin, selectors.EVENT_WRITE),
+            (process.stdout, selectors.EVENT_READ),
+            (process.stderr, selectors.EVENT_READ),
+        ):
+            if stream is None:
+                raise PostgresDeployError()
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, event)
+        sent = 0
+        stdout = bytearray()
+        stderr_bytes = 0
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PostgresDeployError()
+            for key, _event in selector.select(remaining):
+                if time.monotonic() >= deadline:
+                    raise PostgresDeployError()
+                pipe = cast(BinaryIO, key.fileobj)
+                if pipe is process.stdin:
+                    try:
+                        written = os.write(pipe.fileno(), request[sent:sent + 4096])
+                    except BlockingIOError:
+                        continue
+                    if written <= 0:
+                        raise PostgresDeployError()
+                    sent += written
+                    if sent == len(request):
+                        selector.unregister(pipe)
+                        pipe.close()
+                else:
+                    is_stdout = pipe is process.stdout
+                    limit = _NORMAL_SSH_WIRE_BYTES if is_stdout else _NORMAL_SSH_STDERR_BYTES
+                    retained = len(stdout) if is_stdout else stderr_bytes
+                    try:
+                        chunk = os.read(pipe.fileno(), min(4096, limit - retained + 1))
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        selector.unregister(pipe)
+                        pipe.close()
+                    elif retained + len(chunk) > limit:
+                        raise PostgresDeployError()
+                    elif is_stdout:
+                        stdout.extend(chunk)
+                    else:
+                        # Stderr has no protocol meaning; count and discard it.
+                        stderr_bytes += len(chunk)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PostgresDeployError()
+        returncode = process.wait(timeout=remaining)
+        if time.monotonic() >= deadline:
+            raise PostgresDeployError()
+        return returncode, bytes(stdout)
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        cleanup_failed = False
+        cleanup_deadline = time.monotonic() + _NORMAL_SSH_CLEANUP_SECONDS
+        if selector is not None:
+            try:
+                selector.close()
+            except Exception:
+                cleanup_failed = True
+        if process is not None:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception:
+                        cleanup_failed = True
+            try:
+                if process.poll() is None:
+                    process.kill()
+            except Exception:
+                cleanup_failed = True
+            try:
+                process.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+            except Exception:
+                cleanup_failed = True
+        # Preserve an in-flight failure if cleanup also fails. Even a valid
+        # response cannot succeed when owned local cleanup is unproven.
+        if cleanup_failed and not failed:
+            raise PostgresDeployError() from None
+
+
 class SshDeployRemote:
     def __init__(self, host: str) -> None:
         # Host alias only: no options, shell syntax, or user-supplied command.
@@ -5193,15 +5309,22 @@ class SshDeployRemote:
         self.bootstrap = False
 
     def _request(self, action: str, operation_id: str, plan: DeployPlan) -> dict[str, Any]:
-        request = {'action': action, 'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': self.bootstrap}
-        result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '--', self.host,
-            'sudo', '-n', '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', plan.channel],
-            input=json.dumps(request) + '\n', text=True, capture_output=True, check=False)
-        if result.returncode:
+        try:
+            request = {'action': action, 'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': self.bootstrap}
+            returncode, stdout = _normal_ssh_exchange(
+                ['ssh', '-o', 'BatchMode=yes', '--', self.host,
+                 'sudo', '-n', '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', plan.channel],
+                (json.dumps(request) + '\n').encode('utf-8'),
+            )
+        except Exception:
             if action == 'reconcile-unknown':
-                if result.returncode == 78:
+                raise UnknownDeployFenceRefused('native_rpc_returns_fence_evidence') from None
+            raise PostgresDeployError() from None
+        if returncode:
+            if action == 'reconcile-unknown':
+                if returncode == 78:
                     try:
-                        refused = json.loads(result.stdout)
+                        refused = json.loads(stdout.decode('utf-8'))
                     except Exception:
                         refused = None
                     if (isinstance(refused, dict) and set(refused) == {'refused', 'missing_predicate'}
@@ -5212,7 +5335,7 @@ class SshDeployRemote:
                 raise UnknownDeployFenceRefused('native_rpc_returns_fence_evidence')
             raise PostgresDeployError()
         try:
-            response = json.loads(result.stdout)
+            response = json.loads(stdout.decode('utf-8'))
         except Exception:
             if action == 'reconcile-unknown':
                 raise UnknownDeployFenceRefused('native_rpc_returns_fence_evidence') from None
