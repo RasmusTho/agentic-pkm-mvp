@@ -462,7 +462,7 @@ leases (including historical path bindings), and the designated protected target
 remain retained. A complete locked lifecycle snapshot is frozen and reread before
 every batch; any generation/record drift stops progress. Relevant current/prior
 bindings must pass the canonical lifecycle record validator; malformed generations
-remain retained. This operator path also retains all branches while any canonical
+remain retained. By default, this operator path also retains all branches while any canonical
 dispatcher lease is live. Missing historical branch
 bindings are recorded as absent, never reconstructed or fabricated. For a branch
 with no checkout, this explicit owner discard decision plus frozen ref identity
@@ -474,6 +474,25 @@ The durable receipt captures the owner decision and verified snapshot for every
 exact branch, including unmerged branches. Its recovery path is additive object
 recovery from the bundle, not an obligation to resolve old merge conflicts. This
 operator path does not change or grant authority to the daily automation.
+
+For an explicit owner request to retire only refs unrelated to ongoing work,
+`retire_inactive_local_branches` and `retire_absent_remote_tracking_refs` accept
+`allow_unrelated_issue_leases=True`; the receipt records this opt-in. Every live
+lease must have one canonical same-repository nonterminal Issue task, a unique
+lease identity, and matching holder, resource and expiry under the existing
+relationship validator. An orphan, foreign, unknown or inconsistent live claim
+keeps the global preservation rule. This mode does not change or release leases.
+A nonterminal task linked to a closed or unknown PR also retains the global rule;
+open PR identities are already protected by the live open-head census.
+
+All candidate-specific protections still apply, including nonterminal task
+bindings and both local-head and origin-tracking aliases of a branch. Checked-out
+refs, every linked HEAD, open PRs, protected refs and lifecycle bindings remain
+protected, including prior branch names of a live lifecycle generation. The
+dispatcher writer fence and lifecycle lock still span the exact
+CAS and readback. Worktree census drift before deletion refuses the batch; drift
+after deletion restores the absent refs and records compensation. Other ref
+namespaces, remote mutations and automatic cleanup do not inherit this opt-in.
 
 ## Owner-authorized retirement of registered inactive worktrees
 
@@ -595,6 +614,7 @@ reinterpreted by this operator.
 expected SHAs, excluding `HEAD` and protected branch names. It uses a new verified
 bundle, the existing serial local CAS/readback mechanism, and the same checked-out,
 open-PR, lifecycle, lease and protected-branch guards as local branch retirement.
+Its optional selective Issue-lease mode is the explicit owner path described above.
 The canonical remote must prove every corresponding `refs/heads/*` absent before
 snapshot creation and before and after each deletion batch. A recreated source
 stops progress and restores only absent local tracking refs; advanced local refs
