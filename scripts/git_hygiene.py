@@ -2648,12 +2648,19 @@ def _dispatcher_example_block(
     for row in rows:
         starts.append(starts[-1] + len(row))
     offsets: list[int] = []
-    for index, line in enumerate(token.content.splitlines(keepends=True)):
-        row = token.map[0] + index
+    row = token.map[0]
+    for line in token.content.splitlines(keepends=True):
+        # Markdown may omit an empty GFM header after pipe normalization.
+        # Skip only blank source rows, within this token's original extent.
+        while row < token.map[1] and not rows[row].strip() and line.strip():
+            row += 1
+        if row >= token.map[1]:
+            raise RuntimeError("dispatcher_activity_invalid")
         column = rows[row].find(line.rstrip("\n"))
         if column < 0:
             raise RuntimeError("dispatcher_activity_invalid")
         offsets.extend(origins[starts[row] + column : starts[row] + column + len(line)])
+        row += 1
 
     class Events(_DispatcherHTMLBlockTextParser):
         def __init__(
