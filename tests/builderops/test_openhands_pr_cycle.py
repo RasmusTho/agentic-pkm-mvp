@@ -52,6 +52,15 @@ def setup(tmp_path, monkeypatch):
     return layout, config, FakeAgentServer()
 
 
+def fake_completed_review_stop(layout, worker, **kwargs):
+    """Model the durable result of a completed stop at the mocked lifecycle boundary."""
+    mapping = cycle._mapping(layout, worker)
+    stop_id = kwargs["stop_intent"]["stop_id"]
+    work = {"stop_id": stop_id, "present": True, "readable": True, "unique_work": True,
+            "branch": mapping.get("branch"), "checkpoint": {"ref": "synthetic-checkpoint"}}
+    return ew._record_worker(layout, 6618, state="stopped_verified", stop_id=stop_id, work_at_stop=work)
+
+
 def fetch(path, timeout):
     if "/pulls?" in path:
         data = [{"number": 9}, {"number": 10}]
@@ -122,9 +131,9 @@ def test_finished_review_runs_sandbox_and_ci_but_does_not_infer_merge_authority(
         "verify_targets": config[0]["verify_targets"], "owner_doc": {"paths": []}})}]
     server.final_responses[cid] = server.events[0]["detail"]
     calls = []
-    def stop(layout, worker, *, reason, expected_container_id, expected_assignment):
+    def stop(layout, worker, **kwargs):
         calls.append("stop")
-        ew._record_worker(layout, 6618, state="stopped_verified")
+        fake_completed_review_stop(layout, worker, **kwargs)
     def verify(layout, worker, head, targets, test_venv, saved):
         calls.append("sandbox")
         return {"head_sha": head, "targets": targets, "passed": True, "exit_code": 0}
@@ -153,7 +162,7 @@ def test_review_finding_releases_reviewer_but_does_not_run_checks(tmp_path, monk
     server.final_responses[cid] = server.events[0]["detail"]
     stopped = []
     monkeypatch.setattr(ew, "stop_worker", lambda layout, worker, **kw:
-                        stopped.append(worker) or ew._record_worker(layout, 6618, state="stopped_verified"))
+                        stopped.append(worker) or fake_completed_review_stop(layout, worker, **kw))
     result = cycle.advance(layout, config, fetch=fetch, http=server)
     assert stopped == ["reviewer"]
     assert result["results"][1]["reason"] == "review repair belongs to current owner"
@@ -304,6 +313,7 @@ def test_merge_intent_persists_before_effect_and_lost_response_never_repeats(tmp
     pr = {"number": 10, "head_sha": HEAD}
     calls = []
     monkeypatch.setattr(cycle, "_premerge", lambda *args: {"number": 10, "head_sha": HEAD})
+    monkeypatch.setattr(cycle, "_review_verification_lineage", lambda *args: None)
     def lost(argv, *, timeout):
         assert cycle._find(layout, 10, "identity")["merge_intent"]["head_sha"] == HEAD
         calls.append(argv)
@@ -311,10 +321,10 @@ def test_merge_intent_persists_before_effect_and_lost_response_never_repeats(tmp
     monkeypatch.setattr(cycle, "_command", lost)
     monkeypatch.setattr(cycle, "reconcile_native", lambda *args: (_ for _ in ()).throw(cycle.CycleError("unknown")))
     with pytest.raises(cycle.CycleError, match="unknown"):
-        cycle.merge_once(layout, pr, {}, saved)
+        cycle.merge_once(layout, pr, {"worker": "reviewer"}, saved)
     saved = cycle._find(layout, 10, "identity")
     with pytest.raises(cycle.CycleError, match="unknown"):
-        cycle.merge_once(layout, pr, {}, saved)
+        cycle.merge_once(layout, pr, {"worker": "reviewer"}, saved)
     assert len(calls) == 1
     assert "--match-head-commit" in calls[0] and "--admin" not in calls[0]
 
@@ -468,7 +478,7 @@ def test_assembled_nonclosing_review_verify_merge_and_receipt(tmp_path, monkeypa
         "scope_assessment": {"acceptance": "covered", "verify_coverage": "covered", "limitations": []},
         "owner_doc": {"outcome": "no_change", "inspected_paths": ["docs/owner.md"], "rationale": "unchanged"}})}]
     server.final_responses[cid] = server.events[0]["detail"]
-    monkeypatch.setattr(ew, "stop_worker", lambda layout, worker, **kw: ew._record_worker(layout, 6618, state="stopped_verified"))
+    monkeypatch.setattr(ew, "stop_worker", fake_completed_review_stop)
     monkeypatch.setattr(cycle, "sandbox_verify", lambda layout, worker, head, targets, test_venv, saved:
                         {"head_sha": head, "targets": targets, "passed": True})
     monkeypatch.setattr(cycle, "ci_once", lambda *args: {"exit_code": 0})
@@ -534,7 +544,7 @@ def test_assembled_closing_fallback_reconciles_lost_merge_and_checks_each_criter
               "owner_doc": {"outcome": "no_change", "inspected_paths": ["docs/owner.md"], "rationale": "unchanged"}}
     server.events = [{"kind": "MessageEvent", "source": "agent", "detail": json.dumps(review)}]
     server.final_responses[cid] = server.events[0]["detail"]
-    monkeypatch.setattr(ew, "stop_worker", lambda layout, worker, **kw: ew._record_worker(layout, 6618, state="stopped_verified"))
+    monkeypatch.setattr(ew, "stop_worker", fake_completed_review_stop)
     monkeypatch.setattr(cycle, "sandbox_verify", lambda layout, worker, head, targets, test_venv, saved:
                         {"head_sha": head, "targets": targets, "passed": True})
     monkeypatch.setattr(cycle, "ci_once", lambda *args: {"exit_code": 0})
@@ -1086,7 +1096,7 @@ def test_public_finish_drives_production_review_for_both_engines(tmp_path, monke
         assert saved["review"] == report and saved["execution_proof"]["conversation_id"] == cid
         assert saved["stop_intent"]["container_id"] == ident
         stopped.append(worker)
-        ew._record_worker(layout, 6618, state="stopped_verified")
+        fake_completed_review_stop(layout, worker, **kwargs)
     monkeypatch.setattr(ew, "stop_worker", stop)
     for text in invalid:
         server.final_responses[cid] = text
@@ -1136,6 +1146,11 @@ def test_findings_unknown_stop_reconciles_absence_and_releases_actual_capacity_g
     engine.ids["epicws-6615-reviewer"] = "d" * 64
     engine.labels["reviewer"] = ["epic-workspace.codex-home=1", f"{ew.LABEL_EPIC}=6615", f"{ew.LABEL_WORKER}=reviewer"]
     engine.labels["repair"] = []
+    ew._record_worker(layout, 6618, branch="codex/example")
+    monkeypatch.setattr(ew, "_inspect", lambda *args, **kwargs:
+                        ({"present": True, "readable": True, "unique_work": False,
+                          "branch": "codex/example"}, []))
+    monkeypatch.setattr(ew, "_checkpoint", lambda *args, **kwargs: None)
     with pytest.raises(ew.LaunchRefused, match="already mounted"):
         ew._validate_codex_home(codex_dir, layout, engine)
     real_stop = ew.stop_worker
@@ -1758,6 +1773,7 @@ def test_multiissue_merge_refuses_closing_child_hold_and_final_label_drift(tmp_p
     authority = {"number": 10, "head_sha": HEAD, "body": pr["body"], "title": "", "closing_issues": [6618],
                  "governing_issue": 6617, "governing_issue_hashes": ISSUE_HASHES, "owner": {}}
     monkeypatch.setattr(cycle, "native_authority", lambda *args: dict(authority))
+    monkeypatch.setattr(cycle, "_review_verification_lineage", lambda *args: None)
     monkeypatch.setattr(cycle.closure, "_issue", lambda *args: dict(child))
     monkeypatch.setattr(cycle, "_api_pages", lambda executor, cwd, endpoint:
                         [{"filename": "app/example.py"}] if endpoint.endswith("/files") else [{"commit": {"message": "Implement child"}}])

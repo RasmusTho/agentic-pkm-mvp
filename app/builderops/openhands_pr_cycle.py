@@ -85,7 +85,10 @@ def _save(layout: workspace.Layout, record: dict[str, Any], *, expected_worker: 
     def update(state: dict[str, Any]) -> dict[str, Any]:
         if expected_worker is not None and expected_assignment is not None:
             issue = workspace._issue_for_worker(state, expected_worker)
-            if not workspace._same_assignment(state["issue_mappings"][str(issue)], expected_assignment):
+            current = state["issue_mappings"][str(issue)]
+            if (not workspace._same_assignment(current, expected_assignment)
+                    or current.get("stop_id") != expected_assignment.get("stop_id")
+                    or current.get("work_at_stop") != expected_assignment.get("work_at_stop")):
                 raise CycleError("worker assignment changed before recording the review stop")
         rows = state["compact_receipts"]
         rows[:] = [r for r in rows if not (isinstance(r, dict) and r.get("kind") == "pr_cycle"
@@ -210,6 +213,8 @@ def _settle_verification(layout: workspace.Layout, worker: str, intent: Any) -> 
 def _sandbox_verify_locked(layout: workspace.Layout, worker: str, head: str, targets: list[str], test_venv: str,
                            saved: dict[str, Any]) -> dict[str, Any]:
     mapping = _mapping(layout, worker)
+    if any(key in saved for key in ("execution_proof", "stop_intent", "stop_verified")):
+        _review_stop_checkpoint(mapping, saved, require_receipt=True)
     image = mapping.get("image")
     if mapping.get("state") != "stopped_verified" or not isinstance(image, str) or not re.fullmatch(
         r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}", image
@@ -2129,16 +2134,19 @@ def merge_once(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str,
     if saved.get("merge_intent"):
         return reconcile_native(layout, saved)
     authority = _premerge(layout, pr, entry, saved)
-    saved["merge_intent"] = authority
-    _save(layout, saved)
-    try:
-        result = _command(["gh", "pr", "merge", str(pr["number"]), "--repo", completion.REPOSITORY,
-                           "--squash", "--match-head-commit", pr["head_sha"],
-                           "--subject", f"Merge PR #{pr['number']}", "--body", f"Delivered PR #{pr['number']}."], timeout=60)
-        saved["merge_exit_code"] = result.returncode
+    worker = entry["worker"]
+    with workspace._worker_lifecycle_lock(layout, worker):
+        _review_verification_lineage(_mapping(layout, worker), saved)
+        saved["merge_intent"] = authority
         _save(layout, saved)
-    except CycleError:
-        pass  # The merge might have happened; read back rather than retrying.
+        try:
+            result = _command(["gh", "pr", "merge", str(pr["number"]), "--repo", completion.REPOSITORY,
+                               "--squash", "--match-head-commit", pr["head_sha"],
+                               "--subject", f"Merge PR #{pr['number']}", "--body", f"Delivered PR #{pr['number']}."], timeout=60)
+            saved["merge_exit_code"] = result.returncode
+            _save(layout, saved)
+        except CycleError:
+            pass  # The merge might have happened; read back rather than retrying.
     return reconcile_native(layout, saved)
 
 
@@ -2494,6 +2502,52 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]], *,
                 "failures": scan["failures"], "results": results}
 
 
+def _review_stop_checkpoint(mapping: Mapping[str, Any], saved: Mapping[str, Any], *,
+                            require_receipt: bool) -> Any:
+    intent = saved.get("stop_intent")
+    if (not isinstance(intent, dict) or not isinstance(intent.get("stop_id"), str)
+            or not re.fullmatch(r"[0-9a-f]{32}", intent["stop_id"])
+            or "previous_stop_id" not in intent):
+        raise CycleError("reviewer stop intent has no exact stop generation; reconcile the old record")
+    assignment = intent.get("assignment")
+    proof = saved.get("execution_proof")
+    conversation = mapping.get("conversation")
+    if (not isinstance(assignment, dict) or not isinstance(proof, dict)
+            or intent.get("container_id") != mapping.get("container_id")
+            or proof.get("container_id") != intent.get("container_id")
+            or not isinstance(conversation, dict)
+            or proof.get("conversation_id") != conversation.get("id")
+            or proof.get("operation_id") != conversation.get("operation_id")):
+        raise CycleError("review stop receipt does not bind the current worker assignment")
+    before = workspace.assignment_of(assignment)
+    current = workspace.assignment_of(mapping)
+    if (any(before[field] != current[field] for field in workspace.ASSIGNMENT_FIELDS if field != "state")
+            or not isinstance(before["conversation"], dict) or not isinstance(current["conversation"], dict)
+            or before["conversation"].get("id") != current["conversation"].get("id")
+            or current["conversation"].get("status") not in
+            (before["conversation"].get("status"), workspace.CONVERSATION_ENDED)):
+        raise CycleError("review stop receipt does not bind the current worker assignment")
+    try:
+        work = workspace._completed_stop(mapping, intent["stop_id"])
+    except workspace.TakeoverRefused as exc:
+        raise CycleError(str(exc)) from exc
+    checkpoint = work["checkpoint"]
+    if require_receipt and (saved.get("stop_verified") is not True or "checkpoint" not in intent
+                            or intent["checkpoint"] != checkpoint):
+        raise CycleError("review stop receipt does not match the current completed checkpoint; reconcile it")
+    return checkpoint
+
+
+def _review_verification_lineage(mapping: Mapping[str, Any], saved: Mapping[str, Any]) -> None:
+    _review_stop_checkpoint(mapping, saved, require_receipt=True)
+    if mapping.get("checkpoint_inspection_unknown"):
+        raise CycleError("checkpoint or verification cleanup remains unresolved; reconcile the worker")
+    verification = saved.get("verification")
+    intent = saved["stop_intent"]
+    if not isinstance(verification, dict) or verification.get("stop_id") != intent["stop_id"]:
+        raise CycleError("verification receipt does not match the current stop; reconcile the review")
+
+
 def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, Any],
                       observed: Mapping[str, Any]) -> None:
     """Stop the reviewed assignment and reconcile an uncertain stop through the lifecycle."""
@@ -2515,19 +2569,21 @@ def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, An
         if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{12,64}", ident):
             raise CycleError("reviewer container identity is unavailable")
         _assert_live_container(layout, worker, mapping)
-        intent = {"container_id": ident, "assignment": workspace.assignment_of(mapping)}
+        intent = {"container_id": ident, "assignment": workspace.assignment_of(mapping),
+                  "previous_stop_id": mapping.get("stop_id"), "stop_id": uuid.uuid4().hex}
         saved["stop_intent"] = intent
         _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
     if (not isinstance(intent, dict) or not isinstance(intent.get("container_id"), str)
             or not workspace._CONTAINER_ID.fullmatch(intent["container_id"])
             or intent["container_id"] != mapping.get("container_id")):
         raise CycleError("reviewer stop intent has no exact container lineage")
+    if (not isinstance(intent.get("stop_id"), str) or not re.fullmatch(r"[0-9a-f]{32}", intent["stop_id"])
+            or "previous_stop_id" not in intent):
+        raise CycleError("reviewer stop intent has no exact stop generation; reconcile the old record")
     assignment = intent.get("assignment")
     def check_lineage(current_mapping: Mapping[str, Any]) -> None:
-        if assignment is None:  # Existing exact-ID intents predate assignment snapshots.
-            return
         if not isinstance(assignment, dict):
-            raise CycleError("reviewer stop assignment is malformed")
+            raise CycleError("reviewer stop assignment is missing or malformed; reconcile the old record")
         before = workspace.assignment_of(assignment)
         current = workspace.assignment_of(current_mapping)
         if (any(before[field] != current[field] for field in workspace.ASSIGNMENT_FIELDS if field != "state")
@@ -2541,12 +2597,17 @@ def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, An
             raise CycleError("reviewer assignment changed since stop intent")
     check_lineage(mapping)
     if not saved.get("stop_verified"):
-        if mapping.get("state") == "stopped_verified" and mapping.get("stop_reason") != reason:
+        if (mapping.get("stop_id") != intent["stop_id"]
+                and (mapping.get("state") != "running" or mapping.get("stop_id") != intent["previous_stop_id"])):
             raise CycleError("a newer reviewer stop requires reconciliation")
         # An interrupted ID-bound stop can be retried safely through the existing
         # stop/checkpoint path; absence alone must not manufacture its completion.
-        workspace.stop_worker(layout, worker, reason=reason, expected_container_id=intent["container_id"],
-                              expected_assignment=mapping)
+        try:
+            workspace.stop_worker(layout, worker, reason=reason, expected_container_id=intent["container_id"],
+                                  expected_assignment=mapping, stop_intent=intent)
+        except workspace.EpicWorkspaceError:
+            check_lineage(_mapping(layout, worker))
+            raise
     with workspace._worker_lifecycle_lock(layout, worker):
         mapping = _mapping(layout, worker)
         check_lineage(mapping)
@@ -2555,7 +2616,8 @@ def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, An
                 or mapping["conversation"].get("id") != proof["conversation_id"]):
             raise CycleError("reviewer assignment changed after stop")
         _assert_stopped(layout, worker, mapping)
-        verified = {**saved, "stop_verified": True}
+        checkpoint = _review_stop_checkpoint(mapping, saved, require_receipt=bool(saved.get("stop_verified")))
+        verified = {**saved, "stop_intent": {**intent, "checkpoint": checkpoint}, "stop_verified": True}
         _save(layout, verified, expected_worker=worker, expected_assignment=mapping)
         saved.update(verified)
 
@@ -2606,9 +2668,15 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
             _release_reviewer(layout, entry["worker"], saved, worker_record)
             if pr["review_outcome"] == "pass":
                 if "verification" not in saved:
-                    saved["verification"] = sandbox_verify(layout, entry["worker"], pr["head_sha"],
-                                                           entry["verify_targets"], entry["test_venv"], saved)
-                    _save(layout, saved)
+                    verification = sandbox_verify(layout, entry["worker"], pr["head_sha"],
+                                                  entry["verify_targets"], entry["test_venv"], saved)
+                    with workspace._worker_lifecycle_lock(layout, entry["worker"]):
+                        current = _mapping(layout, entry["worker"])
+                        _review_stop_checkpoint(current, saved, require_receipt=True)
+                        saved["verification"] = {**verification, "stop_id": saved["stop_intent"]["stop_id"]}
+                        _save(layout, saved, expected_worker=entry["worker"], expected_assignment=current)
+                with workspace._worker_lifecycle_lock(layout, entry["worker"]):
+                    _review_verification_lineage(_mapping(layout, entry["worker"]), saved)
                 if saved["verification"].get("passed") is True:
                     saved["ci"] = ci_once(pr["number"], Path(__file__).resolve().parents[2])
                     _save(layout, saved)

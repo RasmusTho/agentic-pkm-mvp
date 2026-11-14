@@ -501,9 +501,14 @@ The reviewer uses the public final response for its exact finished conversation.
 report may be enclosed between `<BEGIN_PR_CYCLE_REPORT>` and `<END_PR_CYCLE_REPORT>` after plain
 public closeout text. The controller binds the report to the native execution observation, persists
 both before stopping the exact reviewer assignment, and reconciles an uncertain stop through the
-ID-bound stop and checkpoint path. A changed assignment or newer stop refuses reconciliation; an
-absence readback alone does not replace preservation. Findings return to the existing repair owner
-after reviewer capacity is released.
+ID-bound stop and checkpoint path. The stop intent binds a new stop ID and the previously observed
+stop generation before removal. A retry completes that same stop's checkpoint; a changed assignment
+or newer stop refuses reconciliation. A saved stop receipt and verifier admission require the current
+stop ID and its completed checkpoint to match. The verification receipt carries that stop ID, which
+is checked again under the worker lifecycle lock before a merge intent or effect. An older intent
+without a stop ID is ambiguous and requires trusted reconciliation; an absence readback alone does
+not replace preservation. Findings return to the existing repair owner after reviewer capacity is
+released.
 Exact closing Issue holds are checked again immediately before merge; a non-closing parent remains
 open. Dispatcher recovery records each reclaim and completion intent and reads back the actual lease
 and ordered events before proceeding. Older ambiguous effect records remain unknown. A recorded

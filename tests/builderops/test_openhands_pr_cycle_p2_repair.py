@@ -8,7 +8,7 @@ from app.builderops import epic_workspace as ew
 from app.builderops import openhands_pr_cycle as cycle
 from scripts import agent_worktree
 from tests.builderops.test_openhands_pr_cycle import (
-    HEAD, _event_time, _handoff, _native_authority_fixture, _prepare_and_pin, fetch, setup,
+    HEAD, _event_time, _handoff, _native_authority_fixture, _prepare_and_pin, fake_completed_review_stop, fetch, setup,
 )
 from tests.builderops.test_openhands_transfer_registration import _pickup
 from tests.ops.test_agent_worktree import GENERATION
@@ -276,9 +276,15 @@ def test_review_release_refuses_a_missing_legacy_container_id(tmp_path, monkeypa
 
 def test_review_stop_readback_cannot_record_success_for_a_new_assignment(tmp_path, monkeypatch):
     layout, prior, saved = _review_release_setup(tmp_path, monkeypatch)
-    saved["stop_intent"] = {"container_id": prior["container_id"], "assignment": ew.assignment_of(prior)}
+    stop_id = "f" * 32
+    checkpoint = {"ref": "synthetic-checkpoint"}
+    saved["stop_intent"] = {"container_id": prior["container_id"], "assignment": ew.assignment_of(prior),
+                            "previous_stop_id": None, "stop_id": stop_id, "checkpoint": checkpoint}
     saved["stop_verified"] = True
-    ew._record_worker(layout, 6618, state="stopped_verified", conversation={**prior["conversation"], "status": ew.CONVERSATION_ENDED})
+    ew._record_worker(layout, 6618, state="stopped_verified", stop_id=stop_id,
+                      work_at_stop={"stop_id": stop_id, "present": True, "readable": True, "unique_work": True,
+                                    "branch": prior.get("branch"), "checkpoint": checkpoint},
+                      conversation={**prior["conversation"], "status": ew.CONVERSATION_ENDED})
     observed = cycle._mapping(layout, "reviewer")
     successor = {"id": "new-conversation", "operation_id": "new-operation", "status": "created"}
     def replace_after_readback(*args):
@@ -397,8 +403,7 @@ def test_advance_retries_interrupted_verification_after_reconciliation(tmp_path,
                            "verify_targets": config[0]["verify_targets"], "owner_doc": {"paths": []}})
     server.events = [{"kind": "MessageEvent", "source": "agent", "detail": response}]
     server.final_responses[conversation] = response
-    monkeypatch.setattr(ew, "stop_worker", lambda layout, worker, **kw:
-                        ew._record_worker(layout, 6618, state="stopped_verified"))
+    monkeypatch.setattr(ew, "stop_worker", fake_completed_review_stop)
     calls = []
     def verify(layout, worker, head, targets, test_venv, saved):
         calls.append(saved.get("verification_intent"))
@@ -589,6 +594,7 @@ def test_same_head_new_identity_still_cannot_repeat_unknown_merge(tmp_path, monk
     monkeypatch.setattr(cycle, "_mapping", lambda *args: {"conversation": {"id": "conversation"}})
     monkeypatch.setattr(cycle, "_add_transfer_review_context", lambda *args: None)
     monkeypatch.setattr(cycle, "_release_reviewer", lambda *args: None)
+    monkeypatch.setattr(cycle, "_review_verification_lineage", lambda *args: None)
     monkeypatch.setattr(cycle.completion, "work_identity", lambda pr: "new-identity")
     monkeypatch.setattr(cycle.completion, "intake", lambda *args, **kwargs:
                         [{"action": "wait", "reason": "active or unknown writable owner"}])

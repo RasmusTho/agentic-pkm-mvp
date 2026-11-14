@@ -822,6 +822,7 @@ def _settle_checkpoint_writer(layout: Layout, worker: str, runner: Runner) -> No
 def _stop_worker(
     layout: Layout, worker: str, *, reason: str, runner: Runner, image: str, retain_identity: bool = True,
     expected_container_id: str | None = None, expected_assignment: Mapping[str, Any] | None = None,
+    stop_intent: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Remove the worker container, prove absence by engine readback, then preserve its work.
 
@@ -843,9 +844,27 @@ def _stop_worker(
             not _CONTAINER_ID.fullmatch(expected_container_id)
             or state["issue_mappings"][str(issue)].get("container_id") != expected_container_id):
         raise EpicWorkspaceError("worker container identity changed before stop")
+    mapping = state["issue_mappings"][str(issue)]
+    stop_id = uuid.uuid4().hex
+    resuming = False
+    if stop_intent is not None:
+        candidate = stop_intent.get("stop_id")
+        if (not isinstance(candidate, str) or not re.fullmatch(r"[0-9a-f]{32}", candidate)
+                or "previous_stop_id" not in stop_intent):
+            raise EpicWorkspaceError("stop intent has no exact stop generation; reconcile the old record")
+        stop_id = candidate
+        resuming = mapping.get("state") == "stopped_verified" and mapping.get("stop_id") == stop_id
+        if not resuming and (mapping.get("state") != "running"
+                             or mapping.get("stop_id") != stop_intent["previous_stop_id"]):
+            raise EpicWorkspaceError("a newer stop requires reconciliation; preserving its generation")
+        if resuming:
+            previous_work = mapping.get("work_at_stop")
+            if not isinstance(previous_work, Mapping) or previous_work.get("stop_id") != stop_id:
+                raise EpicWorkspaceError("interrupted stop has no exact checkpoint lineage; reconcile it")
+            if "checkpoint" in previous_work:
+                return {**previous_work}
     _assert_engine(runner)
     _settle_checkpoint_writer(layout, worker, runner)
-    mapping = state["issue_mappings"][str(issue)]
     if (mapping.get("state") == "starting" and not mapping.get("container_id")
             and mapping.get("launch_protocol") != LAUNCH_PROTOCOL):
         raise TakeoverRefused("legacy worker launch outcome is unknown; ID-bound stop proof is unavailable")
@@ -857,13 +876,26 @@ def _stop_worker(
     if remaining is not None:
         raise EpicWorkspaceError(f"worker {worker!r} container still present ({remaining}); not verified stopped")
     work, ignored_all = _inspect(layout, worker, runner=runner, image=image)
-    stop_id = uuid.uuid4().hex
+    work = {**work, "stop_id": stop_id}
+    if resuming:
+        previous_work = mapping["work_at_stop"]
+        if any(previous_work.get(key) != work.get(key) for key in
+               (*_IDENTITY_FIELDS, "present", "readable", "unique_work")):
+            raise EpicWorkspaceError("checkout changed since the interrupted stop; preserve it and run takeover")
 
     def record_stop(entry: dict[str, Any]) -> None:
         if expected_assignment is not None and not _same_assignment(entry, expected_assignment):
             raise EpicWorkspaceError("worker assignment changed during stop; the newer state is kept")
+        if stop_intent is not None:
+            if resuming:
+                if entry.get("stop_id") != stop_id or entry.get("work_at_stop") != mapping.get("work_at_stop"):
+                    raise EpicWorkspaceError("stop generation changed during recovery; the newer state is kept")
+                return
+            if entry.get("stop_id") != stop_intent["previous_stop_id"]:
+                raise EpicWorkspaceError("stop generation changed during stop; the newer state is kept")
         needs_takeover = (bool(entry.get("started_at")) or bool(work.get("unique_work"))
                           or not work.get("readable") or work.get("branch") is None
+                          or _takeover_of(entry).get("status") == "authorized"
                           or work.get("branch") != entry.get("execution_branch", entry.get("branch")) or any(
             op.get("status") in _OP_UNRESOLVED
             for op in entry.get("publication_ops", []) if isinstance(op, Mapping)
@@ -876,20 +908,33 @@ def _stop_worker(
             entry["conversation"] = {**conversation, "status": CONVERSATION_ENDED, "ended_at": _now()}
 
     _mutate_mapping(layout, worker, record_stop)
-    work = dict(work)
-    work["stop_id"] = stop_id
     drifted = work.get("branch") != mapping.get("execution_branch", mapping.get("branch"))
-    work["checkpoint"] = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image,
-                                     force=retain_identity and (drifted or work.get("branch") is None))
+    force = retain_identity and (drifted or work.get("branch") is None)
+    checkpoint = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image,
+                             force=force)
+    if work.get("present") is True and work.get("readable") is True:
+        if checkpoint is None and (work.get("unique_work") is not False or force):
+            raise EpicWorkspaceError("required checkpoint was not completed; preserving checkout")
+
+        def record_completion(entry: dict[str, Any]) -> None:
+            if (entry.get("state") != "stopped_verified" or entry.get("stop_id") != stop_id
+                    or entry.get("work_at_stop") != work):
+                raise EpicWorkspaceError("worker assignment changed during checkpoint; the newer state is kept")
+            entry["work_at_stop"] = {**work, "checkpoint": checkpoint}
+
+        _mutate_mapping(layout, worker, record_completion)
+    work["checkpoint"] = checkpoint
     return work
 
 
 @_serialized_worker
 def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE,
                 expected_container_id: str | None = None,
-                expected_assignment: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                expected_assignment: Mapping[str, Any] | None = None,
+                stop_intent: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return _stop_worker(layout, worker, reason=reason, runner=runner, image=image,
-                        expected_container_id=expected_container_id, expected_assignment=expected_assignment)
+                        expected_container_id=expected_container_id, expected_assignment=expected_assignment,
+                        stop_intent=stop_intent)
 
 
 def _controller_dir(layout: Layout, *parts: str) -> Path:
@@ -1551,15 +1596,35 @@ def _fence_authorization(layout: Layout, worker: str, generation: Any) -> None:
     _mutate_mapping(layout, worker, mutate)
 
 
+def _completed_stop(mapping: Mapping[str, Any], stop_id: Any) -> Mapping[str, Any]:
+    """Read the checkpoint result committed for this exact stopped generation."""
+    work = mapping.get("work_at_stop")
+    if (not isinstance(stop_id, str) or not re.fullmatch(r"[0-9a-f]{32}", stop_id)
+            or mapping.get("state") != "stopped_verified" or mapping.get("stop_id") != stop_id
+            or not isinstance(work, Mapping) or work.get("stop_id") != stop_id
+            or work.get("present") is not True or work.get("readable") is not True
+            or "checkpoint" not in work):
+        raise TakeoverRefused("stop checkpoint is incomplete or its generation changed; reconcile the worker")
+    checkpoint = work["checkpoint"]
+    if checkpoint is None:
+        if (work.get("unique_work") is not False or not isinstance(work.get("branch"), str)
+                or work.get("branch") != mapping.get("execution_branch", mapping.get("branch"))):
+            raise TakeoverRefused("stop has no completed preservation checkpoint; reconcile the worker")
+    elif (not isinstance(checkpoint, Mapping) or not isinstance(checkpoint.get("ref"), str)
+          or not checkpoint["ref"]):
+        raise TakeoverRefused("stop checkpoint record is malformed; reconcile the worker")
+    return work
+
+
 def _authorization_record(mapping: Mapping[str, Any]) -> tuple[dict[str, Any], Mapping[str, Any] | None]:
     """Validate the durable binding without consulting a live checkout or engine."""
     pending = _takeover_of(mapping)
+    stopped = _completed_stop(mapping, pending.get("stop_id"))
     identity = mapping.get("execution_identity")
     if not isinstance(identity, Mapping):
         raise TakeoverRefused("authorized checkout identity is missing; run takeover to reconcile it")
     expected = _checkout_identity({**identity, "present": True, "readable": True})
-    stopped = mapping.get("work_at_stop")
-    if (not isinstance(stopped, Mapping) or _checkout_identity(stopped) != expected
+    if (_checkout_identity(stopped) != expected
             or mapping.get("execution_branch", mapping.get("branch")) != expected["branch"]
             or pending.get("execution_branch") != expected["branch"]
             or pending.get("head") != expected["head"] or pending.get("publisher_branch") != mapping.get("branch")):
@@ -1567,6 +1632,9 @@ def _authorization_record(mapping: Mapping[str, Any]) -> tuple[dict[str, Any], M
     if "checkpoint_ref" not in identity:
         raise TakeoverRefused("authorized checkpoint binding is missing; run takeover to reconcile it")
     checkpoint_ref = identity.get("checkpoint_ref")
+    stopped_checkpoint = stopped["checkpoint"]
+    if checkpoint_ref != (stopped_checkpoint.get("ref") if isinstance(stopped_checkpoint, Mapping) else None):
+        raise TakeoverRefused("authorized stop checkpoint changed; run takeover to reconcile it")
     checkpoint = None
     if checkpoint_ref is not None:
         checkpoints = mapping.get("checkpoints", [])
@@ -1574,7 +1642,7 @@ def _authorization_record(mapping: Mapping[str, Any]) -> tuple[dict[str, Any], M
             raise TakeoverRefused("authorized checkpoints are unreadable; run takeover to reconcile them")
         checkpoint = next((c for c in checkpoints if isinstance(c, Mapping)
                            and c.get("ref") == checkpoint_ref and c.get("status") == "preserved"), None)
-        if (not checkpoint or checkpoint.get("branch") != expected["branch"]
+        if (not checkpoint or checkpoint != stopped_checkpoint or checkpoint.get("branch") != expected["branch"]
                 or checkpoint.get("head") != expected["head"] or checkpoint.get("tree") != expected["snapshot_tree"]
                 or checkpoint.get("staged_tree") != expected["staged_tree"]
                 or checkpoint.get("refs_fingerprint") != expected["refs_fingerprint"]
@@ -1949,14 +2017,43 @@ def checkpoint_worker(layout: Layout, worker: str, *, reason: str, runner: Runne
     issue = _issue_for_worker(state, worker)
     _assert_engine(runner)
     _settle_checkpoint_writer(layout, worker, runner)
-    if state["issue_mappings"][str(issue)].get("state") in ("starting", "running"):
+    mapping = state["issue_mappings"][str(issue)]
+    if mapping.get("state") in ("starting", "running"):
         raise EpicWorkspaceError("worker launch or execution is unresolved; run worker-stop before checkpoint")
     if _container_state(layout, worker, runner) is not None:
         raise EpicWorkspaceError("worker container is present; a checkpoint would compete with it. Stop it first")
+    stop_id = mapping.get("stop_id")
+    prior_work = mapping.get("work_at_stop")
+    tracked_stop = (mapping.get("state") == "stopped_verified" and isinstance(stop_id, str)
+                    and re.fullmatch(r"[0-9a-f]{32}", stop_id) is not None
+                    and isinstance(prior_work, Mapping) and prior_work.get("stop_id") == stop_id)
+    if tracked_stop:
+        # An independent checkpoint can advance the generation, or fail after writing a ref.
+        # Fence old receipts before it starts and restore completion only for this exact snapshot.
+        def invalidate(entry: dict[str, Any]) -> None:
+            if entry.get("stop_id") != stop_id or entry.get("work_at_stop") != prior_work:
+                raise EpicWorkspaceError("stop changed before checkpoint; the newer state is kept")
+            entry["work_at_stop"] = {k: v for k, v in prior_work.items() if k != "checkpoint"}
+
+        _mutate_mapping(layout, worker, invalidate)
     work, ignored_all = _inspect(layout, worker, runner=runner, image=image)
     if not work.get("readable"):
         raise EpicWorkspaceError("checkout is missing or unreadable; it is treated as unique work and cannot be checkpointed")
-    return _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image)
+    force = tracked_stop and (work.get("branch") is None
+                              or work.get("branch") != mapping.get("execution_branch", mapping.get("branch")))
+    checkpoint = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image,
+                             force=force)
+    if tracked_stop and all(prior_work.get(key) == work.get(key) for key in
+                            (*_IDENTITY_FIELDS, "present", "readable", "unique_work")):
+        incomplete = {k: v for k, v in prior_work.items() if k != "checkpoint"}
+
+        def complete(entry: dict[str, Any]) -> None:
+            if entry.get("stop_id") != stop_id or entry.get("work_at_stop") != incomplete:
+                raise EpicWorkspaceError("stop changed during checkpoint; the newer state is kept")
+            entry["work_at_stop"] = {**incomplete, "checkpoint": checkpoint}
+
+        _mutate_mapping(layout, worker, complete)
+    return checkpoint
 
 
 @_serialized_worker
@@ -2352,6 +2449,7 @@ def takeover(
     def require_reconciliation(entry: dict[str, Any]) -> None:
         if entry.get("stop_id") != stop_id or entry.get("state") != "stopped_verified":
             raise TakeoverRefused("worker state changed after the stop was verified")
+        _completed_stop(entry, stop_id)
         prior = _takeover_of(entry)
         entry["takeover"] = {
             "status": "required", "generation": int(prior.get("generation", 0)),
@@ -2392,6 +2490,8 @@ def takeover(
     def mutate(entry: dict[str, Any]) -> None:
         if entry.get("stop_id") != stop_id or entry.get("state") != "stopped_verified":
             raise TakeoverRefused("worker state changed after the stop was verified (a start raced the takeover)")
+        if _completed_stop(entry, stop_id).get("checkpoint") != checkpoint:
+            raise TakeoverRefused("stop checkpoint changed during takeover")
         if (entry.get("branch") != recorded or entry.get("execution_branch", recorded) != previous_execution
                 or entry.get("checkout") != str(layout.checkout(worker))
                 or int(_takeover_of(entry).get("generation", 0)) != generation):
@@ -2423,6 +2523,7 @@ def takeover(
         entry["execution_identity"] = {**identity, "checkpoint_ref": checkpoint["ref"] if checkpoint is not None else None}
         entry["takeover"] = {
             "status": "authorized", "generation": int(prior.get("generation", 0)) + 1, "reason": reason,
+            "stop_id": stop_id,
             "authorized_at": _now(), "checkpoints": [c["ref"] for c in entry.get("checkpoints", []) if c.get("status") == "preserved"],
             "execution_branch": actual, "previous_execution_branch": previous_execution,
             "publisher_branch": recorded, "head": after["head"],
