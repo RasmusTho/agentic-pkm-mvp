@@ -3174,6 +3174,7 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
                         f"/conversations/{cid}/events/count?{_EVENT_VALID_COUNT_QUERY}")
                     if valid_code != 200 or type(valid_count) is not int or valid_count != before_count:
                         count_error = "event_count_unavailable_or_inconsistent"
+            events: Any
             if count_error:
                 ecode, events, after_code, after_count = 0, {}, 0, None
             else:
