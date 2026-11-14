@@ -12,6 +12,7 @@ from tests.builderops.test_epic_workspace_isolation import FakeEngine, _seed_rep
 
 HEAD = "a" * 40
 REAL_TEST_VENV_SOURCE = cycle._test_venv_source
+REAL_VENV_MINOR = cycle._venv_python_minor
 ISSUE_HASHES = {"title_sha256": cycle.hashlib.sha256(b"issue title").hexdigest(),
                 "body_sha256": cycle.hashlib.sha256(b"issue").hexdigest()}
 
@@ -46,6 +47,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(ew, "inspect_checkout", lambda _layout, _worker: {"readable": True, "head": HEAD, "uncommitted_count": 0})
     monkeypatch.setattr(cycle, "_review_context", lambda pr: ({"files_digest": "test", "closing_issue_hashes": {}, "check_config_digest": "test"}, {"files": [], "issues": {}}))
     monkeypatch.setattr(cycle, "_test_venv_source", lambda layout, value: cycle.Path(value))
+    monkeypatch.setattr(cycle, "_venv_python_minor", lambda source: 13)
     config = [{"test_venv": "/approved/venv", "number": 10, "head_sha": HEAD, "worker": "reviewer", "engine": "codex",
                "model": "gpt-6.1-terra", "native_session_owned": True,
                "verify_targets": ["tests/example.py::test_example"]}]
@@ -950,11 +952,52 @@ def test_each_child_criterion_needs_substantive_review():
         cycle._assert_child_assessment(review, 2, criteria)
 
 
-def _venv(path):
+def _venv(path, minor=13, link=None):
     (path / "bin").mkdir(parents=True)
-    (path / "pyvenv.cfg").write_text("home = /usr/local/bin\n")
-    (path / "bin" / "python").symlink_to("/usr/local/bin/python3.13")
+    (path / "pyvenv.cfg").write_text(f"home = /usr/local/bin\nversion = 3.{minor}.1\n")
+    (path / "bin" / "python").symlink_to(link or f"/usr/local/bin/python3.{minor}")
     return path
+
+
+@pytest.mark.parametrize("minor", [12, 13])
+def test_venv_preflight_accepts_supported_runtimes_and_binds_interpreter(tmp_path, tmp_path_factory, monkeypatch, minor):
+    layout, _, _ = setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(cycle, "_test_venv_source", REAL_TEST_VENV_SOURCE)
+    monkeypatch.setattr(cycle, "_venv_python_minor", REAL_VENV_MINOR)
+    venv = _venv(tmp_path_factory.mktemp("controller") / "venv", minor)
+    assert cycle._test_venv_source(layout, str(venv)) == venv
+    ew._record_worker(layout, 6618, state="stopped_verified", image="agent-server@sha256:" + "c" * 64)
+    monkeypatch.setattr(cycle, "_assert_stopped", lambda *args: None)
+    monkeypatch.setattr(ew, "_remove_owned", lambda *args, **kwargs: None)
+    calls = []
+    def command(argv, *, timeout):
+        calls.append(argv)
+        return cycle.subprocess.CompletedProcess(argv, 0, "e" * 64 if argv[1] == "create" else "1 passed", "")
+    monkeypatch.setattr(cycle, "_command", command)
+    result = cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py"], str(venv),
+                                  {"kind": "pr_cycle", "number": 10, "identity": f"py3{minor}"})
+    assert result["passed"]
+    create = calls[0]
+    assert f"sys.version_info[:2] == (3, {minor})" in create[create.index("-c") + 1]
+    assert create[create.index("--entrypoint") + 1] == "/opt/pr-cycle-venv/bin/python"
+
+
+@pytest.mark.parametrize("minor,link,cfg", [
+    (12, "/usr/local/bin/python3.13", None),  # symlink disagrees with recorded version
+    (13, "/usr/local/bin/python3.12", None),
+    (11, None, None), (14, None, None),       # unsupported runtimes stay fail-loud
+    (12, "/opt/other/python3.12", None),      # arbitrary interpreter path
+    (12, None, "home = /x\n"),               # no recorded version
+    (12, None, "version = 3.12.1\nversion_info = 3.13.0\n"),  # ambiguous
+])
+def test_venv_preflight_refuses_mismatched_or_unsupported_interpreter(tmp_path, minor, link, cfg):
+    layout = ew.Layout(tmp_path / "workspaces", 6615)
+    layout.root.mkdir()
+    venv = _venv(tmp_path / "verification" / "venv", minor, link)
+    if cfg is not None:
+        (venv / "pyvenv.cfg").write_text(cfg)
+    with pytest.raises(cycle.CycleError, match="Python version|interpreter|symlink"):
+        cycle._test_venv_source(layout, str(venv))
 
 
 def test_controller_venv_preflight_refuses_unsafe_sources(tmp_path):

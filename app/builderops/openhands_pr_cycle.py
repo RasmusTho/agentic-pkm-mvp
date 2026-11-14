@@ -126,6 +126,21 @@ def _assert_stopped(layout: workspace.Layout, worker: str, mapping: Mapping[str,
         raise CycleError("recorded worker container absence is not established")
 
 
+SUPPORTED_TEST_PYTHON_MINORS = (12, 13)
+
+
+def _venv_python_minor(source: Path) -> int:
+    """Return the minor version recorded by the venv, which must be a supported one."""
+    try:
+        text = (source / "pyvenv.cfg").read_text()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CycleError("approved test environment is unavailable") from exc
+    found = re.findall(r"(?m)^version(?:_info)?[ \t]*=[ \t]*3\.([0-9]+)(?:\.|$)", text)
+    if len(set(found)) != 1 or int(found[0]) not in SUPPORTED_TEST_PYTHON_MINORS:
+        raise CycleError("test environment Python version is unsupported or ambiguous")
+    return int(found[0])
+
+
 def _test_venv_source(layout: workspace.Layout, value: str) -> Path:
     """Accept only an explicit, privately controlled venv without credential-shaped files.
 
@@ -157,14 +172,19 @@ def _test_venv_source(layout: workspace.Layout, value: str) -> Path:
             if stat.S_ISLNK(info.st_mode):
                 target = path.resolve()
                 if not workspace._is_within(target, source) and not (
-                    path.parent == source / "bin" and re.fullmatch(r"python(?:3(?:\.13)?)?", name)
-                    and str(target) in ("/usr/local/bin/python3.13", "/usr/bin/python3.13",
-                                        "/usr/local/bin/python3", "/usr/bin/python3")
+                    path.parent == source / "bin" and re.fullmatch(r"python(?:3(?:\.(?:12|13))?)?", name)
+                    and re.fullmatch(r"/usr(?:/local)?/bin/python3(?:\.(?:12|13))?", str(target))
                 ):
                     raise CycleError("test environment symlink escapes its boundary")
     python = source / "bin" / "python"
     if not source.is_dir() or not (python.is_symlink() or python.is_file()) or not (source / "pyvenv.cfg").is_file():
         raise CycleError("approved test environment is unavailable")
+    minor = _venv_python_minor(source)
+    for name in ("python", "python3", f"python3.{minor}"):
+        link = source / "bin" / name
+        hop = Path(os.readlink(link)).name if link.is_symlink() else ""
+        if re.fullmatch(r"python3\.[0-9]+", hop) and hop != f"python3.{minor}":
+            raise CycleError("test environment interpreter does not match its recorded Python version")
     return source
 
 
@@ -274,8 +294,9 @@ def _sandbox_verify_locked(layout: workspace.Layout, worker: str, head: str, tar
         "--workdir", "/workspace", "--env", "PYTHONPATH=/workspace", "--env", "HOME=/tmp",
         "--env", "PYTHONDONTWRITEBYTECODE=1", "--entrypoint", f"{CONTAINER_TEST_VENV}/bin/python", image,
     ]
+    # The pinned image runs this, so its actual interpreter must equal the venv's recorded minor.
     script = ("import sys; "
-              "sys.version_info[:2] == (3, 13) or sys.exit('unsupported test interpreter'); "
+              f"sys.version_info[:2] == (3, {_venv_python_minor(source)}) or sys.exit('unsupported test interpreter'); "
               "import pytest; raise SystemExit(pytest.main(['-q', *sys.argv[1:]]))")
     created = _command([*base, "-c", script, *targets], timeout=60)
     cid = created.stdout.strip()
