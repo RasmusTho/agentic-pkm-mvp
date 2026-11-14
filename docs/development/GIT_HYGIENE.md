@@ -89,7 +89,7 @@ and retires that generation only after the removal succeeds.
 
 Branch deletion is a separate irreversible step. The janitor rechecks both
 the path and branch lease identities immediately before deletion and retains
-prior path-to-branch bindings when a path is reused. A report, missing record,
+historical prior path-to-branch bindings. A report, missing record,
 or missing worktree is never evidence that cleanup is authorized.
 
 An expired `active` record whose checkout is absent remains untouched by
@@ -122,12 +122,20 @@ epoch. Repeating an exact prepare or pin reads back the stored proof, and a
 pinned proof cannot be replaced. Same-session re-registration, reclaim and
 verified path moves keep the row's prior-owner, previous-registration and
 transfer snapshots. A new transfer embeds its predecessor's snapshot, including
-that predecessor's earlier proof and moves. Nesting is capped at 32 levels
+that predecessor's earlier proof and moves. Re-registering the same live owner,
+path, branch and generation preserves its continuous epoch; a release, expiry or
+identity change does not fill a gap in that epoch. Nesting is capped at 32 levels
 (`MAX_TRANSFER_HISTORY`); deeper or malformed snapshot evidence makes the
 record invalid instead of being truncated. When a path is reused, the PR-cycle
 authority read ignores a released former path only if that path is absent and
 the active row's preserved previous registration proves the release. A
-conflicting released row refuses. Several conditions refuse instead of
+conflicting released row refuses. Removed and removal-pending rows retain their
+place in predecessor end-time order, including whether the owner actually
+released; cleanup does not turn expiry or completion into release. A new
+registration for another branch cannot overwrite that path's owner or transfer
+history. Move the checkout to a replacement path and register it, or use the
+existing lifecycle reconciliation; the old row and any unique work stay intact.
+Several conditions refuse instead of
 repairing anything: a predecessor that expired or completed without release,
 an unpinned predecessor transfer, tied ended predecessors, and local history
 that is unreleased or overlaps a reconciled remote predecessor. The owner or

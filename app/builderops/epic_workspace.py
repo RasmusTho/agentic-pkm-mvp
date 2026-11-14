@@ -32,6 +32,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -122,6 +123,14 @@ class EngineUnavailable(EpicWorkspaceError):
 
 class LaunchRefused(EpicWorkspaceError):
     """A launch request violates the workspace or resource boundary."""
+
+
+class LifecycleBusy(LaunchRefused):
+    """Another controller operation owns this worker's lifecycle or the port selection; retry later."""
+
+
+class EndpointUnavailable(EpicWorkspaceError, ValueError):
+    """The assignment or its Docker endpoint no longer matches; no session key was used."""
 
 
 class UniqueWorkPresent(EpicWorkspaceError):
@@ -223,29 +232,75 @@ def _is_within(path: Path, base: Path) -> bool:
         return False
 
 
-@contextmanager
-def _worker_lifecycle_lock(layout: Layout, worker: str) -> Iterator[None]:
-    """Fence overlapping controller effects for this worker, including across processes."""
+# The per-worker lifecycle lock and the root OpenHands start lock are the controller's lifecycle
+# fences. Endpoint use takes the same locks (see ``_endpoint_session``), so a stop, start,
+# conversation operation or port reuse cannot interleave with a session-key request. Every
+# acquisition is non-blocking.
 
-    directory = _controller_dir(layout, "lifecycle-locks")
-    path = directory / f"{validate_worker_id(worker)}.lock"
+_HELD_LOCKS = threading.local()
+
+
+def _held_locks() -> dict[str, str]:
+    held = getattr(_HELD_LOCKS, "locks", None)
+    if held is None:
+        held = _HELD_LOCKS.locks = {}
+    return held
+
+
+@contextmanager
+def _flock(path: Path, *, shared: bool, reentrant: bool, busy: str, unsafe: tuple[type[EpicWorkspaceError], str]) -> Iterator[None]:
+    """Non-blocking advisory lock; ``reentrant`` lets an owner open sessions it already fences.
+
+    A lifecycle operation is never reentrant: it is refused while this thread holds the lock for an
+    endpoint session, exactly as it is refused while another thread or process holds it.
+    """
+
+    key = os.path.abspath(path)
+    held = _held_locks()
+    mode = held.get(key)
+    if mode is not None:
+        if reentrant and (mode == "ex" or shared):
+            yield
+            return
+        raise LifecycleBusy(busy)
+    error, name = unsafe
     try:
         fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     except OSError as exc:
-        raise EpicWorkspaceError("cannot safely open worker lifecycle lock") from exc
+        raise error(f"cannot safely open {name}") from exc
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise EpicWorkspaceError("worker lifecycle lock is not a regular file")
+            raise error(f"{name} is not a regular file")
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise LaunchRefused("another lifecycle operation is in progress for this worker") from exc
+            raise LifecycleBusy(busy) from exc
+        held[key] = "sh" if shared else "ex"
         try:
             yield
         finally:
+            del held[key]
             fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
+def _worker_lifecycle_lock(layout: Layout, worker: str, *, reentrant: bool = False) -> Any:
+    """Fence overlapping controller effects for this worker, including across processes."""
+
+    directory = _controller_dir(layout, "lifecycle-locks")
+    return _flock(directory / f"{validate_worker_id(worker)}.lock", shared=False, reentrant=reentrant,
+                  busy="another lifecycle operation is in progress for this worker",
+                  unsafe=(EpicWorkspaceError, "worker lifecycle lock"))
+
+
+def _port_selection_lock(layout: Layout, *, shared: bool) -> Any:
+    """Exclusive for OpenHands port selection/start; shared (reentrant) for every endpoint session."""
+
+    return _flock(layout.root / ".openhands-start.lock", shared=shared, reentrant=shared,
+                  busy=("an endpoint session is open; retry the OpenHands start" if not shared else
+                        "another OpenHands start is selecting a port; retry"),
+                  unsafe=(LaunchRefused, "OpenHands start lock"))
 
 
 def _serialized_worker(
@@ -265,23 +320,8 @@ def _serialized_openhands_start(
     """Fence port selection and credential-home admission across workers of this root."""
     @wraps(func)
     def wrapped(layout: Layout, worker: str, *args: _P.args, **kwargs: _P.kwargs) -> _R:
-        try:
-            fd = os.open(layout.root / ".openhands-start.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-        except OSError as exc:
-            raise LaunchRefused("cannot open OpenHands start lock") from exc
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise LaunchRefused("OpenHands start lock is not a regular file")
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise LaunchRefused("another OpenHands start is selecting a port; retry") from exc
-            try:
-                return func(layout, worker, *args, **kwargs)
-            finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
+        with _port_selection_lock(layout, shared=False):
+            return func(layout, worker, *args, **kwargs)
     return wrapped
 
 
@@ -781,7 +821,7 @@ def _settle_checkpoint_writer(layout: Layout, worker: str, runner: Runner) -> No
 
 def _stop_worker(
     layout: Layout, worker: str, *, reason: str, runner: Runner, image: str, retain_identity: bool = True,
-    expected_container_id: str | None = None,
+    expected_container_id: str | None = None, expected_assignment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Remove the worker container, prove absence by engine readback, then preserve its work.
 
@@ -797,6 +837,8 @@ def _stop_worker(
     issue = _issue_for_worker(state, worker)
     if state["issue_mappings"][str(issue)].get("state") == "retired":
         raise LaunchRefused(f"worker {worker!r} is retired")
+    if expected_assignment is not None and not _same_assignment(state["issue_mappings"][str(issue)], expected_assignment):
+        raise EpicWorkspaceError("worker assignment changed before stop")
     if expected_container_id is not None and (
             not _CONTAINER_ID.fullmatch(expected_container_id)
             or state["issue_mappings"][str(issue)].get("container_id") != expected_container_id):
@@ -818,6 +860,8 @@ def _stop_worker(
     stop_id = uuid.uuid4().hex
 
     def record_stop(entry: dict[str, Any]) -> None:
+        if expected_assignment is not None and not _same_assignment(entry, expected_assignment):
+            raise EpicWorkspaceError("worker assignment changed during stop; the newer state is kept")
         needs_takeover = (bool(entry.get("started_at")) or bool(work.get("unique_work"))
                           or not work.get("readable") or work.get("branch") is None
                           or work.get("branch") != entry.get("execution_branch", entry.get("branch")) or any(
@@ -842,9 +886,10 @@ def _stop_worker(
 
 @_serialized_worker
 def stop_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE,
-                expected_container_id: str | None = None) -> dict[str, Any]:
+                expected_container_id: str | None = None,
+                expected_assignment: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return _stop_worker(layout, worker, reason=reason, runner=runner, image=image,
-                        expected_container_id=expected_container_id)
+                        expected_container_id=expected_container_id, expected_assignment=expected_assignment)
 
 
 def _controller_dir(layout: Layout, *parts: str) -> Path:
@@ -2526,8 +2571,126 @@ def _session_key_file(layout: Layout, worker: str) -> Path:
 
 
 def _session_key(layout: Layout, worker: str) -> str:
-    line = _session_key_file(layout, worker).read_text().strip()
-    return line.split("=", 1)[1]
+    # Observation must never create or replace the identity used by a running server.
+    path = layout.epic_dir / "control" / f"{validate_worker_id(worker)}.key"
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("session key is not a regular file")
+        raw = os.read(fd, 4097)
+    finally:
+        os.close(fd)
+    if len(raw) > 4096:
+        raise ValueError("session key file is too large")
+    line = raw.decode("utf-8").strip()
+    prefix = "OH_SESSION_API_KEYS_0="
+    if not line.startswith(prefix) or not line[len(prefix):] or "\n" in line:
+        raise ValueError("invalid session key file")
+    return line[len(prefix):]
+
+
+def _checkout_mount_identity(layout: Layout, worker: str, mapping: Mapping[str, Any]) -> tuple[int, int] | None:
+    """Pin the assigned directory without following any ancestor symlink."""
+    checkout = layout.checkout(worker)
+    if not checkout.is_absolute() or mapping.get("checkout") != str(checkout):
+        return None
+    fd: int | None = None
+    try:
+        fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+        for part in checkout.parts[1:]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        info = os.fstat(fd)
+        return info.st_dev, info.st_ino
+    except OSError:
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _worker_inspect(layout: Layout, worker: str, mapping: Mapping[str, Any], runner: Runner) -> str:
+    """Bind Docker's actual id, loopback port and checkout mount before using a session key."""
+    if mapping.get("state") != "running":
+        return "stopped"
+    cid, port = mapping.get("container_id"), mapping.get("port")
+    if not isinstance(cid, str) or not re.fullmatch(r"[0-9a-f]{64}", cid) or type(port) is not int or port not in OPENHANDS_PORT_RANGE:
+        return "unknown"
+    if _checkout_mount_identity(layout, worker, mapping) is None:
+        return "unknown"
+    try:
+        result = runner(["docker", "inspect", "--format", "{{json .}}", cid], capture_output=True, text=True, check=False, timeout=10)
+        info = json.loads(result.stdout) if result.returncode == 0 else None
+        if not isinstance(info, dict) or info.get("Id") != cid:
+            return "unknown"
+        labels = info["Config"]["Labels"]
+        state = info["State"]
+        if labels.get(LABEL_EPIC) != str(layout.epic) or labels.get(LABEL_WORKER) != worker:
+            return "unknown"
+        if state.get("Status") in ("exited", "dead"):
+            return "oom" if state.get("OOMKilled") is True else "exited"
+        if state.get("Status") != "running" or state.get("OOMKilled") is not False:
+            return "unknown"
+        ports = info["NetworkSettings"]["Ports"].get(f"{OPENHANDS_CONTAINER_PORT}/tcp")
+        mounts = [m for m in info["Mounts"] if m.get("Destination") == CONTAINER_WORKSPACE]
+        if (ports != [{"HostIp": "127.0.0.1", "HostPort": str(port)}] or len(mounts) != 1
+                or mounts[0].get("Type") != "bind" or mounts[0].get("Source") != str(layout.checkout(worker))):
+            return "unknown"
+        return "running"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.TimeoutExpired):
+        return "unknown"
+
+
+def _conversation_bound(info: Any, layout: Layout, issue: int, worker: str, cid: str) -> bool:
+    return (isinstance(info, Mapping) and str(info.get("id")) == cid
+            and info.get("tags") == {"epic": str(layout.epic), "issue": str(issue), "worker": worker}
+            and isinstance(info.get("workspace"), Mapping)
+            and info["workspace"].get("working_dir") == CONTAINER_WORKSPACE)
+
+
+ASSIGNMENT_FIELDS = ("worker", "runtime", "state", "container_id", "port", "checkout", "branch", "started_at")
+
+
+def assignment_of(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """The full assignment tuple an observation, decision, effect or endpoint use belongs to."""
+
+    conversation = mapping.get("conversation")
+    return {**{field: mapping.get(field) for field in ASSIGNMENT_FIELDS},
+            "conversation": ({"id": conversation.get("id"), "status": conversation.get("status")}
+                             if isinstance(conversation, Mapping) else None if conversation is None else "malformed")}
+
+
+def _same_assignment(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    return isinstance(left, Mapping) and isinstance(right, Mapping) and assignment_of(left) == assignment_of(right)
+
+
+@contextmanager
+def _endpoint_session(layout: Layout, worker: str, issue: int, expected: Mapping[str, Any], runner: Runner,
+                      *, starting: bool = False) -> Iterator[tuple[int, str]]:
+    """Yield ``(port, session key)`` only while the expected assignment's endpoint cannot change.
+
+    The worker lifecycle lock fences this worker's stop/start/conversation operations; a shared
+    hold on the OpenHands start lock fences port selection by any other worker's start. Inside both,
+    the full assignment tuple and Docker's actual id/port/mount are re-read before the key is read,
+    so every request in the block reaches that endpoint or none. Busy locks raise ``LifecycleBusy``;
+    each request keeps its own finite timeout.
+    """
+
+    with _worker_lifecycle_lock(layout, worker, reentrant=True), _port_selection_lock(layout, shared=True):
+        current = _load_state(layout).get("issue_mappings", {}).get(str(int(issue)))
+        if not isinstance(current, Mapping) or not _same_assignment(expected, current):
+            raise EndpointUnavailable("worker assignment changed before session access")
+        if starting and current.get("state") != "starting":
+            raise EndpointUnavailable("new worker is no longer starting")
+        probe = {**current, "state": "running"} if starting else current
+        if _worker_inspect(layout, worker, probe, runner) != "running":
+            raise EndpointUnavailable("worker container endpoint could not be bound")
+        try:
+            key = _session_key(layout, worker)
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise EndpointUnavailable("existing worker session key is unavailable") from exc
+        yield int(current["port"]), key
 
 
 def _allocate_port(runner: Runner) -> int:
@@ -2627,19 +2790,30 @@ def start_openhands_worker(
         started_at=_now(),
     )
     _record_worker(layout, issue, container_id=_launch(layout, issue, worker, argv, runner))
-    key = _session_key(layout, worker)
+    starting = _load_state(layout)["issue_mappings"][str(issue)]
     deadline = time.monotonic() + ready_timeout
     while True:
         try:
-            code, _ = http("GET", port, key, "/conversations/search?limit=1", None, 5.0)
+            with _endpoint_session(layout, worker, issue, starting, runner, starting=True) as (bound_port, key):
+                code, _ = http("GET", bound_port, key, "/conversations/search?limit=1", None, 5.0)
         except OSError:
             code = 0
+        except EndpointUnavailable as exc:
+            raise EpicWorkspaceError("new worker endpoint changed during readiness") from exc
         if code == 200:
             break
         if time.monotonic() >= deadline:
             raise EpicWorkspaceError("agent-server did not become ready; inspect container")
         time.sleep(1.0)
-    _record_worker(layout, issue, state="running")
+    def ready(state: dict[str, Any]) -> dict[str, Any]:
+        entry = state["issue_mappings"][str(issue)]
+        if not _same_assignment(entry, starting):
+            raise EpicWorkspaceError("worker assignment changed during readiness; the newer state is kept")
+        entry.update(state="running", updated_at=_now())
+        return state
+
+    epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=ready,
+                                         expected_epic_issue_number=layout.epic)
     return {"port": port, "container": layout.container_name(worker), "image": image}
 
 
@@ -2657,13 +2831,16 @@ def resolve_engine(engine: str, model: str | None) -> tuple[str, str]:
 CONVERSATION_ENDED = "ended_with_container"
 
 
-def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mapping[str, Any]) -> dict[str, Any]:
+def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mapping[str, Any],
+                          expected: Mapping[str, Any]) -> dict[str, Any]:
     """Atomically admit one writer: refuse while any earlier conversation could still write."""
 
     key = str(int(issue))
 
     def updater(state: dict[str, Any]) -> dict[str, Any]:
         mapping = dict(state.get("issue_mappings", {}).get(key, {}))
+        if not _same_assignment(mapping, expected):
+            raise LaunchRefused("worker assignment changed before conversation reservation")
         if mapping.get("worker") != worker or mapping.get("runtime") != "openhands" or mapping.get("state") != "running":
             raise LaunchRefused("worker has no running OpenHands agent-server")
         prior = mapping.get("conversation")
@@ -2701,6 +2878,7 @@ def start_conversation(
     prompt: str,
     operation_id: str | None = None,
     http: Callable[..., tuple[int, Any]] = _http,
+    runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
     """Create one OpenHands conversation for the worker's task.
 
@@ -2715,15 +2893,30 @@ def start_conversation(
     engine, model = resolve_engine(engine, model)
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
+    expected = state["issue_mappings"][str(issue)]
+    try:
+        with _endpoint_session(layout, worker, issue, expected, runner) as (_, initial_key):
+            pass
+    except EndpointUnavailable as exc:
+        raise EpicWorkspaceError(str(exc)) from exc
     conversation_id = str(uuid.uuid4())
     record: dict[str, Any] = {"id": conversation_id, "engine": engine, "model": model, "status": "creating", "at": _now()}
     if operation_id is not None:
         if not re.fullmatch(r"pr-completion-[0-9a-f]{64}", operation_id):
             raise LaunchRefused("invalid PR completion operation id")
         record["operation_id"] = operation_id
-    reserved = _reserve_conversation(layout, issue, worker, record)
+    reserved = _reserve_conversation(layout, issue, worker, record, expected)
     mapping = reserved["issue_mappings"][str(issue)]
-    port, key = int(mapping["port"]), _session_key(layout, worker)
+
+    def finish(value: dict[str, Any]) -> None:
+        def updater(current: dict[str, Any]) -> dict[str, Any]:
+            if _same_assignment(current["issue_mappings"][str(issue)], mapping):
+                current["issue_mappings"][str(issue)]["conversation"] = value
+            else:
+                value["status"] = "unknown"
+            return current
+        epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater,
+                                             expected_epic_issue_number=layout.epic)
     payload = {
         "conversation_id": conversation_id,
         "workspace": {"working_dir": CONTAINER_WORKSPACE},
@@ -2733,18 +2926,27 @@ def start_conversation(
         "initial_message": {"role": "user", "content": [{"type": "text", "text": prompt}]},
     }
     try:
-        code, body = http("POST", port, key, "/conversations", payload, 120.0)
-    except Exception:  # noqa: BLE001 - any transport/decode failure leaves the outcome unknown
-        code, body = 0, None
-    if code == 201 and isinstance(body, Mapping) and str(body.get("id")) == conversation_id:
-        record.update(status="created", execution_status=body.get("execution_status"))
-    else:
-        record.update(status=reconcile_conversation(port, key, conversation_id, http=http))
-    _record_worker(layout, issue, conversation=record)
+        with _endpoint_session(layout, worker, issue, mapping, runner) as (port, key):
+            if key != initial_key:
+                raise EndpointUnavailable("existing worker session key changed before creation")
+            try:
+                code, body = http("POST", port, key, "/conversations", payload, 120.0)
+            except Exception:  # noqa: BLE001 - any transport/decode failure leaves the outcome unknown
+                code, body = 0, None
+            if code == 201 and _conversation_bound(body, layout, issue, worker, conversation_id):
+                record.update(status="created", execution_status=body.get("execution_status"))
+            else:
+                record.update(status=reconcile_conversation(port, key, conversation_id, layout=layout, issue=issue,
+                                                            worker=worker, http=http))
+    except EndpointUnavailable as exc:
+        finish({**record, "status": "unknown"})
+        raise EpicWorkspaceError(f"{exc}; conversation creation was not attempted") from exc
+    finish(record)
     return record
 
 
-def reconcile_conversation(port: int, key: str, conversation_id: str, *, http: Callable[..., tuple[int, Any]] = _http) -> str:
+def reconcile_conversation(port: int, key: str, conversation_id: str, *, layout: Layout, issue: int, worker: str,
+                           http: Callable[..., tuple[int, Any]] = _http) -> str:
     """``created`` only on positive readback; anything else stays ``unknown``.
 
     A 404 right after a lost create is not proof of absence (the server may still be creating
@@ -2755,13 +2957,14 @@ def reconcile_conversation(port: int, key: str, conversation_id: str, *, http: C
         code, body = http("GET", port, key, f"/conversations/{conversation_id}", None, 10.0)
     except Exception:  # noqa: BLE001
         return "unknown"
-    if code == 200 and isinstance(body, Mapping) and str(body.get("id")) == conversation_id:
+    if code == 200 and _conversation_bound(body, layout, issue, worker, conversation_id):
         return "created"
     return "unknown"
 
 
 @_serialized_worker
-def reconcile_worker_conversation(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http) -> dict[str, Any]:
+def reconcile_worker_conversation(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http,
+                                  runner: Runner = subprocess.run) -> dict[str, Any]:
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     mapping = state["issue_mappings"][str(issue)]
@@ -2772,8 +2975,22 @@ def reconcile_worker_conversation(layout: Layout, worker: str, *, http: Callable
         return dict(record)
     if mapping.get("state") != "running":
         raise EpicWorkspaceError("worker is not running; a verified stop already ends its conversation")
-    updated = {**record, "status": reconcile_conversation(int(mapping["port"]), _session_key(layout, worker), record["id"], http=http)}
-    _record_worker(layout, issue, conversation=updated)
+    try:
+        with _endpoint_session(layout, worker, issue, mapping, runner) as (port, key):
+            status = reconcile_conversation(port, key, record["id"], layout=layout, issue=issue, worker=worker, http=http)
+    except EndpointUnavailable as exc:
+        raise EpicWorkspaceError(f"{exc}; reconciliation was not attempted") from exc
+    updated = {**record, "status": status}
+
+    def updater(current: dict[str, Any]) -> dict[str, Any]:
+        entry = current["issue_mappings"][str(issue)]
+        if not _same_assignment(entry, mapping):
+            raise EpicWorkspaceError("worker assignment changed during reconciliation; the newer state is kept")
+        entry.update(conversation=updated, updated_at=_now())
+        return current
+
+    epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater,
+                                         expected_epic_issue_number=layout.epic)
     return updated
 
 
@@ -2808,18 +3025,23 @@ def classify_failure(text: str) -> str:
 
 
 def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http,
-                        limit: int = 50, include_messages: bool = True) -> dict[str, Any]:
+                        runner: Runner = subprocess.run, limit: int = 50, include_messages: bool = True) -> dict[str, Any]:
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     mapping = state["issue_mappings"][str(issue)]
     record = mapping.get("conversation")
     if not isinstance(record, Mapping):
         return {"issue": issue, "worker": worker, "conversation": None}
-    port, key, cid = int(mapping["port"]), _session_key(layout, worker), record["id"]
     try:
-        code, info = http("GET", port, key, f"/conversations/{cid}", None, 10.0)
-        ecode, events = http("GET", port, key, f"/conversations/{cid}/events/search?limit={int(limit)}&sort_order=TIMESTAMP_DESC", None, 10.0)
-    except OSError:
+        with _endpoint_session(layout, worker, issue, mapping, runner) as (port, key):
+            cid = str(record["id"])
+            code, info = http("GET", port, key, f"/conversations/{cid}", None, 10.0)
+            if code != 200 or not _conversation_bound(info, layout, issue, worker, cid):
+                raise ValueError("conversation identity mismatch")
+            ecode, events = http("GET", port, key, f"/conversations/{cid}/events/search?limit={int(limit)}&sort_order=TIMESTAMP_DESC", None, 10.0)
+    except LifecycleBusy:
+        return {"issue": issue, "worker": worker, "conversation": dict(record), "reachable": False, "lifecycle_busy": True}
+    except (OSError, ValueError, KeyError, UnicodeError):
         return {"issue": issue, "worker": worker, "conversation": dict(record), "reachable": False}
     # The server returns the newest page first; retain chronological order within that page.
     items = list(reversed(events.get("items", []))) if ecode == 200 and isinstance(events, Mapping) else []
@@ -2836,11 +3058,15 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
         "worker": worker,
         "conversation": dict(record),
         "reachable": code == 200,
+        "events_reachable": ecode == 200 and isinstance(events, Mapping) and isinstance(events.get("items"), list),
         "execution_status": info.get("execution_status") if isinstance(info, Mapping) else None,
         "event_kinds": [e.get("kind") for e in items if isinstance(e, Mapping)][-limit:],
         "errors": errors,
         "failure_class": classify_failure(errors[-1]) if errors else None,
         "last_agent_message": last_agent_message,
+        # Activity (not progress): the newest event a bounded read-only diagnosis compares across passes.
+        "latest_event": next(({"id": e.get("id"), "kind": e.get("kind"), "timestamp": e.get("timestamp")}
+                              for e in reversed(items) if isinstance(e, Mapping) and e.get("id")), None),
     }
 
 
@@ -2920,6 +3146,12 @@ def _parser() -> argparse.ArgumentParser:
     pr.add_argument("--worker", required=True)
     pr.add_argument("--op", required=True)
     pr.add_argument("--readback-file")
+    co = sub.add_parser("coordinate", help="judge every running worker on changing evidence and record bounded actions")
+    co.add_argument("--tick", required=True)
+    co.add_argument("--stall-limit", type=int, default=3)
+    co.add_argument("--apply", action="store_true", help="apply eligible directives to the worker's conversation")
+    co.add_argument("--no-observe-github", "--no-observe-authority", dest="no_observe_github", action="store_true",
+                    help="skip public GitHub observations (a declared blocker's authority then remains unknown)")
     return p
 
 
@@ -2935,6 +3167,7 @@ def main(
     *,
     runner: Runner = subprocess.run,
     http: Callable[..., tuple[int, Any]] | None = None,
+    fetch: Callable[[str, float], tuple[int, bytes]] | None = None,
 ) -> int:
     args = _parser().parse_args(argv)
     _http_kw: dict[str, Any] = {"http": http} if http is not None else {}
@@ -2971,11 +3204,16 @@ def main(
             if args.prompt_file:
                 parts.append(Path(args.prompt_file).read_text(encoding="utf-8"))
             prompt = "\n\n".join(parts)
-            out = start_conversation(layout, args.worker, engine=args.engine, model=args.model, prompt=prompt, **_http_kw)
+            out = start_conversation(layout, args.worker, engine=args.engine, model=args.model, prompt=prompt, runner=runner, **_http_kw)
         elif args.cmd == "conversation-status":
-            out = conversation_status(layout, args.worker, **_http_kw)
+            out = conversation_status(layout, args.worker, runner=runner, **_http_kw)
         elif args.cmd == "conversation-reconcile":
-            out = reconcile_worker_conversation(layout, args.worker, **_http_kw)
+            out = reconcile_worker_conversation(layout, args.worker, runner=runner, **_http_kw)
+        elif args.cmd == "coordinate":
+            from app.builderops import epic_coordination, openhands_pr_observation
+
+            fetch = None if args.no_observe_github else (fetch or openhands_pr_observation.public_fetch)
+            out = epic_coordination.coordinate(layout, tick=args.tick, stall_limit=args.stall_limit, runner=runner, fetch=fetch, apply=args.apply, **_http_kw)
         elif args.cmd == "worker-checkpoint":
             out = {"checkpoint": checkpoint_worker(layout, args.worker, reason=args.reason, runner=runner)}
         elif args.cmd == "checkpoint-release":

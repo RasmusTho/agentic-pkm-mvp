@@ -394,7 +394,17 @@ second within that registration interval. Dispatcher claims
 must match the proven owner or the handoff's successor claim. A later pickup, mode change, return to
 an earlier session or subsequent handoff cannot resolve a competing claimant by itself. Review
 preparation and native authority both check that history; missing or conflicting evidence requires
-the existing owner or maintenance reconciliation. For dispatcher-to-fallback across hosts, the receiving host authenticates its actual
+the existing owner or maintenance reconciliation. When the origin is a dispatcher claim, a fallback
+comment is outside that history only when its entire GitHub timestamp second predates the proven
+claim. A comment in the claim second remains ambiguous and is checked. The registration
+history uses the continuously valid epoch, including across same-session
+re-registration; it does not extend through an expiry or release gap. The whole comment second
+must fit within that epoch. The bounded registry predecessor search includes removed and
+removal-pending generations in actual end-time order;
+removal never turns expiry or completion into a release. A path retaining another branch's owner
+history cannot be re-registered for a different branch: move that checkout to a replacement path
+and register it, or use existing maintenance reconciliation, preserving the old row and any unique work.
+For dispatcher-to-fallback across hosts, the receiving host authenticates its actual
 current fallback comment and the existing handoff's predecessor release/readback; it does not claim
 to inspect a nonlocal dispatcher database. That remote readback is the immediate predecessor: the
 receiving host's own last registry owner is older history only if it was released before the remote
@@ -490,11 +500,26 @@ association is considered.
 The reviewer uses the public final response for its exact finished conversation. One bounded JSON
 report may be enclosed between `<BEGIN_PR_CYCLE_REPORT>` and `<END_PR_CYCLE_REPORT>` after plain
 public closeout text. The controller binds the report to the native execution observation, persists
-both before stopping the exact reviewer container, and reconciles an uncertain stop by checking that
-container's absence. Findings return to the existing repair owner after reviewer capacity is released.
+both before stopping the exact reviewer assignment, and reconciles an uncertain stop through the
+ID-bound stop and checkpoint path. A changed assignment or newer stop refuses reconciliation; an
+absence readback alone does not replace preservation. Findings return to the existing repair owner
+after reviewer capacity is released.
 Exact closing Issue holds are checked again immediately before merge; a non-closing parent remains
 open. Dispatcher recovery records each reclaim and completion intent and reads back the actual lease
-and ordered events before proceeding. Older ambiguous effect records remain unknown.
+and ordered events before proceeding. Older ambiguous effect records remain unknown. A recorded
+merge intent is reconciled even when the PR is absent from the open inventory. If fresh readback
+shows the PR open and unmerged, the old intent remains in the run-state. The same identity waits;
+a changed identity can be reviewed, but an unknown merge for the same head is never retried blindly.
+Only a freshly observed different head can proceed to merge independently of that old head's intent.
+Sandbox verification creates a uniquely named, inert container, records its immutable ID and the
+existing worker lifecycle hold before starting it, and removes that exact scoped ID before retry.
+The worker lifecycle lock prevents concurrent starts while verification is running; after a crash,
+the retained hold prevents a worker start until the ID is settled. An interrupted create with no ID
+cannot have issued a start and a retry uses a different name. Before a different review identity uses
+the same worker, it settles that worker's earlier verification intent by the same exact-ID protocol.
+An unrelated unresolved checkpoint writer refuses before a new verifier container is created.
+Legacy ambiguous run intents remain blocked for reconciliation. Engine errors or mismatched identity
+remain unknown, without host fallback.
 It is not installed
 or qualified by its tests. Do not schedule delivery until independent source review and actual host
 qualification have passed.
@@ -552,9 +577,9 @@ The third command is the emergency stop for every container of one epic. The fou
 previous controller release. Workers must not hot-replace the active release. A candidate controller
 is installed as a new `<sha>` directory between reconciled runs.
 
-Preservation, takeover and retirement are implemented in the #6617 source candidate. The running
-pinned controller has not been upgraded or qualified by this source change. After the candidate is
-independently reviewed, installed and verified, these commands run from outside any worker:
+Preservation, takeover and retirement are implemented in the #6617 source merged in #6627. The
+running pinned controller has not been upgraded or qualified by this source change. After that source
+is installed and verified, these commands run from outside any worker:
 
 - `worker-stop` removes the container, reads absence back from the engine, then captures unique work
   in a controller-owned checkpoint repository under `control/checkpoints/<worker>.git`. The checkout
@@ -679,7 +704,107 @@ checkout and lock, then rerun `takeover`, which inspects again from the start. U
 work is retained but not continued or reclaimed. Nothing
 reclaims a workspace that may hold unique work until #6617 qualifies
 preservation (KD-B5F8B2D2F2BB, KD-FE5EDF575D1E). The engine handoff and the disconnect-safe
-coordinator are #6618; non-progress handling is #6619.
+coordinator are #6618; non-progress handling is #6619 (source candidate below).
+
+
+### Coordinator progress judgement (#6619, source candidate)
+
+`epicws --epic <N> coordinate --tick <id> [--stall-limit 3] [--apply]` runs one bounded pass of
+`app/builderops/epic_coordination.py` on the trusted controller. It uses the existing run-state and
+OpenHands worker identities; it does not add a scheduler or give the model container host control or
+GitHub credentials. This is an enabling source candidate, not an installed or qualified controller.
+
+- **Evidence and isolation.** It checks the assigned checkout against the recorded worker path, reads
+  the checkout through contained Git, inspects the exact recorded container and compares test, PR and
+  error observations. Heartbeats, event counts, delivery, error-text churn and narration are not progress. A pytest last-failed
+  cache is only a partial test observation; existing `validation_status` remains available for other
+  test evidence. An applied pass also reads the public open-PR inventory and matches the worker's
+  branch and governing Issue. It does not establish CI or review outcomes. An incomplete inventory,
+  unreachable event stream or mismatched checkout is an evidence gap for the affected item.
+- **Bounded judgement.** Repeated equivalent evidence on an inactive conversation records
+  `change_approach`, one `bounded_diagnosis` (helper budget 0), `handoff`, then a no-progress stop.
+  Changed checkout, test or PR evidence resets the ladder. A no-progress directive waits for at least
+  60 seconds without such evidence, and accepted sends have a 60-second interval before another
+  directive. The diagnosis is executed in the same pass, read-only and without interrupting the
+  writer: the conversation, a bounded event page, the checkout and test evidence are read and the
+  finding is recorded on the decision. An active conversation with unchanged evidence is diagnosed
+  first. Its `change_approach` directive is then sent while it runs, superseding the in-flight prompt
+  through the upstream message endpoint. That happens on the next unchanged pass if the agent keeps
+  taking steps (a loop), or once one operation has produced no new event for 30 minutes (a long
+  tool or backoff gets that long). Event activity is diagnosis input only, never progress. Quota, authentication, context, transient network and policy errors retain separate
+  next actions; they are not silently treated as task failures or a license to switch engines. A
+  locally OOM-killed or exited container holds its unfinished assignment, recorded owner when known,
+  checkout and remaining action, while eligible peers continue. No cleanup, worker stop, successor
+  or takeover is performed by this pass; preservation and one-writer qualification remain required.
+- **Blocker authority.** A worker can declare `.codex-tmp/worker-blocker.json` using schema
+  `worker_blocker.v1` and a `summary`; its text is not authority. The controller reads current Issue
+  labels and the latest blocker-action receipt independently of declarations. This public read accepts a matching
+  receipt only from a GitHub `OWNER`-associated comment; other or unverifiable authors leave authority
+  unknown for trusted reconciliation. A valid external/human-owned receipt remains an authority stop.
+  A technical dependency without that stop is routed to `issue-maintenance-change-control`; the
+  trusted coordinator retains any GitHub write. `--no-observe-github` skips public Issue and PR reads;
+  directives then remain fenced because current source authority is unknown.
+- **Optional directive application.** With `--apply`, only `change_approach` and
+  `repair_technical_dependency` are sent as user messages to the current OpenHands conversation via
+  its existing controller-only session endpoint. The attempt, Issue, worker, container, conversation,
+  tick, action and random marker are recorded before the request. The controller checks the actual
+  container ID, published loopback port, checkout mount, existing session key, and conversation ID,
+  tags and working directory before contacting or directing a worker. It rechecks identity and
+  current Issue and PR authority at the send boundary, including a replay. The upstream message endpoint
+  can supersede a running ACP prompt or goal loop; callers must intend that effect. A user event with
+  the marker must be read back before delivery is reported. A lost reply or missing event is unknown,
+  never proof of absence: the original attempt is reconciled by marker and is not resent, even on a
+  later tick. A visible event alone cannot complete an in-flight or lost POST. The unknown effect
+  holds that issue's subsequent directives while peers continue. A 429
+  can mean the message was saved but run capacity was full; use the existing conversation `/run`
+  endpoint only after checking the conversation. An observed message is not work progress: a later
+  checkout, test or PR change is recorded separately and is not proof of causal model compliance.
+- **Assignment and endpoint fence.** An observation, decision, reservation, POST outcome,
+  conversation create/reconcile and readiness result belong to one full assignment tuple (worker,
+  runtime, state, container ID, port, checkout, branch, start time, conversation ID and status).
+  Each write is a compare-and-set on that tuple under the run-state lock. A late, lost or error
+  outcome for an older tuple stays in its own effect record with its obligations; it never replaces
+  a newer stop, conversation or next action. Decisions carry the tuple and a tuple-tagged ID, so a
+  successor never inherits or receives a predecessor's directive. The session key and loopback
+  port are used only inside an endpoint session. That session holds the worker lifecycle lock and a
+  shared hold on the OpenHands start (port-selection) lock, which is the same fence that serializes
+  `worker-stop`, starts and conversation operations. A coordinator item holds that worker's
+  lifecycle for its bounded duration. All locks are non-blocking, so a busy worker is reported as
+  `held_lifecycle_busy` without contact and peers continue. A stop or start requested meanwhile is
+  refused and can be retried. Every request keeps its finite timeout. An unresolved effect whose
+  conversation ended with a verified stop is preserved but no longer blocks a successor.
+- **Replay and obligations.** Every previously applied tick remains idempotent even out of order;
+  a replay still observes current authority. Decisions,
+  effects and remaining actions live in the existing `dispatch_decisions` and `stop_conditions`;
+  GitHub Issues, PRs and CI remain authoritative. Issue maintenance, handoff and lifecycle actions
+  remain explicit coordinator obligations and are not performed by `coordinate`.
+
+The source tests use simulated engine, GitHub and agent-server boundaries; they do not demonstrate a
+real model's reaction. After independent review and trusted integration, an operator can create a
+separate, single-worker synthetic epic and use `scripts/epic_coordination_live_fixture.py` (`prompt`,
+`baseline`, `apply`, `verify`) to collect a bounded real-directive observation. The script requires an owned
+fixture root, synthetic epic and Issue numbers at least 9000000, and a `fixture-` worker; it never
+starts or stops the worker or contacts GitHub. Its Issue and PR authority is an explicitly simulated
+port, not a GitHub readback. It is read before every session contact and before any success result.
+A stopped or unavailable authority refuses with no contact. An actual OpenHands, model, event and
+work response still has to be shown by the live run. Supply the same random hexadecimal `--token` to each
+phase and use the printed prompt when starting the fixture conversation. On the trusted controller,
+after creating the fixture epic and worker with the usual `epicws` commands:
+
+```sh
+python3 scripts/epic_coordination_live_fixture.py prompt --token <hex-token> > <owned-prompt-file>
+# Start the fixture conversation using the owned prompt file, then:
+python3 scripts/epic_coordination_live_fixture.py baseline --token <hex-token> --root <fixture-root> --epic <fixture-epic> --issue <fixture-issue> --worker <fixture-worker>
+# Wait at least 60 seconds with the conversation inactive, then:
+python3 scripts/epic_coordination_live_fixture.py apply --token <hex-token> --root <fixture-root> --epic <fixture-epic> --issue <fixture-issue> --worker <fixture-worker>
+python3 scripts/epic_coordination_live_fixture.py verify --token <hex-token> --root <fixture-root> --epic <fixture-epic> --issue <fixture-issue> --worker <fixture-worker>
+```
+
+The prompt does not disclose the unpredictable marker created for the later POST. Verification
+requires that marker in the designated non-ignored result, the actual server event, and checkout
+evidence ordered after the event. Review the result alongside runtime evidence. This fixture is not
+broader activation or acceptance.
+
 
 ## Planning vocabulary and lightweight breakdown
 

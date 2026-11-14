@@ -29,7 +29,8 @@ class FakeAgentServer:
         if method == "POST" and path == "/conversations":
             cid = body["conversation_id"]
             if not self.create_not_applied:
-                self.conversations[cid] = {"id": cid, "execution_status": "running", "agent_settings": body["agent_settings"]}
+                self.conversations[cid] = {"id": cid, "execution_status": "running", "agent_settings": body["agent_settings"],
+                                           "tags": body["tags"], "workspace": body["workspace"]}
             if self.lose_next_create:
                 self.lose_next_create = False
                 raise OSError("response lost")
@@ -237,3 +238,43 @@ def test_status_uses_latest_page_and_newest_error_and_message(tmp_path, capsys):
     ]
     assert _main(root, engine, server, "conversation-status", "--worker", "w-a") == 0
     assert json.loads(capsys.readouterr().out)["failure_class"] is None
+
+
+def test_conversation_start_does_not_create_missing_key_or_post_to_wrong_port(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("fixture")
+    layout = ew.Layout(root.resolve(), 6615)
+    key = layout.epic_dir / "control" / "w-a.key"
+    key_contents = key.read_text()
+    key.unlink()
+    before = len(server.calls)
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 2
+    assert not key.exists() and len(server.calls) == before
+    assert ew._load_state(layout)["issue_mappings"]["6617"].get("conversation") is None
+    key.write_text(key_contents)
+    engine.ports["w-a"] = 18799
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 2
+    assert len(server.calls) == before
+
+
+def test_late_create_response_cannot_replace_a_newer_stop_record(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("fixture")
+    layout = ew.Layout(root.resolve(), 6615)
+    def changed_during_post(method, port, key, path, body, timeout):
+        response = server(method, port, key, path, body, timeout)
+        if method == "POST" and path == "/conversations":
+            record = ew._load_state(layout)["issue_mappings"]["6617"]["conversation"]
+            ew._record_worker(layout, 6617, state="stopped_verified", conversation={**record, "status": ew.CONVERSATION_ENDED})
+        return response
+    capsys.readouterr()
+    assert ew.main(["--root", str(root), "--epic", "6615", "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)],
+                   runner=engine, http=changed_during_post) == 0
+    result = json.loads(capsys.readouterr().out)
+    saved = ew._load_state(layout)["issue_mappings"]["6617"]
+    assert result["status"] == "unknown" and saved["conversation"]["status"] == ew.CONVERSATION_ENDED
+    assert saved["state"] == "stopped_verified"

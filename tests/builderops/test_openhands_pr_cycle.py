@@ -16,16 +16,33 @@ ISSUE_HASHES = {"title_sha256": cycle.hashlib.sha256(b"issue title").hexdigest()
                 "body_sha256": cycle.hashlib.sha256(b"issue").hexdigest()}
 
 
+def bind_worker_endpoint(layout, monkeypatch, cid):
+    """Simulate the current Docker ID/port/mount readback at the worker boundary."""
+    worker = "reviewer"
+    checkout = layout.checkout(worker)
+    checkout.mkdir(parents=True, exist_ok=True)
+    ew._record_worker(layout, 6618, checkout=str(checkout))
+    engine = FakeEngine()
+    engine.ids[layout.container_name(worker)] = cid
+    engine.containers[worker] = "running"
+    engine.labels[worker] = [f"{ew.LABEL_EPIC}=6615", f"{ew.LABEL_WORKER}={worker}"]
+    engine.ports[worker] = 18700
+    engine.launches[worker] = ["docker", "create", "--mount", f"type=bind,source={checkout},target=/workspace"]
+    monkeypatch.setattr(cycle, "_worker_runner", engine)
+
+
 def setup(tmp_path, monkeypatch):
     layout = ew.Layout(tmp_path, 6615)
     epic_run_state.create_epic_run_state(6615, layout.run_id, root=layout.run_state_dir)
     ew._reserve_worker(layout, 6618, "reviewer", state="running", runtime="openhands", port=18700,
                        container_id="d" * 64)
+    bind_worker_endpoint(layout, monkeypatch, "d" * 64)
     ew._session_key_file(layout, "reviewer")
     monkeypatch.setattr(cycle, "_assert_live_container", lambda *args: None)
     monkeypatch.setattr(cycle, "_assert_stopped", lambda *args: None)
     monkeypatch.setattr(cycle, "native_execution_proof", lambda layout, worker, op, *args, **kwargs:
-                        {"operation_id": op, "conversation_id": cycle._mapping(layout, worker)["conversation"]["id"]})
+                        {"operation_id": op, "conversation_id": cycle._mapping(layout, worker)["conversation"]["id"],
+                         "container_id": cycle._mapping(layout, worker)["container_id"]})
     monkeypatch.setattr(ew, "inspect_checkout", lambda _layout, _worker: {"readable": True, "head": HEAD, "uncommitted_count": 0})
     monkeypatch.setattr(cycle, "_review_context", lambda pr: ({"files_digest": "test", "closing_issue_hashes": {}, "check_config_digest": "test"}, {"files": [], "issues": {}}))
     monkeypatch.setattr(cycle, "_test_venv_source", lambda layout, value: cycle.Path(value))
@@ -105,10 +122,10 @@ def test_finished_review_runs_sandbox_and_ci_but_does_not_infer_merge_authority(
         "verify_targets": config[0]["verify_targets"], "owner_doc": {"paths": []}})}]
     server.final_responses[cid] = server.events[0]["detail"]
     calls = []
-    def stop(layout, worker, *, reason, expected_container_id):
+    def stop(layout, worker, *, reason, expected_container_id, expected_assignment):
         calls.append("stop")
         ew._record_worker(layout, 6618, state="stopped_verified")
-    def verify(layout, worker, head, targets, test_venv):
+    def verify(layout, worker, head, targets, test_venv, saved):
         calls.append("sandbox")
         return {"head_sha": head, "targets": targets, "passed": True, "exit_code": 0}
     monkeypatch.setattr(ew, "stop_worker", stop)
@@ -149,18 +166,21 @@ def test_real_sandbox_command_and_skipped_tests_do_not_pass(tmp_path, monkeypatc
     seen = []
     def command(args, *, timeout):
         seen.append(args)
-        if "-c" in args:
-            return cycle.subprocess.CompletedProcess(args, 0, "pytest-ready\n", "")
+        if args[1] == "create":
+            return cycle.subprocess.CompletedProcess(args, 0, "e" * 64, "")
         return cycle.subprocess.CompletedProcess(args, 0, "1 passed, 1 skipped in 1s", "")
     monkeypatch.setattr(cycle, "_command", command)
-    result = cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py::test_example"], "/approved/venv")
+    monkeypatch.setattr(ew, "_remove_owned", lambda *args, **kwargs: None)
+    saved = {"kind": "pr_cycle", "number": 10, "identity": "test"}
+    result = cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py::test_example"], "/approved/venv", saved)
     assert not result["passed"]
     assert "--network" in seen[0] and "none" in seen[0] and "--read-only" in seen[0]
     assert all("token" not in arg.casefold() for arg in seen[0])
     assert f"{cycle.CONTAINER_TEST_VENV}/bin/python" in seen[0]
-    assert cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py"], "/approved/venv")["exit_code"] == 0
+    saved = {"kind": "pr_cycle", "number": 10, "identity": "other"}
+    assert cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py"], "/approved/venv", saved)["exit_code"] == 0
     with pytest.raises(cycle.CycleError, match="pytest files"):
-        cycle.sandbox_verify(layout, "reviewer", HEAD, ["../../etc/passwd"], "/approved/venv")
+        cycle.sandbox_verify(layout, "reviewer", HEAD, ["../../etc/passwd"], "/approved/venv", saved)
 
 
 def test_changed_check_configuration_does_not_reuse_old_conversation(tmp_path, monkeypatch):
@@ -210,6 +230,7 @@ def test_native_execution_reads_real_boundaries_and_rejects_paid_environment(tmp
                        container_id=cid, image=image, credentials={"codex": "chatgpt-login-dir"},
                        conversation={"id": "conv", "operation_id": operation, "engine": "codex",
                                      "model": "gpt-6.1-terra", "status": "created"})
+    bind_worker_endpoint(layout, monkeypatch, cid)
     ew._session_key_file(layout, "reviewer")
     env = []
     observed_model = ["gpt-6.1-terra"]
@@ -229,7 +250,8 @@ def test_native_execution_reads_real_boundaries_and_rejects_paid_environment(tmp
             return cycle.subprocess.CompletedProcess(argv, 0, json.dumps({"engine": "codex", "conversation_id": "conv", "session_id": "native", "model": observed_model[0], "effort": observed_effort[0], "timestamp": "2026-11-13T00:00:00Z"}), "")
         return cycle.subprocess.CompletedProcess(argv, 0, "route-ok\n", "")
     monkeypatch.setattr(cycle, "_command", command)
-    info = {"id": "conv", "execution_status": "finished", "agent_state": {"acp_session_id": "native", "acp_session_cwd": "/workspace"},
+    info = {"id": "conv", "execution_status": "finished", "tags": {"epic": "6615", "issue": "6618", "worker": "reviewer"},
+            "workspace": {"working_dir": "/workspace"}, "agent_state": {"acp_session_id": "native", "acp_session_cwd": "/workspace"},
             "agent": {"kind": "ACPAgent", "acp_server": "codex", "acp_model": "gpt-6.1-terra", "acp_effort": None},
             "current_model_id": "gpt-6.1-terra", "current_effort": "high",
             "available_efforts": [{"value": "high", "name": "High"}, {"value": "xhigh", "name": "Xhigh"}]}
@@ -433,7 +455,8 @@ def test_assembled_nonclosing_review_verify_merge_and_receipt(tmp_path, monkeypa
     monkeypatch.setattr(cycle, "native_execution_proof", lambda layout, worker, op, entry, **kw:
                         {"operation_id": op, "engine": "codex", "model": "gpt-6.1-terra", "auth": "chatgpt",
                          "source": "native-session-metadata", "native_session_id": "native", "effort": "high",
-                         "timestamp": "2026-11-13T00:00:00Z", "conversation_id": cycle._mapping(layout, worker)["conversation"]["id"]})
+                         "timestamp": "2026-11-13T00:00:00Z", "conversation_id": cycle._mapping(layout, worker)["conversation"]["id"],
+                         "container_id": cycle._mapping(layout, worker)["container_id"]})
     cycle.advance(layout, config, fetch=fetch, http=server)
     state = ew._load_state(layout)
     record = next(r for r in state["compact_receipts"] if r.get("kind") == "pr_cycle")
@@ -446,7 +469,7 @@ def test_assembled_nonclosing_review_verify_merge_and_receipt(tmp_path, monkeypa
         "owner_doc": {"outcome": "no_change", "inspected_paths": ["docs/owner.md"], "rationale": "unchanged"}})}]
     server.final_responses[cid] = server.events[0]["detail"]
     monkeypatch.setattr(ew, "stop_worker", lambda layout, worker, **kw: ew._record_worker(layout, 6618, state="stopped_verified"))
-    monkeypatch.setattr(cycle, "sandbox_verify", lambda layout, worker, head, targets, test_venv:
+    monkeypatch.setattr(cycle, "sandbox_verify", lambda layout, worker, head, targets, test_venv, saved:
                         {"head_sha": head, "targets": targets, "passed": True})
     monkeypatch.setattr(cycle, "ci_once", lambda *args: {"exit_code": 0})
     authority = {"number": 10, "head_sha": HEAD, "body": "Governing-Issue: #6618", "title": "",
@@ -489,7 +512,8 @@ def test_assembled_closing_fallback_reconciles_lost_merge_and_checks_each_criter
     monkeypatch.setattr(cycle, "native_execution_proof", lambda layout, worker, op, entry, **kw:
                         {"operation_id": op, "engine": "codex", "model": "gpt-6.1-terra", "auth": "chatgpt",
                          "source": "native-session-metadata", "native_session_id": "native", "effort": "xhigh",
-                         "timestamp": "2026-11-13T00:00:00Z", "conversation_id": cycle._mapping(layout, worker)["conversation"]["id"]})
+                         "timestamp": "2026-11-13T00:00:00Z", "conversation_id": cycle._mapping(layout, worker)["conversation"]["id"],
+                         "container_id": cycle._mapping(layout, worker)["container_id"]})
     target = layout.checkout("reviewer") / "tests" / "example.py"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("def test_example(): pass\n")
@@ -511,7 +535,7 @@ def test_assembled_closing_fallback_reconciles_lost_merge_and_checks_each_criter
     server.events = [{"kind": "MessageEvent", "source": "agent", "detail": json.dumps(review)}]
     server.final_responses[cid] = server.events[0]["detail"]
     monkeypatch.setattr(ew, "stop_worker", lambda layout, worker, **kw: ew._record_worker(layout, 6618, state="stopped_verified"))
-    monkeypatch.setattr(cycle, "sandbox_verify", lambda layout, worker, head, targets, test_venv:
+    monkeypatch.setattr(cycle, "sandbox_verify", lambda layout, worker, head, targets, test_venv, saved:
                         {"head_sha": head, "targets": targets, "passed": True})
     monkeypatch.setattr(cycle, "ci_once", lambda *args: {"exit_code": 0})
     issue = {"number": 6618, "state": "open", "title": "issue title", "body": issue_body,
@@ -728,16 +752,34 @@ def test_lost_owner_doc_response_is_not_reposted(tmp_path, monkeypatch):
         cycle.reconcile_native(layout, saved)
 
 
-def test_failed_sandbox_preflight_stops_before_test_execution(tmp_path, monkeypatch):
+def test_failed_sandbox_create_stops_before_start(tmp_path, monkeypatch):
     layout, _, _ = setup(tmp_path, monkeypatch)
     ew._record_worker(layout, 6618, state="stopped_verified", image="agent-server@sha256:" + "c" * 64)
     monkeypatch.setattr(ew, "_container_state", lambda *args: None)
     calls = []
     monkeypatch.setattr(cycle, "_command", lambda argv, timeout: calls.append(argv) or
                         cycle.subprocess.CompletedProcess(argv, 1, "", "pytest missing"))
-    with pytest.raises(cycle.CycleError, match="preflight failed"):
-        cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py"], "/approved/venv")
-    assert len(calls) == 1 and "-m" not in calls[0]
+    with pytest.raises(cycle.CycleError, match="create outcome is unknown"):
+        cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py"], "/approved/venv",
+                             {"kind": "pr_cycle", "number": 10, "identity": "failed"})
+    assert len(calls) == 1 and calls[0][1] == "create"
+
+
+def test_failed_sandbox_interpreter_preflight_cannot_pass(tmp_path, monkeypatch):
+    layout, _, _ = setup(tmp_path, monkeypatch)
+    ew._record_worker(layout, 6618, state="stopped_verified", image="agent-server@sha256:" + "c" * 64)
+    calls = []
+    def command(argv, *, timeout):
+        calls.append(argv)
+        if argv[1] == "create":
+            return cycle.subprocess.CompletedProcess(argv, 0, "e" * 64, "")
+        return cycle.subprocess.CompletedProcess(argv, 1, "", "unsupported test interpreter")
+    monkeypatch.setattr(cycle, "_command", command)
+    monkeypatch.setattr(ew, "_remove_owned", lambda *args, **kwargs: None)
+    result = cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py"], "/approved/venv",
+                                  {"kind": "pr_cycle", "number": 10, "identity": "bad-interpreter"})
+    assert not result["passed"] and result["exit_code"] == 1
+    assert [call[1] for call in calls] == ["create", "start"]
 
 
 def test_advance_reconciles_merged_intent_absent_from_open_inventory(tmp_path, monkeypatch):
@@ -939,7 +981,8 @@ def test_sandbox_refuses_model_workspace_venv_before_container(tmp_path, monkeyp
     monkeypatch.setattr(cycle, "_command", lambda args, *, timeout: seen.append(args))
     fake = _venv(layout.worker_dir("reviewer") / "home" / "venv")
     with pytest.raises(cycle.CycleError, match="outside the model workspace root"):
-        cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py"], str(fake))
+        cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py"], str(fake),
+                             {"kind": "pr_cycle", "number": 10, "identity": "venv"})
     assert seen == []
 
 
@@ -952,6 +995,7 @@ def test_claude_subscription_reaches_same_model_observation_boundary(tmp_path, m
                        container_id=cid, image=image, credentials={"claude": "oauth-token-env"},
                        conversation={"id": "conv", "operation_id": operation, "engine": "claude-code",
                                      "model": "claude-sonnet-5-5", "status": "created"})
+    bind_worker_endpoint(layout, monkeypatch, cid)
     ew._session_key_file(layout, "reviewer")
     def command(argv, *, timeout):
         if argv[-1:] == [cycle.CLAUDE_STATUS]:
@@ -970,7 +1014,8 @@ def test_claude_subscription_reaches_same_model_observation_boundary(tmp_path, m
     def http(method, port, key, path, body, timeout):
         if "/events/search" in path:
             return 200, {"items": [{"kind": "MessageEvent", "source": "agent", "detail": "done"}]}
-        return 200, {"id": "conv", "execution_status": "finished", "agent_state": {"acp_session_id": "native", "acp_session_cwd": "/workspace"},
+        return 200, {"id": "conv", "execution_status": "finished", "tags": {"epic": "6615", "issue": "6618", "worker": "reviewer"},
+                     "workspace": {"working_dir": "/workspace"}, "agent_state": {"acp_session_id": "native", "acp_session_cwd": "/workspace"},
                      "agent": {"kind": "ACPAgent", "acp_server": "claude-code", "acp_model": "claude-sonnet-5-5", "acp_effort": None},
                      "current_model_id": "claude-sonnet-5-5", "current_effort": "default",
                      "available_efforts": [{"value": "default", "name": "Default"}]}

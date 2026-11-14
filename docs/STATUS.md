@@ -165,15 +165,22 @@ authentication and persistence. On the same pinned image, the epic coordinator a
 Claude Opus 5.5 execution with a scoped subscription OAuth token, no paid API key, UID 1000 and the
 workspace mount boundary. These results qualify the carrier trial, not the recovery implementation,
 engine handoff, disconnect-safe coordinator or [epic #6615](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6615).
-The live [#6617](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6617) Issue and its receipts
-identify the current reviewed source candidate. That source remains subject to real-path proof, full
-mypy, current-head CI and guarded delivery. #6618, #6619, #6620 and full automatic PR activation
-remain unfinished. The [epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental)
+The [#6617](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6617) recovery was delivered and the
+Issue closed via [#6626](https://github.com/RasmusTho/agentic-pkm-mvp/pull/6626) (merge
+`318281e27c87c219bdb7ab637f713fc75e8fe60f`). Independently fetched GitHub readback supplied by the
+controller records independent fresh-workspace verification, CI and an actual contained recovery
+fixture. This bounded verification does not establish a live controller upgrade or whole-epic
+acceptance. #6618, #6619, #6620 and full automatic PR activation remain unfinished. The
+[epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental)
 owns the operating boundary.
+Last reviewed (#6617 delivery): 2026-11-14 UTC. Last verified against: controller-supplied independent
+GitHub readback for #6617 and #6626.
 
-**#6618 PR-cycle source candidate (2026-11-13).** The unmerged
-[#6618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6618) branch adds repository candidate
-support only. It covers OpenHands PR intake and evidence binding, a one-shot PR-cycle controller with
+**#6619 coordinator source candidate (2026-11-14).** The unmerged [#6619](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6619) integration candidate adds bounded progress judgment and assignment-fenced OpenHands directives on the #6627 source tree `73be38919b26269ac07497d02d7234e7d40e3da4`. It also composes the #6618 PR-cycle source repairs described below. The [epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental) owns the behavior and its limits. The candidate has not been independently reviewed, installed or live-qualified; simulated tests do not prove a real worker response. The hosting controller and image remain frozen. The real quota recovery is external bootstrap evidence, not the separate controlled autonomous-handoff acceptance.
+
+**#6618 PR-cycle source candidate (2026-11-14).** The unmerged
+[#6618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6618) repair is composed into this
+repository candidate. It covers OpenHands PR intake and evidence binding, a one-shot PR-cycle controller with
 explicit admission, and claimant-history fencing for dispatcher and fallback handoffs. It also adds
 review preparation bound to the exact head, contracts and native model metadata, and guarded merge
 mechanisms. Review repair is not automated; it is routed back to the current owner. The limits of
@@ -183,6 +190,10 @@ which remains the normative owner. The running baseline controller `c68dd18db4dc
 `sha256:3c3c2472b35ea3ccb0df57df7cc9d2303f582dcb2987b259124c9df946d56644` are untouched by this
 candidate. No runtime release, activation or child completion is claimed. Automatic PR activation,
 controlled quota handoff, disconnect-safe operation and whole-epic acceptance remain unfinished.
+The source repair retains pre-origin, continuous-registration and predecessor chronology, preserves
+ownership on cross-branch path reuse, and adds bounded merge and sandbox-verification recovery. It
+still needs fresh independent review of the publishable commit, affected checks, CI and the parent's
+guarded delivery.
 
 The August 22 baseline formerly here and the dated October 5 observations above are historical.
 Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those
