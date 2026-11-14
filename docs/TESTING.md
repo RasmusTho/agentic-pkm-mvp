@@ -423,6 +423,62 @@ provisioned by the native bootstrap, then hashes its unique installed executable
 rechecks and explicitly launches that exact executable. Missing, ambiguous, symlinked or foreign
 payloads refuse; qualification never downloads, installs or starts a browser.
 
+The supported explicit preparation entrypoint is the registered native/operator command below.
+Its argparse entrypoint uses the existing native runtime dependencies; the full Product CLI
+also exposes `ops prepare-operations-fixture` as an alias of the same composition.
+It requires a **previously initialized, registered, isolated synthetic binding** and the already
+configured local-operator principal and instance. Normal vault initialization and registration keep
+their own explicit operator authority; preparation does not initialize an unknown folder or create
+a principal, binding, consent grant, key or archive volume. The existing local clone must permit
+vault writes: `readOnlySatellite` remains a hard denial, and `allowWritesToVault: false` is honored
+through the normal permission owner and canonical write guards. The IDs are expected-value
+assertions, not permission. Run it only under the existing native operator's authorized setup intent:
+
+```sh
+# TEST: stage the one exact encrypted synthetic RAW seed through the normal owner.
+/opt/yggdrasil/bws-deploy-runtime/bin/python -m app.ops.native_operations_acceptance_runner prepare-fixture test NATIVE_OPERATION_UUID --binding-id EXISTING_SYNTHETIC_BINDING --principal-id EXISTING_OPERATOR_ROLE --instance-id EXISTING_INSTANCE --confirm-synthetic-setup --stage-raw
+# After the RAW owner's real eligibility gate passes, prepare the remaining fixture.
+/opt/yggdrasil/bws-deploy-runtime/bin/python -m app.ops.native_operations_acceptance_runner prepare-fixture test NATIVE_OPERATION_UUID --binding-id EXISTING_SYNTHETIC_BINDING --principal-id EXISTING_OPERATOR_ROLE --instance-id EXISTING_INSTANCE --confirm-synthetic-setup
+# DEV has no RAW staging requirement.
+/opt/yggdrasil/bws-deploy-runtime/bin/python -m app.ops.native_operations_acceptance_runner prepare-fixture dev DEV_NATIVE_OPERATION_UUID --binding-id EXISTING_DEV_SYNTHETIC_BINDING --principal-id EXISTING_DEV_OPERATOR_ROLE --instance-id EXISTING_DEV_INSTANCE --confirm-synthetic-setup
+```
+
+Native resolves the original committed full operation/request/PG acceptance and actual immutable
+candidate, image and baked resources before invoking `app.ops.native_operations_fixture` inside
+that API container. TEST staging requires existing active consent for
+`native-operations-acceptance.v1:OPERATION_UUID`, issued by that principal and bound to the same
+instance/binding, plus its configured raw key, fixed restore reader, retention greater than seven
+days and a qualified channel archive volume. Staging uses the normal encrypted RAW insert and
+its actual ingestion time. It returns `convergence_pending`, the original receipt and
+`eligible_after` / `retention_expires_at`; it does **not** report the fixture ready. The normal
+archive decision requires age **strictly greater than seven days** and within retention. A fresh
+seed therefore requires real elapsed time before the second command can succeed. No clock,
+ingestion timestamp or retention policy is changed by preparation. Native owners remain
+responsible if background archival, retention or revoked consent makes that substrate ineligible.
+
+The same original native operation and actual immutable source/image/resources must remain
+qualified across that maturation window. Staging also retains the existing principal-record
+identity and binding authority; changed operation, running candidate, principal or binding
+authority refuses before the later preparation effects. Original receipts are never rebased onto
+a successor candidate. This operational prerequisite does not authorize pausing the post-merge
+controller, pinning a channel or changing normal deployment policy. If the original cannot remain
+qualified, #5340 and its runtime owner retain that unresolved acceptance prerequisite. Preparation
+does not inventory older RAW evidence or claim that none exists.
+
+The second command creates the exact canonical source seeds at their fixed paths (including the
+configured capture target), creates today's canonical briefing once when enabled, records the fixed
+profile declaration and remembers the registry restore target through the ordinary picker owner. Existing
+notes, foreign declarations, links and partially prepared state refuse rather than being healed
+or overwritten. Setup intent, source/GOV receipts and known partial or UNKNOWN effects stay in the
+existing instance `operation-receipts.json`, under fixed preparation and RAW-stage request IDs.
+Repeating a completed call reads its original receipt; an uncertain call cannot repeat effects.
+A changed operation, binding or selection cannot reset these records. Setup has its own explicit
+effects and consumes no journey slots. After successful preparation, hand the **same original
+native operation ID and its setup receipts** to the unchanged TEST then DEV runner commands above.
+The runner and API admission still only qualify existing state; they never invoke setup.
+Source tests and source delivery of this path do not establish installation, live fixture
+preparation, 21 TEST / 7 DEV PASS, or owner-doc State promotion on #5340/#5329.
+
 The existing instance registry must already contain one initialized, isolated binding whose
 `native-operations-acceptance.v1` extension declares only its native `operation_id`. This declaration
 is fixture data; it grants no authority. The configured native local-operator principal, instance,

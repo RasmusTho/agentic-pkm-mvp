@@ -99,6 +99,21 @@ def test_watcher_cli_entrypoint_is_owned_by_watcher_sync() -> None:
     assert "tests/watcher" in selection.targets
 
 
+def test_operations_preparation_entrypoints_select_real_operations_proof() -> None:
+    for path in ("app/cli/ops.py", "app/ops/native_operations_fixture.py"):
+        selection = select_tests([path])
+
+        assert selection.full_suite is False
+        assert selection.unowned_paths == ()
+        assert "operations" in selection.subsystems
+        assert "tests/operations" in selection.targets
+        assert "tests/architecture/test_autonomous_operations_boundaries.py" in selection.targets
+
+    # Keep the runtime fail-closed boundary for an undeclared CLI sibling.
+    unknown = "app/cli/unowned_operations.py"
+    assert select_tests([unknown]).unowned_paths == (unknown,)
+
+
 def test_uat_cli_routes_to_watcher_sync() -> None:
     selection = select_tests(["app/cli/uat.py"])
 

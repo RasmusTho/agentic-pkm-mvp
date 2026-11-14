@@ -1,8 +1,8 @@
-"""Fixed live DEV/TEST fact producer; no deploy, repair, or source initializer.
+"""Native DEV/TEST facts and explicit fixed operator fixture preparation.
 
-Only the native committed operation id and channel are inputs. Git, Docker,
-the existing native journal and installed external distribution produce facts.
-The external effect ports are replaceable for deterministic orchestration tests.
+Admission only qualifies existing state. Separate preparation requires explicit
+setup inputs and intent. Git, Docker, the original native journal and installed
+distribution produce candidate facts; physical effect ports support source tests.
 """
 from __future__ import annotations
 
@@ -238,12 +238,8 @@ class NativeChannel:
             raise OperationsAcceptanceRefusal("committed_operations_producer_missing")
         return resources, producers
 
-    def admit(self) -> dict[str, Any]:
-        from app.ops.postgres_deploy_linux import LinuxConfig
-        config = LinuxConfig.load(self.channel, require_runtime_env=False)
-        current = config.journal.read()
-        if current is not None and current.operation_id != self.operation_id:
-            return self._retained_admission(config)
+    def candidate_identity(self) -> tuple[Path, dict[str, Any]]:
+        """Read original native/candidate facts without qualifying or preparing data."""
         root, receipt, plan = self._native()
         revision, image_digest = plan["revision"], plan["image_digest"]
         running = self._qualified_running(root, revision, image_digest, receipt)
@@ -259,6 +255,32 @@ class NativeChannel:
             "api_container_id": running["api"]["Id"], "ui_container_id": running["companion-ui"]["Id"],
             "api_image_id": running["api"]["Image"], "ui_image_id": running["companion-ui"]["Image"]}
         require_identity(identity)
+        return root, identity
+
+    def prepare_fixture(self, *, binding_id: str, principal_id: str, instance_identity: str,
+                        confirm_synthetic_setup: bool, stage_raw: bool = False) -> dict[str, Any]:
+        """Explicit operator effect, separate from admission and journey allowances."""
+        if confirm_synthetic_setup is not True:
+            raise OperationsAcceptanceRefusal("explicit_synthetic_setup_required")
+        _, identity = self.candidate_identity()
+        result = json.loads(command(["docker", "exec", "-i", identity["api_container_id"],
+            "python", "-m", "app.ops.native_operations_fixture"], payload={
+                "identity": identity, "binding_id": binding_id, "principal_id": principal_id,
+                "instance_identity": instance_identity, "confirm_synthetic_setup": True, "stage_raw": stage_raw}))
+        if (result.get("operation_id") != "native.operations_fixture.prepare"
+            or result.get("context", {}).get("active_context_ref") != "native:" + self.operation_id
+            or result.get("context", {}).get("extensions", {}).get("identity_sha256") != digest(identity)
+            or result.get("context", {}).get("extensions", {}).get("binding_id") != binding_id):
+            raise OperationsAcceptanceRefusal("original_preparation_receipt_binding_mismatch")
+        return result
+
+    def admit(self) -> dict[str, Any]:
+        from app.ops.postgres_deploy_linux import LinuxConfig
+        config = LinuxConfig.load(self.channel, require_runtime_env=False)
+        current = config.journal.read()
+        if current is not None and current.operation_id != self.operation_id:
+            return self._retained_admission(config)
+        root, identity = self.candidate_identity()
         # The fixed baked producer rechecks current program, native principal,
         # instance/binding, canonical sources and restore state before writing
         # a narrowing record outside the vault. No caller manifest is accepted.
@@ -366,3 +388,36 @@ class NativeChannel:
         return {"status": "observed", "separate_native_authority": True,
                 "original_native_receipt": receipt, "restart_binding": self.restart_binding,
                 "source_sha": plan["revision"], "image_digest": plan["image_digest"], "source_replays": 0}
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Fixed native operator command using the installed native runtime only.
+
+    Keep this argparse shell independent of the full Product Click CLI: the
+    native BWS/SDK runtime intentionally does not install that dependency set.
+    """
+    import argparse
+    parser = argparse.ArgumentParser(description="Explicit native operations fixture preparation")
+    actions = parser.add_subparsers(dest="action", required=True)
+    setup = actions.add_parser("prepare-fixture", help="Prepare one existing isolated synthetic binding")
+    setup.add_argument("channel", choices=("test", "dev"))
+    setup.add_argument("operation_id")
+    setup.add_argument("--binding-id", required=True)
+    setup.add_argument("--principal-id", required=True)
+    setup.add_argument("--instance-id", required=True)
+    setup.add_argument("--confirm-synthetic-setup", action="store_true", required=True)
+    setup.add_argument("--stage-raw", action="store_true", help="TEST only: stage normal encrypted RAW; real age still applies")
+    args = parser.parse_args(argv)
+    try:
+        result = NativeChannel(args.channel, args.operation_id).prepare_fixture(binding_id=args.binding_id,
+            principal_id=args.principal_id, instance_identity=args.instance_id,
+            confirm_synthetic_setup=args.confirm_synthetic_setup, stage_raw=args.stage_raw)
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["status"] in {"succeeded", "convergence_pending"} else 1
+    except (OperationsAcceptanceRefusal, ValueError):
+        print(json.dumps({"status": "blocked", "reason": "native_fixture_preparation_refused_inspect_original_receipts"}))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
