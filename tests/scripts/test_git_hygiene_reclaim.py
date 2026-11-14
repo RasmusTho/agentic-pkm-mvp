@@ -905,11 +905,12 @@ def _reregister_path_for_other_branch(
     registry_path: Path,
     branch: str,
 ) -> None:
-    """A successor agent reuses the same worktree path for a different branch.
+    """A successor agent tries to reuse the same worktree path for another branch.
 
-    This is the ordinary lifecycle sequence that used to destroy the tombstone:
-    the registry is keyed by path, so registering ``branch`` at ``worktree``
-    overwrote the record that bound the *previous* branch to that path.
+    The registry is keyed by path, so a successful registration used to overwrite
+    the record that bound the *previous* branch to that path and destroy its
+    tombstone. Registration now refuses that cross-branch reuse, so the registry
+    must be left byte-for-byte unchanged and the checkout is then removed again.
     """
     subprocess.run(
         ["git", "branch", branch, "main"], cwd=repo, check=True, capture_output=True
@@ -920,19 +921,27 @@ def _reregister_path_for_other_branch(
         check=True,
         capture_output=True,
     )
-    agent_worktree.register_worktree(
-        repo,
-        worktree=worktree,
-        owner="next-agent",
-        ttl_seconds=100_000,
-        registry_path=registry_path,
-    )
-    subprocess.run(
-        ["git", "worktree", "remove", str(worktree)],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
+    registry_before = registry_path.read_bytes()
+    try:
+        with pytest.raises(
+            agent_worktree.WorktreeLifecycleError,
+            match="retains another branch's ownership history",
+        ):
+            agent_worktree.register_worktree(
+                repo,
+                worktree=worktree,
+                owner="next-agent",
+                ttl_seconds=100_000,
+                registry_path=registry_path,
+            )
+        assert registry_path.read_bytes() == registry_before
+    finally:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree)],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
 
 
 def test_branch_deletion_fails_closed_when_worktree_path_is_reregistered(
@@ -944,7 +953,9 @@ def test_branch_deletion_fails_closed_when_worktree_path_is_reregistered(
     Pre-fix, ``register_worktree`` replaced the whole record for that path, so the
     ``codex/candidate`` -> path binding vanished and the second apply deleted the
     branch with ``git branch -d`` while a ``worktree:<path>`` lease was still
-    active. Runs the real registry, planner, and apply paths.
+    active. Registration now refuses the reuse; the second apply must still keep
+    the old branch under the path lease. Runs the real registry, planner, and
+    apply paths.
     """
     repo = _init_repo_with_merged_branch(
         tmp_path, branch="codex/candidate", squash=False
@@ -1006,6 +1017,7 @@ def test_branch_deletion_fails_closed_when_worktree_path_is_reregistered(
         action
         for action in second.get("destructive_actions", [])
         if action.get("command", [])[:2] == ["git", "branch"]
+        and "codex/candidate" in action.get("command", [])
     ]
     assert any(
         entry.get("name") == "codex/candidate"
