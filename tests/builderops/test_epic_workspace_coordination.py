@@ -177,6 +177,8 @@ class Epic:
                        {"kind": "MessageEvent", "source": "agent", "llm_message": {"content": f"retrying attempt {len(stream)}"}}])
         if error:
             stream.append(dict(ERROR, detail=ERROR["detail"].replace("12.4", f"{len(stream)}.1")))
+        for index, event in enumerate(stream):
+            event.setdefault("id", f"heartbeat-{index}")
 
     def others_busy(self, *except_issues):
         self.busy = {i for i in self.cid if i not in except_issues}
@@ -540,7 +542,7 @@ def test_failure_classes_are_not_an_undifferentiated_task_failure_ladder(tmp_pat
               MALFORMED: "prompt is too long", UNREACHABLE: "ECONNRESET", RECOVERS: "AssertionError in the agent loop"}
     epic.server.down.clear()
     for issue, detail in errors.items():
-        epic.server.streams[epic.cid[issue]].append({"kind": "ConversationErrorEvent", "code": "", "detail": detail})
+        epic.server.streams[epic.cid[issue]].append({"id": f"error-{issue}", "kind": "ConversationErrorEvent", "code": "", "detail": detail})
     epic.busy.add(PEER)
     epic.tick(capsys, apply=True)  # t1 baseline
     out, items = epic.tick(capsys, apply=True)  # t2

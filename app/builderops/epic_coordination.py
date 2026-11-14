@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -41,7 +42,7 @@ KIND = "epic_coordination"
 STALL_LIMIT = 3
 STALL_SECONDS = 60.0
 LADDER = ("change_approach", "bounded_diagnosis", "handoff")
-# Active work is diagnosed first; only distinct equivalent task-failure events justify superseding it.
+# Active work is diagnosed first; unlinked conversation errors cannot authorize superseding it.
 ACTIVE_LADDER = ("bounded_diagnosis", "change_approach", "handoff")
 ACTIVE_OPERATION_SECONDS = 1800.0
 BLOCKER_FILE = ".codex-tmp/worker-blocker.json"
@@ -75,6 +76,7 @@ _VALIDATION_OUTCOMES = {
 _NEXT_ACTION = {
     "change_approach": "Deliver the changed-approach directive to the live conversation, then require new diff/test/PR evidence before another equivalent retry.",
     "bounded_diagnosis": "Read-only diagnosis executed without interrupting the worker (helper budget 0): conversation, event page, checkout and test evidence; its result is recorded on this decision and the ladder continues.",
+    "active_failure_review": "Investigate the observed repeated conversation errors and current operation through the owning workflow; retain the writer and do not interrupt it automatically.",
     "handoff": "worker-stop with verified absence (unique work preserved), then conversation-start a successor on the same branch.",
     "progress_resumed": "Continue normal judgement; the ladder reset on new evidence.",
     "no_progress_exhausted": "Ladder spent without new evidence: redirect or reassign this item; peers continue.",
@@ -192,7 +194,7 @@ def _failure_signature(layout: ew.Layout, worker: str, http: Callable[..., tuple
     """Return the error signature, failure class, evidence gap, execution status and activity."""
 
     try:
-        status = ew.conversation_status(layout, worker, http=http, runner=runner)
+        status = ew.conversation_status(layout, worker, http=http, runner=runner, include_messages=False)
     except Exception:  # noqa: BLE001 - any transport/decode failure is a gap for this item only
         return None, None, "conversation_unreachable", None, {}
     if status.get("conversation") is None:
@@ -202,13 +204,35 @@ def _failure_signature(layout: ew.Layout, worker: str, http: Callable[..., tuple
     if status.get("events_reachable") is not True:
         return None, None, "event_stream_unavailable", None, {}
     # Activity is diagnosis input only; events and tool counts never count as progress.
-    activity = {"latest_event": status.get("latest_event"), "event_kinds_tail": list(status.get("event_kinds") or [])[-5:]}
+    activity = {"latest_event": status.get("latest_event"), "event_kinds_tail": list(status.get("event_kinds") or [])[-5:],
+                "event_refs": status.get("event_refs")}
+    latest = activity["latest_event"]
+    if activity["event_refs"] is None:
+        return None, None, "event_identity_unavailable", str(status.get("execution_status") or ""), activity
     errors = status.get("errors") or []
-    if not errors:
+    if not errors or not isinstance(latest, Mapping) or latest.get("kind") != "ConversationErrorEvent":
         return "none", None, None, str(status.get("execution_status") or ""), activity
-    normalized = re.sub(r"\s+", " ", re.sub(r"[0-9a-f]{8,}|\d+", "#", str(errors[-1]).lower())).strip()
-    return (_digest([status.get("failure_class"), normalized])[:16], status.get("failure_class"), None,
+    try:
+        # Exact evidence preserves task identities. A keyed digest avoids persisting potentially
+        # sensitive error detail or a guessable unsalted fingerprint in the run-state.
+        signature = hmac.new(ew._session_key(layout, worker).encode(),
+                             b"epic-coordination-error-v1\0" + str(errors[-1]).encode(), hashlib.sha256).hexdigest()
+    except (OSError, ValueError, UnicodeError):
+        return None, None, "failure_identity_unavailable", str(status.get("execution_status") or ""), activity
+    return (signature, status.get("failure_class"), None,
             str(status.get("execution_status") or ""), activity)
+
+
+def _validation_part(validation: Any) -> tuple[str | None, str | None]:
+    if validation is None:
+        return "none", None
+    if isinstance(validation, Mapping):
+        results = _pick(validation, _VALIDATION_RESULTS)
+        unknown = set(validation) - set(_VALIDATION_RESULTS) - _VALIDATION_METADATA
+        if not unknown and results and all(isinstance(value, str) and value.strip().lower() in _VALIDATION_OUTCOMES for value in results.values()):
+            return _digest({name: _VALIDATION_OUTCOMES[value.strip().lower()] for name, value in results.items()}), None
+        return None, "unsupported"
+    return None, "malformed"
 
 
 def observe_worker(layout: ew.Layout, worker: str, issue: int, state: Mapping[str, Any], *, runner: ew.Runner,
@@ -221,26 +245,14 @@ def observe_worker(layout: ew.Layout, worker: str, issue: int, state: Mapping[st
     mapping = state["issue_mappings"][key]
     recorded_checkout = mapping.get("checkout")
     bound = isinstance(recorded_checkout, str) and ew._checkout_mount_identity(layout, worker, mapping) is not None
-    parts["checkout"] = _checkout_digest(layout, worker, runner) if bound else None
-    if parts["checkout"] is None:
-        gaps["checkout"] = "unavailable" if bound else "workspace_binding_mismatch"
     signature, failure_class, gap, execution_status, activity = (_failure_signature(layout, worker, http, runner)
                                                                  if read_conversation else (None, None, "source_authority_unavailable", None, {}))
     parts["failure"] = signature
     if gap:
         gaps["failure"] = gap
-    validation = state.get("validation_status", {}).get(key)
-    if validation is None:
-        parts["validation"] = "none"
-    elif isinstance(validation, Mapping):
-        results = _pick(validation, _VALIDATION_RESULTS)
-        unknown = set(validation) - set(_VALIDATION_RESULTS) - _VALIDATION_METADATA
-        if not unknown and results and all(isinstance(value, str) and value.strip().lower() in _VALIDATION_OUTCOMES for value in results.values()):
-            parts["validation"] = _digest({name: _VALIDATION_OUTCOMES[value.strip().lower()] for name, value in results.items()})
-        else:
-            parts["validation"], gaps["validation"] = None, "unsupported"
-    else:
-        parts["validation"], gaps["validation"] = None, "malformed"
+    parts["validation"], gap = _validation_part(state.get("validation_status", {}).get(key))
+    if gap:
+        gaps["validation"] = gap
     for name, source, keys in (("pr", state["issue_mappings"][key].get("pr"), _PR_KEYS),):
         if source is None:
             parts[name] = "none"
@@ -254,8 +266,28 @@ def observe_worker(layout: ew.Layout, worker: str, issue: int, state: Mapping[st
     blocker, blocker_gap = _read_declared_blocker(layout.checkout(worker)) if bound else (None, "workspace_binding_mismatch")
     if blocker_gap:
         gaps["blocker"] = blocker_gap
+    # Read the checkout after the conversation and other evidence, close to the send boundary.
+    parts["checkout"] = _checkout_digest(layout, worker, runner) if bound else None
+    if parts["checkout"] is None:
+        gaps["checkout"] = "unavailable" if bound else "workspace_binding_mismatch"
     return {"parts": parts, "gaps": gaps, "failure_class": failure_class, "blocker": blocker,
             "execution_status": execution_status, "activity": activity}
+
+
+def directive_evidence(obs: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Bind a directive to its complete, privacy-limited observation, or fail closed."""
+    parts, activity = obs.get("parts"), obs.get("activity")
+    execution = str(obs.get("execution_status") or "").lower()
+    if (obs.get("gaps") or not isinstance(parts, Mapping) or not isinstance(activity, Mapping)
+            or set(parts) != {"checkout", "failure", "validation", "pr", "tests"}
+            or any(value is None for value in parts.values())
+            or execution not in {"idle", "finished", "error", "stuck"}):
+        return None
+    latest = activity.get("latest_event")
+    head = {"id": latest.get("id"), "kind": latest.get("kind")} if isinstance(latest, Mapping) else None
+    blocker = obs.get("blocker")
+    return {"parts": dict(parts), "execution_status": execution, "event_head": head,
+            "blocker_digest": blocker.get("digest") if isinstance(blocker, Mapping) else None}
 
 
 def read_issue_authority(issue: int, fetch: Fetch) -> dict[str, Any]:
@@ -446,8 +478,17 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
     failure_event = prior.get("failure_event")
     failure_signature = prior.get("failure_signature")
     failure_events = list(prior.get("failure_events", []))
-    if verdict == "progressing":
+    refs = (obs.get("activity") or {}).get("event_refs")
+    if failure_event and error_id != failure_event and isinstance(refs, list):
+        positions = [index for index, event in enumerate(refs) if event.get("id") == failure_event]
+        # Intermediate events have no compared error identity; do not infer their equivalence.
+        if len(positions) != 1 or positions[0] != len(refs) - 2:
+            failure_signature, failure_events = None, []
+    if verdict == "progressing" or gaps:
         failure_event, failure_signature, failure_events = error_id, None, []
+    elif not isinstance(error_id, str) or not error_id:
+        # A later operation invalidates the observed error series, even though it is not work progress.
+        failure_event, failure_signature, failure_events = None, None, []
     elif (not gaps and failure_class == "task_failure" and signature not in (None, "none")
           and isinstance(error_id, str) and error_id and error_id != failure_event):
         if signature != failure_signature:
@@ -463,6 +504,8 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
         record = {"id": f"coord:{issue}:{kind}:{key}{tag}", "kind": KIND, "schema": SCHEMA, "issue": issue, "worker": worker,
                   "action": kind, "first_tick": tick, "evidence_fingerprint": fingerprint,
                   "next_responsible_action": {"owner": "coordinator", "step": _NEXT_ACTION[kind], **fields.pop("next", {})}, **fields}
+        if kind in ("change_approach", "repair_technical_dependency"):
+            record["directive_evidence"] = directive_evidence(obs)
         if assignment is not None:
             record["assignment"] = dict(assignment)
         return record
@@ -508,8 +551,19 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
             ladder = LADDER if inactive else ACTIVE_LADDER
             step = next((kind for kind in ladder if kind not in done), None)
             diagnosed = prior.get("diagnosis") or {}
-            if step == "change_approach" and not inactive and not repeated_failure:
-                if isinstance(since, (int, float)) and now - since >= ACTIVE_OPERATION_SECONDS:
+            if step == "change_approach" and not inactive:
+                if repeated_failure:
+                    verdict, action = "stopped_active_unconfirmed", "active_failure_review"
+                    next_action = _NEXT_ACTION[action]
+                    decisions.append(decision(action, fingerprint, failure_events=failure_events,
+                                              failure_signature=failure_signature,
+                                              finding="Matching conversation errors cannot be bound to the active operation."))
+                    stops.append({"id": f"coord-stop:{issue}:active_failure_review:{fingerprint}{tag}", "kind": KIND,
+                                  "schema": SCHEMA, "issue": issue, "worker": worker, "stop": action,
+                                  "owner": "coordinator", "next_action": next_action,
+                                  "unblocks_when": "new work evidence, inactive execution, or an investigated redirect",
+                                  "first_tick": tick})
+                elif isinstance(since, (int, float)) and now - since >= ACTIVE_OPERATION_SECONDS:
                     verdict = "stopped_active_unconfirmed"
                     next_action = ("Active work has no confirmed repeated failure. Investigate the running operation "
                                    "and its evidence through the owning workflow; preserve its writer and peers.")
@@ -521,7 +575,7 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
                 else:
                     verdict = "waiting_active_or_backoff"
                     next_action = (f"Bounded diagnosis {diagnosed.get('tick')} found that {diagnosed.get('finding')} "
-                                   "Continue observing; only repeated equivalent task failures justify interrupting active work.")
+                                   "Continue observing; conversation errors alone cannot identify the active operation.")
             elif step is None:
                 action = "no_progress_exhausted"
                 stops.append({"id": f"coord-stop:{issue}:no_progress_exhausted:{fingerprint}{tag}", "kind": KIND, "schema": SCHEMA,
@@ -537,15 +591,13 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
                 next_action = _NEXT_ACTION[step]
                 if step == "bounded_diagnosis":
                     following = next((kind for kind in ladder if kind not in (*done, step)), None)
+                    if not inactive and following == "change_approach":
+                        following = "active_failure_review or continued observation"
                     diagnosed = _diagnosis(tick, obs, stall=stall, inactive=inactive, stepping=stepping,
                                            operation_age=operation_age, next_step=following)
                     fields.update(diagnosis=diagnosed, finding=diagnosed["finding"])
                     next_action = (f"Bounded read-only diagnosis executed at {tick}: {diagnosed['finding']} "
                                    f"Next ladder step: {following}.")
-                elif step == "change_approach" and not inactive:
-                    fields["while_active"] = True  # upstream run=True supersedes the in-flight prompt
-                    fields["failure_events"] = failure_events
-                    fields["failure_signature"] = failure_signature
                 decisions.append(decision(step, fingerprint, **fields))
                 done.append(step)
                 stage, stall = len(done), 0

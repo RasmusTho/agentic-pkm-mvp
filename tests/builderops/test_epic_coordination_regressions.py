@@ -242,7 +242,7 @@ def test_out_of_order_replays_and_error_churn_do_not_reset_or_advance(make_harne
     results = [h.run(tick, apply=False)["items"][0] for tick in ("A", "B", "A", "B", "A")]
     assert [item["stage"] for item in results] == [0, 1, 1, 1, 1]
     for i in range(3):
-        h.events[h.cids[9000002]] = [{"kind": "ConversationErrorEvent", "detail": f"failure {i}"}]
+        h.events[h.cids[9000002]] = [{"id": f"error-{i}", "kind": "ConversationErrorEvent", "detail": f"failure {i}"}]
         item = h.run(f"E{i}", apply=False)["items"][0]
         assert item["state"] != "progressing" and "failure" not in item["changed_parts"]
 

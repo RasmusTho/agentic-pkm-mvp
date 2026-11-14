@@ -440,7 +440,7 @@ def test_active_no_progress_is_diagnosed_then_held_without_interrupting(harness,
     assert h.posts == []
 
 
-def test_active_repeated_distinct_task_failures_allow_one_directive(harness):
+def test_active_repeated_errors_require_investigation_then_inactive_work_can_be_directed(harness):
     h = harness()
     h.execution = "running"
     cid = h.cids[ISSUE]
@@ -453,15 +453,19 @@ def test_active_repeated_distinct_task_failures_allow_one_directive(harness):
     h.run("same-error")
     assert h.posts == []
     failure("failure-2")
-    h.run("loop")
-    assert [d["action"] for d in _ladder(h)] == ["bounded_diagnosis", "change_approach"]
+    item = h.run("loop")["items"][0]
+    assert item["state"] == "stopped_active_unconfirmed" and item["action"] == "active_failure_review"
+    assert [d["action"] for d in _ladder(h)] == ["bounded_diagnosis", "active_failure_review"]
     assert _ladder(h)[1]["failure_events"] == ["failure-1", "failure-2"]
     assert _ladder(h)[1]["failure_signature"]
-    assert h.posts == [cid]
-    assert h.payloads[0]["run"] is True and h.effects()[0]["while_active"] is True
+    assert h.posts == [] and h.effects() == []
     for n in range(3):
         h.run(f"after{n}")
+    assert h.posts == []
+    h.execution = "error"
+    h.run("inactive")
     assert h.posts == [cid]
+    assert h.payloads[0]["run"] is True
 
 
 def test_progress_after_diagnosis_resets_the_ladder(harness):
@@ -624,8 +628,8 @@ def test_active_failure_evidence_resets_on_new_failure_or_progress(harness):
     h.run("new-baseline")
     assert h.posts == []
     failure("four", "build failed")
-    h.run("repeated")
-    assert h.posts == [cid]
+    item = h.run("repeated")["items"][0]
+    assert item["action"] == "active_failure_review" and h.posts == []
 
 
 def test_provider_backoff_does_not_become_an_active_loop(harness, monkeypatch):

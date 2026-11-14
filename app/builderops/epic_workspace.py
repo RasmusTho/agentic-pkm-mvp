@@ -3167,6 +3167,9 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
         (e for e in reversed(items) if isinstance(e, Mapping) and e.get("kind") == "MessageEvent" and e.get("source") == "agent"),
         None,
     ) if include_messages else None
+    event_refs = ([{"id": event["id"], "kind": event["kind"]} for event in items]
+                  if all(isinstance(event, Mapping) and isinstance(event.get("id"), str) and event["id"]
+                         and isinstance(event.get("kind"), str) and event["kind"] for event in items) else None)
     return {
         "issue": issue,
         "worker": worker,
@@ -3175,12 +3178,16 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
         "events_reachable": ecode == 200 and isinstance(events, Mapping) and isinstance(events.get("items"), list),
         "execution_status": info.get("execution_status") if isinstance(info, Mapping) else None,
         "event_kinds": [e.get("kind") for e in items if isinstance(e, Mapping)][-limit:],
+        # Only identity/kind crosses into the coordinator; never copy message or tool content.
+        "event_refs": event_refs,
         "errors": errors,
         "failure_class": classify_failure(errors[-1]) if errors else None,
         "last_agent_message": last_agent_message,
         # Activity (not progress): the newest event a bounded read-only diagnosis compares across passes.
-        "latest_event": next(({"id": e.get("id"), "kind": e.get("kind"), "timestamp": e.get("timestamp")}
-                              for e in reversed(items) if isinstance(e, Mapping) and e.get("id")), None),
+        # Do not silently substitute an older identifiable event for an unreadable newest one.
+        "latest_event": ({"id": items[-1].get("id"), "kind": items[-1].get("kind"),
+                          "timestamp": items[-1].get("timestamp")}
+                         if items and isinstance(items[-1], Mapping) else None),
     }
 
 

@@ -210,18 +210,23 @@ def _session(layout: ew.Layout, issue: int, worker: str, expected: Mapping[str, 
         yield port, key, cid, str(info.get("execution_status") or "").lower(), identity
 
 
-def _fresh_authority(layout: ew.Layout, issue: int, mapping: Mapping[str, Any], fetch: coord.Fetch | None) -> bool:
+def _fresh_context(layout: ew.Layout, issue: int, mapping: Mapping[str, Any], fetch: coord.Fetch | None) -> str | None:
+    """Read current authority and the actual PR projection; None means unknown or held."""
     if fetch is None:
-        return False
+        return None
     try:
         receipt = coord.read_issue_authority(issue, fetch)
         authority = coord.authority_for({"compact_receipts": [receipt]}, issue)
         rows = coord.github_read._Reader(fetch, time.monotonic).pages(
             f"/repos/{coord.github_read.REPOSITORY}/pulls?state=open", coord.github_read.MAX_PAGES)
-        coord._live_pr_part(issue, layout.epic, mapping.get("branch"), rows)
-        return authority.get("kind") == "none"
+        pr = coord._live_pr_part(issue, layout.epic, mapping.get("branch"), rows)
+        return pr if authority.get("kind") == "none" else None
     except Exception:  # noqa: BLE001 - unavailable or conflicting live authority fails closed
-        return False
+        return None
+
+
+def _fresh_authority(layout: ew.Layout, issue: int, mapping: Mapping[str, Any], fetch: coord.Fetch | None) -> bool:
+    return _fresh_context(layout, issue, mapping, fetch) is not None
 
 
 def _refuse(layout: ew.Layout, issue: int, worker: str, tick: str, decision: Mapping[str, Any], reason: str,
@@ -295,7 +300,8 @@ def apply_item(layout: ew.Layout, issue: int, worker: str, tick: str, *, decisio
         return [_refuse(layout, issue, worker, tick, decision, "invalid current conversation identity", observed)]
     if ew.assignment_of(mapping) != observed or decision.get("assignment") != observed:
         return [_refuse(layout, issue, worker, tick, decision, "the decision belongs to an earlier assignment", observed)]
-    allowed = {"idle", "finished", "error", "stuck", *(("running",) if decision.get("while_active") else ())}
+    # Retained decisions from older code cannot authorize interruption of an active operation.
+    allowed = {"idle", "finished", "error", "stuck"}
     effect: dict[str, Any] | None = None
     posted = False
     try:
@@ -315,10 +321,23 @@ def apply_item(layout: ew.Layout, issue: int, worker: str, tick: str, *, decisio
             if decision["action"] == "repair_technical_dependency":
                 blocker, gap = coord._read_declared_blocker(layout.checkout(worker))
                 blocker_matches = not gap and blocker is not None and blocker.get("summary") == decision.get("declared_blocker")
+            fresh_pr = _fresh_context(layout, issue, current, fetch)
             if (not _binding(current, effect, worker) or ew._checkout_mount_identity(layout, worker, current) != identity
-                    or (decision["action"] == "change_approach" and not aged) or not blocker_matches
-                    or not _fresh_authority(layout, issue, current, fetch)):
+                    or (decision["action"] == "change_approach" and not aged) or not blocker_matches or fresh_pr is None):
                 raise ValueError("effect boundary changed")
+            # Re-read real evidence after reservation and after the last source-authority read.
+            # The endpoint and lifecycle locks bind identity, not the independently running writer.
+            fresh_state = ew._load_state(layout)
+            fresh = coord.observe_worker(layout, worker, issue, fresh_state, runner=runner, http=http)
+            fresh["parts"]["pr"] = fresh_pr
+            latest_state = ew._load_state(layout)
+            latest = latest_state["issue_mappings"][str(issue)]
+            validation, validation_gap = coord._validation_part(latest_state.get("validation_status", {}).get(str(issue)))
+            evidence = coord.directive_evidence(fresh)
+            if (not _binding(latest, effect, worker) or ew._checkout_mount_identity(layout, worker, latest) != identity
+                    or validation_gap or validation != fresh["parts"].get("validation")
+                    or evidence is None or evidence != decision.get("directive_evidence")):
+                raise ValueError("current work evidence changed or is unavailable")
             payload = {"role": "user", "content": [{"type": "text", "text": compose(decision, marker)}], "run": True}
             posted = True
             try:

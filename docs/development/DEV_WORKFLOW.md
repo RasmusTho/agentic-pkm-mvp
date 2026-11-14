@@ -790,15 +790,20 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
   Changed checkout, supported validation result, test or PR evidence resets the ladder. A fresh
   no-progress decision waits for at least 60 seconds without such evidence, and accepted sends have
   a 60-second interval before another directive. **Replay limit (KD-4B9E44394285):** after an
-  interrupted pass, do not replay its latest tick with `--apply`; use a fresh tick so new checkout,
-  test and PR evidence is judged before any directive. Same-tick replay can otherwise send a stale
-  decision. This limitation remains an obligation for full #6618 activation. The diagnosis is
+  interrupted pass, do not replay its latest tick with `--apply`; use a fresh tick to judge new
+  checkout, test and PR evidence. The send-boundary recheck below also applies to replay and refuses
+  an observed mismatch, but does not establish that every replay/recovery sequence is safe. This
+  limitation remains an obligation for full #6618 activation. The diagnosis is
   executed in the same pass, read-only and without interrupting the
   writer: the conversation, a bounded event page, the checkout and test evidence are read and the
   finding is recorded on the decision. An active conversation with unchanged evidence is diagnosed
-  first. Only distinct equivalent task-failure events can justify a `change_approach` directive
-  while it runs, superseding the in-flight prompt through the upstream message endpoint. An event
-  alone and a 30-minute operation are not evidence of a loop. After 30 minutes without changed work
+  first. Conversation errors do not identify the current tool call or operation, and may be nonfatal.
+  Matching errors while a conversation runs therefore lead to a recorded investigation through the
+  owning workflow, without automatically superseding the writer. Only exact, identifiable error
+  observations are compared; a later operation, missing event history or new work invalidates the
+  series. The coordinator stores a keyed digest rather than error text. An inactive stalled worker
+  can still receive the bounded changed-approach directive. An event alone and a 30-minute operation
+  are not evidence of a loop. After 30 minutes without changed work
   evidence, the coordinator records an active-work investigation stop without interrupting the
   writer. Event activity is diagnosis input only, never progress. Quota, authentication, context, transient network and policy errors retain separate
   next actions; they are not silently treated as task failures or a license to switch engines. A
@@ -821,7 +826,11 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
   tick, action and random marker are recorded before the request. The controller checks the actual
   container ID, published loopback port, checkout mount, existing session key, and conversation ID,
   tags and working directory before contacting or directing a worker. It rechecks identity and
-  current Issue and PR authority at the send boundary, including a replay. The upstream message endpoint
+  current Issue and PR authority after reservation. It then rereads the actual conversation, checkout,
+  test cache and validation evidence and compares them with the decision, including on replay. Missing
+  or changed evidence, a new event, or active execution refuses the affected send. These observations
+  are not atomic with the worker or GitHub, so changes after the final read remain outside the fence.
+  The upstream message endpoint
   can supersede a running ACP prompt or goal loop; callers must intend that effect. A user event with
   the marker must be read back before delivery is reported. A lost reply or missing event is unknown,
   never proof of absence: the original attempt is reconciled by marker and is not resent, even on a
