@@ -332,6 +332,24 @@ def _load_state(layout: Layout) -> dict[str, Any]:
     return epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
 
 
+def _continuation_task_action(mapping: Mapping[str, Any]) -> Any:
+    """Keep the task action separate from a coordinator's temporary diagnostic action."""
+    saved = mapping.get("coordination_continuation")
+    if (isinstance(saved, Mapping) and "diagnostic_action" in saved
+            and mapping.get("next_action") == saved["diagnostic_action"]):
+        return saved.get("task_action")
+    return mapping.get("next_action")
+
+
+def _set_coordination_action(mapping: dict[str, Any], action: str) -> None:
+    # Called inside the same run-state mutation that writes the diagnostic. A separately
+    # updated next_action supersedes an older snapshot before the next diagnostic is saved.
+    mapping["coordination_continuation"] = {
+        "task_action": _continuation_task_action(mapping), "diagnostic_action": action,
+    }
+    mapping["next_action"] = action
+
+
 def _record_worker(layout: Layout, issue: int, **fields: Any) -> dict[str, Any]:
     key = str(int(issue))
 
@@ -2413,6 +2431,9 @@ def continuation_brief(layout: Layout, worker: str) -> dict[str, Any]:
         ],
         "predecessors": [{k: c.get(k) for k in ("id", "engine", "model", "status")} for c in conversations],
     }
+    remaining_task = _continuation_task_action(mapping)
+    if remaining_task is not None and remaining_task != mapping.get("next_action"):
+        brief["remaining_task_action"] = remaining_task
     brief["prompt"] = _render_continuation_prompt(brief)
     return brief
 
@@ -2432,6 +2453,9 @@ def _render_continuation_prompt(brief: Mapping[str, Any]) -> str:
         lines.append("Controller-held safety checkpoints of the predecessor's uncommitted and ignored files (the files themselves are still in this checkout): " + ", ".join(c["ref"] for c in brief["checkpoints"]))
     if action["blocked_operations"]:
         lines.append("Do NOT attempt these publication operations; their outcome is unknown and only the coordinator reconciles them: " + ", ".join(f"{b['kind']} ({b['id']})" for b in action["blocked_operations"]))
+    if brief.get("remaining_task_action"):
+        lines.append("Remaining task action, subject to the coordinator's holds and blocked operations: "
+                     + str(brief["remaining_task_action"])[:600])
     lines.append("You have no GitHub credentials: never push or open pull requests; commit locally and record the state in `.codex-tmp/epic-continuation.md`.")
     return "\n".join(lines)
 
@@ -3221,7 +3245,7 @@ def reconcile_worker_conversation(layout: Layout, worker: str, *, http: Callable
 
 _FAILURE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # A paid-API credential in use violates the subscription-only policy; never a handoff trigger.
-    ("policy", re.compile(r"credit balance|ANTHROPIC_API_KEY|OPENAI_API_KEY|billing", re.I)),
+    ("policy", re.compile(r"credit balance|ANTHROPIC_API_KEY|OPENAI_API_KEY|billing|\b(?:usage|content) policy\b", re.I)),
     ("authentication", re.compile(
         r"authentication required|ACPAuthRequired|unauthori[sz]ed|invalid (api key|token|bearer)|"
         r"token (has )?expired|refresh token|sign in again|log ?in again|not logged in|oauth", re.I)),
@@ -3240,16 +3264,58 @@ _FAILURE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
-def classify_failure(text: str) -> str:
+_TYPED_FAILURES = {
+    "UsagePolicyRefusal": "policy",
+    "ACPAuthRequired": "authentication",
+    "LLMAuthenticationError": "authentication",
+    "LLMContextWindowExceedError": "context_exhausted",
+    "LLMMalformedConversationHistoryError": "context_exhausted",
+    "ACPStartupTimeout": "transient_network",
+    "LLMRateLimitError": "transient_network",
+    "ACPSpawnError": "task_failure",
+    "LLMBadRequestError": "task_failure",
+    # This is the SDK's configured local budget, not a Claude subscription limit.
+    "MaxBudgetReached": "policy",
+    "MaxIterationsReached": "task_failure",
+    "ConversationOwnershipLostError": "task_failure",
+}
+
+
+def classify_failure(text: str, *, code: str | None = None) -> str:
     """Map an engine-level (ACP/conversation) error to one class.
 
     Only ``quota_exhausted`` may trigger an engine handoff. Tool output is never classified here.
     """
 
+    # Specific upstream types override incidental wording in their detail. ACPPromptError
+    # is an upstream generic wrapper, so its detail can still establish a subscription quota.
+    if isinstance(code, str) and code in _TYPED_FAILURES:
+        return _TYPED_FAILURES[code]
     for name, pattern in _FAILURE_PATTERNS:
         if pattern.search(text or ""):
             return name
     return "task_failure" if text else "unclassified"
+
+
+def _classify_conversation_error(event: Mapping[str, Any]) -> str:
+    code = event.get("code")
+    text = f"{code or ''} {event.get('detail') or event.get('error') or ''}".strip()
+    result = classify_failure(text, code=code)
+    if isinstance(code, str) and code in _TYPED_FAILURES:
+        return result
+    classification = event.get("classification")
+    kind = classification.get("kind") if isinstance(classification, Mapping) else None
+    # OpenHands 1.62 labels the generic ACP prompt/init wrappers as config regardless
+    # of detail, including actual subscription quota. Other explicit non-quota kinds
+    # are conflicting evidence and cannot authorize a quota-only handoff.
+    if kind == "config" and code in ("ACPPromptError", "ACPInitError"):
+        return result
+    structured = {"auth": "authentication", "transient": "transient_network",
+                  "rate_limit": "transient_network", "agent_action": "task_failure",
+                  "internal": "task_failure", "config": "task_failure"}
+    if isinstance(kind, str) and kind in structured and result in ("quota_exhausted", "task_failure", "unclassified"):
+        return structured[kind]
+    return result
 
 
 def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http,
@@ -3282,6 +3348,19 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
     error_current = (last_error is not None and not any(
         isinstance(e, Mapping) and e.get("kind") in ("MessageEvent", "ActionEvent", "ObservationEvent")
         for e in items[last_error + 1:]))
+    failure_class = None
+    if last_error is not None:
+        # Multiple errors with no intervening activity describe one failure episode. A quota
+        # phrase cannot erase a conflicting error emitted in that same episode.
+        start = next((i + 1 for i in range(last_error - 1, -1, -1)
+                      if isinstance(items[i], Mapping) and items[i].get("kind") in
+                      ("MessageEvent", "ActionEvent", "ObservationEvent")), 0)
+        episode = [_classify_conversation_error(e)
+                   for e in items[start:last_error + 1]
+                   if isinstance(e, Mapping) and e.get("kind") == "ConversationErrorEvent"]
+        failure_class = episode[-1]
+        if failure_class == "quota_exhausted":
+            failure_class = next((kind for kind in reversed(episode[:-1]) if kind != "quota_exhausted"), failure_class)
     last_agent_message = next(
         (e for e in reversed(items) if isinstance(e, Mapping) and e.get("kind") == "MessageEvent" and e.get("source") == "agent"),
         None,
@@ -3299,7 +3378,7 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
                            if isinstance(info.get("agent"), Mapping) else None),
         "event_kinds": [e.get("kind") for e in items if isinstance(e, Mapping)][-limit:],
         "errors": errors,
-        "failure_class": classify_failure(errors[-1]) if errors else None,
+        "failure_class": failure_class,
         "failure_current": error_current,
         "last_agent_message": last_agent_message,
         # Activity (not progress): the newest event a bounded read-only diagnosis compares across passes.

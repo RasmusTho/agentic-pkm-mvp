@@ -65,7 +65,7 @@ def _context(state: Mapping[str, Any], mapping: Mapping[str, Any], issue: int,
         "issue_contract": readback.get("continuation_contract") or "unavailable: read the governing Issue",
         "lifecycle_owner": mapping.get("lifecycle_owner") or mapping.get("owner") or "unknown",
         "builder_session": mapping.get("builder_session") or "unknown",
-        "next_action": str(mapping.get("next_action") or "unknown")[:600],
+        "next_action": str(ew._continuation_task_action(mapping) or "unknown")[:600],
         "last_meaningful_progress": str(mapping.get("last_meaningful_progress") or "unknown")[:600],
         "pr": compact(mapping.get("pr"), ("number", "url", "state", "head")),
         "validation": compact(state.get("validation_status", {}).get(str(issue)), ("result", "command", "summary", "head")),
@@ -98,9 +98,14 @@ def continuation_context(layout: ew.Layout, worker: str, handoff: Mapping[str, A
 
 
 def _prompt(layout: ew.Layout, worker: str, handoff: Mapping[str, Any]) -> str:
-    return (ew.continuation_brief(layout, worker)["prompt"]
+    context = continuation_context(layout, worker, handoff)
+    pending = context.get("pending_directives")
+    quarantine = ("\nPrevious directive outcomes are unresolved; do not resend them. "
+                  "Only the coordinator reconciles those original effects."
+                  if isinstance(pending, list) and pending else "")
+    return (ew.continuation_brief(layout, worker)["prompt"] + quarantine
             + "\n\nCompact controller records (unknown means not established):\n"
-            + json.dumps(continuation_context(layout, worker, handoff), ensure_ascii=True, sort_keys=True, default=str))
+            + json.dumps(context, ensure_ascii=True, sort_keys=True, default=str))
 
 
 def _confirmed_quota(status: Mapping[str, Any], conversation: Mapping[str, Any]) -> bool:

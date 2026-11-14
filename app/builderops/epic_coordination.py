@@ -587,9 +587,9 @@ def _hold_runtime(layout: ew.Layout, issue: int, worker: str, mapping: Mapping[s
             return state  # the newer assignment's record is kept
         record_id = f"coord:{issue}:runtime:{runtime}:{mapping.get('container_id')}"
         existing = next((r for r in state["dispatch_decisions"] if isinstance(r, Mapping) and r.get("id") == record_id), None)
-        remaining = existing.get("remaining_outcome") if existing else entry.get("next_action")
+        remaining = existing.get("remaining_outcome") if existing else ew._continuation_task_action(entry)
         result["remaining_outcome"] = remaining
-        entry["next_action"] = next_action
+        ew._set_coordination_action(entry, next_action)
         _upsert(state["dispatch_decisions"], [{"id": record_id,
                 "kind": KIND, "schema": SCHEMA, "issue": issue, "worker": worker, "action": "runtime_hold",
                 "failure_class": result["failure_class"], "first_tick": tick, "checkout": mapping.get("checkout"),
@@ -666,7 +666,7 @@ def _coordinate_item(layout: ew.Layout, key: str, mapping: Mapping[str, Any], *,
         judged = judge_item(issue, worker, entry.get("coordination"), obs, authority, tick=tick, limit=stall_limit, assignment=observed)
         entry["coordination"] = judged["coordination"]
         if judged["result"]["next_action"] and judged["result"].get("action") != "engine_quota":
-            entry["next_action"] = judged["result"]["next_action"]
+            ew._set_coordination_action(entry, judged["result"]["next_action"])
         current["issue_mappings"][str(issue)] = entry
         _upsert(current["dispatch_decisions"], judged["decisions"])
         _upsert(current["stop_conditions"], judged["stops"])

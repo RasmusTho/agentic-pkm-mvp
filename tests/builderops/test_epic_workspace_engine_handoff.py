@@ -19,6 +19,7 @@ from tests.builderops.test_epic_workspace_lifecycle import _ckpt, _git
 
 EPIC, ISSUE, PEER = 6615, 6617, 6619
 QUOTA = "You've hit your weekly limit · resets 2am (UTC)"
+TASK_ACTION = "add guard to parser.py then rerun test_parser_before_publication"
 CONTRACT = """## Context
 Finish the assigned slice.
 ## Scope
@@ -162,6 +163,7 @@ class Harness:
 
 def test_quota_exhaustion_hands_off_to_terra_without_competing_writers(tmp_path, capsys):
     h = Harness(tmp_path, capsys, peer=True)
+    ew._record_worker(h.layout, ISSUE, next_action=TASK_ACTION)
     peer_at_stop = []
     h.engine.stop_observer = lambda argv: peer_at_stop.append(h.mapping(PEER).get("coordination")) if h.old_id in argv else None
     checkout = h.layout.checkout("w-a")
@@ -184,6 +186,7 @@ def test_quota_exhaustion_hands_off_to_terra_without_competing_writers(tmp_path,
     assert result[PEER]["state"] == "baseline"
     assert peer_at_stop and isinstance(peer_at_stop[0], dict)
     mapping = h.mapping()
+    assert mapping["engine_handoff"]["context"]["next_action"] == TASK_ACTION
     assert h.server.absence_at_successor == [True]
     assert h.github.inventory_writer_present[0] is True and h.github.inventory_writer_present[-1] is False
     assert mapping["lifecycle_owner"] == "owner-6618" and mapping["builder_session"] == "builder-session-6618"
@@ -228,6 +231,46 @@ def test_non_quota_failures_do_not_switch_engine(tmp_path, capsys, detail, kind)
     assert h.mapping()["conversation"]["id"] == h.old_conversation
     assert h.mapping()["container_id"] == h.old_id
     assert len(h.posts()) == 1 and not h.server.absence_at_successor
+
+
+@pytest.mark.parametrize("code,detail,classification,expected", [
+    ("UsagePolicyRefusal", f"content policy refusal: {QUOTA}", {"kind": "quota"}, "policy"),
+    ("ACPPromptError", f"usage policy refusal: {QUOTA}", {"kind": "config"}, "policy"),
+    ("ACPAuthRequired", QUOTA, None, "authentication"),
+    ("LLMContextWindowExceedError", QUOTA, None, "context_exhausted"),
+    ("ACPStartupTimeout", QUOTA, None, "transient_network"),
+    ("ACPSpawnError", QUOTA, None, "task_failure"),
+    ("MaxBudgetReached", QUOTA, {"kind": "quota"}, "policy"),
+    ("ACPPromptError", QUOTA, {"kind": "auth"}, "authentication"),
+    ("ACPPromptError", QUOTA, {"kind": "transient"}, "transient_network"),
+])
+def test_typed_or_conflicting_failure_cannot_trigger_quota_handoff(tmp_path, capsys, code, detail, classification, expected):
+    h = Harness(tmp_path, capsys)
+    h.server.streams[h.old_conversation] = [{"id": "error-1", "kind": "ConversationErrorEvent",
+                                              "code": code, "detail": detail, "classification": classification}]
+    result = h.tick(capsys)[ISSUE]
+    assert result["failure_class"] == expected
+    assert h.mapping()["conversation"]["id"] == h.old_conversation
+    assert h.mapping()["container_id"] == h.old_id
+    assert len(h.posts()) == 1 and not h.server.absence_at_successor
+
+
+def test_conflicting_error_in_same_failure_episode_blocks_handoff_until_new_activity(tmp_path, capsys):
+    h = Harness(tmp_path, capsys)
+    h.server.streams[h.old_conversation] = [
+        {"id": "policy", "kind": "ConversationErrorEvent", "code": "UsagePolicyRefusal", "detail": "refused"},
+        {"id": "quota", "kind": "ConversationErrorEvent", "code": "ACPPromptError", "detail": QUOTA},
+    ]
+    result = h.tick(capsys)[ISSUE]
+    assert result["failure_class"] == "policy" and h.mapping()["container_id"] == h.old_id
+    assert len(h.posts()) == 1
+    h.server.streams[h.old_conversation].extend([
+        {"id": "new-work", "kind": "ActionEvent"},
+        {"id": "new-quota", "kind": "ConversationErrorEvent", "code": "ACPPromptError", "detail": QUOTA,
+         "classification": {"kind": "config"}},
+    ])
+    assert h.tick(capsys)[ISSUE]["handoff"]["state"] == "continued"
+    assert h.server.absence_at_successor == [True] and len(h.posts()) == 2
 
 
 @pytest.mark.parametrize("failure", ["refuse_stop", "unknown_stop"])
@@ -396,6 +439,7 @@ def test_unknown_publication_quarantines_only_that_effect(tmp_path, capsys):
 
 def test_unavailable_pr_inventory_quarantines_publication_but_allows_continuation(tmp_path, capsys):
     h = Harness(tmp_path, capsys, peer=True)
+    ew._record_worker(h.layout, ISSUE, next_action=TASK_ACTION)
     assert h.main("publication-begin", "--worker", "w-a", "--kind", "pr_create") == 0
     operation = json.loads(capsys.readouterr().out)["id"]
     h.github.inventory_down = True
@@ -407,6 +451,7 @@ def test_unavailable_pr_inventory_quarantines_publication_but_allows_continuatio
     capsys.readouterr()
     prompt = h.posts()[-1][3]["initial_message"]["content"][0]["text"]
     assert operation in prompt and "Do NOT attempt" in prompt and h.server.absence_at_successor == [True]
+    assert TASK_ACTION in prompt and h.mapping()["engine_handoff"]["context"]["next_action"] == TASK_ACTION
     assert result[PEER]["state"] in ("baseline", "unknown")
 
 
@@ -426,6 +471,59 @@ def test_unknown_old_directive_does_not_block_preserved_quota_continuation(tmp_p
     assert record["outcome"] == "reserved" and record["conversation_id"] == h.old_conversation
     prompt = h.posts()[-1][3]["initial_message"]["content"][0]["text"]
     assert effect["id"] in prompt and "pending_directives" in prompt and not h.server.messages
+
+
+def test_task_action_survives_unknown_directive_and_interrupted_quota_handoff(tmp_path, capsys):
+    from app.builderops import epic_coordination_effects as effects
+
+    h = Harness(tmp_path, capsys)
+    checkout = h.layout.checkout("w-a")
+    (checkout / "partial.py").write_text("unfinished task work\n")
+    ew._record_worker(h.layout, ISSUE, next_action=TASK_ACTION)
+    observed = ew.assignment_of(h.mapping())
+    decision = {"id": "quota-unknown-directive-with-task", "action": "change_approach", "assignment": observed}
+    effect = effects._reserve(h.layout, ISSUE, "w-a", decision, "prior-pass", observed)
+    assert effect is not None
+    assert TASK_ACTION in ew.continuation_brief(h.layout, "w-a")["prompt"]
+    h.failure()
+    h.server.streams[h.old_conversation].insert(0, {
+        "id": "old-chat", "kind": "MessageEvent", "source": "agent",
+        "llm_message": {"role": "assistant", "content": [{"type": "text", "text": "PRIVATE-CHAT-SENTINEL"}]},
+    })
+    h.engine.refuse_stop = True
+    assert h.tick(capsys)[ISSUE]["handoff"]["state"] == "held"
+    saved = h.mapping()["engine_handoff"]
+    assert saved["context"]["next_action"] == TASK_ACTION
+    assert saved["context"]["pending_directives"][0]["id"] == effect["id"]
+    h.engine.refuse_stop = False
+    assert h.tick(capsys)[ISSUE]["handoff"]["state"] == "continued"
+    mapping = h.mapping()
+    prompt = h.posts()[-1][3]["initial_message"]["content"][0]["text"]
+    assert TASK_ACTION in prompt and effect["id"] in prompt
+    assert "PRIVATE-CHAT-SENTINEL" not in prompt and "do not resend" in prompt
+    assert mapping["lifecycle_owner"] == "owner-6618" and mapping["builder_session"] == "builder-session-6618"
+    assert mapping["branch"] == "b/a" and (checkout / "partial.py").read_text() == "unfinished task work\n"
+    record = next(row for row in ew._load_state(h.layout)["dispatch_decisions"] if row.get("id") == effect["id"])
+    assert record["outcome"] == "reserved" and not h.server.messages and len(h.posts()) == 2
+    h.tick(capsys)  # a fresh pass rebuilds its view from persisted state
+    assert TASK_ACTION in ew.continuation_brief(h.layout, "w-a")["prompt"]
+    assert not h.server.messages and len(h.posts()) == 2
+
+
+def test_new_task_action_supersedes_an_older_diagnostic_snapshot(tmp_path, capsys):
+    from app.builderops import epic_coordination_effects as effects
+
+    h = Harness(tmp_path, capsys)
+    h.github.inventory_down = True
+    h.tick(capsys)  # a gap records its diagnostic before the task changes
+    ew._record_worker(h.layout, ISSUE, next_action=TASK_ACTION)
+    observed = ew.assignment_of(h.mapping())
+    decision = {"id": "updated-task-with-directive", "action": "change_approach", "assignment": observed}
+    assert effects._reserve(h.layout, ISSUE, "w-a", decision, "prior-pass", observed) is not None
+    h.failure()
+    assert h.tick(capsys)[ISSUE]["handoff"]["state"] == "continued"
+    assert h.mapping()["engine_handoff"]["context"]["next_action"] == TASK_ACTION
+    assert TASK_ACTION in h.posts()[-1][3]["initial_message"]["content"][0]["text"]
 
 
 def test_interrupted_successor_container_create_uses_a_new_fenced_stop(tmp_path, capsys):
