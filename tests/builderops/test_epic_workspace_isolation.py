@@ -28,6 +28,11 @@ class FakeEngine:
         self.hang_inspections = False
         self.ids: dict[str, str] = {}
         self.pending: dict[str, list[str]] = {}
+        self.launches: dict[str, list[str]] = {}
+
+    @staticmethod
+    def worker_for_name(name: str) -> str:
+        return name.split("-", 2)[-1]
 
     def __call__(self, argv, **kwargs):
         argv = list(argv)
@@ -44,7 +49,7 @@ class FakeEngine:
             id_filter = next((a[3:] for a in argv if a.startswith("id=")), None)
             matches = []
             for name, cid in self.ids.items():
-                worker = name.removeprefix("epicws-6615-")
+                worker = self.worker_for_name(name)
                 if worker not in self.containers and cid not in self.pending:
                     continue
                 if name_filter is not None and name != name_filter:
@@ -61,8 +66,25 @@ class FakeEngine:
             if cid in self.pending:
                 labels = [self.pending[cid][i + 1] for i, item in enumerate(self.pending[cid]) if item == "--label"]
             else:
-                labels = self.labels.get(name.removeprefix("epicws-6615-"), [])
-            return subprocess.CompletedProcess(argv, 0, json.dumps(dict(label.split("=", 1) for label in labels)), "")
+                labels = self.labels.get(self.worker_for_name(name), [])
+            labels_dict = dict(label.split("=", 1) for label in labels)
+            if "{{json .}}" in argv:
+                worker = self.worker_for_name(name)
+                if worker not in self.containers or worker not in self.launches:
+                    return subprocess.CompletedProcess(argv, 1, "", "not found")
+                launch = self.launches[worker]
+                mounts = []
+                for i, arg in enumerate(launch):
+                    if arg == "--mount":
+                        fields = dict(part.split("=", 1) for part in launch[i + 1].split(",") if "=" in part)
+                        mounts.append({"Type": fields["type"], "Source": fields["source"], "Destination": fields["target"]})
+                port = self.ports.get(worker)
+                info = {"Id": cid, "Config": {"Labels": labels_dict},
+                        "State": {"Status": self.containers[worker], "OOMKilled": False, "ExitCode": 0},
+                        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(port)}]}},
+                        "Mounts": mounts}
+                return subprocess.CompletedProcess(argv, 0, json.dumps(info), "")
+            return subprocess.CompletedProcess(argv, 0, json.dumps(labels_dict), "")
         if argv[1] == "ps" and not any(a.startswith(f"label={ew.LABEL_WORKER}=") for a in argv):
             if "{{.Ports}}" in argv:
                 return subprocess.CompletedProcess(argv, 0, "".join(f"127.0.0.1:{p}->8000/tcp\n" for p in self.ports.values()), "")
@@ -117,7 +139,7 @@ class FakeEngine:
             return subprocess.run(cleaned, **kwargs)
         if argv[1] == "create":
             name = argv[argv.index("--name") + 1]
-            if name in self.ids and (self.ids[name] in self.pending or name.removeprefix("epicws-6615-") in self.containers):
+            if name in self.ids and (self.ids[name] in self.pending or self.worker_for_name(name) in self.containers):
                 return subprocess.CompletedProcess(argv, 125, "", "name already in use")
             cid = uuid.uuid4().hex * 2
             self.ids[name] = cid
@@ -128,6 +150,7 @@ class FakeEngine:
                 worker = next(v.split("=", 1)[1] for v in labels if v.startswith(f"{ew.LABEL_WORKER}="))
                 self.containers[worker] = "created"
                 self.labels[worker] = labels
+                self.launches[worker] = argv
             return subprocess.CompletedProcess(argv, 0, cid + "\n", "")
         if argv[1] == "start":
             cid = argv[-1]
@@ -144,7 +167,7 @@ class FakeEngine:
                 del self.pending[cid]
                 self.ids.pop(name, None)
                 return result
-            worker = name.removeprefix("epicws-6615-")
+            worker = self.worker_for_name(name)
             if worker not in self.containers:
                 return subprocess.CompletedProcess(argv, 1, "", "not found")
             self.containers[worker] = "running"

@@ -38,7 +38,7 @@ UNSUPPORTED = ("trusted_owner", "route", "review_outcome", "verify_evidence", "c
 
 Fetch = Callable[[str, float], tuple[int, bytes]]
 
-_PATH = re.compile(rf"/repos/{re.escape(REPOSITORY)}/(pulls|issues)(/[1-9][0-9]*(/reviews)?)?"
+_PATH = re.compile(rf"/repos/{re.escape(REPOSITORY)}/(pulls|issues)(/[1-9][0-9]*(/reviews|/comments)?)?"
                    r"(\?(state=open&)?per_page=[0-9]+&page=[1-9][0-9]*)?")
 _MARKER = re.compile(r"(?im)^[ \t]{0,3}Governing-Issue[ \t]*:[ \t]*#([1-9][0-9]*)")
 _REVIEW_STATES = ("APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING")

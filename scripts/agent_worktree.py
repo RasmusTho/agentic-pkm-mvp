@@ -1526,6 +1526,11 @@ def register_worktree(
     canonical, branch = _worktree_identity(cwd, worktree)
     if canonical != requested:
         raise WorktreeLifecycleError("worktree identity changed before lifecycle write")
+    if initial_record is not None and initial_record.get("branch") != branch:
+        raise WorktreeLifecycleError(
+            "worktree path retains another branch's ownership history; "
+            "move the checkout to a replacement path and register it, or reconcile the existing lifecycle record"
+        )
     generation = _worktree_generation(cwd, canonical, create=True)
     with _locked_registry(path) as payload:
         # Git and marker reads can block past expiry. Establish continuity at
@@ -1539,6 +1544,11 @@ def register_worktree(
         if current_record != initial_record:
             raise WorktreeLifecycleError(
                 "worktree lifecycle registration changed before commit"
+            )
+        if current_record is not None and current_record.get("branch") != branch:
+            raise WorktreeLifecycleError(
+                "worktree path retains another branch's ownership history; "
+                "move the checkout to a replacement path and register it, or reconcile the existing lifecycle record"
             )
         if (current_record is not None and _valid_authority_timestamp(current_record.get("heartbeat_at"))
                 and timestamp < current_record["heartbeat_at"]):
@@ -1560,10 +1570,13 @@ def register_worktree(
         # and a returning earlier session cannot erase the later owner's anchor.
         # The branch can have moved paths, so the choice is made under the same
         # registry lock as this registration.
-        ended = [row for row in worktrees.values() if isinstance(row, dict)
-                 and row.get("branch") == branch and row.get("status") in ("active", "released", "complete")
-                 and _valid_authority_timestamp(row.get("expires_at"))
-                 and row["expires_at"] <= timestamp]
+        history = []
+        for key, row in worktrees.items():
+            if isinstance(row, dict) and row.get("branch") == branch:
+                _validate_authority_record(key, row)
+                if row.get("status") in ("active", "released", "complete", "removal_pending", "removed", "missing_preserved"):
+                    history.append(row)
+        ended = [row for row in history if row["expires_at"] <= timestamp]
         ended.sort(key=lambda row: row["expires_at"], reverse=True)
         predecessor = None if continuous else (ended[0] if ended else None)
         same_owner = (current_record is not None and same_identity and (predecessor is None or
@@ -1611,6 +1624,14 @@ def register_worktree(
             predecessor_snapshot: dict[str, Any] = {key: predecessor.get(key) for key in (
                 "path", "branch", "generation", "owner", "registered_at",
                 "authority_since", "authority_until", "released_at")}
+            terminal = predecessor.get("status")
+            if terminal == "removal_pending":
+                terminal = predecessor.get("removal_pending_from_status")
+            if (terminal not in ("released", "removed")
+                    or predecessor.get("released_at") != predecessor.get("expires_at")
+                    or (_valid_authority_timestamp(predecessor.get("complete_at"))
+                        and predecessor["complete_at"] >= predecessor["expires_at"])):
+                predecessor_snapshot["released_at"] = None
             if "transfer_registration" in predecessor:
                 predecessor_snapshot["transfer_registration"] = predecessor["transfer_registration"]
                 previous = predecessor.get("previous_registration")
@@ -1624,6 +1645,7 @@ def register_worktree(
             record["previous_registration"] = {key: predecessor.get(key) for key in (
                 "path", "branch", "generation", "owner", "registered_at",
                 "authority_since", "authority_until", "released_at")}
+            record["previous_registration"]["released_at"] = predecessor_snapshot["released_at"]
         if prior_bindings:
             record["prior_bindings"] = prior_bindings
         _validate_authority_record(str(canonical), record)
