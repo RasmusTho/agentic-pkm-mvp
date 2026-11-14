@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,6 +38,7 @@ class CycleError(RuntimeError):
 
 CONTAINER_TEST_VENV = "/opt/pr-cycle-venv"
 CODEX_CLI = "/acp-node/lib/node_modules/@agentclientprotocol/codex-acp/node_modules/@openai/codex/bin/codex.js"
+_worker_runner: workspace.Runner = subprocess.run
 CLAUDE_STATUS = (
     "import glob,os; p=glob.glob('/acp-node/lib/node_modules/@agentclientprotocol/claude-agent-acp/"
     "node_modules/@anthropic-ai/claude-agent-sdk-*/claude'); "
@@ -78,8 +80,16 @@ def _single_advancement(layout: workspace.Layout) -> Iterator[None]:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def _save(layout: workspace.Layout, record: dict[str, Any]) -> None:
+def _save(layout: workspace.Layout, record: dict[str, Any], *, expected_worker: str | None = None,
+          expected_assignment: Mapping[str, Any] | None = None) -> None:
     def update(state: dict[str, Any]) -> dict[str, Any]:
+        if expected_worker is not None and expected_assignment is not None:
+            issue = workspace._issue_for_worker(state, expected_worker)
+            current = state["issue_mappings"][str(issue)]
+            if (not workspace._same_assignment(current, expected_assignment)
+                    or current.get("stop_id") != expected_assignment.get("stop_id")
+                    or current.get("work_at_stop") != expected_assignment.get("work_at_stop")):
+                raise CycleError("worker assignment changed before recording the review stop")
         rows = state["compact_receipts"]
         rows[:] = [r for r in rows if not (isinstance(r, dict) and r.get("kind") == "pr_cycle"
                    and r.get("number") == record["number"] and r.get("identity") == record["identity"])]
@@ -158,19 +168,71 @@ def _test_venv_source(layout: workspace.Layout, value: str) -> Path:
     return source
 
 
-def sandbox_verify(layout: workspace.Layout, worker: str, head: str, targets: list[str], test_venv: str) -> dict[str, Any]:
+def sandbox_verify(layout: workspace.Layout, worker: str, head: str, targets: list[str], test_venv: str,
+                   saved: dict[str, Any]) -> dict[str, Any]:
     """Run explicitly selected pytest targets in a credential-free disposable container.
 
     A stopped worker is mandatory so its model and descendants cannot change the
     mounted tree while tests run. The worker checkout is never interpreted by host Git.
     """
+    with workspace._worker_lifecycle_lock(layout, worker):
+        return _sandbox_verify_locked(layout, worker, head, targets, test_venv, saved)
+
+
+def _clear_verification_marker(layout: workspace.Layout, worker: str, expected: Mapping[str, Any]) -> None:
+    def clear(entry: dict[str, Any]) -> None:
+        if entry.get("checkpoint_inspection_unknown") != expected:
+            raise CycleError("verification lifecycle marker changed; the newer hold is kept")
+        entry.pop("checkpoint_inspection_unknown", None)
+
+    workspace._mutate_mapping(layout, worker, clear)
+
+
+def _settle_verification(layout: workspace.Layout, worker: str, intent: Any) -> None:
+    if (not isinstance(intent, dict) or intent.get("protocol") != workspace.LAUNCH_PROTOCOL
+            or intent.get("worker") != worker or not isinstance(intent.get("container"), str)
+            or not workspace._INSPECT_NAME.fullmatch(intent["container"])):
+        raise CycleError("legacy or mismatched verification intent requires reconciliation")
+    name, cid = intent["container"], intent.get("container_id")
+    marker = _mapping(layout, worker).get("checkpoint_inspection_unknown")
+    if marker is not None and (not isinstance(marker, dict) or marker.get("name") != name
+                               or marker.get("container_id") != cid
+                               or marker.get("protocol") != workspace.LAUNCH_PROTOCOL):
+        raise CycleError("verification lifecycle marker differs from the recorded intent")
+    if cid is not None and (not isinstance(cid, str) or not workspace._CONTAINER_ID.fullmatch(cid)):
+        raise CycleError("verification container identity is invalid")
+    # Without an ID only create was issued; a late create stays inert. With an
+    # ID, remove that exact object so a delayed start cannot recreate it.
+    labels = {"epic-workspace.inspect": "1", workspace.LABEL_EPIC: str(layout.epic),
+              workspace.LABEL_WORKER: f"verify-{worker}"}
+    workspace._remove_owned(name, labels, subprocess.run, cid=cid)
+    if marker is not None:
+        _clear_verification_marker(layout, worker, marker)
+
+
+def _sandbox_verify_locked(layout: workspace.Layout, worker: str, head: str, targets: list[str], test_venv: str,
+                           saved: dict[str, Any]) -> dict[str, Any]:
     mapping = _mapping(layout, worker)
+    if any(key in saved for key in ("execution_proof", "stop_intent", "stop_verified")):
+        _review_stop_checkpoint(mapping, saved, require_receipt=True)
     image = mapping.get("image")
     if mapping.get("state") != "stopped_verified" or not isinstance(image, str) or not re.fullmatch(
         r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}", image
     ):
         raise CycleError("verification requires a stopped worker and its digest-pinned image")
     _assert_stopped(layout, worker, mapping)
+    state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
+    legacy_name = f"epicws-{layout.epic}-verify-{worker}"
+    for other in state["compact_receipts"]:
+        if (not isinstance(other, dict) or other.get("kind") != "pr_cycle" or other.get("verification") is not None
+                or other.get("verification_settled") is True
+                or (other.get("number"), other.get("identity")) == (saved.get("number"), saved.get("identity"))):
+            continue
+        prior = other.get("verification_intent")
+        if isinstance(prior, dict) and (prior.get("worker") == worker or prior.get("container") == legacy_name):
+            _settle_verification(layout, worker, prior)
+            other["verification_settled"] = True
+            _save(layout, other)
     pattern = r"tests/[A-Za-z0-9_./-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*(?:\[[A-Za-z0-9_.-]+\])?)*"
     if not targets or any(not re.fullmatch(pattern, t) or ".." in Path(t.split("::")[0]).parts for t in targets):
         raise CycleError("Verify targets must be explicit pytest files or selectors")
@@ -181,9 +243,28 @@ def sandbox_verify(layout: workspace.Layout, worker: str, head: str, targets: li
     if before.get("readable") is not True or before.get("head") != head or before.get("uncommitted_count") != 0:
         raise CycleError("verification checkout is not clean at the reviewed head")
     source = _test_venv_source(layout, test_venv)
+    labels = {"epic-workspace.inspect": "1", workspace.LABEL_EPIC: str(layout.epic),
+              workspace.LABEL_WORKER: f"verify-{worker}"}
+    previous = saved.get("verification_intent")
+    if previous is not None:
+        if (not isinstance(previous, dict) or previous.get("protocol") != workspace.LAUNCH_PROTOCOL
+                or previous.get("worker") != worker or previous.get("head_sha") != head
+                or previous.get("targets") != targets or previous.get("test_venv") != test_venv):
+            raise CycleError("legacy or mismatched verification intent requires reconciliation")
+        _settle_verification(layout, worker, previous)
+        saved["verification_previous_intent"] = dict(previous)
+    if _mapping(layout, worker).get("checkpoint_inspection_unknown"):
+        raise CycleError("another lifecycle inspection remains unresolved")
+
+    name = f"{workspace.CONTAINER_PREFIX}-git-{uuid.uuid4().hex[:12]}"
+    intent: dict[str, Any] = {"protocol": workspace.LAUNCH_PROTOCOL, "worker": worker,
+                              "head_sha": head, "targets": list(targets), "test_venv": test_venv, "container": name}
+    saved.pop("verification_settled", None)
+    saved["verification_intent"] = intent
+    _save(layout, saved)
     base = [
-        "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
-        "--name", f"epicws-{layout.epic}-verify-{worker}",
+        "docker", "create", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+        "--name", name, "--label", "epic-workspace.inspect=1",
         "--label", f"{workspace.LABEL_EPIC}={layout.epic}",
         "--label", f"{workspace.LABEL_WORKER}=verify-{worker}",
         "--security-opt", "no-new-privileges", "--user", workspace.WORKER_UID_GID,
@@ -193,10 +274,30 @@ def sandbox_verify(layout: workspace.Layout, worker: str, head: str, targets: li
         "--workdir", "/workspace", "--env", "PYTHONPATH=/workspace", "--env", "HOME=/tmp",
         "--env", "PYTHONDONTWRITEBYTECODE=1", "--entrypoint", f"{CONTAINER_TEST_VENV}/bin/python", image,
     ]
-    preflight = _command([*base, "-c", "import sys,pytest; assert sys.version_info[:2] == (3, 13); print('pytest-ready')"], timeout=60)
-    if preflight.returncode != 0 or preflight.stdout.strip() != "pytest-ready":
-        raise CycleError("approved test interpreter or pytest preflight failed inside sandbox")
-    result = _command([*base, "-m", "pytest", "-q", *targets], timeout=600)
+    script = ("import sys; "
+              "sys.version_info[:2] == (3, 13) or sys.exit('unsupported test interpreter'); "
+              "import pytest; raise SystemExit(pytest.main(['-q', *sys.argv[1:]]))")
+    created = _command([*base, "-c", script, *targets], timeout=60)
+    cid = created.stdout.strip()
+    if created.returncode != 0 or not workspace._CONTAINER_ID.fullmatch(cid):
+        raise CycleError("verification container create outcome is unknown; no start was issued")
+    intent["container_id"] = cid
+    _save(layout, saved)
+
+    marker = {"at": workspace._now(), "protocol": workspace.LAUNCH_PROTOCOL, "name": name, "container_id": cid}
+
+    def mark(entry: dict[str, Any]) -> None:
+        if entry.get("checkpoint_inspection_unknown"):
+            raise CycleError("another lifecycle inspection remains unresolved")
+        entry["checkpoint_inspection_unknown"] = marker
+
+    # Existing lifecycle starts and takeovers already honor this exact-ID hold.
+    workspace._mutate_mapping(layout, worker, mark)
+    try:
+        result = _command(["docker", "start", "--attach", cid], timeout=600)
+    finally:
+        workspace._remove_owned(name, labels, subprocess.run, cid=cid)
+        _clear_verification_marker(layout, worker, marker)
     after = workspace.inspect_checkout(layout, worker)
     if after.get("readable") is not True or after.get("head") != head or after.get("uncommitted_count") != 0:
         raise CycleError("verification checkout changed while testing")
@@ -1179,6 +1280,7 @@ def _claimant_history(*, registration: Mapping[str, Any], records: Mapping[str, 
                 and remote.get("session") == before[1]):
             current_owner = before
             start = closure._parse_timestamp(remote.get("claimed_at"), "remote dispatcher claim")
+            history_start = start
         if current_owner != before:
             if not isinstance(remote, dict) or remote.get("history_reconciled") is not True:
                 raise CycleError("earlier claimant transfer is unavailable; reconcile through maintenance")
@@ -1241,10 +1343,19 @@ def _claimant_history(*, registration: Mapping[str, Any], records: Mapping[str, 
     def registered_path(path: str, session: Any, at: Any) -> bool:
         for candidate in snapshots:
             if (candidate.get("path") != path or candidate.get("branch") != branch
-                    or candidate.get("owner") != session):
+                    or candidate.get("owner") != session
+                    or not agent_worktree._valid_generation(candidate.get("generation"))):
                 continue
-            since = candidate.get("registered_at")
+            # A continuous re-registration updates registered_at while keeping
+            # the same epoch. A new epoch starts authority_since again, so it
+            # cannot fill an expiry, release, branch, or generation gap.
+            since = candidate.get("authority_since", candidate.get("registered_at"))
             until = candidate.get("released_at", candidate.get("expires_at"))
+            if "authority_until" in candidate:
+                end = candidate.get("authority_until")
+                if not agent_worktree._valid_authority_timestamp(end) or not agent_worktree._valid_authority_timestamp(until):
+                    continue
+                until = min(until, end)
             if (agent_worktree._valid_authority_timestamp(since) and agent_worktree._valid_authority_timestamp(until)
                     and since <= at.timestamp() and at.timestamp() + 1 <= until):
                 return True
@@ -1260,7 +1371,10 @@ def _claimant_history(*, registration: Mapping[str, Any], records: Mapping[str, 
         if match is None or not _authenticated_comment(comment) or match["issue"] != str(issue):
             continue
         at = closure._parse_timestamp(comment["created_at"], "fallback pickup")
-        if origin_at is not None and at < origin_at:
+        # GitHub pickup times have only second precision. A comment in the
+        # origin second could follow the claim, even when the claim includes
+        # subsecond precision; only discard a wholly earlier second.
+        if history_start is not None and at + timedelta(seconds=1) <= history_start:
             continue
         if comment_counts[comment["id"]] != 1:
             raise CycleError("fallback pickup comment is ambiguous")
@@ -1895,6 +2009,9 @@ def reconcile_native(layout: workspace.Layout, saved: dict[str, Any]) -> dict[st
         raise CycleError("merge intent unavailable")
     cwd, executor = Path(__file__).resolve().parents[2], SubprocessExecutor(timeout_seconds=30)
     number, head = intent["number"], intent["head_sha"]
+    if (type(number) is not int or number <= 0 or number != saved.get("number")
+            or not isinstance(head, str) or not closure.SHA_RE.fullmatch(head)):
+        raise CycleError("recorded merge intent identity is invalid")
     try:
         governor = intent["governing_issue"]
         mode = intent.get("coordination_mode")
@@ -1914,6 +2031,14 @@ def reconcile_native(layout: workspace.Layout, saved: dict[str, Any]) -> dict[st
                     isinstance(owner.get(k), str) and owner[k] for k in ("task_id", "lease_holder", "lease_id")):
                 raise CycleError("recorded dispatcher coordination is ambiguous")
         merged = closure._pr(executor, cwd, completion.REPOSITORY, number)
+        observed_head = merged.get("head", {}).get("sha")
+        if (merged.get("state") == "open" and merged.get("merged_at") is None
+                and isinstance(observed_head, str) and closure.SHA_RE.fullmatch(observed_head)):
+            # Retain the original intent, including an unknown outcome. A
+            # different observed head is protected by the expected-head guard;
+            # the same head remains fenced against a repeat merge.
+            return {"number": number, "action": "wait", "reason": "earlier merge intent remains unresolved",
+                    "intent_head_sha": head, "observed_head_sha": observed_head}
         sha = merged.get("merge_commit_sha")
         if (merged.get("state") != "closed" or merged.get("merged_at") is None
                 or merged.get("head", {}).get("sha") != head or not isinstance(sha, str)
@@ -2009,16 +2134,19 @@ def merge_once(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str,
     if saved.get("merge_intent"):
         return reconcile_native(layout, saved)
     authority = _premerge(layout, pr, entry, saved)
-    saved["merge_intent"] = authority
-    _save(layout, saved)
-    try:
-        result = _command(["gh", "pr", "merge", str(pr["number"]), "--repo", completion.REPOSITORY,
-                           "--squash", "--match-head-commit", pr["head_sha"],
-                           "--subject", f"Merge PR #{pr['number']}", "--body", f"Delivered PR #{pr['number']}."], timeout=60)
-        saved["merge_exit_code"] = result.returncode
+    worker = entry["worker"]
+    with workspace._worker_lifecycle_lock(layout, worker):
+        _review_verification_lineage(_mapping(layout, worker), saved)
+        saved["merge_intent"] = authority
         _save(layout, saved)
-    except CycleError:
-        pass  # The merge might have happened; read back rather than retrying.
+        try:
+            result = _command(["gh", "pr", "merge", str(pr["number"]), "--repo", completion.REPOSITORY,
+                               "--squash", "--match-head-commit", pr["head_sha"],
+                               "--subject", f"Merge PR #{pr['number']}", "--body", f"Delivered PR #{pr['number']}."], timeout=60)
+            saved["merge_exit_code"] = result.returncode
+            _save(layout, saved)
+        except CycleError:
+            pass  # The merge might have happened; read back rather than retrying.
     return reconcile_native(layout, saved)
 
 
@@ -2053,6 +2181,7 @@ def _assert_live_container(layout: workspace.Layout, worker: str, mapping: Mappi
         raise CycleError("worker container identity is unreadable") from exc
 
 
+@workspace._serialized_worker
 def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: str,
                            admission: Mapping[str, Any], *,
                            http: Callable[..., tuple[int, Any]] = workspace._http) -> dict[str, Any]:
@@ -2117,10 +2246,17 @@ def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: 
     cid = record.get("id")
     if not isinstance(cid, str):
         raise CycleError("conversation identity unavailable")
-    code, info = http("GET", int(mapping["port"]), workspace._session_key(layout, worker),
-                      f"/conversations/{cid}", None, 10.0)
+    state = workspace._load_state(layout)
+    issue = workspace._issue_for_worker(state, worker)
+    try:
+        with workspace._endpoint_session(layout, worker, issue, mapping, _worker_runner) as (port, key):
+            code, info = http("GET", port, key, f"/conversations/{cid}", None, 10.0)
+            if code != 200 or not workspace._conversation_bound(info, layout, issue, worker, cid):
+                raise CycleError("native conversation identity is not established")
+            status = workspace.conversation_status(layout, worker, http=http, runner=_worker_runner, include_messages=False)
+    except workspace.EpicWorkspaceError as exc:
+        raise CycleError("native conversation endpoint is unavailable") from exc
     agent = info.get("agent") if isinstance(info, dict) else None
-    status = workspace.conversation_status(layout, worker, http=http, include_messages=False)
     kinds = status.get("event_kinds")
     if (code != 200 or not isinstance(info, dict) or str(info.get("id")) != cid
             or not isinstance(agent, dict) or agent.get("kind") != "ACPAgent"
@@ -2193,7 +2329,7 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
     prior = mapping.get("conversation")
     if isinstance(prior, dict) and prior.get("operation_id") == operation_id:
         if prior.get("status") in ("creating", "unknown"):
-            return workspace.reconcile_worker_conversation(layout, worker, http=http)
+            return workspace.reconcile_worker_conversation(layout, worker, http=http, runner=_worker_runner)
         return prior
     if isinstance(prior, dict) and prior.get("status") != workspace.CONVERSATION_ENDED:
         raise CycleError("previous conversation may still write")
@@ -2203,7 +2339,8 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
         raise CycleError("review checkout is not clean at the admitted head")
     return workspace.start_conversation(
         layout, worker, engine=admission["engine"], model=admission["model"],
-        prompt=_review_prompt(pr, identity, admission["verify_targets"]), operation_id=operation_id, http=http)
+        prompt=_review_prompt(pr, identity, admission["verify_targets"]), operation_id=operation_id,
+        http=http, runner=_worker_runner)
 
 
 def _public_report(text: Any) -> dict[str, Any] | None:
@@ -2248,30 +2385,32 @@ def _public_report(text: Any) -> dict[str, Any] | None:
         return None
 
 
+@workspace._serialized_worker
 def review_result(layout: workspace.Layout, worker: str, operation_id: str,
                   pr: Mapping[str, Any], identity: str, admission: Mapping[str, Any],
                   *, http: Callable[..., tuple[int, Any]] = workspace._http) -> dict[str, Any] | None:
-    _assert_live_container(layout, worker, _mapping(layout, worker))
-    status = workspace.conversation_status(layout, worker, http=http, include_messages=False)
-    conversation = status.get("conversation")
-    if (not isinstance(conversation, dict) or conversation.get("operation_id") != operation_id
-            or status.get("reachable") is not True or status.get("execution_status") not in ("finished", "FINISHED")
-            or status.get("errors")):
-        return None
+    mapping = _mapping(layout, worker)
+    _assert_live_container(layout, worker, mapping)
     try:
-        cid = conversation.get("id")
-        mapping = _mapping(layout, worker)
-        if not isinstance(cid, str) or not cid:
-            return None
-        code, info = http("GET", int(mapping["port"]), workspace._session_key(layout, worker),
-                          f"/conversations/{cid}", None, 10.0)
-        if (code != 200 or not isinstance(info, dict) or str(info.get("id")) != cid
-                or info.get("execution_status") not in ("finished", "FINISHED")):
-            return None
-        code, final = http("GET", int(mapping["port"]), workspace._session_key(layout, worker),
-                           f"/conversations/{cid}/agent_final_response", None, 10.0)
-        result = _public_report(final.get("response") if code == 200 and isinstance(final, dict) else None)
-    except (OSError, ValueError, RecursionError):
+        state = workspace._load_state(layout)
+        issue = workspace._issue_for_worker(state, worker)
+        with workspace._endpoint_session(layout, worker, issue, mapping, _worker_runner) as (port, key):
+            status = workspace.conversation_status(layout, worker, http=http, runner=_worker_runner, include_messages=False)
+            conversation = status.get("conversation")
+            if (not isinstance(conversation, dict) or conversation.get("operation_id") != operation_id
+                    or status.get("reachable") is not True or status.get("execution_status") not in ("finished", "FINISHED")
+                    or status.get("errors")):
+                return None
+            cid = conversation.get("id")
+            if not isinstance(cid, str) or not cid:
+                return None
+            code, info = http("GET", port, key, f"/conversations/{cid}", None, 10.0)
+            if (code != 200 or not workspace._conversation_bound(info, layout, issue, worker, cid)
+                    or info.get("execution_status") not in ("finished", "FINISHED")):
+                return None
+            code, final = http("GET", port, key, f"/conversations/{cid}/agent_final_response", None, 10.0)
+            result = _public_report(final.get("response") if code == 200 and isinstance(final, dict) else None)
+    except (OSError, ValueError, RecursionError, workspace.EpicWorkspaceError):
         return None
     allowed = {"identity", "head_sha", "verdict", "findings", "verify_targets", "owner_doc",
                "covered_sources", "scope_assessment", "closing_assessments"}
@@ -2319,7 +2458,7 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]], *,
             raise CycleError("epic owner mismatch")
         scan = observation.collect(fetch)
         results: list[dict[str, Any]] = []
-        reconciling: set[int] = set()
+        reconciling: dict[int, list[tuple[str, str, str] | None]] = {}
         for saved in state["compact_receipts"]:
             if (not isinstance(saved, dict) or saved.get("kind") != "pr_cycle"
                     or not isinstance(saved.get("merge_intent"), dict) or saved.get("reconciled") is True):
@@ -2327,22 +2466,35 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]], *,
             number = saved.get("number")
             if type(number) is not int:
                 continue
-            reconciling.add(number)
             try:
-                results.append(reconcile_native(layout, dict(saved)))
+                result = reconcile_native(layout, dict(saved))
+                results.append(result)
+                old_head, observed_head = result.get("intent_head_sha"), result.get("observed_head_sha")
+                identity = saved.get("identity")
+                if isinstance(old_head, str) and isinstance(observed_head, str) and isinstance(identity, str) and identity:
+                    reconciling.setdefault(number, []).append((identity, old_head, observed_head))
+                else:
+                    reconciling.setdefault(number, []).append(None)
             except (CycleError, closure.ClosureError, observation.ObservationError, OSError, ValueError,
                     KeyError, AttributeError, TypeError, RecursionError) as exc:
+                reconciling.setdefault(number, []).append(None)
                 results.append({"number": number, "action": "wait", "reason": str(exc)})
         for pr in scan["observations"]:
             number = pr["number"]
-            if number in reconciling:
+            obligations = reconciling.get(number, [])
+            if any(item is None or item[2] != pr["head_sha"]
+                   for item in obligations):
                 continue
             entry = admitted.get(number)
             if entry is None or entry["head_sha"] != pr["head_sha"]:
                 results.append({"number": number, "action": "wait", "reason": "not admitted at this head"})
                 continue
             try:
-                results.append(_advance_one(layout, pr, entry, http=http))
+                pending = [(item[0], item[1]) for item in obligations if item is not None]
+                if pending:
+                    results.append(_advance_one(layout, pr, entry, http=http, merge_obligations=pending))
+                else:
+                    results.append(_advance_one(layout, pr, entry, http=http))
             except (CycleError, closure.ClosureError, observation.ObservationError, workspace.EpicWorkspaceError,
                     OSError, ValueError, KeyError, AttributeError, TypeError, RecursionError) as exc:
                 results.append({"number": number, "action": "wait", "reason": str(exc)})
@@ -2350,41 +2502,129 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]], *,
                 "failures": scan["failures"], "results": results}
 
 
-def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, Any]) -> None:
-    """Stop this reviewer once; recover an uncertain stop only by exact-ID absence."""
+def _review_stop_checkpoint(mapping: Mapping[str, Any], saved: Mapping[str, Any], *,
+                            require_receipt: bool) -> Any:
+    intent = saved.get("stop_intent")
+    if (not isinstance(intent, dict) or not isinstance(intent.get("stop_id"), str)
+            or not re.fullmatch(r"[0-9a-f]{32}", intent["stop_id"])
+            or "previous_stop_id" not in intent):
+        raise CycleError("reviewer stop intent has no exact stop generation; reconcile the old record")
+    assignment = intent.get("assignment")
+    proof = saved.get("execution_proof")
+    conversation = mapping.get("conversation")
+    if (not isinstance(assignment, dict) or not isinstance(proof, dict)
+            or intent.get("container_id") != mapping.get("container_id")
+            or proof.get("container_id") != intent.get("container_id")
+            or not isinstance(conversation, dict)
+            or proof.get("conversation_id") != conversation.get("id")
+            or proof.get("operation_id") != conversation.get("operation_id")):
+        raise CycleError("review stop receipt does not bind the current worker assignment")
+    before = workspace.assignment_of(assignment)
+    current = workspace.assignment_of(mapping)
+    if (any(before[field] != current[field] for field in workspace.ASSIGNMENT_FIELDS if field != "state")
+            or not isinstance(before["conversation"], dict) or not isinstance(current["conversation"], dict)
+            or before["conversation"].get("id") != current["conversation"].get("id")
+            or current["conversation"].get("status") not in
+            (before["conversation"].get("status"), workspace.CONVERSATION_ENDED)):
+        raise CycleError("review stop receipt does not bind the current worker assignment")
+    try:
+        work = workspace._completed_stop(mapping, intent["stop_id"])
+    except workspace.TakeoverRefused as exc:
+        raise CycleError(str(exc)) from exc
+    checkpoint = work["checkpoint"]
+    if require_receipt and (saved.get("stop_verified") is not True or "checkpoint" not in intent
+                            or intent["checkpoint"] != checkpoint):
+        raise CycleError("review stop receipt does not match the current completed checkpoint; reconcile it")
+    return checkpoint
+
+
+def _review_verification_lineage(mapping: Mapping[str, Any], saved: Mapping[str, Any]) -> None:
+    _review_stop_checkpoint(mapping, saved, require_receipt=True)
+    if mapping.get("checkpoint_inspection_unknown"):
+        raise CycleError("checkpoint or verification cleanup remains unresolved; reconcile the worker")
+    verification = saved.get("verification")
+    intent = saved["stop_intent"]
+    if not isinstance(verification, dict) or verification.get("stop_id") != intent["stop_id"]:
+        raise CycleError("verification receipt does not match the current stop; reconcile the review")
+
+
+def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, Any],
+                      observed: Mapping[str, Any]) -> None:
+    """Stop the reviewed assignment and reconcile an uncertain stop through the lifecycle."""
+    reason = "review completed; release model capacity"
     mapping = _mapping(layout, worker)
+    if not workspace._same_assignment(mapping, observed):
+        raise CycleError("reviewer assignment changed before release")
+    proof = saved.get("execution_proof")
+    conversation = mapping.get("conversation")
+    if (not isinstance(proof, dict) or proof.get("container_id") != mapping.get("container_id")
+            or not isinstance(conversation, dict) or proof.get("conversation_id") != conversation.get("id")
+            or proof.get("operation_id") != conversation.get("operation_id")):
+        raise CycleError("review proof does not bind the current worker assignment")
     intent = saved.get("stop_intent")
     if intent is None:
+        if mapping.get("state") != "running":
+            raise CycleError("reviewer is no longer running before release")
         ident = mapping.get("container_id")
         if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{12,64}", ident):
             raise CycleError("reviewer container identity is unavailable")
         _assert_live_container(layout, worker, mapping)
-        intent = {"container_id": ident}
+        intent = {"container_id": ident, "assignment": workspace.assignment_of(mapping),
+                  "previous_stop_id": mapping.get("stop_id"), "stop_id": uuid.uuid4().hex}
         saved["stop_intent"] = intent
-        _save(layout, saved)
-        workspace.stop_worker(layout, worker, reason="review completed; release model capacity", expected_container_id=ident)
-        mapping = _mapping(layout, worker)
-    if not isinstance(intent, dict) or intent.get("container_id") != mapping.get("container_id"):
+        _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    if (not isinstance(intent, dict) or not isinstance(intent.get("container_id"), str)
+            or not workspace._CONTAINER_ID.fullmatch(intent["container_id"])
+            or intent["container_id"] != mapping.get("container_id")):
         raise CycleError("reviewer stop intent has no exact container lineage")
-    # A lost stop response may have removed the container before the lifecycle
-    # record was updated. Inspect both the worker labels and the recorded ID.
-    _assert_stopped(layout, worker, {**mapping, "state": "stopped_verified"})
-    if mapping.get("state") != "stopped_verified":
-        state = workspace._load_state(layout)
-        issue = workspace._issue_for_worker(state, worker)
-        conversation = mapping.get("conversation")
-        fields: dict[str, Any] = {"state": "stopped_verified", "stopped_at": workspace._now(),
-                                  "stop_reason": "review completed; verified absent after unknown stop"}
-        if isinstance(conversation, dict):
-            fields["conversation"] = {**conversation, "status": workspace.CONVERSATION_ENDED,
-                                      "ended_at": workspace._now()}
-        workspace._record_worker(layout, issue, **fields)
-    saved["stop_verified"] = True
-    _save(layout, saved)
+    if (not isinstance(intent.get("stop_id"), str) or not re.fullmatch(r"[0-9a-f]{32}", intent["stop_id"])
+            or "previous_stop_id" not in intent):
+        raise CycleError("reviewer stop intent has no exact stop generation; reconcile the old record")
+    assignment = intent.get("assignment")
+    def check_lineage(current_mapping: Mapping[str, Any]) -> None:
+        if not isinstance(assignment, dict):
+            raise CycleError("reviewer stop assignment is missing or malformed; reconcile the old record")
+        before = workspace.assignment_of(assignment)
+        current = workspace.assignment_of(current_mapping)
+        if (any(before[field] != current[field] for field in workspace.ASSIGNMENT_FIELDS if field != "state")
+                or not isinstance(before["conversation"], dict)
+                or not isinstance(current["conversation"], dict)
+                or before["conversation"].get("id") != current["conversation"].get("id")
+                or (current_mapping.get("state") == "stopped_verified" and
+                    current["conversation"].get("status") not in
+                    (before["conversation"].get("status"), workspace.CONVERSATION_ENDED))
+                or (current_mapping.get("state") != "stopped_verified" and before != current)):
+            raise CycleError("reviewer assignment changed since stop intent")
+    check_lineage(mapping)
+    if not saved.get("stop_verified"):
+        if (mapping.get("stop_id") != intent["stop_id"]
+                and (mapping.get("state") != "running" or mapping.get("stop_id") != intent["previous_stop_id"])):
+            raise CycleError("a newer reviewer stop requires reconciliation")
+        # An interrupted ID-bound stop can be retried safely through the existing
+        # stop/checkpoint path; absence alone must not manufacture its completion.
+        try:
+            workspace.stop_worker(layout, worker, reason=reason, expected_container_id=intent["container_id"],
+                                  expected_assignment=mapping, stop_intent=intent)
+        except workspace.EpicWorkspaceError:
+            check_lineage(_mapping(layout, worker))
+            raise
+    with workspace._worker_lifecycle_lock(layout, worker):
+        mapping = _mapping(layout, worker)
+        check_lineage(mapping)
+        if (mapping.get("container_id") != intent["container_id"]
+                or not isinstance(mapping.get("conversation"), dict)
+                or mapping["conversation"].get("id") != proof["conversation_id"]):
+            raise CycleError("reviewer assignment changed after stop")
+        _assert_stopped(layout, worker, mapping)
+        checkpoint = _review_stop_checkpoint(mapping, saved, require_receipt=bool(saved.get("stop_verified")))
+        verified = {**saved, "stop_intent": {**intent, "checkpoint": checkpoint}, "stop_verified": True}
+        _save(layout, verified, expected_worker=worker, expected_assignment=mapping)
+        saved.update(verified)
 
 
 def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, Any], *,
-                 http: Callable[..., tuple[int, Any]]) -> dict[str, Any]:
+                 http: Callable[..., tuple[int, Any]],
+                 merge_obligations: Sequence[tuple[str, str]] = ()) -> dict[str, Any]:
     # Until independently observed, route/owner are unknown. Explicit trial admission
     # selects native session-owned review only; it does not assert merge eligibility.
     if re.search(r"\b(?:draft[ -]only|do[ -]not[ -]merge|do not merge|merge hold)\b", pr["body"], re.I):
@@ -2394,6 +2634,9 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     pr["review_context"], pr["review_material"] = _review_context(pr)
     _add_transfer_review_context(layout, entry, pr)
     identity = completion.work_identity(pr)
+    if any(old_identity == identity for old_identity, _ in merge_obligations):
+        return {"number": pr["number"], "action": "wait", "identity": identity,
+                "reason": "merge outcome remains unknown; do not repeat"}
     saved = _find(layout, pr["number"], identity)
     operation_id = saved.get("review_operation")
     if operation_id:
@@ -2422,17 +2665,18 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
             pr["effect_outcomes"][operation_id] = _outcome(operation_id, f"openhands:{operation_id}")
             pr["review_outcome"] = "pass" if review["verdict"] == "pass" and not review["findings"] else "changes_requested"
             pr["independent_review_identity"] = identity
-            _release_reviewer(layout, entry["worker"], saved)
+            _release_reviewer(layout, entry["worker"], saved, worker_record)
             if pr["review_outcome"] == "pass":
                 if "verification" not in saved:
-                    if saved.get("verification_intent"):
-                        raise CycleError("sandbox verification outcome requires reconciliation")
-                    saved["verification_intent"] = {"head_sha": pr["head_sha"],
-                                                    "targets": entry["verify_targets"],
-                                                    "container": f"epicws-{layout.epic}-verify-{entry['worker']}"}
-                    _save(layout, saved)
-                    saved["verification"] = sandbox_verify(layout, entry["worker"], pr["head_sha"], entry["verify_targets"], entry["test_venv"])
-                    _save(layout, saved)
+                    verification = sandbox_verify(layout, entry["worker"], pr["head_sha"],
+                                                  entry["verify_targets"], entry["test_venv"], saved)
+                    with workspace._worker_lifecycle_lock(layout, entry["worker"]):
+                        current = _mapping(layout, entry["worker"])
+                        _review_stop_checkpoint(current, saved, require_receipt=True)
+                        saved["verification"] = {**verification, "stop_id": saved["stop_intent"]["stop_id"]}
+                        _save(layout, saved, expected_worker=entry["worker"], expected_assignment=current)
+                with workspace._worker_lifecycle_lock(layout, entry["worker"]):
+                    _review_verification_lineage(_mapping(layout, entry["worker"]), saved)
                 if saved["verification"].get("passed") is True:
                     saved["ci"] = ci_once(pr["number"], Path(__file__).resolve().parents[2])
                     _save(layout, saved)
@@ -2443,6 +2687,9 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
             and saved["verification"].get("passed") is True and isinstance(saved.get("ci"), dict)
             and saved["ci"].get("exit_code") == 0 and decision["action"] == "wait"
             and decision["reason"] == "active or unknown writable owner"):
+        if any(old_head == pr["head_sha"] for _, old_head in merge_obligations):
+            return {"number": pr["number"], "action": "wait", "identity": identity,
+                    "reason": "earlier merge at this head remains unknown; do not repeat"}
         return merge_once(layout, pr, entry, saved)
     if decision["action"] in ("independent-review", "reconcile"):
         op = decision["operation_id"]
