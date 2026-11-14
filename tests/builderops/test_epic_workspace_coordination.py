@@ -340,7 +340,7 @@ def test_replayed_tick_and_interrupted_pass_do_not_advance_the_ladder(tmp_path, 
     assert epic.main("coordinate", "--tick", "bad tick!") == 2
 
 
-def test_builder_owned_receipt_is_repaired_but_external_owner_receipt_is_a_stop(tmp_path, capsys):
+def test_builder_and_external_owned_receipts_remain_holds(tmp_path, capsys):
     epic = Epic(tmp_path, capsys)
     builder = HUMAN_RECEIPT.replace("action:human-decision", "action:repair-contract").replace("owner: owner", "owner: builder")
     external = HUMAN_RECEIPT.replace("action:human-decision", "action:wait-external").replace("owner: owner", "owner: external:vendor-x")
@@ -351,8 +351,10 @@ def test_builder_owned_receipt_is_repaired_but_external_owner_receipt_is_a_stop(
     for issue in (FALSE_BLOCKER, MALFORMED, AUTHORITY, PEER):
         epic.write(issue, coord.BLOCKER_FILE, json.dumps({"schema": coord.BLOCKER_SCHEMA, "summary": "blocked on something"}))
     _, items = epic.tick(capsys)
-    assert items[FALSE_BLOCKER]["action"] == "repair_technical_dependency"
-    assert _decisions(epic.state(), FALSE_BLOCKER)[0]["source_authority"]["owner"] == "builder"
+    assert items[FALSE_BLOCKER]["state"] == "authority_stop"
+    builder_stop = _stops(epic.state(), FALSE_BLOCKER)[0]
+    assert builder_stop["owner"] == "builder" and builder_stop["investigation_workflow"] == coord.REPAIR_WORKFLOW
+    assert _decisions(epic.state(), FALSE_BLOCKER) == []
     assert items[AUTHORITY]["state"] == "authority_stop" and _stops(epic.state(), AUTHORITY)[0]["owner"] == "external:vendor-x"
     # A receipt that claims authority but cannot be validated, or does not match its label, establishes neither a stop nor a repair.
     for issue in (MALFORMED, PEER):
@@ -624,7 +626,8 @@ def test_public_pr_readback_and_unavailable_event_stream_are_not_manual_status(t
     epic.server.event_down.add(epic.cid[UNREACHABLE])
     epic.tick(capsys, apply=True)
     epic.github.pulls = [{"number": 8001, "state": "open", "draft": False,
-                          "body": f"Governing-Issue: #{STALLED}",
+                          "body": f"Governing-Issue: #{EPIC}\nCloses #{STALLED}",
+                          "base": {"repo": {"full_name": github_read.REPOSITORY}},
                           "head": {"ref": f"b/{STALLED}", "sha": "a" * 40,
                                    "repo": {"full_name": github_read.REPOSITORY}}}]
     _, items = epic.tick(capsys, apply=True)
@@ -725,3 +728,59 @@ def test_worker_controlled_parent_symlink_is_not_followed(tmp_path):
     (outside / "worker-blocker.json").write_text(json.dumps({"schema": coord.BLOCKER_SCHEMA, "summary": "outside"}))
     (checkout / ".codex-tmp").symlink_to(outside, target_is_directory=True)
     assert coord._read_declared_blocker(checkout) == (None, "unavailable")
+
+
+def test_builder_wait_dependency_remains_held_until_owning_workflow_resolves_it(tmp_path, capsys):
+    epic = Epic(tmp_path, capsys)
+    receipt = ("receipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder\n"
+               "next_action: Verify dependency through the owning workflow\n"
+               "unblocks_when: Dependency is satisfied or invalidated\n"
+               "dependency_refs: ['#123']\nlast_verified_at: 2026-11-13T00:00:00Z\n")
+    epic.github.block(FALSE_BLOCKER, ["agent:blocked", "action:wait-dependency"], receipt)
+    _declare(epic, FALSE_BLOCKER, "waiting for dependency")
+    epic.others_busy(FALSE_BLOCKER)
+    _, first = epic.tick(capsys, name="hold", apply=True)
+    _, replay = epic.tick(capsys, name="hold", apply=True)
+    assert first[FALSE_BLOCKER]["state"] == replay[FALSE_BLOCKER]["state"] == "authority_stop"
+    stop = _stops(epic.state(), FALSE_BLOCKER)[0]
+    assert stop["owner"] == "builder" and stop["next_action"] == "Verify dependency through the owning workflow"
+    assert stop["investigation_workflow"] == coord.REPAIR_WORKFLOW
+    assert not epic.server.directives(epic.cid[FALSE_BLOCKER])
+    # Simulate the trusted owning workflow's independent source resolution.
+    epic.github.block(FALSE_BLOCKER, ["type:task"], None)
+    _, resumed = epic.tick(capsys, name="resolved", apply=True)
+    assert resumed[PEER]["state"] == "progressing"
+    assert resumed[FALSE_BLOCKER]["action"] == "repair_technical_dependency"
+    assert len(epic.server.directives(epic.cid[FALSE_BLOCKER])) == 1
+
+
+def test_existing_validation_outcome_changes_progress_but_metadata_does_not(tmp_path, capsys):
+    epic = Epic(tmp_path, capsys)
+    epic.others_busy(STALLED)
+    epic.record(validation_status={str(STALLED): {"pytest": "failed", "summary": "first run"}})
+    epic.tick(capsys)
+    epic.record(validation_status={str(STALLED): {"pytest": "failed", "summary": "different narration"}})
+    _, same = epic.tick(capsys)
+    assert same[STALLED]["state"] != "progressing" and "validation" not in same[STALLED]["changed_parts"]
+    epic.record(validation_status={str(STALLED): {"pytest": "failure", "summary": "same result"}})
+    _, alias = epic.tick(capsys)
+    assert alias[STALLED]["state"] != "progressing" and "validation" not in alias[STALLED]["changed_parts"]
+    epic.record(validation_status={str(STALLED): {"pytest": "passed", "summary": "different narration"}})
+    _, passed = epic.tick(capsys)
+    assert passed[STALLED]["state"] == "progressing" and "validation" in passed[STALLED]["changed_parts"]
+    def unsupported(state):
+        state["validation_status"][str(STALLED)] = {"unknown": "different every tick"}
+        return state
+    epic_run_state.update_epic_run_state(epic.layout.run_id, root=epic.layout.run_state_dir,
+                                        expected_epic_issue_number=EPIC, updater=unsupported)
+    _, unknown = epic.tick(capsys)
+    assert unknown[STALLED]["evidence_gaps"]["validation"] == "unsupported"
+    assert unknown[STALLED]["action"] is None
+    def mixed(state):
+        state["validation_status"][str(STALLED)] = {"pytest": "passed", "integration": "failed"}
+        return state
+    epic_run_state.update_epic_run_state(epic.layout.run_id, root=epic.layout.run_state_dir,
+                                        expected_epic_issue_number=EPIC, updater=mixed)
+    _, mixed_result = epic.tick(capsys)
+    assert mixed_result[STALLED]["evidence_gaps"]["validation"] == "unsupported"
+    assert mixed_result[STALLED]["action"] is None

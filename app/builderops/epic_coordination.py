@@ -5,8 +5,8 @@ when work advances (checkout content, test result, PR state, failure signature) 
 changes without work (heartbeats, event/tool counts, agent narration). Equivalent evidence over
 ``stall_limit`` ticks climbs a bounded ladder (changed approach, one independent diagnosis,
 handoff, then a recorded stop). A worker-declared blocker is repaired through its owning workflow
-unless an Issue blocker-action receipt shows a decision only a non-builder party can take; that
-authority stop is preserved while every other worker keeps being judged. Decisions land in the
+unless an Issue blocker-action receipt establishes a live hold; that hold is preserved regardless
+of its owner while every other worker keeps being judged. Decisions land in the
 existing ``dispatch_decisions`` / ``stop_conditions``; run-state stays coordination evidence
 (GitHub Issues/PRs/CI win). Engine-level failures are classified by the existing
 ``epic_workspace.classify_failure``: only task failures climb the ladder; quota, context,
@@ -34,15 +34,14 @@ from typing import Any, Callable, Mapping
 from app.builderops import blocker_actions, epic_run_state
 from app.builderops import epic_workspace as ew
 from app.builderops import openhands_pr_observation as github_read
+from app.dispatcher.verification_contract import resolve_issue_authority
 
 SCHEMA = "epic_coordination.v1"
 KIND = "epic_coordination"
 STALL_LIMIT = 3
 STALL_SECONDS = 60.0
 LADDER = ("change_approach", "bounded_diagnosis", "handoff")
-# An active conversation is diagnosed first; its changed-approach directive then supersedes the
-# in-flight prompt (upstream run=True semantics) once it loops, or once one operation has produced
-# no new event for ACTIVE_OPERATION_SECONDS (a legitimately long tool or backoff gets that long).
+# Active work is diagnosed first; only distinct equivalent task-failure events justify superseding it.
 ACTIVE_LADDER = ("bounded_diagnosis", "change_approach", "handoff")
 ACTIVE_OPERATION_SECONDS = 1800.0
 BLOCKER_FILE = ".codex-tmp/worker-blocker.json"
@@ -65,7 +64,14 @@ _COMMENT_PAGES = 3
 Fetch = github_read.Fetch
 _TICK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,63}$")
 _PR_KEYS = ("number", "state", "draft", "head", "checks", "review")
-_VALIDATION_KEYS = ("result", "command", "summary", "head")
+_VALIDATION_RESULTS = ("result", "pytest")
+_VALIDATION_METADATA = frozenset({"command", "summary", "head"})
+_VALIDATION_OUTCOMES = {
+    "pass": "passed", "passed": "passed", "success": "passed",
+    "fail": "failed", "failed": "failed", "failure": "failed",
+    "error": "error", "skipped": "skipped", "timeout": "timeout",
+    "cancelled": "cancelled", "canceled": "cancelled",
+}
 _NEXT_ACTION = {
     "change_approach": "Deliver the changed-approach directive to the live conversation, then require new diff/test/PR evidence before another equivalent retry.",
     "bounded_diagnosis": "Read-only diagnosis executed without interrupting the worker (helper budget 0): conversation, event page, checkout and test evidence; its result is recorded on this decision and the ladder continues.",
@@ -223,10 +229,19 @@ def observe_worker(layout: ew.Layout, worker: str, issue: int, state: Mapping[st
     parts["failure"] = signature
     if gap:
         gaps["failure"] = gap
-    for name, source, keys in (
-        ("validation", state.get("validation_status", {}).get(key), _VALIDATION_KEYS),
-        ("pr", state["issue_mappings"][key].get("pr"), _PR_KEYS),
-    ):
+    validation = state.get("validation_status", {}).get(key)
+    if validation is None:
+        parts["validation"] = "none"
+    elif isinstance(validation, Mapping):
+        results = _pick(validation, _VALIDATION_RESULTS)
+        unknown = set(validation) - set(_VALIDATION_RESULTS) - _VALIDATION_METADATA
+        if not unknown and results and all(isinstance(value, str) and value.strip().lower() in _VALIDATION_OUTCOMES for value in results.values()):
+            parts["validation"] = _digest({name: _VALIDATION_OUTCOMES[value.strip().lower()] for name, value in results.items()})
+        else:
+            parts["validation"], gaps["validation"] = None, "unsupported"
+    else:
+        parts["validation"], gaps["validation"] = None, "malformed"
+    for name, source, keys in (("pr", state["issue_mappings"][key].get("pr"), _PR_KEYS),):
         if source is None:
             parts[name] = "none"
         elif isinstance(source, Mapping):
@@ -265,7 +280,7 @@ def read_issue_authority(issue: int, fetch: Fetch) -> dict[str, Any]:
     return record
 
 
-def _live_pr_part(issue: int, branch: Any, rows: list[Any]) -> str:
+def _live_pr_part(issue: int, epic: int, branch: Any, rows: list[Any]) -> str:
     """Project a complete public open-PR inventory onto this Issue's recorded branch."""
     if not isinstance(branch, str) or not branch:
         raise github_read.ObservationError("worker branch missing")
@@ -276,14 +291,23 @@ def _live_pr_part(issue: int, branch: Any, rows: list[Any]) -> str:
         head = row.get("head")
         if not isinstance(head, Mapping):
             raise github_read.ObservationError("PR head missing")
-        if head.get("ref") != branch:
-            continue
         repo = head.get("repo")
-        if not isinstance(repo, Mapping) or repo.get("full_name") != github_read.REPOSITORY:
-            continue
         body = row.get("body")
-        if not isinstance(body, str) or github_read._governing_number(body) != issue:
-            raise github_read.ObservationError("PR governing Issue does not match branch")
+        authority = resolve_issue_authority(body)
+        if head.get("ref") != branch:
+            if (isinstance(repo, Mapping) and repo.get("full_name") == github_read.REPOSITORY
+                    and authority is not None and issue in authority.closing_issues):
+                raise github_read.ObservationError("Issue PR belongs to another branch")
+            continue
+        if not isinstance(repo, Mapping) or repo.get("full_name") != github_read.REPOSITORY:
+            raise github_read.ObservationError("PR head repository does not match")
+        base = row.get("base")
+        base_repo = base.get("repo") if isinstance(base, Mapping) else None
+        if not isinstance(base_repo, Mapping) or base_repo.get("full_name") != github_read.REPOSITORY:
+            raise github_read.ObservationError("PR base repository does not match")
+        if (authority is None or authority.governing_issue not in (issue, epic)
+                or authority.closing_issues != (issue,)):
+            raise github_read.ObservationError("PR governing and closing Issues do not match assignment")
         if (type(row.get("number")) is not int or row.get("state") != "open"
                 or type(row.get("draft")) is not bool or not isinstance(head.get("sha"), str)):
             raise github_read.ObservationError("PR fields malformed")
@@ -294,7 +318,7 @@ def _live_pr_part(issue: int, branch: Any, rows: list[Any]) -> str:
 
 
 def authority_for(state: Mapping[str, Any], issue: int) -> dict[str, Any]:
-    """Classify the Issue's recorded authority readback: stop / technical / none / malformed."""
+    """Classify the Issue's recorded authority readback: stop / none / malformed."""
 
     wanted = AUTHORITY_RECEIPT_ID.format(issue=issue)
     record = next((r for r in state.get("compact_receipts", []) if isinstance(r, Mapping) and r.get("id") == wanted), None)
@@ -310,9 +334,8 @@ def authority_for(state: Mapping[str, Any], issue: int) -> dict[str, Any]:
     _, receipt = blocker_actions.receipt_for_context(map(str, labels), comments, open_issue=True)
     if receipt is None:
         return {"kind": "malformed"}  # an incomplete authority write is never acted on
-    # Only a decision/action that a non-builder party must take is an authority boundary.
-    is_stop = receipt["action"] in blocker_actions.HUMAN_ACTIONS or receipt["owner"] != "builder"
-    return {"kind": "stop" if is_stop else "technical", "receipt": {k: receipt[k] for k in ("action", "owner", "next_action", "unblocks_when")},
+    # A canonical live hold remains in force even when its next action belongs to a builder.
+    return {"kind": "stop", "receipt": {k: receipt[k] for k in ("action", "owner", "next_action", "unblocks_when")},
             "digest": _digest(receipt)}
 
 
@@ -328,7 +351,7 @@ def _diagnosis(tick: str, obs: Mapping[str, Any], *, stall: int, inactive: bool,
     if inactive:
         finding = f"the conversation is {status} with unchanged diff/test/PR evidence."
     elif stepping:
-        finding = "the agent keeps taking steps without new diff/test/PR evidence (a loop)."
+        finding = "the conversation has a new event without new diff/test/PR evidence; activity alone is not a loop."
     else:
         finding = (f"one operation has produced no new event for {int(operation_age)}s "
                    "(a long tool, a provider backoff or a hung call).")
@@ -415,6 +438,26 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
     elif not isinstance(activity_since, (int, float)):
         activity_since = now
     operation_age = now - activity_since
+    # Only a distinct most-recent error event with the same task-failure signature is repeat
+    # evidence. Reading one old error again, or seeing a new unrelated event, is not a retry.
+    latest = (obs.get("activity") or {}).get("latest_event") or {}
+    error_id = latest.get("id") if latest.get("kind") == "ConversationErrorEvent" else None
+    signature = obs["parts"].get("failure")
+    failure_event = prior.get("failure_event")
+    failure_signature = prior.get("failure_signature")
+    failure_events = list(prior.get("failure_events", []))
+    if verdict == "progressing":
+        failure_event, failure_signature, failure_events = error_id, None, []
+    elif (not gaps and failure_class == "task_failure" and signature not in (None, "none")
+          and isinstance(error_id, str) and error_id and error_id != failure_event):
+        if signature != failure_signature:
+            failure_events = []
+        if error_id not in failure_events:
+            failure_events = [*failure_events, error_id][-2:]
+        failure_event, failure_signature = error_id, signature
+    elif failure_class != "task_failure" or signature != failure_signature:
+        failure_signature, failure_events = None, []
+    repeated_failure = len(failure_events) >= 2
 
     def decision(kind: str, key: str, **fields: Any) -> dict[str, Any]:
         record = {"id": f"coord:{issue}:{kind}:{key}{tag}", "kind": KIND, "schema": SCHEMA, "issue": issue, "worker": worker,
@@ -437,6 +480,7 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
         stops.append({"id": f"coord-stop:{issue}:authority_stop:{authority['digest'][:12]}", "kind": KIND, "schema": SCHEMA,
                       "issue": issue, "worker": worker, "stop": "authority_stop", "action": receipt["action"], "owner": receipt["owner"],
                       "next_action": receipt["next_action"], "unblocks_when": receipt["unblocks_when"], "first_tick": tick,
+                      "investigation_workflow": REPAIR_WORKFLOW if receipt["owner"] == "builder" else None,
                       "declared_blocker": obs["blocker"]["summary"] if obs["blocker"] else None})
     else:
         blocker = obs["blocker"]
@@ -444,8 +488,8 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
             action, next_action = "repair_technical_dependency", _NEXT_ACTION["repair_technical_dependency"]
             decisions.append(decision(
                 "repair_technical_dependency", blocker["digest"][:12], declared_blocker=blocker["summary"],
-                source_authority=authority.get("receipt") if authority["kind"] == "technical" else None,
-                finding="worker-declared dependency has no non-builder authority; technical choice belongs to the delegated agent",
+                source_authority=None,
+                finding="worker-declared dependency has no canonical Issue hold; investigate through the owning workflow",
                 next={"workflow": REPAIR_WORKFLOW}))
         hold = HOLD_CLASSES.get(failure_class) if isinstance(failure_class, str) and verdict not in ("unknown_effect", "waiting_transient") else None
         if hold:
@@ -464,11 +508,20 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
             ladder = LADDER if inactive else ACTIVE_LADDER
             step = next((kind for kind in ladder if kind not in done), None)
             diagnosed = prior.get("diagnosis") or {}
-            if step == "change_approach" and not inactive and not (stepping or operation_age >= ACTIVE_OPERATION_SECONDS):
-                verdict = "waiting_active_or_backoff"
-                next_action = (f"Bounded diagnosis {diagnosed.get('tick')} found that {diagnosed.get('finding')} The in-flight "
-                               f"operation may continue for at most {int(ACTIVE_OPERATION_SECONDS - operation_age)}s; then the "
-                               "changed-approach directive supersedes it. A loop gets it on the next unchanged pass.")
+            if step == "change_approach" and not inactive and not repeated_failure:
+                if isinstance(since, (int, float)) and now - since >= ACTIVE_OPERATION_SECONDS:
+                    verdict = "stopped_active_unconfirmed"
+                    next_action = ("Active work has no confirmed repeated failure. Investigate the running operation "
+                                   "and its evidence through the owning workflow; preserve its writer and peers.")
+                    stops.append({"id": f"coord-stop:{issue}:active_unconfirmed:{fingerprint}{tag}", "kind": KIND,
+                                  "schema": SCHEMA, "issue": issue, "worker": worker, "stop": "active_unconfirmed",
+                                  "owner": "coordinator", "next_action": next_action,
+                                  "unblocks_when": "new work evidence, confirmed repeated failure, or an investigated redirect",
+                                  "first_tick": tick})
+                else:
+                    verdict = "waiting_active_or_backoff"
+                    next_action = (f"Bounded diagnosis {diagnosed.get('tick')} found that {diagnosed.get('finding')} "
+                                   "Continue observing; only repeated equivalent task failures justify interrupting active work.")
             elif step is None:
                 action = "no_progress_exhausted"
                 stops.append({"id": f"coord-stop:{issue}:no_progress_exhausted:{fingerprint}{tag}", "kind": KIND, "schema": SCHEMA,
@@ -491,6 +544,8 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
                                    f"Next ladder step: {following}.")
                 elif step == "change_approach" and not inactive:
                     fields["while_active"] = True  # upstream run=True supersedes the in-flight prompt
+                    fields["failure_events"] = failure_events
+                    fields["failure_signature"] = failure_signature
                 decisions.append(decision(step, fingerprint, **fields))
                 done.append(step)
                 stage, stall = len(done), 0
@@ -510,6 +565,7 @@ def judge_item(issue: int, worker: str, prior: Mapping[str, Any] | None, obs: Ma
     coordination = {"parts": parts, "stall": stall, "stage": stage, "done": done if stage else [], "transient": transient,
                     "last_tick": tick, "last_result": result, "seen_ticks": seen_ticks, "unchanged_since": since,
                     "activity_head": prior_head, "activity_since": activity_since,
+                    "failure_event": failure_event, "failure_signature": failure_signature, "failure_events": failure_events,
                     "diagnosis": prior.get("diagnosis") if stage else None,
                     "blocker_digest": obs["blocker"]["digest"] if obs["blocker"] else None}
     for made in decisions:
@@ -583,7 +639,7 @@ def _coordinate_item(layout: ew.Layout, key: str, mapping: Mapping[str, Any], *,
     if not isinstance(current_mapping, Mapping) or not ew._same_assignment(mapping, current_mapping):
         return changed
     observed = ew.assignment_of(current_mapping)
-    may_observe = authority.get("kind") in ("none", "technical") and not pr_gap
+    may_observe = authority.get("kind") == "none" and not pr_gap
     runtime = _runtime_state(layout, worker, current_mapping, runner)
     runtime_hold: dict[str, Any] | None = None
     if runtime != "running":
@@ -712,7 +768,7 @@ def coordinate(layout: ew.Layout, *, tick: str, stall_limit: int = STALL_LIMIT, 
             try:
                 if pr_rows is None:
                     raise github_read.ObservationError("PR inventory unavailable")
-                pr_part = _live_pr_part(issue, mapping.get("branch"), pr_rows)
+                pr_part = _live_pr_part(issue, layout.epic, mapping.get("branch"), pr_rows)
             except github_read.ObservationError:
                 pr_gap = True
         with contextlib.ExitStack() as hold:
@@ -724,10 +780,14 @@ def coordinate(layout: ew.Layout, *, tick: str, stall_limit: int = STALL_LIMIT, 
                 results.append({"issue": issue, "worker": worker, "state": "held_lifecycle_busy", "action": None,
                                 "next_action": "Another lifecycle operation owns this worker; reobserve it on a later pass. Peers continue."})
                 continue
+            except ew.EpicWorkspaceError:
+                results.append({"issue": issue, "worker": worker, "state": "held_lifecycle_unavailable", "action": None,
+                                "next_action": "This worker's lifecycle lock is unsafe or unavailable; investigate it before contact. Peers continue."})
+                continue
             results.append(_coordinate_item(layout, key, mapping, readback=readback, authority=authority, pr_part=pr_part,
                                             pr_gap=pr_gap, tick=tick, stall_limit=stall_limit, runner=runner, http=http,
                                             fetch=fetch, apply=apply))
-    held_states = {"authority_stop", "stopped_no_progress", "unknown_effect", "run_deferred", "held_assignment_changed", "held_lifecycle_busy", *(f"held_runtime_{r}" for r in ("oom", "exited", "stopped", "unknown")),
+    held_states = {"authority_stop", "stopped_no_progress", "stopped_active_unconfirmed", "unknown_effect", "run_deferred", "held_assignment_changed", "held_lifecycle_busy", "held_lifecycle_unavailable", *(f"held_runtime_{r}" for r in ("oom", "exited", "stopped", "unknown")),
                    *(state_name for _, state_name in HOLD_CLASSES.values())}
     return {
         "schema": SCHEMA, "epic": layout.epic, "tick": tick, "stall_limit": stall_limit, "applied": apply, "items": results, "skipped": skipped,
