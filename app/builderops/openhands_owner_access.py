@@ -7,7 +7,7 @@ import asyncio
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 REPO = "https://github.com/RasmusTho/agentic-pkm-mvp"
 WORKER = "owner-sandbox"
@@ -203,7 +203,8 @@ def main() -> None:
             await self.client.session_update(session_id, acp.update_agent_message_text(response))
             return PromptResponse(stop_reason="end_turn")
 
-    asyncio.run(acp.run_agent(AccessAgent(Path(config["runner"]))))
+    # The ACP Protocol also lists optional methods that this agent does not advertise.
+    asyncio.run(acp.run_agent(cast(acp.Agent, AccessAgent(Path(config["runner"])))))
 
 
 if __name__ == "__main__":
