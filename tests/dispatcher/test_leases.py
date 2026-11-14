@@ -57,6 +57,36 @@ def test_claim_creates_active_lease(store: SqliteStore) -> None:
     assert lease.ttl_seconds == 3600
 
 
+def test_bound_claim_and_stale_release_fence_same_agent_takeover(store: SqliteStore) -> None:
+    """An old release cannot clear the replacement, even with the same actor."""
+    store.upsert_task(_task())
+    _, old = claim(store, "task-1", "agent-1", ttl_minutes=60, session="builder-s1", claim_id="attempt-1")
+    first = store.list_events("task-1")[-1]
+    assert first.payload == {"ttl_minutes": 60, "session": "builder-s1", "claim_id": "attempt-1"}
+    _expire_lease(store, old.lease_id)
+    _, new = claim(store, "task-1", "agent-1", takeover_stale=True, expected_lease_id=old.lease_id,
+                   session="builder-s1", claim_id="attempt-2")
+    with pytest.raises(ValueError, match="expected lease changed"):
+        release(store, "task-1", "agent-1", expected_lease_id=old.lease_id)
+    assert store.get_task("task-1").lease_id == new.lease_id
+    assert store.get_lease(new.lease_id).released_at is None
+    assert not [event for event in store.list_events("task-1") if event.event_type == "task.released"]
+    release(store, "task-1", "agent-1", expected_lease_id=new.lease_id)
+    assert store.get_task("task-1").lease_id is None
+
+
+def test_legacy_unfenced_release_preserves_holder_compatibility(store: SqliteStore) -> None:
+    store.upsert_task(_task())
+    _, lease = claim(store, "task-1", "agent-1")
+    task = store.get_task("task-1")
+    assert task is not None
+    task.claimed_by = None  # Old task rows could lack this projection.
+    store.upsert_task(task)
+    with pytest.raises(ValueError, match="task holder changed"):
+        release(store, "task-1", "agent-1", expected_lease_id=lease.lease_id)
+    assert release(store, "task-1", "agent-1").lease_id is None
+
+
 def test_duplicate_claim_rejected(store: SqliteStore) -> None:
     task = _task()
     store.upsert_task(task)
@@ -104,6 +134,28 @@ def test_heartbeat_renews_lease_expiry(
     assert persisted_lease.ttl_seconds == 3600
     assert persisted_task.lease_expires_at == updated_lease.expires_at
     assert persisted_lease.expires_at == updated_lease.expires_at
+
+
+def test_heartbeat_samples_time_after_waiting_for_write_lock(store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    store.upsert_task(_task())
+    clock = ["2026-04-25T10:00:00+00:00"]
+    monkeypatch.setattr("app.dispatcher.leases._utc_now", lambda: clock[0])
+    claim(store, "task-1", "agent-1", ttl_minutes=1)
+    clock[0] = "2026-04-25T10:00:30+00:00"
+    connect = store._connect
+    class DelayedConnection:
+        def __enter__(self):
+            self.connection = connect().__enter__()
+            return self
+        def __exit__(self, *args):
+            self.connection.close()
+        def execute(self, sql, *args):
+            if sql == "BEGIN IMMEDIATE":
+                clock[0] = "2026-04-25T10:02:00+00:00"
+            return self.connection.execute(sql, *args)
+    monkeypatch.setattr(store, "_connect", lambda: DelayedConnection())
+    with pytest.raises(ValueError, match="lease has expired"):
+        heartbeat(store, "task-1", "agent-1")
 
 
 def test_heartbeat_renewal_controls_reclaim_boundary(

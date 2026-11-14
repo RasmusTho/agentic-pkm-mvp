@@ -19,6 +19,7 @@ class FakeAgentServer:
         self.lose_next_create = False
         self.create_not_applied = False
         self.events: list[dict] = []
+        self.final_responses: dict[str, str] = {}
 
     def __call__(self, method, port, key, path, body, timeout):
         assert key and len(key) >= 32
@@ -37,6 +38,9 @@ class FakeAgentServer:
             params = parse_qs(urlsplit(path).query)
             events = self.events[::-1] if params.get("sort_order") == ["TIMESTAMP_DESC"] else self.events
             return 200, {"items": events[:int(params.get("limit", ["100"])[0])]}
+        if method == "GET" and path.endswith("/agent_final_response"):
+            cid = path.split("/")[2]
+            return 200, {"response": self.final_responses.get(cid, "")}
         if method == "GET" and path.startswith("/conversations/"):
             cid = path.rsplit("/", 1)[1]
             return (200, self.conversations[cid]) if cid in self.conversations else (404, None)

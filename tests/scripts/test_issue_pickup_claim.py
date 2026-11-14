@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -87,7 +88,10 @@ def _dispatcher_stale_show(
         "expires_at": current_expires_at or expires_at,
         "released_at": None,
     }
-    events: list[dict[str, object]] = []
+    events: list[dict[str, object]] = [{
+        "task_id": task["task_id"], "event_type": "task.claimed", "actor": holder,
+        "lease_id": lease_id, "payload": {"session": f"session-{issue_number}"},
+    }]
     if current_lease_id != lease_id:
         events.append(
             {
@@ -205,6 +209,16 @@ esac
 set -u
 printf 'dispatcher-cwd %s\n' "$PWD" >> "$COMMAND_LOG"
 printf 'dispatcher %s\n' "$*" >> "$COMMAND_LOG"
+if [[ "${FAKE_REAL_DISPATCHER:-0}" == 1 && "$*" == *"-m app.dispatcher claim "* ]]; then
+  "$JSON_PYTHON" "$@" > "$FAKE_SHOW_MARKER.actual"
+  status=$?
+  if [[ "${FAKE_LOST_CLAIM_REPLY:-0}" == 1 && "$status" == 0 ]]; then exit 1; fi
+  cat "$FAKE_SHOW_MARKER.actual"
+  exit "$status"
+fi
+if [[ "${FAKE_REAL_DISPATCHER:-0}" == 1 && ( "$*" == *"-m app.dispatcher show "* || "$*" == *"-m app.dispatcher release "* ) ]]; then
+  exec "$JSON_PYTHON" "$@"
+fi
 case "$*" in
   *"scripts/agent_worktree.py"*"heartbeat"*)
     printf 'worktree %s\n' "$*" >> "$COMMAND_LOG"
@@ -214,15 +228,45 @@ case "$*" in
   *"-m app.dispatcher status --json"*) printf '%s\n' "$FAKE_STATUS_JSON"; exit "$FAKE_STATUS_RC" ;;
   *"-m app.dispatcher pickup-refresh "*) printf '%s\n' "$FAKE_PICKUP_REFRESH_JSON"; exit "$FAKE_PICKUP_REFRESH_RC" ;;
   *"-m app.dispatcher show "*)
-    if [[ ! -f "$FAKE_SHOW_MARKER" ]]; then
+    if [[ ! -f "$FAKE_SHOW_MARKER.claim" ]]; then
       touch "$FAKE_SHOW_MARKER"
       printf '%s\n' "$FAKE_SHOW_BEFORE_JSON"
     else
-      printf '%s\n' "$FAKE_SHOW_AFTER_JSON"
+      FAKE_SELECTED_SHOW="$FAKE_SHOW_AFTER_JSON" "$JSON_PYTHON" - <<'PY'
+import json, os
+from pathlib import Path
+attempt, session = Path(os.environ['FAKE_SHOW_MARKER'] + '.claim').read_text().split()
+raw = os.environ['FAKE_SELECTED_SHOW']
+if raw == '{}':
+    raw = os.environ['FAKE_CLAIM_JSON']
+try:
+    data = json.loads(raw)
+except ValueError:
+    print(raw)
+    raise SystemExit
+if isinstance(data, dict):
+    task, lease = data.get('task'), data.get('lease')
+    if 'events' not in data and isinstance(task, dict) and isinstance(lease, dict):
+        data['events'] = [{'task_id': task.get('task_id'), 'event_type': 'task.claimed',
+                           'actor': lease.get('holder'), 'lease_id': lease.get('lease_id'), 'payload': {}}]
+    for event in data.get('events', []):
+        if isinstance(event, dict) and isinstance(task, dict) and event.get('lease_id') == task.get('lease_id'):
+            payload = event.get('payload')
+            if isinstance(payload, dict):
+                payload.update(session=session, claim_id=attempt)
+print(json.dumps(data))
+PY
     fi
     exit "$FAKE_SHOW_RC"
     ;;
-  *"-m app.dispatcher claim "*) printf '%s\n' "$FAKE_CLAIM_JSON"; exit "$FAKE_CLAIM_RC" ;;
+  *"-m app.dispatcher claim "*)
+    args=("$@")
+    for ((i=0; i<${#args[@]}; i++)); do
+      [[ "${args[$i]}" == "--claim-id" ]] && attempt="${args[$((i+1))]}"
+      [[ "${args[$i]}" == "--session" ]] && session="${args[$((i+1))]}"
+    done
+    printf '%s %s\n' "$attempt" "$session" > "$FAKE_SHOW_MARKER.claim"
+    printf '%s\n' "$FAKE_CLAIM_JSON"; exit "$FAKE_CLAIM_RC" ;;
   *"-m app.dispatcher release "*) printf '%s\n' "$FAKE_RELEASE_JSON"; exit "$FAKE_RELEASE_RC" ;;
   *) echo "unexpected dispatcher call: $*" >&2; exit 1 ;;
 esac
@@ -332,6 +376,64 @@ def _run(
         text=True,
         check=False,
     )
+
+
+@pytest.mark.parametrize("lost_reply", [False, True])
+def test_pickup_persists_session_and_reconciles_its_real_claim(tmp_path: Path, lost_reply: bool) -> None:
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    worktree, env = _make_harness(tmp_path, status_json=json.dumps(
+        {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed", "fallback_reason": None}))
+    state = tmp_path / "isolated-dispatcher"
+    env.update(FAKE_REAL_DISPATCHER="1", FAKE_LOST_CLAIM_REPLY="1" if lost_reply else "0",
+               JSON_PYTHON=sys.executable, PYTHONPATH=str(REPO_ROOT), DISPATCHER_STATE_DIR=str(state),
+               DISPATCHER_DB_PATH=str(state / "dispatcher.sqlite3"), DISPATCHER_EVENTS_PATH=str(state / "events.jsonl"))
+    store = SqliteStore(state / "dispatcher.sqlite3")
+    store.initialize()
+    task_id = github_issue_task_id("RasmusTho/agentic-pkm-mvp", 3301)
+    store.upsert_task(TaskRecord(task_id=task_id, repo="RasmusTho/agentic-pkm-mvp", issue_number=3301,
+                                title="fixture", status="ready", priority="high", source_anchor_refs=[],
+                                created_at="2026-01-01T00:00:00Z", updated_at="2026-01-01T00:00:00Z"))
+    result = _run(worktree, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    claims = [event for event in store.list_events(task_id) if event.event_type == "task.claimed"]
+    assert len(claims) == 1
+    assert claims[0].payload["session"] == "session-3301"
+    assert re.fullmatch(r"[0-9a-f]{32}", claims[0].payload["claim_id"])
+    commands = Path(env["COMMAND_LOG"]).read_text()
+    assert commands.count("dispatcher -m app.dispatcher claim ") == 1
+    assert "dispatcher -m app.dispatcher release " not in commands
+    if lost_reply:
+        assert "claim response lost" in result.stderr
+
+
+def test_failed_pickup_never_releases_a_real_rival_claim(tmp_path: Path) -> None:
+    from app.dispatcher.leases import claim
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+
+    worktree, env = _make_harness(tmp_path, status_json=json.dumps(
+        {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed", "fallback_reason": None}))
+    state = tmp_path / "isolated-dispatcher"
+    env.update(FAKE_REAL_DISPATCHER="1", JSON_PYTHON=sys.executable, PYTHONPATH=str(REPO_ROOT),
+               DISPATCHER_STATE_DIR=str(state), DISPATCHER_DB_PATH=str(state / "dispatcher.sqlite3"),
+               DISPATCHER_EVENTS_PATH=str(state / "events.jsonl"))
+    store = SqliteStore(state / "dispatcher.sqlite3")
+    store.initialize()
+    task_id = github_issue_task_id("RasmusTho/agentic-pkm-mvp", 3301)
+    store.upsert_task(TaskRecord(task_id=task_id, repo="RasmusTho/agentic-pkm-mvp", issue_number=3301,
+                                title="fixture", status="ready", priority="high", source_anchor_refs=[],
+                                created_at="2026-01-01T00:00:00Z", updated_at="2026-01-01T00:00:00Z"))
+    _, rival = claim(store, task_id, "codex-3301", session="session-3301", claim_id="rival-attempt")
+    result = _run(worktree, env)
+    assert result.returncode != 0
+    assert "no-release" in result.stderr
+    assert store.get_task(task_id).lease_id == rival.lease_id
+    assert store.get_lease(rival.lease_id).released_at is None
+    commands = Path(env["COMMAND_LOG"]).read_text()
+    assert "dispatcher -m app.dispatcher release " not in commands
+    assert "gh api --method PUT" not in commands
 
 
 def test_dispatcher_backed_pickup_replaces_ready_with_in_progress_after_verified_lease(
@@ -883,6 +985,7 @@ def test_default_task_id_is_repo_qualified_to_match_dispatcher_pull(tmp_path: Pa
                 "ok": True,
                 "task": {
                     "task_id": "github-RasmusTho--bifrost-issue-21",
+                    "repo": "RasmusTho/bifrost",
                     "issue_number": 21,
                     "status": "claimed",
                     "claimed_by": "codex-21",
@@ -1074,6 +1177,7 @@ def test_explicit_task_id_override_still_wins(tmp_path: Path) -> None:
                 "ok": True,
                 "task": {
                     "task_id": "custom-task-id-3301",
+                    "repo": "RasmusTho/agentic-pkm-mvp",
                     "issue_number": 3301,
                     "status": "claimed",
                     "claimed_by": "codex-3301",
@@ -1160,8 +1264,7 @@ def test_dispatcher_availability_is_not_reported_as_acquired_claim(tmp_path: Pat
         assert "pickup-claim-complete" not in result.stdout
         commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
         assert "gh api --method PUT repos/" not in commands
-        if claim_rc == 0:
-            assert "dispatcher -m app.dispatcher release github-RasmusTho--agentic-pkm-mvp-issue-3301" in commands
+        assert "dispatcher -m app.dispatcher release" not in commands
 
 
 def test_dispatcher_refresh_refusal_does_not_claim_or_mutate_labels(tmp_path: Path) -> None:

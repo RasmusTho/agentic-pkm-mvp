@@ -1638,6 +1638,49 @@ def test_lifecycle_registration_preserves_active_owner_until_expiry(
     )
     assert takeover["owner"] == "second-owner"
     assert takeover["expires_at"] == 220
+    # Expiry permits the takeover but is not a release: the replaced owner is
+    # retained as the predecessor without a release time.
+    assert takeover["prior_owner"]["owner"] == "first-owner"
+    assert takeover["prior_owner"]["released_at"] is None
+
+
+@pytest.mark.parametrize(("later_release", "later_owner"), ((200, "second-owner"), (100, "second-owner"),
+                                                            (100, "first-owner")))
+def test_lifecycle_registration_retains_latest_owner_or_refuses_ties(
+    tmp_path,
+    monkeypatch,
+    later_release,
+    later_owner,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    own, other = tmp_path / "own", tmp_path / "other"
+    registry_path = tmp_path / "agent-worktrees.json"
+
+    def released(path: Path, owner: str, at: int) -> dict[str, object]:
+        return {"path": str(path.resolve()), "branch": "codex/issue-4015", "generation": GENERATION,
+                "owner": owner, "status": "released", "registered_at": 10, "heartbeat_at": 10,
+                "authority_since": 10, "authority_until": at, "released_at": at, "expires_at": at}
+
+    registry_path.write_text(json.dumps({"schema": agent_worktree.REGISTRY_SCHEMA, "worktrees": {
+        str(own.resolve()): released(own, "first-owner", 100),
+        str(other.resolve()): released(other, later_owner, later_release),
+    }}), encoding="utf-8")
+    monkeypatch.setattr(agent_worktree, "_worktree_identity",
+                        lambda _cwd, _worktree: (own.resolve(), "codex/issue-4015"))
+    monkeypatch.setattr(agent_worktree, "_worktree_generation",
+                        lambda _cwd, _worktree, *, create: GENERATION)
+    register = lambda: agent_worktree.register_worktree(
+        repo, worktree=own, owner="first-owner", registry_path=registry_path, now=300)
+    if later_release == 100:
+        # Equal end times do not order distinct paths, even for the same session.
+        with pytest.raises(agent_worktree.WorktreeLifecycleError, match="ambiguous ended lifecycle predecessors"):
+            register()
+        return
+    # Returning to its own older row does not erase the later owner's history.
+    record = register()
+    assert record["prior_owner"]["owner"] == "second-owner"
+    assert record["prior_owner"]["released_at"] == 200
 
 
 @pytest.mark.parametrize(

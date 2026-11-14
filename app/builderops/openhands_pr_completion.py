@@ -32,11 +32,16 @@ def _digest(value: Any) -> str:
 
 def work_identity(pr: Mapping[str, Any]) -> str:
     """Hash the current repository, code and relevant observed contract state."""
+    # A peer merge moves base_sha without changing this PR's reviewed work.
+    # The native merge procedure independently refreshes base and CI authority.
     contract = {key: pr[key] for key in (
         "repository", "number", "head_sha", "body", "draft", "labels",
-        "base_ref", "base_sha", "governing_issue", "state", "head_repository",
+        "base_ref", "governing_issue", "state", "head_repository",
         "restrictions", "route",
     )}
+    for key in ("title", "check_config", "review_context"):
+        if key in pr:
+            contract[key] = pr[key]
     contract["labels"] = sorted(contract["labels"])
     return _digest(contract)
 

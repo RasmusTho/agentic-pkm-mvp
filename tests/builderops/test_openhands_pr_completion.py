@@ -130,6 +130,24 @@ def test_stable_identity_and_stale_evidence(tmp_path):
     assert run(tmp_path, [pr])[0]["action"] == "wait"
 
 
+def test_peer_merge_does_not_repeat_review_but_head_and_contract_changes_do(tmp_path):
+    setup_run(tmp_path)
+    pr = observation()
+    pr["review_outcome"] = "missing"
+    first = run(tmp_path, [pr])[0]
+    pr["effect_outcomes"][first["operation_id"]] = outcome(first, "completed")
+    pr["review_outcome"] = "pass"
+    pr["base_sha"] = "another-peer-merged"
+    assert run(tmp_path, [pr])[0]["action"] == "verification-and-closure"
+
+    # Fresh authority is still required for actual code and scope changes.
+    for field, value in (("head_sha", "new-head"), ("body", "changed scope"),
+                         ("base_ref", "release")):
+        changed = deepcopy(pr)
+        changed[field] = value
+        assert work_identity(changed) != work_identity(pr)
+
+
 def test_no_effect_retry_and_completed_requires_authorization(tmp_path):
     setup_run(tmp_path)
     pr = observation()
