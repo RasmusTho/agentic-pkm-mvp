@@ -2946,20 +2946,34 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
         raise CycleError("review worker is not a running OpenHands worker")
     _assert_live_container(layout, worker, mapping)
     prior = mapping.get("conversation")
+    handoff = mapping.get("engine_handoff")
+    if (isinstance(handoff, Mapping) and handoff.get("status") == "awaiting_pr_cycle"
+            and handoff.get("operation_id") == operation_id):
+        admission = {**admission, "engine": "codex", "model": "gpt-6.1-terra"}
     if isinstance(prior, dict) and prior.get("operation_id") == operation_id:
         if prior.get("status") in ("creating", "unknown"):
             return workspace.reconcile_worker_conversation(layout, worker, http=http, runner=_worker_runner)
-        return prior
+        if not (prior.get("status") == workspace.CONVERSATION_ENDED and isinstance(handoff, Mapping)
+                and handoff.get("status") == "awaiting_pr_cycle" and handoff.get("operation_id") == operation_id):
+            return prior
     if isinstance(prior, dict) and prior.get("status") != workspace.CONVERSATION_ENDED:
         raise CycleError("previous conversation may still write")
     checkout = workspace.inspect_checkout(layout, worker)
     if (checkout.get("readable") is not True or checkout.get("head") != pr["head_sha"]
             or checkout.get("uncommitted_count") != 0):
         raise CycleError("review checkout is not clean at the admitted head")
+    prompt = (_review_prompt(pr, identity, admission["verify_targets"]) if reconciliation is None else
+              _reconciliation_prompt(pr, identity, admission["verify_targets"], reconciliation))
+    if (isinstance(handoff, Mapping) and handoff.get("status") == "awaiting_pr_cycle"
+            and handoff.get("operation_id") == operation_id):
+        from app.builderops import epic_engine_handoff
+
+        context = epic_engine_handoff.continuation_context(layout, worker, handoff)
+        prompt = ("Compact controller records for this same review (unknown means not established):\n"
+                  + json.dumps(context, ensure_ascii=True, sort_keys=True, default=str) + "\n\n" + prompt)
     return workspace.start_conversation(
         layout, worker, engine=admission["engine"], model=admission["model"],
-        prompt=(_review_prompt(pr, identity, admission["verify_targets"]) if reconciliation is None else
-                _reconciliation_prompt(pr, identity, admission["verify_targets"], reconciliation)),
+        prompt=prompt,
         operation_id=operation_id,
         http=http, runner=_worker_runner)
 
@@ -3082,9 +3096,41 @@ def _read_admissions(layout: workspace.Layout, path: Path) -> Any:
     return config.get("admissions", [])
 
 
+def _review_quota_candidate(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                            result: Mapping[str, Any], *,
+                            http: Callable[..., tuple[int, Any]]) -> tuple[int, str, dict[str, Any]] | None:
+    """Find an already-admitted review operation; do not create another producer or task."""
+    if pr.get("draft") is not False or pr.get("restrictions"):
+        return None
+    worker = entry["worker"]
+    state = workspace._load_state(layout)
+    issue = workspace._issue_for_worker(state, worker)
+    mapping = state["issue_mappings"][str(issue)]
+    handoff = mapping.get("engine_handoff")
+    pending = isinstance(handoff, Mapping) and handoff.get("status") == "pending"
+    conversation = mapping.get("conversation")
+    operation = handoff.get("operation_id") if pending else (
+        conversation.get("operation_id") if isinstance(conversation, Mapping) else None)
+    if not isinstance(operation, str):
+        return None
+    if not pending:
+        if (mapping.get("state") != "running" or not isinstance(conversation, Mapping)
+                or conversation.get("engine") != "claude-code" or conversation.get("status") != "created"):
+            return None
+        status = workspace.conversation_status(layout, worker, http=http, runner=_worker_runner, include_messages=False)
+        if status.get("failure_class") != "quota_exhausted" or status.get("failure_current") is not True:
+            return None
+    identity = result.get("identity")
+    if not isinstance(identity, str):
+        identity = completion.work_identity(pr)
+    if _find(layout, pr["number"], identity).get("review_operation") != operation:
+        return None
+    return issue, worker, workspace.assignment_of(mapping)
+
+
 def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *,
-            fetch: observation.Fetch = github_fetch,
-            http: Callable[..., tuple[int, Any]] = workspace._http) -> dict[str, Any]:
+            fetch: observation.Fetch = github_fetch, http: Callable[..., tuple[int, Any]] = workspace._http,
+            codex_home: Path | None = None) -> dict[str, Any]:
     """Advance with direct admissions, or read a controller-owned file under the cycle lock."""
     with _single_advancement(layout):
         admitted = _validate_admission(_read_admissions(layout, admissions) if isinstance(admissions, Path)
@@ -3094,6 +3140,7 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
             raise CycleError("epic owner mismatch")
         scan = observation.collect(fetch)
         results: list[dict[str, Any]] = []
+        handoffs: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
         reconciling: dict[int, list[tuple[str, str, str] | None]] = {}
         for saved in state["compact_receipts"]:
             if (not isinstance(saved, dict) or saved.get("kind") != "pr_cycle"
@@ -3128,12 +3175,32 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
             try:
                 pending = [(item[0], item[1]) for item in obligations if item is not None]
                 if pending:
-                    results.append(_advance_one(layout, pr, entry, http=http, merge_obligations=pending))
+                    result = _advance_one(layout, pr, entry, http=http, merge_obligations=pending)
                 else:
-                    results.append(_advance_one(layout, pr, entry, http=http))
+                    result = _advance_one(layout, pr, entry, http=http)
+                eligible_for_handoff = not obligations
             except (CycleError, closure.ClosureError, observation.ObservationError, workspace.EpicWorkspaceError,
                     OSError, ValueError, KeyError, AttributeError, TypeError, RecursionError) as exc:
-                results.append({"number": number, "action": "wait", "reason": str(exc)})
+                result = {"number": number, "action": "wait", "reason": str(exc)}
+                eligible_for_handoff = False
+            results.append(result)
+            if eligible_for_handoff:
+                handoffs.append((pr, entry, result))
+        # This is part of the existing one-shot advancement, after other admitted PRs have advanced.
+        # The scheduled read-only collector remains unchanged until the trusted workflow adopts it.
+        from app.builderops import epic_coordination
+
+        for pr, entry, result in handoffs:
+            try:
+                candidate = _review_quota_candidate(layout, pr, entry, result, http=http)
+                if candidate is not None:
+                    issue, worker, observed = candidate
+                    result["engine_handoff"] = epic_coordination.continue_quota_handoff(
+                        layout, issue, worker, observed,
+                        codex_home=codex_home or Path.home() / ".config/epic-workspace/codex",
+                        runner=_worker_runner, http=http, fetch=fetch)
+            except Exception as exc:  # noqa: BLE001 - keep this review's uncertainty local to it
+                result["engine_handoff"] = {"state": "held", "error": str(exc)[:300] or type(exc).__name__}
         return {"repository": completion.REPOSITORY, "inventory_complete": scan["inventory_complete"],
                 "failures": scan["failures"], "results": results}
 
@@ -3344,6 +3411,16 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     same_head_merge_unknown = any(old_head == pr["head_sha"] for _, old_head in merge_obligations)
     saved = _find(layout, pr["number"], identity)
     operation_id = saved.get("review_operation")
+    worker_record = _mapping(layout, entry["worker"])
+    handoff = worker_record.get("engine_handoff")
+    if (isinstance(handoff, Mapping) and handoff.get("status") == "pending"
+            and operation_id is not None and handoff.get("operation_id") == operation_id):
+        return {"number": pr["number"], "action": "wait", "identity": identity,
+                "reason": "resume the existing quota handoff before observing the review"}
+    if (isinstance(handoff, Mapping) and handoff.get("status") in ("awaiting_pr_cycle", "complete")
+            and operation_id is not None and handoff.get("operation_id") == operation_id):
+        # The operation and PR contract remain unchanged; only its admitted ACP selection changes.
+        entry = {**entry, "engine": "codex", "model": "gpt-6.1-terra"}
     exhausted: dict[str, Any] | None = None
     owner_wait: str | None = None
     verified_this_advancement = False
@@ -3354,8 +3431,11 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
         review = saved.get("review") if saved.get("public_report_conversation") == cid and cid else None
         pending = _reconciliation(saved)
         # A reserved reconciliation has no conversation until its reviewer runs again.
-        if review is None and (pending is None or pending.get("operation") != operation_id
-                               or worker_record.get("state") == "running"):
+        awaiting_successor = (isinstance(handoff, Mapping) and handoff.get("status") == "awaiting_pr_cycle"
+                              and handoff.get("operation_id") == operation_id and isinstance(conversation, Mapping)
+                              and conversation.get("status") == workspace.CONVERSATION_ENDED)
+        if review is None and not awaiting_successor and (pending is None or pending.get("operation") != operation_id
+                                                          or worker_record.get("state") == "running"):
             review = review_result(layout, entry["worker"], operation_id, pr, identity, entry, http=http)
         if review is not None:
             saved["review"] = review

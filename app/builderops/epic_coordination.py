@@ -34,6 +34,7 @@ from typing import Any, Callable, Mapping
 from app.builderops import blocker_actions, epic_run_state
 from app.builderops import epic_workspace as ew
 from app.builderops import openhands_pr_observation as github_read
+from app.dispatcher.verification_contract import resolve_issue_authority
 
 SCHEMA = "epic_coordination.v1"
 KIND = "epic_coordination"
@@ -72,7 +73,7 @@ _NEXT_ACTION = {
     "handoff": "worker-stop with verified absence (unique work preserved), then conversation-start a successor on the same branch.",
     "progress_resumed": "Continue normal judgement; the ladder reset on new evidence.",
     "no_progress_exhausted": "Ladder spent without new evidence: redirect or reassign this item; peers continue.",
-    "engine_quota": "Engine quota reached: takeover belongs to #6618 (verified worker-stop, then a successor). Preserve the checkout; no automatic engine or model switch; no task retry.",
+    "engine_quota": "Engine quota reached: #6618 continuation uses verified takeover for a confirmed Claude quota; other engines remain held.",
     "context_exhausted": "Context exhausted: not an approach problem. Needs a successor conversation after a verified worker-stop (one-writer rule); preserve the checkout first.",
     "authentication": "Subscription authentication failed: re-establish the worker's login through the documented credential procedure (never print it). A directive cannot fix this; do not switch engines.",
     "policy": "Investigate the policy or billing error using the existing launch rules; do not infer credential contents or switch engines.",
@@ -243,6 +244,29 @@ def observe_worker(layout: ew.Layout, worker: str, issue: int, state: Mapping[st
             "execution_status": execution_status, "activity": activity}
 
 
+def _contract_brief(data: Mapping[str, Any]) -> dict[str, Any]:
+    """Bounded public Issue context for a successor, with unknowns kept explicit."""
+    title, body = data.get("title"), data.get("body")
+    if not isinstance(body, str):
+        return {"goal": title if isinstance(title, str) else "unknown", "scope": "unknown", "remaining_ac": "unknown"}
+    sections = re.split(r"(?m)^##\s+", body)
+    fields = {part.split("\n", 1)[0].strip().lower(): part.split("\n", 1)[1]
+              for part in sections[1:] if "\n" in part}
+    ac = fields.get("acceptance criteria", "")
+    chunks = re.split(r"(?m)(?=^- \[[ xX]\])", ac)
+    remaining = []
+    for chunk in chunks:
+        if re.match(r"^- \[ \]", chunk):
+            criterion = chunk.strip().splitlines()[0][:600]
+            targets = [line.strip()[:300] for line in chunk.splitlines()[1:] if "Verify:" in line][:8]
+            remaining.append({"criterion": criterion, "verify": targets})
+    return {"goal": title[:500] if isinstance(title, str) else "unknown",
+            "scope": fields.get("scope", "unknown").strip()[:2500],
+            "remaining_ac": remaining[:15] if remaining else ("none recorded" if ac else "unknown"),
+            "truncated": len(remaining) > 15 or len(fields.get("scope", "")) > 2500,
+            "authority": "Read the live Issue for the complete contract."}
+
+
 def read_issue_authority(issue: int, fetch: Fetch) -> dict[str, Any]:
     """Read the live Issue's lifecycle/action labels and latest receipt through GitHub REST.
 
@@ -256,7 +280,8 @@ def read_issue_authority(issue: int, fetch: Fetch) -> dict[str, Any]:
         raise github_read.ObservationError("Issue identity mismatch")
     labels = sorted(blocker_actions.label_names(data))
     record: dict[str, Any] = {"id": AUTHORITY_RECEIPT_ID.format(issue=issue), "issue": issue, "state": data.get("state"),
-                              "labels": labels, "comments": [], "source": "github-rest"}
+                              "labels": labels, "comments": [], "source": "github-rest",
+                              "continuation_contract": _contract_brief(data)}
     if set(labels) & LIFECYCLE_LABELS:
         rows = reader.pages(f"/repos/{github_read.REPOSITORY}/issues/{issue}/comments", _COMMENT_PAGES)
         markers = [r for r in rows if isinstance(r, dict) and blocker_actions.is_blocker_action_receipt_marker(r)]
@@ -265,7 +290,17 @@ def read_issue_authority(issue: int, fetch: Fetch) -> dict[str, Any]:
     return record
 
 
-def _live_pr_part(issue: int, branch: Any, rows: list[Any]) -> str:
+def _pr_matches_issue(issue: int, epic: int | None, body: Any) -> bool:
+    if not isinstance(body, str):
+        return False
+    governing = github_read._governing_number(body)
+    if governing == issue:
+        return True
+    authority = resolve_issue_authority(body)
+    return bool(authority and authority.governing_issue == epic and issue in authority.closing_issues)
+
+
+def _live_pr_part(issue: int, branch: Any, rows: list[Any], *, epic: int | None = None) -> str:
     """Project a complete public open-PR inventory onto this Issue's recorded branch."""
     if not isinstance(branch, str) or not branch:
         raise github_read.ObservationError("worker branch missing")
@@ -282,7 +317,7 @@ def _live_pr_part(issue: int, branch: Any, rows: list[Any]) -> str:
         if not isinstance(repo, Mapping) or repo.get("full_name") != github_read.REPOSITORY:
             continue
         body = row.get("body")
-        if not isinstance(body, str) or github_read._governing_number(body) != issue:
+        if not _pr_matches_issue(issue, epic, body):
             raise github_read.ObservationError("PR governing Issue does not match branch")
         if (type(row.get("number")) is not int or row.get("state") != "open"
                 or type(row.get("draft")) is not bool or not isinstance(head.get("sha"), str)):
@@ -630,7 +665,7 @@ def _coordinate_item(layout: ew.Layout, key: str, mapping: Mapping[str, Any], *,
                      else authority_for(current, issue) if readback is not None else {"kind": "none"})
         judged = judge_item(issue, worker, entry.get("coordination"), obs, authority, tick=tick, limit=stall_limit, assignment=observed)
         entry["coordination"] = judged["coordination"]
-        if judged["result"]["next_action"]:
+        if judged["result"]["next_action"] and judged["result"].get("action") != "engine_quota":
             entry["next_action"] = judged["result"]["next_action"]
         current["issue_mappings"][str(issue)] = entry
         _upsert(current["dispatch_decisions"], judged["decisions"])
@@ -668,8 +703,33 @@ def _coordinate_item(layout: ew.Layout, key: str, mapping: Mapping[str, Any], *,
     return item
 
 
+def continue_quota_handoff(layout: ew.Layout, issue: int, worker: str, observed: Mapping[str, Any], *,
+                           codex_home: Path | None, runner: ew.Runner, http: Callable[..., tuple[int, Any]],
+                           fetch: Fetch | None) -> dict[str, Any]:
+    """Continue one existing assignment with fresh authority under its lifecycle fence."""
+    from app.builderops import epic_engine_handoff
+
+    with ew._worker_lifecycle_lock(layout, worker):
+        try:
+            readback = read_issue_authority(issue, fetch) if fetch is not None else None
+        except Exception:  # noqa: BLE001 - unknown authority holds only this assignment
+            readback = None
+        authority = (authority_for({"compact_receipts": [readback]}, issue)
+                     if readback is not None else {"kind": "unavailable"})
+        if authority.get("kind") == "stop":
+            return {"state": "authority_stop", "next_action": authority["receipt"]["next_action"]}
+        if authority.get("kind") not in ("none", "technical"):
+            return {"state": "held_authority_unknown",
+                    "next_action": "Reconcile current Issue authority before resuming this handoff."}
+        assert readback is not None
+        return epic_engine_handoff.advance_locked(
+            layout, issue, worker, observed=observed, readback=readback,
+            codex_home=codex_home, runner=runner, http=http, fetch=fetch)
+
+
 def coordinate(layout: ew.Layout, *, tick: str, stall_limit: int = STALL_LIMIT, runner: ew.Runner = subprocess.run,
-               http: Callable[..., tuple[int, Any]] = ew._http, fetch: Fetch | None = None, apply: bool = False) -> dict[str, Any]:
+               http: Callable[..., tuple[int, Any]] = ew._http, fetch: Fetch | None = None, apply: bool = False,
+               codex_home: Path | None = None) -> dict[str, Any]:
     """One idempotent coordinator pass over every running OpenHands worker of the epic.
 
     ``fetch`` supplies read-only GitHub authority and, on applied passes, the open-PR inventory.
@@ -691,6 +751,7 @@ def coordinate(layout: ew.Layout, *, tick: str, stall_limit: int = STALL_LIMIT, 
             pr_rows = None
     results: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    handoffs: list[tuple[str, str, dict[str, Any], dict[str, Any]]] = []
     for key in sorted(state.get("issue_mappings", {}), key=int):
         mapping = state["issue_mappings"][key]
         if not isinstance(mapping, Mapping) or "worker" not in mapping:
@@ -712,7 +773,7 @@ def coordinate(layout: ew.Layout, *, tick: str, stall_limit: int = STALL_LIMIT, 
             try:
                 if pr_rows is None:
                     raise github_read.ObservationError("PR inventory unavailable")
-                pr_part = _live_pr_part(issue, mapping.get("branch"), pr_rows)
+                pr_part = _live_pr_part(issue, mapping.get("branch"), pr_rows, epic=layout.epic)
             except github_read.ObservationError:
                 pr_gap = True
         with contextlib.ExitStack() as hold:
@@ -724,10 +785,64 @@ def coordinate(layout: ew.Layout, *, tick: str, stall_limit: int = STALL_LIMIT, 
                 results.append({"issue": issue, "worker": worker, "state": "held_lifecycle_busy", "action": None,
                                 "next_action": "Another lifecycle operation owns this worker; reobserve it on a later pass. Peers continue."})
                 continue
-            results.append(_coordinate_item(layout, key, mapping, readback=readback, authority=authority, pr_part=pr_part,
-                                            pr_gap=pr_gap, tick=tick, stall_limit=stall_limit, runner=runner, http=http,
-                                            fetch=fetch, apply=apply))
-    held_states = {"authority_stop", "stopped_no_progress", "unknown_effect", "run_deferred", "held_assignment_changed", "held_lifecycle_busy", *(f"held_runtime_{r}" for r in ("oom", "exited", "stopped", "unknown")),
+            pending = mapping.get("engine_handoff")
+            resume = isinstance(pending, Mapping) and pending.get("status") in ("pending", "awaiting_pr_cycle")
+            if resume and apply and authority.get("kind") == "stop":
+                item = {"issue": issue, "worker": worker, "state": "authority_stop", "action": "authority_stop",
+                        "next_action": authority["receipt"]["next_action"]}
+            elif resume and apply and (readback is None or authority.get("kind") not in ("none", "technical")):
+                item = {"issue": issue, "worker": worker, "state": "held_authority_unknown", "action": None,
+                        "next_action": "Reconcile current Issue authority before resuming this handoff."}
+            elif resume and apply:
+                item = {"issue": issue, "worker": worker, "state": "held_quota_exhausted", "action": "engine_quota",
+                        "evidence_gaps": {}}
+            else:
+                item = _coordinate_item(layout, key, mapping, readback=readback, authority=authority, pr_part=pr_part,
+                                        pr_gap=pr_gap, tick=tick, stall_limit=stall_limit, runner=runner, http=http,
+                                        fetch=fetch, apply=apply)
+            quota_with_gap = False
+            conversation = mapping.get("conversation")
+            if (apply and not resume and readback is not None and authority.get("kind") in ("none", "technical")
+                    and item.get("evidence_gaps") and mapping.get("state") == "running"
+                    and isinstance(conversation, Mapping) and conversation.get("engine") == "claude-code"):
+                try:
+                    # PR/directive uncertainty holds those effects, not the safe stop of a bound
+                    # quota-exhausted writer. The lifecycle revalidates quota and quarantines effects.
+                    status = ew.conversation_status(layout, worker, http=http, runner=runner, include_messages=False)
+                    quota_with_gap = (status.get("failure_class") == "quota_exhausted"
+                                      and status.get("failure_current") is True)
+                except Exception:  # noqa: BLE001 - uncertainty remains local to this worker
+                    pass
+            if (apply and readback is not None and authority.get("kind") in ("none", "technical")
+                    and (resume or quota_with_gap or (item.get("action") == "engine_quota" and not item.get("evidence_gaps")))):
+                handoffs.append((key, worker, ew.assignment_of(mapping), item))
+            results.append(item)
+    # Complete ordinary peer observations/effects before a potentially slow stop and checkpoint.
+    # The same pass then reacquires only the affected worker's fence and re-reads its authority.
+    for key, worker, observed, item in handoffs:
+        issue = int(key)
+        try:
+            outcome = continue_quota_handoff(layout, issue, worker, observed, codex_home=codex_home,
+                                              runner=runner, http=http, fetch=fetch)
+            if outcome["state"] in ("authority_stop", "held_authority_unknown"):
+                item.update(state=outcome["state"], action="authority_stop" if outcome["state"] == "authority_stop" else None,
+                            next_action=outcome["next_action"])
+                continue
+            item["handoff"] = outcome
+            if outcome["state"] == "continued":
+                item.update(state="continuing", next_action="Observe the new Terra conversation and continue the same assignment.")
+            elif outcome["state"] == "unknown_create":
+                item.update(state="unknown_effect", next_action="Reconcile the reserved conversation ID; do not repeat creation.")
+            else:
+                item["next_action"] = "The existing PR cycle must reconstruct and start the reserved review continuation."
+        except ew.LifecycleBusy:
+            item.update(state="held_lifecycle_busy", action=None,
+                        next_action="Another lifecycle operation owns this worker; reobserve it on a later pass. Peers continue.")
+        except Exception as exc:  # noqa: BLE001 - only this worker's handoff is held
+            item["handoff"] = {"state": "held", "error": str(exc)[:300] or type(exc).__name__}
+            if isinstance(ew._load_state(layout)["issue_mappings"][key].get("engine_handoff"), Mapping):
+                item["next_action"] = "Reconcile this worker's retained handoff and retry the existing coordinator pass; peers continue."
+    held_states = {"authority_stop", "stopped_no_progress", "unknown_effect", "run_deferred", "held_assignment_changed", "held_lifecycle_busy", "held_authority_unknown", *(f"held_runtime_{r}" for r in ("oom", "exited", "stopped", "unknown")),
                    *(state_name for _, state_name in HOLD_CLASSES.values())}
     return {
         "schema": SCHEMA, "epic": layout.epic, "tick": tick, "stall_limit": stall_limit, "applied": apply, "items": results, "skipped": skipped,

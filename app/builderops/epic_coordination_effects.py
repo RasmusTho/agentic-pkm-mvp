@@ -218,7 +218,7 @@ def _fresh_authority(layout: ew.Layout, issue: int, mapping: Mapping[str, Any], 
         authority = coord.authority_for({"compact_receipts": [receipt]}, issue)
         rows = coord.github_read._Reader(fetch, time.monotonic).pages(
             f"/repos/{coord.github_read.REPOSITORY}/pulls?state=open", coord.github_read.MAX_PAGES)
-        coord._live_pr_part(issue, mapping.get("branch"), rows)
+        coord._live_pr_part(issue, mapping.get("branch"), rows, epic=layout.epic)
         return authority.get("kind") in ("none", "technical")
     except Exception:  # noqa: BLE001 - unavailable or conflicting live authority fails closed
         return False

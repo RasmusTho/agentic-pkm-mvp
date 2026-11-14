@@ -707,8 +707,20 @@ upstream event page (default 50) and classifies only the latest `ConversationErr
 `quota_exhausted`, `authentication`, `context_exhausted`, `transient_network` or `task_failure`.
 The classifier recognizes the observed native session and weekly quota phrases; tool and message
 text cannot trigger a handoff. Upstream 1.60.1 already supports the newest-first event ordering.
-Only quota exhaustion may trigger the engine handoff (#6618). The running pinned controller has
-not been hot-upgraded with this correction, and automatic handoff remains unqualified.
+In the enabling #6618 source candidate, an applied coordinator pass can transfer a confirmed,
+identity-bound Claude quota failure to a new Codex/Terra conversation. The pass retains the
+existing Issue owner and Builder session, stops the exact predecessor container, checkpoints and
+reconciles its checkout and publication attempts, and consumes one takeover generation before
+creating the successor. The continuation uses compact Issue and run-state evidence, not a summary
+from the exhausted model. Unknown publication remains quarantined by operation. A lost conversation
+create response is reconciled by the reserved ID; it is not posted again. An unavailable PR inventory
+or an unresolved directive on the old, verifiably stopped conversation holds that effect, not the
+preserved continuation. A PR review resumes through
+the existing PR cycle, which can detect the same quota handoff for an admitted review and reconstructs
+its report contract under the same operation ID. That one-shot candidate processes other admitted PRs
+before the handoff; the scheduled read-only collector is unchanged until trusted adoption.
+The running pinned controller has not been hot-upgraded with this candidate. Independent integrated
+review and real native/disconnect runtime proof remain required before adoption.
 `worker-start` runs a
 plain container and is recorded as `native-exception`: it is for bootstrap, diagnostics and recovery
 only and never counts as OpenHands-delivered work.
@@ -867,7 +879,7 @@ coordinator are #6618; non-progress handling is #6619 (source candidate below).
 
 ### Coordinator progress judgement (#6619, source candidate)
 
-`epicws --epic <N> coordinate --tick <id> [--stall-limit 3] [--apply]` runs one bounded pass of
+`epicws --epic <N> coordinate --tick <id> [--stall-limit 3] [--apply] [--codex-home <path>]` runs one bounded pass of
 `app/builderops/epic_coordination.py` on the trusted controller. It uses the existing run-state and
 OpenHands worker identities; it does not add a scheduler or give the model container host control or
 GitHub credentials. This is an enabling source candidate, not an installed or qualified controller.
@@ -892,8 +904,20 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
   tool or backoff gets that long). Event activity is diagnosis input only, never progress. Quota, authentication, context, transient network and policy errors retain separate
   next actions; they are not silently treated as task failures or a license to switch engines. A
   locally OOM-killed or exited container holds its unfinished assignment, recorded owner when known,
-  checkout and remaining action, while eligible peers continue. No cleanup, worker stop, successor
-  or takeover is performed by this pass; preservation and one-writer qualification remain required.
+  checkout and remaining action, while eligible peers continue. With `--apply`, a confirmed Claude
+  quota failure is the sole automatic engine-replacement case; the existing per-worker lifecycle and
+  run-state fences govern its stop, takeover and start. The optional `--codex-home` selects the existing
+  private subscription home; its default is the documented `~ygg/.config/epic-workspace/codex` for
+  the controller user. An unavailable or already mounted login holds only that continuation, allowing
+  an active Terra worker to finish; the exhausted predecessor may already be stopped and preserved.
+  Other classes do not switch engines. An interrupted successor
+  container launch is settled by the existing exact-container stop and a new takeover generation;
+  an unknown conversation create is read back rather than repeated.
+- **Identity and status.** Workspace status joins the recorded Issue, worker, conversation selection,
+  owner/session, branch, PR and progress with available conversation status. A native identity is
+  shown only when an existing controller receipt binds it to the same conversation, operation and
+  container; unavailable identity and opaque native descendants remain unknown. This projection is
+  not itself authentication or proof of a live model run.
 - **Blocker authority.** A worker can declare `.codex-tmp/worker-blocker.json` using schema
   `worker_blocker.v1` and a `summary`; its text is not authority. The controller reads current Issue
   labels and the latest blocker-action receipt independently of declarations. This public read accepts a matching
@@ -934,8 +958,8 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
 - **Replay and obligations.** Every previously applied tick remains idempotent even out of order;
   a replay still observes current authority. Decisions,
   effects and remaining actions live in the existing `dispatch_decisions` and `stop_conditions`;
-  GitHub Issues, PRs and CI remain authoritative. Issue maintenance, handoff and lifecycle actions
-  remain explicit coordinator obligations and are not performed by `coordinate`.
+  GitHub Issues, PRs and CI remain authoritative. Issue maintenance and other lifecycle actions
+  remain explicit coordinator obligations; the confirmed quota handoff above uses the existing lifecycle.
 
 The source tests use simulated engine, GitHub and agent-server boundaries; they do not demonstrate a
 real model's reaction. After independent review and trusted integration, an operator can create a

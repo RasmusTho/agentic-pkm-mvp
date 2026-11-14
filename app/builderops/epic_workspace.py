@@ -826,7 +826,7 @@ def _settle_checkpoint_writer(layout: Layout, worker: str, runner: Runner) -> No
 def _stop_worker(
     layout: Layout, worker: str, *, reason: str, runner: Runner, image: str, retain_identity: bool = True,
     expected_container_id: str | None = None, expected_assignment: Mapping[str, Any] | None = None,
-    stop_intent: Mapping[str, Any] | None = None,
+    stop_intent: Mapping[str, Any] | None = None, allow_starting: bool = False,
 ) -> dict[str, Any]:
     """Remove the worker container, prove absence by engine readback, then preserve its work.
 
@@ -858,7 +858,9 @@ def _stop_worker(
             raise EpicWorkspaceError("stop intent has no exact stop generation; reconcile the old record")
         stop_id = candidate
         resuming = mapping.get("state") == "stopped_verified" and mapping.get("stop_id") == stop_id
-        if not resuming and (mapping.get("state") != "running"
+        may_stop_starting = (allow_starting and mapping.get("state") == "starting"
+                             and mapping.get("launch_protocol") == LAUNCH_PROTOCOL)
+        if not resuming and (mapping.get("state") != "running" and not may_stop_starting
                              or mapping.get("stop_id") != stop_intent["previous_stop_id"]):
             raise EpicWorkspaceError("a newer stop requires reconciliation; preserving its generation")
         if resuming:
@@ -1731,7 +1733,8 @@ def checkout_branch(checkout: Path, *, runner: Runner, image: str = DEFAULT_IMAG
     return None if name == "HEAD" else name
 
 
-def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]:
+def status(layout: Layout, *, runner: Runner = subprocess.run,
+           http: Callable[..., tuple[int, Any]] | None = None) -> dict[str, Any]:
     """Join run-state, engine readback and checkout evidence for each worker."""
 
     state = _load_state(layout)
@@ -1752,6 +1755,30 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
                 container = "unknown"
         identity = mapping.get("execution_identity")
         identity = identity if isinstance(identity, Mapping) else {}
+        conversation = mapping.get("conversation")
+        conversation = dict(conversation) if isinstance(conversation, Mapping) else None
+        proofs = [row.get("execution_proof") for row in state.get("compact_receipts", [])
+                  if isinstance(row, Mapping) and isinstance(row.get("execution_proof"), Mapping)]
+        matched = [p for p in proofs if conversation is not None
+                   and p.get("source") == "native-session-metadata"
+                   and isinstance(p.get("operation_id"), str) and bool(p["operation_id"])
+                   and isinstance(p.get("native_session_id"), str) and bool(p["native_session_id"])
+                   and isinstance(p.get("timestamp"), str) and bool(p["timestamp"])
+                   and ((p.get("engine") == "codex" and p.get("auth") == "chatgpt")
+                        or (p.get("engine") == "claude-code" and p.get("auth") == "claude-subscription"))
+                   and p.get("conversation_id") == conversation.get("id")
+                   and p.get("operation_id") == conversation.get("operation_id")
+                   and p.get("container_id") == mapping.get("container_id")
+                   and p.get("image") == mapping.get("image")
+                   and p.get("engine") == conversation.get("engine")
+                   and p.get("model") == conversation.get("model")]
+        observed_identity = dict(matched[0]) if len(matched) == 1 else None
+        live = None
+        if http is not None and conversation is not None and mapping.get("state") == "running":
+            live = conversation_status(layout, worker, runner=runner, http=http, include_messages=False)
+            if live.get("conversation") != conversation:
+                live = {"reachable": False, "execution_status": None, "failure_class": None}
+                observed_identity = None
         workers.append({
             "issue": int(key),
             "worker": worker,
@@ -1760,8 +1787,17 @@ def status(layout: Layout, *, runner: Runner = subprocess.run) -> dict[str, Any]
             "execution_head": identity.get("head"),
             "recorded_state": mapping.get("state"),
             "container": container,
-            "engine": mapping.get("engine"),
-            "model": mapping.get("model"),
+            "engine": conversation.get("engine") if conversation else mapping.get("engine"),
+            "model": conversation.get("model") if conversation else mapping.get("model"),
+            "conversation": conversation,
+            "conversation_status": ({k: live.get(k) for k in ("reachable", "execution_status", "failure_class")}
+                                    if isinstance(live, Mapping) else None),
+            "observed_identity": observed_identity,
+            "native_descendants": "unknown",
+            "lifecycle_owner": mapping.get("lifecycle_owner") or mapping.get("owner"),
+            "builder_session": mapping.get("builder_session"),
+            "pr": mapping.get("pr"),
+            "last_meaningful_progress": mapping.get("last_meaningful_progress"),
             "next_action": mapping.get("next_action"),
             "next_authorized_action": next_authorized_action(mapping),
             "takeover": _takeover_of(mapping).get("status"),
@@ -2400,8 +2436,7 @@ def _render_continuation_prompt(brief: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-@_serialized_worker
-def takeover(
+def _takeover_locked(
     layout: Layout,
     worker: str,
     *,
@@ -2409,6 +2444,10 @@ def takeover(
     readbacks: Mapping[str, Mapping[str, Any]] | None = None,
     runner: Runner = subprocess.run,
     image: str = DEFAULT_IMAGE,
+    stop_intent: Mapping[str, Any] | None = None,
+    expected_container_id: str | None = None,
+    allow_starting: bool = False,
+    readback_provider: Callable[[Mapping[str, Any]], Mapping[str, Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Permit exactly one continuation after the predecessor is proven gone and its effects reconciled.
 
@@ -2447,7 +2486,9 @@ def takeover(
             _fence_authorization(layout, worker, generation)
         else:
             return {**continuation_brief(layout, worker), "already_authorized": True}
-    stopped = _stop_worker(layout, worker, reason=f"takeover: {reason}", runner=runner, image=image)
+    stopped = _stop_worker(layout, worker, reason=f"takeover: {reason}", runner=runner, image=image,
+                           stop_intent=stop_intent, expected_container_id=expected_container_id,
+                           allow_starting=allow_starting)
     stop_id = stopped.get("stop_id")
 
     def require_reconciliation(entry: dict[str, Any]) -> None:
@@ -2495,7 +2536,13 @@ def takeover(
     identity = _checkout_identity(after)
     if (actual is None or actual != previous_execution) and checkpoint is None:
         raise TakeoverRefused("detached checkout or branch drift lacks a retained checkpoint; preserve checkout")
-    for op in list(_load_state(layout)["issue_mappings"][str(issue)].get("publication_ops", [])):
+    latest_mapping = _load_state(layout)["issue_mappings"][str(issue)]
+    if readback_provider is not None:
+        try:
+            readbacks = readback_provider(latest_mapping)
+        except Exception:  # noqa: BLE001 - unavailable readback quarantines only each affected operation
+            readbacks = None
+    for op in list(latest_mapping.get("publication_ops", [])):
         if op["status"] in _OP_UNRESOLVED:
             reconcile_publication(layout, worker, op_id=op["id"], readback=(readbacks or {}).get(op["id"]))
     # The engine is read again immediately before authorizing: a container that appeared since the
@@ -2545,6 +2592,15 @@ def takeover(
 
     _mutate_mapping(layout, worker, mutate)
     return {**continuation_brief(layout, worker), "already_authorized": False}
+
+
+@_serialized_worker
+def takeover(
+    layout: Layout, worker: str, *, reason: str,
+    readbacks: Mapping[str, Mapping[str, Any]] | None = None,
+    runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE,
+) -> dict[str, Any]:
+    return _takeover_locked(layout, worker, reason=reason, readbacks=readbacks, runner=runner, image=image)
 
 
 @_serialized_worker
@@ -2850,9 +2906,8 @@ def _validate_codex_home(path: Path | None, layout: Layout, runner: Runner) -> l
     return [(str(home.resolve()), CODEX_HOME_TARGET)]
 
 
-@_serialized_worker
 @_serialized_openhands_start
-def start_openhands_worker(
+def _start_openhands_worker_locked(
     layout: Layout,
     worker: str,
     *,
@@ -2931,6 +2986,19 @@ def start_openhands_worker(
     return {"port": port, "container": layout.container_name(worker), "image": image}
 
 
+@_serialized_worker
+def start_openhands_worker(
+    layout: Layout, worker: str, *, budget: Budget = Budget(cpus="1.0", memory="1536m", pids=512),
+    claude_env_file: Path | None = None, codex_home: Path | None = None,
+    image: str = OPENHANDS_IMAGE, network: str = DEFAULT_NETWORK,
+    runner: Runner = subprocess.run, http: Callable[..., tuple[int, Any]] = _http,
+    ready_timeout: float = 90.0,
+) -> dict[str, Any]:
+    return _start_openhands_worker_locked(layout, worker, budget=budget, claude_env_file=claude_env_file,
+                                          codex_home=codex_home, image=image, network=network,
+                                          runner=runner, http=http, ready_timeout=ready_timeout)
+
+
 def resolve_engine(engine: str, model: str | None) -> tuple[str, str]:
     """Owner-selectable engine/model under the epic policy. Never Astra, never paid API."""
 
@@ -2965,6 +3033,22 @@ def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mappi
             )
         _assert_no_pending_takeover(mapping)
         pending = _takeover_of(mapping)
+        handoff = mapping.get("engine_handoff")
+        if isinstance(handoff, Mapping) and handoff.get("status") in ("pending", "awaiting_pr_cycle"):
+            predecessor = handoff.get("predecessor")
+            previous = predecessor.get("conversation") if isinstance(predecessor, Mapping) else None
+            stop_intent = handoff.get("recovery_stop_intent") or handoff.get("stop_intent")
+            owner_binding = handoff.get("owner_binding")
+            if (not isinstance(prior, Mapping) or not isinstance(previous, Mapping)
+                    or prior.get("id") != previous.get("id") or prior.get("status") != CONVERSATION_ENDED
+                    or not isinstance(stop_intent, Mapping) or pending.get("status") != "consumed"
+                    or pending.get("stop_id") != stop_intent.get("stop_id")
+                    or not isinstance(owner_binding, Mapping)
+                    or set(owner_binding) != {"lifecycle_owner", "owner", "builder_session"}
+                    or any(mapping.get(key) != value for key, value in owner_binding.items())
+                    or record.get("engine") != "codex" or record.get("model") != "gpt-6.1-terra"
+                    or record.get("operation_id") != handoff.get("operation_id")):
+                raise LaunchRefused("pending engine handoff does not authorize this conversation")
         if pending.get("status") == "authorized":
             # Normally consumed when the worker started; a continuation still pending is spent here.
             mapping["takeover"] = {**pending, "status": "consumed", "conversation_id": record["id"], "consumed_at": _now()}
@@ -2982,8 +3066,17 @@ def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mappi
     )
 
 
-@_serialized_worker
-def start_conversation(
+def _complete_engine_handoff(entry: dict[str, Any], conversation: Mapping[str, Any]) -> None:
+    handoff = entry.get("engine_handoff")
+    if (isinstance(handoff, Mapping) and handoff.get("status") in ("pending", "awaiting_pr_cycle")
+            and conversation.get("status") == "created" and conversation.get("engine") == "codex"
+            and conversation.get("model") == "gpt-6.1-terra"
+            and conversation.get("operation_id") == handoff.get("operation_id")
+            and conversation.get("id") == _takeover_of(entry).get("conversation_id")):
+        entry["engine_handoff"] = {**handoff, "status": "complete", "successor_conversation": conversation["id"]}
+
+
+def _start_conversation_locked(
     layout: Layout,
     worker: str,
     *,
@@ -3025,7 +3118,9 @@ def start_conversation(
     def finish(value: dict[str, Any]) -> None:
         def updater(current: dict[str, Any]) -> dict[str, Any]:
             if _same_assignment(current["issue_mappings"][str(issue)], mapping):
-                current["issue_mappings"][str(issue)]["conversation"] = value
+                entry = current["issue_mappings"][str(issue)]
+                entry["conversation"] = value
+                _complete_engine_handoff(entry, value)
             else:
                 value["status"] = "unknown"
             return current
@@ -3059,6 +3154,16 @@ def start_conversation(
     return record
 
 
+@_serialized_worker
+def start_conversation(
+    layout: Layout, worker: str, *, engine: str, model: str | None, prompt: str,
+    operation_id: str | None = None, http: Callable[..., tuple[int, Any]] = _http,
+    runner: Runner = subprocess.run,
+) -> dict[str, Any]:
+    return _start_conversation_locked(layout, worker, engine=engine, model=model, prompt=prompt,
+                                      operation_id=operation_id, http=http, runner=runner)
+
+
 def reconcile_conversation(port: int, key: str, conversation_id: str, *, layout: Layout, issue: int, worker: str,
                            http: Callable[..., tuple[int, Any]] = _http) -> str:
     """``created`` only on positive readback; anything else stays ``unknown``.
@@ -3076,9 +3181,8 @@ def reconcile_conversation(port: int, key: str, conversation_id: str, *, layout:
     return "unknown"
 
 
-@_serialized_worker
-def reconcile_worker_conversation(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http,
-                                  runner: Runner = subprocess.run) -> dict[str, Any]:
+def _reconcile_worker_conversation_locked(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http,
+                                          runner: Runner = subprocess.run) -> dict[str, Any]:
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     mapping = state["issue_mappings"][str(issue)]
@@ -3101,11 +3205,18 @@ def reconcile_worker_conversation(layout: Layout, worker: str, *, http: Callable
         if not _same_assignment(entry, mapping):
             raise EpicWorkspaceError("worker assignment changed during reconciliation; the newer state is kept")
         entry.update(conversation=updated, updated_at=_now())
+        _complete_engine_handoff(entry, updated)
         return current
 
     epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater,
                                          expected_epic_issue_number=layout.epic)
     return updated
+
+
+@_serialized_worker
+def reconcile_worker_conversation(layout: Layout, worker: str, *, http: Callable[..., tuple[int, Any]] = _http,
+                                  runner: Runner = subprocess.run) -> dict[str, Any]:
+    return _reconcile_worker_conversation_locked(layout, worker, http=http, runner=runner)
 
 
 _FAILURE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -3114,15 +3225,18 @@ _FAILURE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("authentication", re.compile(
         r"authentication required|ACPAuthRequired|unauthori[sz]ed|invalid (api key|token|bearer)|"
         r"token (has )?expired|refresh token|sign in again|log ?in again|not logged in|oauth", re.I)),
+    ("context_exhausted", re.compile(r"context (length|window)|prompt is too long|maximum context|too many tokens", re.I)),
+    ("transient_network", re.compile(
+        r"ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|connection (reset|refused|closed)|"
+        r"timed out|overloaded|\b50[234] (bad gateway|service unavailable|gateway time-?out)", re.I)),
+    ("task_failure", re.compile(
+        r"\b(?:tool (?:call |execution )?(?:failed|failure)|task failed|"
+        r"(?:command|pytest) (?:failed|exited|returned))\b", re.I)),
     # Subscription quota phrasing from Claude Code and Codex only; no bare "429" or "rate limit".
     ("quota_exhausted", re.compile(
         r"usage limit (reached|has been reached)|claude ai usage limit|you'?ve hit your usage limit|"
         r"you['’]ve hit your (weekly|session) limit\b|"
         r"usage_limit_reached|(5|five)-hour limit|weekly limit reached|out of (extra )?usage", re.I)),
-    ("context_exhausted", re.compile(r"context (length|window)|prompt is too long|maximum context|too many tokens", re.I)),
-    ("transient_network", re.compile(
-        r"ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|connection (reset|refused|closed)|"
-        r"timed out|overloaded|\b50[234] (bad gateway|service unavailable|gateway time-?out)", re.I)),
 )
 
 
@@ -3163,6 +3277,11 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
         f"{e.get('code') or ''} {e.get('detail') or e.get('error') or ''}".strip()
         for e in items if isinstance(e, Mapping) and e.get("kind") == "ConversationErrorEvent"
     ]
+    last_error = next((i for i in range(len(items) - 1, -1, -1)
+                       if isinstance(items[i], Mapping) and items[i].get("kind") == "ConversationErrorEvent"), None)
+    error_current = (last_error is not None and not any(
+        isinstance(e, Mapping) and e.get("kind") in ("MessageEvent", "ActionEvent", "ObservationEvent")
+        for e in items[last_error + 1:]))
     last_agent_message = next(
         (e for e in reversed(items) if isinstance(e, Mapping) and e.get("kind") == "MessageEvent" and e.get("source") == "agent"),
         None,
@@ -3174,9 +3293,14 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
         "reachable": code == 200,
         "events_reachable": ecode == 200 and isinstance(events, Mapping) and isinstance(events.get("items"), list),
         "execution_status": info.get("execution_status") if isinstance(info, Mapping) else None,
+        "agent_settings": ({"agent_kind": "acp" if info["agent"].get("kind") == "ACPAgent" else None,
+                            "acp_server": info["agent"].get("acp_server"), "acp_model": info["agent"].get("acp_model"),
+                            "current_model_id": info.get("current_model_id")}
+                           if isinstance(info.get("agent"), Mapping) else None),
         "event_kinds": [e.get("kind") for e in items if isinstance(e, Mapping)][-limit:],
         "errors": errors,
         "failure_class": classify_failure(errors[-1]) if errors else None,
+        "failure_current": error_current,
         "last_agent_message": last_agent_message,
         # Activity (not progress): the newest event a bounded read-only diagnosis compares across passes.
         "latest_event": next(({"id": e.get("id"), "kind": e.get("kind"), "timestamp": e.get("timestamp")}
@@ -3264,6 +3388,8 @@ def _parser() -> argparse.ArgumentParser:
     co.add_argument("--tick", required=True)
     co.add_argument("--stall-limit", type=int, default=3)
     co.add_argument("--apply", action="store_true", help="apply eligible directives to the worker's conversation")
+    co.add_argument("--codex-home", default=str(Path.home() / ".config/epic-workspace/codex"),
+                    help="existing private Codex subscription home for quota continuations")
     co.add_argument("--no-observe-github", "--no-observe-authority", dest="no_observe_github", action="store_true",
                     help="skip public GitHub observations (a declared blocker's authority then remains unknown)")
     return p
@@ -3327,7 +3453,8 @@ def main(
             from app.builderops import epic_coordination, openhands_pr_observation
 
             fetch = None if args.no_observe_github else (fetch or openhands_pr_observation.public_fetch)
-            out = epic_coordination.coordinate(layout, tick=args.tick, stall_limit=args.stall_limit, runner=runner, fetch=fetch, apply=args.apply, **_http_kw)
+            out = epic_coordination.coordinate(layout, tick=args.tick, stall_limit=args.stall_limit, runner=runner, fetch=fetch,
+                                               apply=args.apply, codex_home=Path(args.codex_home), **_http_kw)
         elif args.cmd == "worker-checkpoint":
             out = {"checkpoint": checkpoint_worker(layout, args.worker, reason=args.reason, runner=runner)}
         elif args.cmd == "checkpoint-release":
@@ -3347,7 +3474,7 @@ def main(
         elif args.cmd == "worker-stop":
             out = {"work_at_stop": stop_worker(layout, args.worker, reason=args.reason, runner=runner)}
         else:
-            out = status(layout, runner=runner)
+            out = status(layout, runner=runner, http=http or _http)
     except EpicWorkspaceError as exc:
         print(json.dumps({"error": type(exc).__name__, "detail": str(exc)}), file=sys.stderr)
         return 2
