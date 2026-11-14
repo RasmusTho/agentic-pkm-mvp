@@ -11,6 +11,7 @@ import pytest
 
 from app.builderops import epic_workspace as ew
 from app.builderops import openhands_pr_cycle as cycle
+from tests.builderops.openhands_disposition_test_support import synthetic_disposition
 from tests.builderops.test_openhands_pr_cycle import (
     HEAD, bind_worker_endpoint, fake_completed_review_stop, fetch, review_material, setup,
 )
@@ -93,7 +94,7 @@ def _parked_by_9fa8(layout, config, server, identity, cid, monkeypatch):
     """Produce the actual saved record: report, native proof, verified stop and the 9fa8 parked wait."""
     report = _finish(server, cid, identity, ACTUAL)
     with monkeypatch.context() as old:
-        old.setattr(cycle, "review_gate", lambda review, expected=None: {"outcome": "pass" if review["verdict"] == "pass"
+        old.setattr(cycle, "review_gate", lambda review, expected=None, **kwargs: {"outcome": "pass" if review["verdict"] == "pass"
                     and not review["findings"] else "changes_requested", "blocking": [], "grammar": [],
                     "informational": []}, raising=False)
         tick = cycle.advance(layout, config, fetch=fetch, http=server)
@@ -208,6 +209,8 @@ def test_f1_actual_record_reconciles_once_then_reaches_guarded_merge_and_readbac
     cid2 = second[3]["conversation_id"]
     server.conversations[cid2]["execution_status"] = "finished"
     report = _finish(server, cid2, identity, reconciled())
+    pending = cycle._find(layout, 10, identity)["report_reconciliations"][0]
+    config[0]["review_disposition"] = synthetic_disposition(report, pending)
 
     effects = _merge_ports(layout, monkeypatch, identity)
     result = cycle.advance(layout, config, fetch=fetch, http=server)
@@ -293,7 +296,7 @@ def test_f1_competing_writer_blocks_reconciliation_start(tmp_path, monkeypatch):
 
 def test_f1_informational_ci_limit_passes_but_gaps_and_owner_doc_omissions_block():
     report = reconciled({**ACTUAL, "identity": "i", "head_sha": HEAD})
-    gate = cycle.review_gate(report)
+    gate = cycle.review_gate(report, disposition=synthetic_disposition(report))
     assert gate["outcome"] == "pass" and [r["severity"] for r in gate["informational"] if "severity" in r] == ["P3"]
     assert {"where": "scope", "limitation": 1, "kind": "ci_not_observed"} in gate["informational"]
     for where, kind in [("scope", "acceptance_gap"), ("scope", "verify_gap"), ("scope", "owner_doc_gap"),
@@ -352,7 +355,7 @@ def test_f2_explicit_protected_classification_without_keyword_scanning(change, o
     report = _v2_finding(**change)
     if change.get("protected_class", "absent") is None:
         report["findings"][0].pop("protected_class")
-    assert cycle.review_gate(report)["outcome"] == outcome
+    assert cycle.review_gate(report, disposition=synthetic_disposition(report))["outcome"] == outcome
 
 
 def test_f2_disguised_protected_p3_cannot_reach_sandbox_or_authority(tmp_path, monkeypatch):
@@ -389,8 +392,9 @@ def test_legacy_clean_report_with_nothing_to_classify_still_passes():
     clean = {**ACTUAL, "verdict": "pass", "findings": [], "closing_assessments": {},
              "scope_assessment": {**ACTUAL["scope_assessment"], "limitations": []},
              "owner_doc": {**ACTUAL["owner_doc"], "outcome": "no_change"}}
-    assert cycle.review_gate(clean) == {"outcome": "pass", "contract": "legacy", "blocking": [], "grammar": [],
-                                        "informational": []}
+    gate = cycle.review_gate(clean, disposition=synthetic_disposition(clean))
+    assert gate["outcome"] == "pass" and gate["contract"] == "legacy"
+    assert gate["blocking"] == gate["grammar"] == gate["informational"] == []
     assert cycle.review_gate({**clean, "findings": [{"severity": "P0"}], "verdict": "findings"})["outcome"] == \
         "changes_requested"
 
@@ -444,7 +448,8 @@ def test_review_stage_checks_coverage_against_the_reviewed_contract(tmp_path, mo
         report["covered_sources"] = report["covered_sources"][1:]
     elif defect == "extra-child":
         report["closing_assessments"]["6618"] = report["closing_assessments"]["6619"]
-    assert cycle.review_gate({**report, "identity": "i", "head_sha": HEAD}, EXPECTED)["outcome"] == (
+    bound = {**report, "identity": "i", "head_sha": HEAD}
+    assert cycle.review_gate(bound, EXPECTED, disposition=synthetic_disposition(bound))["outcome"] == (
         "pass" if defect == "identity" else "reconcile_report")
     if defect == "identity":
         assert cycle.review_gate({**report, "identity": "other", "head_sha": HEAD}, EXPECTED)["outcome"] == \

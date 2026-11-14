@@ -7,6 +7,7 @@ import pytest
 from app.builderops import epic_workspace as ew
 from app.builderops import openhands_pr_cycle as cycle
 from scripts import agent_worktree
+from tests.builderops.openhands_disposition_test_support import digest, synthetic_disposition, synthetic_reservation
 from tests.builderops.test_openhands_pr_cycle import (
     CONFORMING, HEAD, _event_time, _handoff, _native_authority_fixture, _prepare_and_pin, fake_completed_review_stop, fetch, setup,
 )
@@ -403,6 +404,7 @@ def test_advance_retries_interrupted_verification_after_reconciliation(tmp_path,
                            "verify_targets": config[0]["verify_targets"]})
     server.events = [{"kind": "MessageEvent", "source": "agent", "detail": response}]
     server.final_responses[conversation] = response
+    config[0]["review_disposition"] = synthetic_disposition(json.loads(response))
     monkeypatch.setattr(ew, "stop_worker", fake_completed_review_stop)
     calls = []
     def verify(layout, worker, head, targets, test_venv, saved):
@@ -591,6 +593,9 @@ def test_same_head_new_identity_still_cannot_repeat_unknown_merge(tmp_path, monk
                         "verify_targets": config[0]["verify_targets"]}, "public_report_conversation": "conversation",
              "execution_proof": {"operation_id": "op", "conversation_id": "conversation"},
              "verification": {"passed": True}}
+    config[0]["review_disposition"] = synthetic_disposition(saved["review"])
+    saved["verification"]["disposition_sha256"] = digest(config[0]["review_disposition"])
+    synthetic_reservation(layout, 10, "new-identity", "op")
     monkeypatch.setattr(cycle, "_find", lambda *args: saved)
     monkeypatch.setattr(cycle, "_mapping", lambda *args: {"conversation": {"id": "conversation"}})
     monkeypatch.setattr(cycle, "_add_transfer_review_context", lambda *args: None)

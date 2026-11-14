@@ -1907,6 +1907,11 @@ def _text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip()) and len(value) <= 4000
 
 
+def _disposition_reason(value: Any) -> bool:
+    """Reject empty or terse notes; semantic sufficiency remains the owner's responsibility."""
+    return _text(value) and len(value.strip()) >= 20
+
+
 def report_grammar() -> str:
     """The exact report grammar given to every reviewer; review_gate enforces the same tables."""
     kinds = "; ".join(f"{k} ({'blocking gap' if b else 'informational'}: {d})" for k, (b, d) in LIMITATION_KINDS.items())
@@ -1977,13 +1982,30 @@ def report_expectations(layout: workspace.Layout, entry: Mapping[str, Any], pr: 
             "criteria": criteria}
 
 
-def review_gate(review: Any, expected: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Derive the severity-policy gate; see ``_review_gate``. A wrong-typed report reconciles."""
+def review_gate(review: Any, expected: Mapping[str, Any] | None = None, *,
+                disposition: Any = None, reconciliation: Any = None) -> dict[str, Any]:
+    """Apply report syntax, then the separate controller-owned disposition boundary.
+
+    ``disposition`` is supplied only by the controller's trusted admission, never by a
+    reviewer report or by the saved copy of a disposition. It is deliberately not a
+    prose classifier: the owning workflow must examine each item before adopting it.
+    """
     try:
-        return _review_gate(review, expected)
+        gate = _review_gate(review, expected)
     except (TypeError, AttributeError, KeyError, ValueError):
         return {"outcome": "reconcile_report", "contract": None, "blocking": [],
                 "grammar": ["report has wrong-typed fields"], "informational": []}
+    if gate["outcome"] == "pass":
+        try:
+            reason = _disposition_error(review, expected, disposition, reconciliation)
+        except (TypeError, AttributeError, KeyError, ValueError):
+            reason = "owner disposition or original analysis is malformed or unknown"
+        if reason:
+            gate["outcome"] = "changes_requested"
+            gate["blocking"].append(reason)
+        elif disposition is not None:
+            gate["disposition_sha256"] = _digest(disposition)
+    return gate
 
 
 def _review_gate(review: Any, expected: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -2101,6 +2123,171 @@ def _review_gate(review: Any, expected: Mapping[str, Any] | None) -> dict[str, A
             "informational": informational}
 
 
+def _report_items(report: Mapping[str, Any]) -> dict[tuple[str, int], Any]:
+    """Enumerate every known finding and limitation without changing the report."""
+    findings = report.get("findings")
+    scope = report.get("scope_assessment")
+    # The existing report grammar permits omission for a non-closing PR.
+    children = report.get("closing_assessments", {})
+    if not isinstance(findings, list) or not isinstance(scope, dict) or not isinstance(children, dict):
+        raise ValueError("original analysis cannot be enumerated")
+    collections = {"findings": findings, "scope": scope.get("limitations")}
+    for number, child in children.items():
+        if not isinstance(number, str) or not isinstance(child, dict):
+            raise ValueError("original closing analysis is unknown")
+        collections[f"closing:{number}"] = child.get("limitations")
+    if any(not isinstance(rows, list) for rows in collections.values()):
+        raise ValueError("original limitations cannot be enumerated")
+    return {(where, index): item for where, rows in collections.items() for index, item in enumerate(rows)}
+
+
+def _original_item_may_be_nonblocking(where: str, item: Any) -> bool:
+    """A trusted owner cannot waive an explicit protected or defect obligation here."""
+    if where == "findings":
+        return (isinstance(item, dict) and item.get("severity") == "P3"
+                and item.get("protected_class", "none") == "none"
+                and item.get("category") not in DEFECT_CATEGORIES
+                and all(_text(item.get(key)) for key in ("summary", "file", "failure_scenario"))
+                and type(item.get("line")) is int and item["line"] >= 1)
+    if isinstance(item, str):
+        return _text(item)
+    return (isinstance(item, dict) and set(item) == {"kind", "detail"}
+            and item.get("kind") in LIMITATION_KINDS and not LIMITATION_KINDS[item["kind"]][0]
+            and _text(item.get("detail")))
+
+
+def _retains_item(where: str, original: Any, current: Any) -> bool:
+    if where == "findings":
+        if not isinstance(original, dict) or not isinstance(current, dict):
+            return False
+        # A legacy classification can be translated; substantive fields cannot be rewritten.
+        ignored = {"category", "protected_class"}
+        return (all(current.get(key) == value for key, value in original.items() if key not in ignored)
+                and (original.get("protected_class", "none") == "none"
+                     or current.get("protected_class") == original.get("protected_class")))
+    if isinstance(original, str):
+        return isinstance(current, dict) and current.get("detail") == original
+    return isinstance(original, dict) and current == original
+
+
+def _disposition_request(review: Mapping[str, Any], reconciliation: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Expose exact evidence for the owning session without proposing an item decision."""
+    items = [{"report": "current", "where": where, "index": index, "sha256": _digest(item)}
+             for (where, index), item in _report_items(review).items()]
+    original_digest = original_attempt_digest = None
+    if reconciliation is not None:
+        archive = reconciliation["archived"]
+        original = archive["review"]
+        original_digest, original_attempt_digest = _digest(original), _digest(archive)
+        items.extend({"report": "original", "where": where, "index": index, "sha256": _digest(item)}
+                     for (where, index), item in _report_items(original).items())
+    return {"identity": review["identity"], "head_sha": review["head_sha"], "report_sha256": _digest(review),
+            "original_report_sha256": original_digest, "original_attempt_sha256": original_attempt_digest,
+            "items": items}
+
+
+def _disposition_error(review: Mapping[str, Any], expected: Mapping[str, Any] | None,
+                       disposition: Any, reconciliation: Any) -> str | None:
+    """Validate exact per-item owner adoption and, on retry, the complete original lineage."""
+    current = _report_items(review)
+    original: dict[tuple[str, int], Any] = {}
+    original_digest = original_attempt_digest = None
+    identity = expected.get("identity") if expected is not None else review.get("identity")
+    head = expected.get("head_sha") if expected is not None else review.get("head_sha")
+    if reconciliation is not None:
+        if not isinstance(reconciliation, dict) or not isinstance(reconciliation.get("archived"), dict):
+            return "original review lineage is unavailable"
+        archive = reconciliation["archived"]
+        prior = archive.get("review")
+        proof, stop = archive.get("execution_proof"), archive.get("stop_intent")
+        operation = reconciliation.get("original_operation")
+        assignment = stop.get("assignment") if isinstance(stop, dict) else None
+        conversation = assignment.get("conversation") if isinstance(assignment, dict) else None
+        if (not isinstance(prior, dict) or not isinstance(proof, dict) or not isinstance(stop, dict)
+                or prior.get("identity") != identity or prior.get("head_sha") != head
+                or (expected is not None and expected.get("criteria") and "closing_assessments" not in prior)
+                or reconciliation.get("identity", identity) != identity or reconciliation.get("head_sha", head) != head
+                or not isinstance(operation, str) or not operation or archive.get("review_operation") != operation
+                or proof.get("operation_id") != operation or archive.get("stop_verified") is not True
+                or proof.get("source") != "native-session-metadata"
+                or proof.get("auth") != {"codex": "chatgpt", "claude-code": "claude-subscription"}.get(proof.get("engine"))
+                or proof.get("engine") not in ("codex", "claude-code") or not _text(proof.get("model"))
+                or not _text(proof.get("native_session_id")) or not _text(proof.get("timestamp"))
+                or (proof.get("engine") == "codex" and proof.get("effort") not in ("high", "xhigh", "max", "ultra"))
+                or not isinstance(proof.get("container_id"), str)
+                or not re.fullmatch(r"[0-9a-f]{12,64}", proof["container_id"])
+                or not isinstance(stop.get("stop_id"), str) or not re.fullmatch(r"[0-9a-f]{32}", stop["stop_id"])
+                or "checkpoint" not in stop or "previous_stop_id" not in stop
+                or (stop.get("checkpoint") is not None and
+                    (not isinstance(stop["checkpoint"], dict) or not _text(stop["checkpoint"].get("ref"))))
+                or not isinstance(assignment, dict) or assignment.get("runtime") != "openhands"
+                or stop.get("container_id") != proof.get("container_id")
+                or assignment.get("container_id") != proof.get("container_id")
+                or not isinstance(conversation, dict) or conversation.get("id") != proof.get("conversation_id")
+                or not isinstance(archive.get("public_report_conversation"), str)
+                or proof.get("conversation_id") != archive.get("public_report_conversation")
+                or not isinstance(archive.get("conversation_provenance"), dict)
+                or archive["conversation_provenance"].get("reviewer") != proof.get("conversation_id")
+                or not isinstance(reconciliation.get("operation"), str)
+                or reconciliation["operation"] == operation):
+            return "original review lineage is unknown or contradictory"
+        original_digest = _digest(prior)
+        if reconciliation.get("original_report_sha256") != original_digest:
+            return "original review digest changed"
+        original_attempt_digest = _digest(archive)
+        if (reconciliation.get("original_attempt_sha256") is not None
+                and reconciliation["original_attempt_sha256"] != original_attempt_digest):
+            return "original review proof or stop archive changed"
+        original = _report_items(prior)
+    if (not isinstance(disposition, dict) or set(disposition) !=
+            {"identity", "head_sha", "report_sha256", "original_report_sha256", "original_attempt_sha256",
+             "assessment", "items"}
+            or not isinstance(identity, str) or not identity or not isinstance(head, str) or not head
+            or disposition.get("identity") != identity or disposition.get("head_sha") != head
+            or disposition.get("report_sha256") != _digest(review)
+            or disposition.get("original_report_sha256") != original_digest
+            or disposition.get("original_attempt_sha256") != original_attempt_digest
+            or not _disposition_reason(disposition.get("assessment"))
+            or not isinstance(disposition.get("items"), list)):
+        return "owner disposition is missing or bound to different review evidence"
+    seen: set[tuple[str, str, int]] = set()
+    for row in disposition["items"]:
+        if (not isinstance(row, dict) or not {"report", "where", "index", "sha256", "decision", "rationale"} <= set(row)
+                or set(row) - {"report", "where", "index", "sha256", "decision", "rationale", "successor"}
+                or row.get("report") not in ("current", "original") or not isinstance(row.get("where"), str)
+                or type(row.get("index")) is not int or not _disposition_reason(row.get("rationale"))):
+            return "owner disposition has a malformed item or rationale"
+        key = (row["where"], row["index"])
+        item_set = current if row["report"] == "current" else original
+        token = (row["report"], *key)
+        if token in seen or key not in item_set or row.get("sha256") != _digest(item_set[key]):
+            return "owner disposition item is missing, duplicated or changed"
+        seen.add(token)
+        if row["report"] == "current":
+            if row["decision"] != "nonblocking" or "successor" in row:
+                return "current item has no nonblocking owner disposition"
+        elif row["decision"] == "nonblocking":
+            if "successor" in row or not _original_item_may_be_nonblocking(key[0], item_set[key]):
+                return "original protected, defective or unknown item cannot be waived"
+        elif row["decision"] == "retained":
+            target = row.get("successor")
+            if (not _original_item_may_be_nonblocking(key[0], item_set[key])
+                    or not isinstance(target, dict) or set(target) != {"where", "index", "sha256"}
+                    or not isinstance(target.get("where"), str) or type(target.get("index")) is not int):
+                return "original protected, defective or unknown item has no nonblocking successor"
+            target_key = (target["where"], target["index"])
+            if (target_key not in current or target_key[0] != key[0]
+                    or target["sha256"] != _digest(current[target_key])
+                    or not _retains_item(key[0], item_set[key], current[target_key])):
+                return "original item was omitted, changed or softened"
+        else:
+            return "original item has no established disposition"
+    required = {("current", *key) for key in current} | {("original", *key) for key in original}
+    if seen != required:
+        return "owner disposition does not cover every original and current item"
+    return None
+
+
 def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, Any],
               saved: Mapping[str, Any]) -> dict[str, Any]:
     """Refresh exact review, source, issue and CI evidence immediately before native merge."""
@@ -2117,11 +2304,13 @@ def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, 
             or not isinstance(tests, dict) or tests.get("passed") is not True
             or tests.get("head_sha") != pr["head_sha"] or tests.get("targets") != entry["verify_targets"]):
         raise CycleError("review execution or sandbox verification is incomplete")
-    # The same gate as the review stage: report grammar, limitations and owner-doc vocabulary are
-    # validated once there; only live PR, Issue and CI evidence is checked below.
-    gate = review_gate(review, report_expectations(layout, entry, pr, saved["identity"]))
+    # Re-derive the same owner-bound gate immediately before the live authority and CI reads.
+    gate = review_gate(review, report_expectations(layout, entry, pr, saved["identity"]),
+                       disposition=entry.get("review_disposition"), reconciliation=_bound_reconciliation(layout, saved))
     if gate["outcome"] != "pass":
         raise CycleError(f"review report gate is {gate['outcome']}: " + "; ".join(gate["blocking"] or gate["grammar"]))
+    if tests.get("disposition_sha256") != gate.get("disposition_sha256"):
+        raise CycleError("sandbox verification does not bind the current review disposition")
     owner_doc = review["owner_doc"]
     fresh = observation._observe(observation._Reader(github_fetch, time.monotonic), int(pr["number"]))
     if fresh is None:
@@ -2942,7 +3131,8 @@ def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, An
 
 # One review attempt's fields. A report reconciliation moves them verbatim into history.
 _REVIEW_ATTEMPT_FIELDS = ("review_operation", "review", "public_report_conversation", "conversation_provenance",
-                          "execution_proof", "stop_intent", "stop_verified", "review_gate", "verification", "ci")
+                          "execution_proof", "stop_intent", "stop_verified", "review_gate", "review_disposition",
+                          "disposition_request", "verification", "ci")
 
 
 def _reconciliation(saved: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -2950,13 +3140,46 @@ def _reconciliation(saved: Mapping[str, Any]) -> dict[str, Any] | None:
     rows = saved.get("report_reconciliations", [])
     if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
         raise CycleError("report reconciliation history is malformed; reconcile the record")
+    if any(row.get("contract") != REPORT_CONTRACT for row in rows):
+        raise CycleError("report reconciliation contract history is unknown; reconcile the record")
     matches = [r for r in rows if r.get("contract") == REPORT_CONTRACT]
     if len(matches) > 1:
         raise CycleError("report reconciliation history is ambiguous; reconcile the record")
     return matches[0] if matches else None
 
 
-def _begin_reconciliation(layout: workspace.Layout, saved: dict[str, Any], gate: Mapping[str, Any]) -> None:
+def _bound_reconciliation(layout: workspace.Layout, saved: Mapping[str, Any]) -> dict[str, Any] | None:
+    pending = _reconciliation(saved)
+    state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
+    records = [row for row in state["dispatch_decisions"] if isinstance(row, dict)
+               and row.get("kind") == "openhands_pr_completion" and row.get("request") == "independent-review"
+               and row.get("repository") == completion.REPOSITORY and row.get("route") == "native"
+               and row.get("number") == saved.get("number") and row.get("identity") == saved.get("identity")]
+    matches = [row for row in records if row.get("operation_id") == saved.get("review_operation")]
+    expected_attempts = [1] if pending is None else [1, 2]
+    if (len(records) != len(expected_attempts)
+            or any(type(row.get("attempt")) is not int for row in records)
+            or sorted(row["attempt"] for row in records) != expected_attempts
+            or len(matches) != 1 or type(matches[0].get("attempt")) is not int
+            or matches[0]["attempt"] not in (1, 2)
+            or (matches[0]["attempt"] == 1) != (pending is None)):
+        raise CycleError("review operation reservation history is unknown or contradictory")
+    if pending is not None:
+        archive = pending.get("archived")
+        prior_stop = archive.get("stop_intent") if isinstance(archive, dict) else None
+        stop = saved.get("stop_intent")
+        original = [row for row in records if row.get("operation_id") == pending.get("original_operation")]
+        if (pending.get("operation") != saved.get("review_operation") or not isinstance(prior_stop, dict)
+                or not isinstance(stop, dict) or not isinstance(prior_stop.get("stop_id"), str)
+                or stop.get("previous_stop_id") != prior_stop["stop_id"]
+                or len(original) != 1 or original[0].get("attempt") != 1
+                or original[0].get("outcome") != "completed"):
+            raise CycleError("review reconciliation operation or stop lineage is unknown")
+    return pending
+
+
+def _begin_reconciliation(layout: workspace.Layout, saved: dict[str, Any], gate: Mapping[str, Any],
+                          head_sha: str) -> None:
     """Record one bounded correction of a non-conforming report at the same identity.
 
     The original report, proof, stop and gate stay byte-for-byte in the record's history. The
@@ -2968,7 +3191,9 @@ def _begin_reconciliation(layout: workspace.Layout, saved: dict[str, Any], gate:
     digest = hashlib.sha256(json.dumps(archived["review"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     saved.setdefault("report_reconciliations", []).append({
         "contract": REPORT_CONTRACT, "original_operation": archived["review_operation"],
-        "original_report_sha256": digest, "gate": dict(gate), "archived": archived, "operation": None})
+        "identity": saved["identity"], "head_sha": head_sha, "original_report_sha256": digest,
+        "original_attempt_sha256": _digest(archived),
+        "gate": dict(gate), "archived": archived, "operation": None})
     _save(layout, saved)
 
 
@@ -2990,6 +3215,7 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     saved = _find(layout, pr["number"], identity)
     operation_id = saved.get("review_operation")
     exhausted: dict[str, Any] | None = None
+    owner_wait: str | None = None
     if operation_id:
         worker_record = _mapping(layout, entry["worker"])
         conversation = worker_record.get("conversation")
@@ -3020,28 +3246,57 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
             # Capacity is released before classification, so a contract-side read failure cannot hold it.
             _release_reviewer(layout, entry["worker"], saved, worker_record)
             # The saved report stays verbatim; the policy gate is re-derived from it on every tick.
-            gate = review_gate(review, report_expectations(layout, entry, pr, identity))
+            expectations = report_expectations(layout, entry, pr, identity)
+            bound_reconciliation = _bound_reconciliation(layout, saved)
+            gate = review_gate(review, expectations,
+                               disposition=entry.get("review_disposition"),
+                               reconciliation=bound_reconciliation)
+            if gate["outcome"] == "changes_requested" and _review_gate(review, expectations)["outcome"] == "pass":
+                owner_wait = gate["blocking"][0]
+                try:
+                    saved["disposition_request"] = _disposition_request(review, bound_reconciliation)
+                except (KeyError, TypeError, ValueError):
+                    saved.pop("disposition_request", None)
+            else:
+                saved.pop("disposition_request", None)
             if saved.get("review_gate") != gate:
                 saved["review_gate"] = gate
-                _save(layout, saved)
+            _save(layout, saved)
             pr["review_outcome"] = gate["outcome"]
             pr["independent_review_identity"] = identity
             if gate["outcome"] == "reconcile_report":
                 if pending is None:
-                    _begin_reconciliation(layout, saved, gate)
+                    _begin_reconciliation(layout, saved, gate, pr["head_sha"])
                     operation_id = None
                     pr["review_outcome"] = "missing"
                 else:
                     pr["review_outcome"] = "changes_requested"
                     exhausted = gate
             if pr["review_outcome"] == "pass":
+                authority = entry.get("review_disposition")
+                if authority is not None:
+                    saved["review_disposition"] = authority  # audit copy, never an authority input
+                else:
+                    saved.pop("review_disposition", None)
+                if (isinstance(saved.get("verification"), dict)
+                        and saved["verification"].get("disposition_sha256") != gate.get("disposition_sha256")):
+                    saved.pop("verification", None)
+                    saved.pop("ci", None)
+                _save(layout, saved)
                 if "verification" not in saved:
                     verification = sandbox_verify(layout, entry["worker"], pr["head_sha"],
                                                   entry["verify_targets"], entry["test_venv"], saved)
                     with workspace._worker_lifecycle_lock(layout, entry["worker"]):
                         current = _mapping(layout, entry["worker"])
                         _review_stop_checkpoint(current, saved, require_receipt=True)
-                        saved["verification"] = {**verification, "stop_id": saved["stop_intent"]["stop_id"]}
+                        after_verify = review_gate(review, expectations,
+                                                   disposition=entry.get("review_disposition"),
+                                                   reconciliation=_bound_reconciliation(layout, saved))
+                        if (after_verify["outcome"] != "pass"
+                                or after_verify.get("disposition_sha256") != gate.get("disposition_sha256")):
+                            raise CycleError("review disposition changed during sandbox verification")
+                        saved["verification"] = {**verification, "stop_id": saved["stop_intent"]["stop_id"],
+                                                 "disposition_sha256": gate.get("disposition_sha256")}
                         _save(layout, saved, expected_worker=entry["worker"], expected_assignment=current)
                 with workspace._worker_lifecycle_lock(layout, entry["worker"]):
                     _review_verification_lineage(_mapping(layout, entry["worker"]), saved)
@@ -3091,6 +3346,10 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     if exhausted is not None and decision["action"] == "wait":
         decision["reason"] = (f"report reconciliation under {REPORT_CONTRACT} did not produce a conforming report ("
                               + "; ".join(exhausted["grammar"]) + "); the owning review workflow must repair it")
+    elif owner_wait is not None and decision["action"] == "wait":
+        decision["reason"] = "owning workflow must resolve review disposition: " + owner_wait
+        if "disposition_request" in saved:
+            decision["disposition_request"] = saved["disposition_request"]
     return dict(decision)
 
 

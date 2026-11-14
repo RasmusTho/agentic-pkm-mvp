@@ -349,10 +349,18 @@ proceed, and gap kinds (uncovered acceptance, Verify, owner doc, source or evide
 `required_missing`. The gate also compares identity, head, Verify targets, `covered_sources` and
 the closing criterion hashes with the reviewer's own material, using the files-API path list that
 premerge re-reads. A coverage error is therefore caught before sandbox verification. A finished
-conversation's malformed answer counts as a terminal report, and an unreadable answer is kept as its
-digest plus at most 64 KiB of text.
-A report whose only findings are unprotected advisory P3 items proceeds to sandbox
-verification, current-head CI and the guarded merge gate, and the saved report is kept verbatim.
+conversation's malformed answer counts as a terminal report. An unreadable answer retains its digest
+and at most 65,536 characters, which may occupy 262,144 UTF-8 bytes; JSON escaping can make the
+reconciliation prompt larger still. The documented 64 KiB byte bound is not yet enforced.
+Reviewer classifications are evidence, not authority to waive a protected finding or an uncovered
+obligation. Before sandbox verification, the existing authorized owning session must assess the whole
+report and every finding and limitation, including a report that labels itself clean. It records a
+`review_disposition` in the controller-owned admission, outside reviewer-writable paths. This is an
+ordinary owning-workflow action, not a new human approval requirement. The item decision is
+`nonblocking` only when the owning workflow has examined the evidence and can support that conclusion;
+uncertain or contradictory evidence waits. The controller rechecks the same binding before premerge.
+A truly informational P3 with a supported nonblocking disposition proceeds to sandbox verification,
+current-head CI and the guarded merge gate; the saved report is kept verbatim.
 P0/P1, any protected finding at any severity, a P3 with a defect category, P2 without a verified
 Known Defects disposition, gaps and incomplete assessments all wait for the owning workflow. A legacy
 or non-conforming report is never edited and never passed. The original report, proof and stop move
@@ -360,8 +368,9 @@ verbatim into the record's `report_reconciliations` history, and one retry of th
 reserved. Once the reviewer runs again through the existing takeover/start lifecycle, that retry
 starts one new OpenHands conversation, which re-expresses the earlier analysis under the grammar. A
 second non-conforming report waits with an explicit owning-workflow repair reason. A legacy report
-with no findings, no limitations and a known owner-doc outcome needs no classification. The native
-metadata reader connects the exact retained OpenHands conversation and live ACP session to that
+with no findings, no limitations and a known owner-doc outcome still needs the owning session's
+assessment of the whole report. The native metadata reader connects the exact retained OpenHands
+conversation and live ACP session to that
 session's bounded Codex or Claude log, retaining only model, effort, timestamps and session identities.
 It requires the observed model to match the selected model; a Codex effort must be `high` or stronger
 (`xhigh`, `max`, `ultra`) and equal the API-selected `current_effort`. A session keeps one effort; a
@@ -372,6 +381,28 @@ stop the review. In a Claude log the reader skips only API-error records and the
 checking its session and timestamp; any other synthetic record refuses, and real inference by one
 model is still required. Subscription authentication also requires the native login check; no model call is
 needed for this metadata read.
+
+The disposition is a JSON object with `identity`, `head_sha`, `report_sha256`,
+`original_report_sha256` and `original_attempt_sha256` (both null without a retry), substantive
+`assessment`, and `items`. The attempt digest covers the entire archived report, proof, stop and
+checkpoint. For a pre-existing archive without a stored attempt digest, the owner must compare it
+with the retained authoritative evidence before binding it in the disposition. Digests
+are SHA-256 of the exact JSON value encoded with sorted keys and compact separators, as in the
+existing cycle record. The cycle's `disposition_request` exposes the binding and each item digest
+for the owning session, without making any item decision. Each disposition item contains
+`report` (`current` or `original`), `where` (`findings`,
+`scope`, or `closing:<issue-number>`), zero-based `index`, `sha256`, `decision`, and a substantive
+`rationale`. Assessment and rationale each require at least 20 non-padding characters; that length
+check does not prove their meaning. Every current item needs `decision: nonblocking`. Each original item either has its
+own supported `nonblocking` decision or `decision: retained` with a `successor` containing its
+exact `where`, `index`, and `sha256`. Retained content must preserve the original substantive
+finding or limitation; an explicit protected finding, defect, or gap cannot be waived through this
+path. The saved disposition is an audit copy, never an authorization input. Stale identities,
+head/report/item digests, missing original or current items, changed original proof/stop lineage,
+and changed dispositions fail closed. A changed disposition invalidates earlier sandbox evidence.
+The owner updates the admission through the existing serialized controller workflow, never from the
+reviewer's report. These bindings prove coverage and provenance; the authorized owning session is
+responsible for judging the meaning of the evidence.
 
 `lifecycle_repo` is an absolute, controller-owned host checkout of the existing worktree lifecycle
 registry, outside every model workspace; it must expose the candidate's actual registered worktree,
@@ -579,8 +610,12 @@ runtime readback. The recorded #6618 exception is worker `w-6618`, stopped and r
 port in 18700–18799 and a per-worker session key in the controller-only `control/` directory.
 Conversation history is kept in the worker's persistent home. `conversation-start --engine
 claude-code|codex [--model M]` creates the conversation through upstream `agent_settings`
-(`acp_server`, `acp_model`), tagged with epic, Issue and worker. The default is Claude Code with
-`claude-sonnet-5-5`; Codex accepts only `gpt-6.1-terra`, and Astra is refused. The conversation id
+(`acp_server`, `acp_model`), tagged with epic, Issue and worker. For the current #6615 operating
+choice, use `--engine codex --model gpt-6.1-terra` explicitly for coordination, implementation,
+diagnosis and review. The temporary Claude-first quota priority ended on 2026-11-14; a Claude reset
+does not by itself change this choice. This is not permanent vendor policy. The existing source CLI
+still defaults to Claude Code with `claude-sonnet-5-5` when `--engine` is omitted, so do not omit it
+for this operation. Codex accepts only `gpt-6.1-terra`, and Astra is refused. The conversation id
 is recorded before the request. A lost response is reconciled by reading that id and is never
 retried as a create. In this source candidate, `conversation-status` reads the newest bounded
 upstream event page (default 50) and classifies only the latest `ConversationErrorEvent` as
@@ -713,7 +748,7 @@ is installed and verified, these commands run from outside any worker:
 Claude Code authenticates with a subscription token from `claude setup-token`. The token is stored
 as `CLAUDE_CODE_OAUTH_TOKEN` in `~ygg/.config/epic-workspace/claude.env` (mode 0600, outside the
 workspace root) and passed with `--env-file` (`openhands-start --claude-env-file`). Upstream OpenHands
-lets this token take precedence and strips `ANTHROPIC_API_KEY`. The Terra reserve uses one ChatGPT
+lets this token take precedence and strips `ANTHROPIC_API_KEY`. Codex uses one ChatGPT
 subscription login in `~ygg/.config/epic-workspace/codex`, created once by the owner with
 `ssh -t bob-1-builder-system '~/epic-sandbox/runner/current/config/builderops/epic-workspace/codex-device-login.sh'`.
 `openhands-start --codex-home` mounts it at `/run/codex-home` for one worker at a time, because

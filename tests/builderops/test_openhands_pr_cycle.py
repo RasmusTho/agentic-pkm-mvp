@@ -8,6 +8,7 @@ from app.builderops import epic_run_state, epic_workspace as ew
 from app.builderops import openhands_pr_cycle as cycle
 from tests.builderops.test_epic_workspace_openhands import FakeAgentServer
 from tests.builderops.test_epic_workspace_isolation import FakeEngine, _seed_repo
+from tests.builderops.openhands_disposition_test_support import digest, synthetic_disposition, synthetic_reservation
 
 
 HEAD = "a" * 40
@@ -143,6 +144,7 @@ def test_finished_review_runs_sandbox_and_ci_but_does_not_infer_merge_authority(
         **CONFORMING, "identity": record["identity"], "head_sha": HEAD, "verdict": "pass", "findings": [],
         "verify_targets": config[0]["verify_targets"]})}]
     server.final_responses[cid] = server.events[0]["detail"]
+    config[0]["review_disposition"] = synthetic_disposition(json.loads(server.final_responses[cid]))
     calls = []
     def stop(layout, worker, **kwargs):
         calls.append("stop")
@@ -497,6 +499,7 @@ def test_assembled_nonclosing_review_verify_merge_and_receipt(tmp_path, monkeypa
         "scope_assessment": {"acceptance": "covered", "verify_coverage": "covered", "limitations": []},
         "owner_doc": {"outcome": "no_change", "inspected_paths": ["docs/owner.md"], "rationale": "unchanged"}})}]
     server.final_responses[cid] = server.events[0]["detail"]
+    config[0]["review_disposition"] = synthetic_disposition(json.loads(server.final_responses[cid]))
     monkeypatch.setattr(ew, "stop_worker", fake_completed_review_stop)
     monkeypatch.setattr(cycle, "sandbox_verify", lambda layout, worker, head, targets, test_venv, saved:
                         {"head_sha": head, "targets": targets, "passed": True})
@@ -623,7 +626,8 @@ def test_assembled_closing_fallback_reconciles_lost_merge_and_checks_each_criter
     expected = cycle.report_expectations(layout, config[0], {"head_sha": HEAD, "review_material": material},
                                          record["identity"])
     assert cycle.review_gate(partial, expected)["outcome"] == "reconcile_report"
-    assert cycle.review_gate(review, expected)["outcome"] == "pass"
+    config[0]["review_disposition"] = synthetic_disposition(review)
+    assert cycle.review_gate(review, expected, disposition=config[0]["review_disposition"])["outcome"] == "pass"
     result = cycle.advance(layout, config, fetch=fetch, http=server)
     assert result["results"][1]["action"] == "wait"
     assert effects == ["merge", "readback-lost"]
@@ -1840,6 +1844,9 @@ def test_multiissue_merge_refuses_closing_child_hold_and_final_label_drift(tmp_p
              "execution_proof": {"operation_id": "op", "engine": "codex", "model": "gpt-6.1-terra", "auth": "chatgpt",
                  "source": "native-session-metadata", "native_session_id": "native", "effort": "high", "timestamp": "now", "conversation_id": "cid"},
              "verification": {"passed": True, "head_sha": HEAD, "targets": entry["verify_targets"]}}
+    entry["review_disposition"] = synthetic_disposition(review)
+    saved["verification"]["disposition_sha256"] = digest(entry["review_disposition"])
+    synthetic_reservation(layout, 10, identity, "op")
     authority = {"number": 10, "head_sha": HEAD, "body": pr["body"], "title": "", "closing_issues": [6618],
                  "governing_issue": 6617, "governing_issue_hashes": ISSUE_HASHES, "owner": {}}
     monkeypatch.setattr(cycle, "native_authority", lambda *args: dict(authority))

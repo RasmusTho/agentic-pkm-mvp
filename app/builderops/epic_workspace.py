@@ -2830,7 +2830,7 @@ def _allocate_port(runner: Runner) -> int:
 
 
 def _validate_codex_home(path: Path | None, layout: Layout, runner: Runner) -> list[tuple[str, str]]:
-    """The Terra reserve's single ChatGPT login directory. One mounting worker at a time, because
+    """The Codex ChatGPT login directory. One mounting worker at a time, because
     refresh tokens rotate and divergent copies would invalidate each other."""
 
     if path is None:
@@ -3222,7 +3222,7 @@ def _parser() -> argparse.ArgumentParser:
     o.add_argument("--memory", default="1536m")
     o.add_argument("--pids", type=int, default=512)
     o.add_argument("--claude-env-file", help="file holding CLAUDE_CODE_OAUTH_TOKEN (mode 0600, outside the root)")
-    o.add_argument("--codex-home", help="Terra reserve ChatGPT login directory (mode 0700, outside the root)")
+    o.add_argument("--codex-home", help="Codex ChatGPT login directory (mode 0700, outside the root)")
     cs = sub.add_parser("conversation-start", help="start an OpenHands conversation with the selected engine/model")
     cs.add_argument("--worker", required=True)
     cs.add_argument("--engine", default="claude-code", choices=sorted(ENGINE_DEFAULT_MODELS))
