@@ -306,6 +306,10 @@ partial. A code-formatted fragment does not make visible retention intent
 outside its container narrative; incomplete or malformed assembled intent
 still refuses retirement. Separate receipts and historical delivery statements
 retain their own source boundaries.
+Empty GFM table headers may be omitted by Markdown parsing; source mapping skips
+only blank rows within the same token extent and still requires exact source
+text for every mapped line. Narrative tables therefore do not block retirement,
+while explicit reservations beside them remain protected.
 
 
 ## Rescue-backed serial maintenance policy

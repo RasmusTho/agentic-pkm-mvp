@@ -7126,6 +7126,57 @@ def test_local_retirement_ignores_narrative_binding_words(
     assert result["deleted"] == 1
 
 
+@pytest.mark.parametrize("suffix, retained", [
+    ("", False),
+    ("Preserved worktree: /tmp/old; branch: old; base HEAD: {sha}", True),
+    ("`Preserved worktree: /tmp/old; branch: old; base HEAD: {sha}`", False),
+    ("Dedicated worktree /tmp/old is still dirty on branch old at head invalid", None),
+])
+def test_local_retirement_maps_empty_gfm_header_to_original_source(
+    tmp_path, monkeypatch, suffix, retained,
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    body = (
+        "| | |\n"
+        "| --- | --- |\n"
+        "| Result | `passed` |\n\n"
+        + suffix.format(sha=sha)
+    )
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-2143",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 2143,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({"comments": [{"body": body}]}),
+            },
+        }
+    ])
+
+    def retire():
+        return git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard only inactive work after table source mapping",
+        )
+
+    if retained is None:
+        with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+            retire()
+        assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+        return
+
+    result = retire()
+
+    assert result["deleted"] == (0 if retained else 1)
+    assert git_hygiene.run_git_result(
+        ["show-ref", "--verify", "--quiet", ref], repo
+    ).returncode == (0 if retained else 1)
+
+
 def test_local_retirement_ignores_completed_dedicated_worktree_lifecycle_prose(
     tmp_path, monkeypatch
 ):
