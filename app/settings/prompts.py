@@ -40,7 +40,13 @@ def validate_canonical_prompts(vault_root: Path | None = None) -> list[str]:
     errors: list[str] = []
     for prompt_path in sorted(prompts_dir.glob("*.md")):
         try:
-            if not _markdown_body(prompt_path.read_text(encoding="utf-8")):
+            text = prompt_path.read_text(encoding="utf-8")
+            try:
+                body = _markdown_body(text)
+            except ValueError:
+                errors.append(f"{prompt_path.name}: prompt front matter is unclosed")
+                continue
+            if not body:
                 errors.append(f"{prompt_path.name}: prompt body is empty")
         except OSError as exc:
             errors.append(f"{prompt_path.name}: {exc}")
