@@ -59,6 +59,13 @@ def owner_disposition(report, pending=None):
             "assessment": "Synthetic owner checked the entire report and its closing obligations.", "items": rows}
 
 
+def known_legacy_report():
+    """Legacy item classifications with a supported, explicit owner-doc outcome."""
+    report = copy.deepcopy(prior.ACTUAL)
+    report["owner_doc"] = copy.deepcopy(prior.reconciled()["owner_doc"])
+    return report
+
+
 def case(tmp_path, monkeypatch):
     layout, config, server = setup(tmp_path, monkeypatch)
     config[0].update(engine="codex", model="gpt-6.1-terra", verify_targets=list(prior.ACTUAL["verify_targets"]))
@@ -93,7 +100,7 @@ def case(tmp_path, monkeypatch):
 
 
 def finish_original_and_retry(layout, config, server, identity, cid, monkeypatch, original=None):
-    original = prior._finish(server, cid, identity, original or prior.ACTUAL)
+    original = prior._finish(server, cid, identity, original if original is not None else known_legacy_report())
     cycle.advance(layout, config, fetch=fetch, http=server)
     pending = copy.deepcopy(cycle._find(layout, 10, identity)["report_reconciliations"][0])
     prior._restart_reviewer(layout, monkeypatch, "e" * 64)
@@ -209,7 +216,7 @@ def test_owning_session_can_explicitly_dispose_of_safe_deleted_item(tmp_path, mo
     assert effects == ["merge", "comment", "comment"]
 
 
-def test_actual_report_p3_progresses_only_after_bound_owner_disposition(tmp_path, monkeypatch):
+def test_known_legacy_p3_progresses_only_after_bound_owner_disposition(tmp_path, monkeypatch):
     layout, config, server, identity, cid, calls = case(tmp_path, monkeypatch)
     original, pending, cid2 = finish_original_and_retry(layout, config, server, identity, cid, monkeypatch)
     successor = prior._finish(server, cid2, identity, prior.reconciled())
@@ -318,7 +325,7 @@ def test_changed_disposition_cannot_authorize_later_effects(tmp_path, monkeypatc
 
 
 def make_bound_reports():
-    original = {**copy.deepcopy(prior.ACTUAL), "identity": "identity", "head_sha": HEAD}
+    original = {**known_legacy_report(), "identity": "identity", "head_sha": HEAD}
     current = prior.reconciled(original)
     archive = {"review": original, "review_operation": "old-op", "execution_proof": {
         "operation_id": "old-op", "conversation_id": "old-conversation", "container_id": "d" * 64,

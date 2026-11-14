@@ -2008,7 +2008,72 @@ def review_gate(review: Any, expected: Mapping[str, Any] | None = None, *,
     return gate
 
 
+def _explicit_review_blockers(review: Any) -> list[str]:
+    """Collect known negative outcomes even when neighboring report fields are malformed."""
+    if not isinstance(review, dict):
+        return []
+    blocking: list[str] = []
+    findings = review.get("findings")
+    if isinstance(findings, list):
+        for index, item in enumerate(findings):
+            if not isinstance(item, dict):
+                continue
+            severity, protected = item.get("severity"), item.get("protected_class")
+            if severity in ("P0", "P1"):
+                blocking.append(f"finding {index}: {severity}")
+            elif severity == "P2":
+                blocking.append(f"finding {index}: P2 without verified Known Defects disposition")
+            if isinstance(protected, str) and protected in PROTECTED_CLASSES:
+                blocking.append(f"finding {index}: protected {protected} blocks regardless of severity")
+            if severity == "P3" and item.get("category") in DEFECT_CATEGORIES:
+                blocking.append(f"finding {index}: P3 cannot carry defect category {item['category']}")
+
+    def limits(value: Any, where: str) -> None:
+        if isinstance(value, list):
+            for row in value:
+                kind = row.get("kind") if isinstance(row, dict) else None
+                if isinstance(kind, str) and kind in LIMITATION_KINDS and LIMITATION_KINDS[kind][0]:
+                    blocking.append(f"{where}: {kind} limitation")
+
+    owner_doc = review.get("owner_doc")
+    if isinstance(owner_doc, dict) and owner_doc.get("outcome") == "required_missing":
+        blocking.append("owner_doc: required owner-doc update is missing")
+    scope = review.get("scope_assessment")
+    if isinstance(scope, dict):
+        limits(scope.get("limitations"), "scope")
+    children = review.get("closing_assessments")
+    if isinstance(children, dict):
+        for number, child in children.items():
+            if not isinstance(child, dict):
+                continue
+            where = f"closing #{number}"
+            rows = child.get("criteria")
+            if ("incomplete" in (child.get("acceptance"), child.get("verify_coverage"))
+                    or (isinstance(rows, dict) and any(isinstance(row, dict) and row.get("assessment") == "incomplete"
+                                                       for row in rows.values()))):
+                blocking.append(f"{where}: acceptance or Verify assessment is incomplete")
+            limits(child.get("limitations"), where)
+    return blocking
+
+
 def _review_gate(review: Any, expected: Mapping[str, Any] | None) -> dict[str, Any]:
+    # Do this before grammar validation, which may fail or skip malformed siblings.
+    blocking = _explicit_review_blockers(review)
+    try:
+        gate = _review_gate_grammar(review, expected)
+    except (TypeError, AttributeError, KeyError, ValueError):
+        gate = {"outcome": "reconcile_report", "contract": None, "blocking": [],
+                "grammar": ["report has wrong-typed fields"], "informational": []}
+    gate["blocking"] = list(dict.fromkeys(blocking + gate["blocking"]))
+    bound_elsewhere = (expected is not None and isinstance(review, dict)
+                       and any(review.get(key) != expected.get(key)
+                               for key in ("identity", "head_sha", "verify_targets")))
+    if gate["blocking"] and not bound_elsewhere:
+        gate["outcome"] = "changes_requested"
+    return gate
+
+
+def _review_gate_grammar(review: Any, expected: Mapping[str, Any] | None) -> dict[str, Any]:
     """Derive the severity-policy gate from an immutable public report.
 
     ``pass`` lets the report reach sandbox verification, current-head CI and the live premerge checks.
@@ -2079,6 +2144,8 @@ def _review_gate(review: Any, expected: Mapping[str, Any] | None) -> dict[str, A
     if not isinstance(scope, dict) or not all(_text(scope.get(k)) for k in ("acceptance", "verify_coverage")):
         grammar.append("scope_assessment needs acceptance and verify_coverage")
     else:
+        if set(scope) != {"acceptance", "verify_coverage", "limitations"}:
+            grammar.append("scope_assessment has unknown or missing fields")
         _limitations(scope.get("limitations"), contract, "scope", grammar, blocking, informational)
     sources = review.get("covered_sources")
     if not isinstance(sources, list) or not all(isinstance(x, str) for x in sources) or sources != sorted(sources):
@@ -2086,6 +2153,10 @@ def _review_gate(review: Any, expected: Mapping[str, Any] | None) -> dict[str, A
     owner_doc = review.get("owner_doc")
     owner_doc = owner_doc if isinstance(owner_doc, dict) else {}
     paths, outcome = owner_doc.get("inspected_paths"), owner_doc.get("outcome")
+    if set(owner_doc) - {"outcome", "inspected_paths", "rationale", "updates"}:
+        grammar.append("owner_doc has unknown fields")
+    if outcome != "already_updated" and "updates" in owner_doc:
+        grammar.append("owner_doc updates require the already_updated outcome")
     if (not isinstance(paths, list) or not paths or not all(_text(x) for x in paths)
             or outcome not in OWNER_DOC_OUTCOMES or not _text(owner_doc.get("rationale"))):
         grammar.append("owner_doc needs a known outcome, inspected_paths and rationale")
@@ -2108,8 +2179,10 @@ def _review_gate(review: Any, expected: Mapping[str, Any] | None) -> dict[str, A
         where = f"closing #{number}"
         rows = child.get("criteria") if isinstance(child, dict) else None
         if (not isinstance(child, dict) or not isinstance(rows, dict)
+                or set(child) != {"acceptance", "verify_coverage", "criteria", "limitations"}
                 or any(child.get(k) not in ("covered", "incomplete") for k in ("acceptance", "verify_coverage"))
-                or any(not isinstance(row, dict) or row.get("assessment") not in ("covered", "incomplete")
+                or any(not isinstance(row, dict) or set(row) != {"assessment", "rationale"}
+                       or row.get("assessment") not in ("covered", "incomplete")
                        or not _text(row.get("rationale")) for row in rows.values())):
             grammar.append(f"{where}: assessment is malformed")
             continue
@@ -2139,6 +2212,42 @@ def _report_items(report: Mapping[str, Any]) -> dict[tuple[str, int], Any]:
     if any(not isinstance(rows, list) for rows in collections.values()):
         raise ValueError("original limitations cannot be enumerated")
     return {(where, index): item for where, rows in collections.items() for index, item in enumerate(rows)}
+
+
+def _archived_material_error(prior: Mapping[str, Any], current: Mapping[str, Any],
+                             expected: Mapping[str, Any] | None) -> str | None:
+    """Refuse to turn unknown or explicitly negative original obligations into a retry pass."""
+    gate = _review_gate(prior, expected)
+    if gate["blocking"]:
+        return "original review has a protected or incomplete obligation: " + "; ".join(gate["blocking"])
+    if prior.get("verdict") not in ("pass", "findings"):
+        return "original review has an unknown verdict"
+    # Legacy unclassified items have their own exact owner disposition. A mismatched verdict
+    # also leaves those items visible. Other grammar errors leave required material unknown.
+    for reason in gate["grammar"]:
+        if (reason == "verdict and findings disagree"
+                or reason.endswith(": legacy finding lacks an explicit protected classification")
+                or reason.endswith(": legacy limitations are unclassified")):
+            continue
+        return "original review has unsupported or missing required material: " + reason
+    scope, owner, children = prior.get("scope_assessment"), prior.get("owner_doc"), prior.get("closing_assessments", {})
+    if (not isinstance(scope, dict) or set(scope) != {"acceptance", "verify_coverage", "limitations"}
+            or not isinstance(owner, dict) or set(owner) - {"outcome", "inspected_paths", "rationale", "updates"}
+            or not isinstance(children, dict)):
+        return "original review contains unknown or missing assessment material"
+    current_children = current.get("closing_assessments", {})
+    if not isinstance(current_children, dict) or set(children) != set(current_children):
+        return "original closing assessments do not match the closing scope"
+    for number, child in children.items():
+        successor = current_children.get(number)
+        if (not isinstance(child, dict) or set(child) != {"acceptance", "verify_coverage", "criteria", "limitations"}
+                or not isinstance(child.get("criteria"), dict) or not isinstance(successor, dict)
+                or not isinstance(successor.get("criteria"), dict)
+                or set(child["criteria"]) != set(successor["criteria"])
+                or any(not isinstance(row, dict) or set(row) != {"assessment", "rationale"}
+                       for row in child["criteria"].values())):
+            return "original closing assessment contains unknown or missing required material"
+    return None
 
 
 def _original_item_may_be_nonblocking(where: str, item: Any) -> bool:
@@ -2191,6 +2300,7 @@ def _disposition_error(review: Mapping[str, Any], expected: Mapping[str, Any] | 
     """Validate exact per-item owner adoption and, on retry, the complete original lineage."""
     current = _report_items(review)
     original: dict[tuple[str, int], Any] = {}
+    prior_material: Mapping[str, Any] | None = None
     original_digest = original_attempt_digest = None
     identity = expected.get("identity") if expected is not None else review.get("identity")
     head = expected.get("head_sha") if expected is not None else review.get("head_sha")
@@ -2238,6 +2348,7 @@ def _disposition_error(review: Mapping[str, Any], expected: Mapping[str, Any] | 
         if (reconciliation.get("original_attempt_sha256") is not None
                 and reconciliation["original_attempt_sha256"] != original_attempt_digest):
             return "original review proof or stop archive changed"
+        prior_material = prior
         original = _report_items(prior)
     if (not isinstance(disposition, dict) or set(disposition) !=
             {"identity", "head_sha", "report_sha256", "original_report_sha256", "original_attempt_sha256",
@@ -2250,6 +2361,10 @@ def _disposition_error(review: Mapping[str, Any], expected: Mapping[str, Any] | 
             or not _disposition_reason(disposition.get("assessment"))
             or not isinstance(disposition.get("items"), list)):
         return "owner disposition is missing or bound to different review evidence"
+    if prior_material is not None:
+        material_error = _archived_material_error(prior_material, review, expected)
+        if material_error:
+            return material_error
     seen: set[tuple[str, str, int]] = set()
     for row in disposition["items"]:
         if (not isinstance(row, dict) or not {"report", "where", "index", "sha256", "decision", "rationale"} <= set(row)
@@ -2955,11 +3070,25 @@ def _validate_admission(value: Any) -> dict[int, dict[str, Any]]:
     return admitted
 
 
-def advance(layout: workspace.Layout, admissions: list[dict[str, Any]], *,
+def _read_admissions(layout: workspace.Layout, path: Path) -> Any:
+    """Read controller-owned file authority while the advancement lock is held."""
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022
+            or workspace._is_within(path, layout.root.resolve() / f"epic-{layout.epic}" / "workers")):
+        raise CycleError("admission configuration must be controller-owned and outside worker directories")
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise CycleError("invalid configuration")
+    return config.get("admissions", [])
+
+
+def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *,
             fetch: observation.Fetch = github_fetch,
             http: Callable[..., tuple[int, Any]] = workspace._http) -> dict[str, Any]:
-    admitted = _validate_admission(admissions)
+    """Advance with direct admissions, or read a controller-owned file under the cycle lock."""
     with _single_advancement(layout):
+        admitted = _validate_admission(_read_admissions(layout, admissions) if isinstance(admissions, Path)
+                                       else admissions)
         state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
         if state["epic_issue_number"] != layout.epic:
             raise CycleError("epic owner mismatch")
@@ -3259,6 +3388,12 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                     saved.pop("disposition_request", None)
             else:
                 saved.pop("disposition_request", None)
+            if (gate["outcome"] == "changes_requested"
+                    or (isinstance(saved.get("verification"), dict)
+                        and saved["verification"].get("disposition_sha256") != gate.get("disposition_sha256")
+                        and gate["outcome"] == "pass")):
+                saved.pop("verification", None)
+                saved.pop("ci", None)
             if saved.get("review_gate") != gate:
                 saved["review_gate"] = gate
             _save(layout, saved)
@@ -3278,10 +3413,6 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                     saved["review_disposition"] = authority  # audit copy, never an authority input
                 else:
                     saved.pop("review_disposition", None)
-                if (isinstance(saved.get("verification"), dict)
-                        and saved["verification"].get("disposition_sha256") != gate.get("disposition_sha256")):
-                    saved.pop("verification", None)
-                    saved.pop("ci", None)
                 _save(layout, saved)
                 if "verification" not in saved:
                     verification = sandbox_verify(layout, entry["worker"], pr["head_sha"],
@@ -3361,15 +3492,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--config", required=True, help="controller-owned JSON admission file")
     args = parser.parse_args(argv)
     try:
-        path = Path(args.config)
-        info = path.lstat()
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022
-                or workspace._is_within(path, Path(args.root).resolve() / f"epic-{args.epic}" / "workers")):
-            raise CycleError("admission configuration must be controller-owned and outside worker directories")
-        config = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(config, dict):
-            raise CycleError("invalid configuration")
-        result = advance(workspace.Layout(Path(args.root).resolve(), args.epic), config.get("admissions", []))
+        result = advance(workspace.Layout(Path(args.root).resolve(), args.epic), Path(args.config))
     except (OSError, ValueError, CycleError, workspace.EpicWorkspaceError) as exc:
         print(json.dumps({"error": type(exc).__name__, "detail": str(exc)}), file=sys.stderr)
         return 2

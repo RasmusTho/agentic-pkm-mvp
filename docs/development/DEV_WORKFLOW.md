@@ -319,7 +319,13 @@ one trial entry names `number`, exact `head_sha`, dedicated pre-existing `worker
 `lifecycle_repo`, and explicit pytest
 `verify_targets`, and `test_venv`, an absolute host path to a secret-free test environment. The
 controller configuration must be owned by the controller and protected from other writers. The
-venv path and its contents must satisfy the ownership, mode, symlink and credential-shaped filename
+CLI passes the configuration path into the cycle; the cycle reads and validates the file only after
+acquiring its existing per-epic `.pr-cycle.lock`, and holds that lock throughout the advancement.
+The trusted owning workflow must hold the same lock for the entire admission read, update and atomic
+replacement, including disposition revocation. A busy lock requires a later retry. Programmatic
+callers with file-backed admissions must pass the `Path` to `advance`, not an earlier file snapshot;
+the existing list argument is for admissions supplied directly by the caller.
+The venv path and its contents must satisfy the ownership, mode, symlink and credential-shaped filename
 preflight; that filename check cannot prove arbitrary file contents are secret-free. It must be a
 controller-owned path outside the configured model workspace root (`--root`) and must not be that root
 or one of its ancestors: a venv in a worker checkout or home could fake passing tests, and an
@@ -363,15 +369,21 @@ A truly informational P3 with a supported nonblocking disposition proceeds to sa
 current-head CI and the guarded merge gate; the saved report is kept verbatim.
 P0/P1, any protected finding at any severity, a P3 with a defect category, P2 without a verified
 Known Defects disposition, gaps and incomplete assessments all wait for the owning workflow. A legacy
-or non-conforming report is never edited and never passed. The original report, proof and stop move
-verbatim into the record's `report_reconciliations` history, and one retry of the same identity is
-reserved. Once the reviewer runs again through the existing takeover/start lifecycle, that retry
+or non-conforming report is never edited and never passed. When it has no known blocker, the original
+report, proof and stop move verbatim into the record's `report_reconciliations` history, and one retry
+of the same identity is reserved. Once the reviewer runs again through the existing takeover/start lifecycle, that retry
 starts one new OpenHands conversation, which re-expresses the earlier analysis under the grammar. A
 second non-conforming report waits with an explicit owning-workflow repair reason. A legacy report
 with no findings, no limitations and a known owner-doc outcome still needs the owning session's
-assessment of the whole report. The native metadata reader connects the exact retained OpenHands
-conversation and live ACP session to that
-session's bounded Codex or Claude log, retaining only model, effort, timestamps and session identities.
+assessment of the whole report. Explicit protected findings, gap limitations, incomplete closing
+assessments and a required-missing owner doc are detected even when adjacent fields are malformed.
+An already archived original is checked for those blockers and for complete, understood required
+assessment material before a retry can pass. Unsupported or missing original material waits for
+the owning workflow; a generic disposition cannot erase it. Historical reports and their proofs
+remain unchanged, and arbitrary malformed legacy reports are not automatically converted. A later
+review at a repaired identity can proceed through the existing workflow. The native metadata reader
+connects the exact retained OpenHands conversation and live ACP session to that session's bounded
+Codex or Claude log, retaining only model, effort, timestamps and session identities.
 It requires the observed model to match the selected model; a Codex effort must be `high` or stronger
 (`xhigh`, `max`, `ultra`) and equal the API-selected `current_effort`. A session keeps one effort; a
 supported escalation starts a new conversation rather than changing effort mid-task. These are

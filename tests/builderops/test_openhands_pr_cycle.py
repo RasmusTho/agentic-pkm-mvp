@@ -234,11 +234,11 @@ def test_assembled_cli_requires_controller_owned_config(tmp_path, monkeypatch, c
     config = tmp_path / "admission.json"
     config.write_text(json.dumps({"admissions": []}))
     config.chmod(0o600)
-    seen = []
-    monkeypatch.setattr(cycle, "advance", lambda layout, admissions: seen.append((layout, admissions)) or
-                        {"inventory_complete": True, "failures": [], "results": []})
+    layout = ew.Layout(tmp_path, 6615)
+    epic_run_state.create_epic_run_state(6615, layout.run_id, root=layout.run_state_dir)
+    monkeypatch.setattr(cycle.observation, "collect", lambda fetch: {"inventory_complete": True, "failures": [],
+                                                                    "observations": []})
     assert cycle.main(["--once", "--root", str(tmp_path), "--epic", "6615", "--config", str(config)]) == 0
-    assert seen[0][0] == ew.Layout(tmp_path, 6615)
     assert json.loads(capsys.readouterr().out)["results"] == []
     config.chmod(0o666)
     assert cycle.main(["--once", "--root", str(tmp_path), "--epic", "6615", "--config", str(config)]) == 2

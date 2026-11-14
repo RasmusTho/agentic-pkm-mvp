@@ -179,7 +179,7 @@ def _merge_ports(layout, monkeypatch, identity):
     return effects
 
 
-def test_f1_actual_record_reconciles_once_then_reaches_guarded_merge_and_readback(tmp_path, monkeypatch):
+def test_f1_actual_record_retains_unknown_original_and_waits_after_one_retry(tmp_path, monkeypatch):
     layout, config, server, identity, cid, calls = _cycle(tmp_path, monkeypatch)
     original = _parked_by_9fa8(layout, config, server, identity, cid, monkeypatch)
     parked = cycle._find(layout, 10, identity)
@@ -214,17 +214,16 @@ def test_f1_actual_record_reconciles_once_then_reaches_guarded_merge_and_readbac
 
     effects = _merge_ports(layout, monkeypatch, identity)
     result = cycle.advance(layout, config, fetch=fetch, http=server)
-    assert result["results"][1]["action"] == "merged", result
-    assert calls == ["stop", "stop", "sandbox", "ci", "ci"]  # review-stage CI, then the premerge CI gate
-    assert effects == ["merge", "comment", "comment"]
+    assert result["results"][1]["action"] == "wait", result
+    assert calls == ["stop", "stop"] and effects == []
     saved = cycle._find(layout, 10, identity)
-    assert saved["review"] == report and saved["review_gate"]["outcome"] == "pass"
-    assert saved["reconciled"] is True and saved["merged_sha"] == "b" * 40
+    assert saved["review"] == report and saved["review_gate"]["outcome"] == "changes_requested"
+    assert "original review has unsupported or missing required material" in saved["review_gate"]["blocking"][0]
+    assert "verification" not in saved and "merge_intent" not in saved
     assert saved["stop_intent"]["previous_stop_id"] == stop1["stop_id"]
     assert saved["report_reconciliations"][0]["archived"]["review"] == original  # still verbatim
-    assert "owner docs updated in this PR: docs/development/DEV_WORKFLOW.md" in saved["merge_intent"]["owner_doc_receipt"]
     cycle.advance(layout, config, fetch=fetch, http=server)
-    assert effects == ["merge", "comment", "comment"] and len(_posts(server)) == 2
+    assert effects == [] and len(_posts(server)) == 2
 
 
 def test_f1_genuine_gap_from_reconciliation_stays_blocking(tmp_path, monkeypatch):
