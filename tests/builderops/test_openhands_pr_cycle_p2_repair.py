@@ -8,7 +8,7 @@ from app.builderops import epic_workspace as ew
 from app.builderops import openhands_pr_cycle as cycle
 from scripts import agent_worktree
 from tests.builderops.test_openhands_pr_cycle import (
-    HEAD, _event_time, _handoff, _native_authority_fixture, _prepare_and_pin, fake_completed_review_stop, fetch, setup,
+    CONFORMING, HEAD, _event_time, _handoff, _native_authority_fixture, _prepare_and_pin, fake_completed_review_stop, fetch, setup,
 )
 from tests.builderops.test_openhands_transfer_registration import _pickup
 from tests.ops.test_agent_worktree import GENERATION
@@ -399,8 +399,8 @@ def test_advance_retries_interrupted_verification_after_reconciliation(tmp_path,
     conversation = state["issue_mappings"]["6618"]["conversation"]["id"]
     identity = next(row["identity"] for row in state["compact_receipts"] if row.get("kind") == "pr_cycle")
     server.conversations[conversation]["execution_status"] = "finished"
-    response = json.dumps({"identity": identity, "head_sha": HEAD, "verdict": "pass", "findings": [],
-                           "verify_targets": config[0]["verify_targets"], "owner_doc": {"paths": []}})
+    response = json.dumps({**CONFORMING, "identity": identity, "head_sha": HEAD, "verdict": "pass", "findings": [],
+                           "verify_targets": config[0]["verify_targets"]})
     server.events = [{"kind": "MessageEvent", "source": "agent", "detail": response}]
     server.final_responses[conversation] = response
     monkeypatch.setattr(ew, "stop_worker", fake_completed_review_stop)
@@ -587,7 +587,8 @@ def test_same_head_changed_contract_can_review_while_old_merge_is_fenced(tmp_pat
 def test_same_head_new_identity_still_cannot_repeat_unknown_merge(tmp_path, monkeypatch):
     layout, config, server = setup(tmp_path, monkeypatch)
     saved = {"kind": "pr_cycle", "number": 10, "identity": "new-identity", "review_operation": "op",
-             "review": {"verdict": "pass", "findings": []}, "public_report_conversation": "conversation",
+             "review": {**CONFORMING, "identity": "new-identity", "head_sha": HEAD, "verdict": "pass", "findings": [],
+                        "verify_targets": config[0]["verify_targets"]}, "public_report_conversation": "conversation",
              "execution_proof": {"operation_id": "op", "conversation_id": "conversation"},
              "verification": {"passed": True}}
     monkeypatch.setattr(cycle, "_find", lambda *args: saved)

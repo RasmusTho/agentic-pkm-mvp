@@ -339,11 +339,28 @@ every closing child; any other parent or child hold still stops the cycle.
 That container mounts the configured host venv read-only at `/opt/pr-cycle-venv` and refuses to run tests
 when its in-container interpreter and pytest preflight fails. The source includes guarded native
 merge and PR-specific post-merge continuation. Review evidence binds the observed diff, exact closing
-contracts and check configuration; every closing criterion needs a review assessment. A `findings`
-report whose only findings are well-formed, unprotected P3 items with covered acceptance, Verify,
-source and owner-doc assessments proceeds to sandbox verification, current-head CI and the guarded
-merge gate; the saved report is kept verbatim with its P3 items. P0/P1, P2 without a verified Known
-Defects disposition, and malformed, unknown or protected-category findings still wait. The native
+contracts and check configuration; every closing criterion needs a review assessment. The review
+prompt states report grammar `pr_cycle_report.v2`, and `review_gate` validates the review stage and
+premerge against the same tables in `openhands_pr_cycle.py`. Each finding carries an explicit
+`protected_class` from the severity-routing protected list, or `none`. Each limitation has a `kind`:
+informational kinds (for example `ci_not_observed`, because current-head CI is enforced separately)
+proceed, and gap kinds (uncovered acceptance, Verify, owner doc, source or evidence) block.
+`owner_doc.outcome` is `no_change`, `already_updated` with exact `updates`, or the blocking
+`required_missing`. The gate also compares identity, head, Verify targets, `covered_sources` and
+the closing criterion hashes with the reviewer's own material, using the files-API path list that
+premerge re-reads. A coverage error is therefore caught before sandbox verification. A finished
+conversation's malformed answer counts as a terminal report, and an unreadable answer is kept as its
+digest plus at most 64 KiB of text.
+A report whose only findings are unprotected advisory P3 items proceeds to sandbox
+verification, current-head CI and the guarded merge gate, and the saved report is kept verbatim.
+P0/P1, any protected finding at any severity, a P3 with a defect category, P2 without a verified
+Known Defects disposition, gaps and incomplete assessments all wait for the owning workflow. A legacy
+or non-conforming report is never edited and never passed. The original report, proof and stop move
+verbatim into the record's `report_reconciliations` history, and one retry of the same identity is
+reserved. Once the reviewer runs again through the existing takeover/start lifecycle, that retry
+starts one new OpenHands conversation, which re-expresses the earlier analysis under the grammar. A
+second non-conforming report waits with an explicit owning-workflow repair reason. A legacy report
+with no findings, no limitations and a known owner-doc outcome needs no classification. The native
 metadata reader connects the exact retained OpenHands conversation and live ACP session to that
 session's bounded Codex or Claude log, retaining only model, effort, timestamps and session identities.
 It requires the observed model to match the selected model; a Codex effort must be `high` or stronger

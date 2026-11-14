@@ -13,6 +13,12 @@ from tests.builderops.test_epic_workspace_isolation import FakeEngine, _seed_rep
 HEAD = "a" * 40
 REAL_TEST_VENV_SOURCE = cycle._test_venv_source
 REAL_VENV_MINOR = cycle._venv_python_minor
+# Well-formed report fields for tests whose subject is not the report grammar itself.
+CONFORMING = {"report_contract": cycle.REPORT_CONTRACT, "covered_sources": ["app/example.py"],
+              "scope_assessment": {"acceptance": "covered", "verify_coverage": "covered", "limitations": []},
+              "owner_doc": {"outcome": "no_change", "inspected_paths": ["docs/owner.md"], "rationale": "unchanged"}}
+BLOCKING_FINDING = {"severity": "P1", "category": "correctness", "protected_class": "none", "summary": "repair",
+                    "file": "app/example.py", "line": 1, "failure_scenario": "repair"}
 ISSUE_HASHES = {"title_sha256": cycle.hashlib.sha256(b"issue title").hexdigest(),
                 "body_sha256": cycle.hashlib.sha256(b"issue").hexdigest()}
 
@@ -32,6 +38,11 @@ def bind_worker_endpoint(layout, monkeypatch, cid):
     monkeypatch.setattr(cycle, "_worker_runner", engine)
 
 
+def review_material(paths=("app/example.py",), issues=None):
+    """The reviewer's material as _review_context supplies it: the textual diff and closing contracts."""
+    return {"diff": "".join(f"diff --git a/{p} b/{p}\n" for p in paths), "issues": issues or {}, "paths": sorted(paths)}
+
+
 def setup(tmp_path, monkeypatch):
     layout = ew.Layout(tmp_path, 6615)
     epic_run_state.create_epic_run_state(6615, layout.run_id, root=layout.run_state_dir)
@@ -45,7 +56,7 @@ def setup(tmp_path, monkeypatch):
                         {"operation_id": op, "conversation_id": cycle._mapping(layout, worker)["conversation"]["id"],
                          "container_id": cycle._mapping(layout, worker)["container_id"]})
     monkeypatch.setattr(ew, "inspect_checkout", lambda _layout, _worker: {"readable": True, "head": HEAD, "uncommitted_count": 0})
-    monkeypatch.setattr(cycle, "_review_context", lambda pr: ({"files_digest": "test", "closing_issue_hashes": {}, "check_config_digest": "test"}, {"files": [], "issues": {}}))
+    monkeypatch.setattr(cycle, "_review_context", lambda pr: ({"files_digest": "test", "closing_issue_hashes": {}, "check_config_digest": "test"}, review_material()))
     monkeypatch.setattr(cycle, "_test_venv_source", lambda layout, value: cycle.Path(value))
     monkeypatch.setattr(cycle, "_venv_python_minor", lambda source: 13)
     config = [{"test_venv": "/approved/venv", "number": 10, "head_sha": HEAD, "worker": "reviewer", "engine": "codex",
@@ -129,8 +140,8 @@ def test_finished_review_runs_sandbox_and_ci_but_does_not_infer_merge_authority(
     cid = conversation["id"]
     server.conversations[cid]["execution_status"] = "finished"
     server.events = [{"kind": "MessageEvent", "source": "agent", "detail": json.dumps({
-        "identity": record["identity"], "head_sha": HEAD, "verdict": "pass", "findings": [],
-        "verify_targets": config[0]["verify_targets"], "owner_doc": {"paths": []}})}]
+        **CONFORMING, "identity": record["identity"], "head_sha": HEAD, "verdict": "pass", "findings": [],
+        "verify_targets": config[0]["verify_targets"]})}]
     server.final_responses[cid] = server.events[0]["detail"]
     calls = []
     def stop(layout, worker, **kwargs):
@@ -159,7 +170,7 @@ def test_review_finding_releases_reviewer_but_does_not_run_checks(tmp_path, monk
     identity = next(r["identity"] for r in state["compact_receipts"] if r.get("kind") == "pr_cycle")
     server.conversations[cid]["execution_status"] = "finished"
     server.events = [{"kind": "MessageEvent", "source": "agent", "detail": json.dumps({
-        "identity": identity, "head_sha": HEAD, "verdict": "findings", "findings": ["repair"],
+        "identity": identity, "head_sha": HEAD, "verdict": "findings", "findings": [BLOCKING_FINDING],
         "verify_targets": config[0]["verify_targets"], "owner_doc": {"paths": []}})}]
     server.final_responses[cid] = server.events[0]["detail"]
     stopped = []
@@ -543,7 +554,8 @@ def test_assembled_closing_fallback_reconciles_lost_merge_and_checks_each_criter
     record = next(r for r in state["compact_receipts"] if r.get("kind") == "pr_cycle")
     cid = state["issue_mappings"]["6618"]["conversation"]["id"]
     server.conversations[cid]["execution_status"] = "finished"
-    assessment = {criteria[0]["criterion_sha256"]: {"assessment": "covered", "rationale": "first path checked"}}
+    assessment = {criteria[0]["criterion_sha256"]: {"assessment": "covered", "rationale": "first path checked"},
+                  criteria[1]["criterion_sha256"]: {"assessment": "covered", "rationale": "second path checked"}}
     review = {"identity": record["identity"], "head_sha": HEAD, "verdict": "pass", "findings": [],
               "verify_targets": config[0]["verify_targets"], "covered_sources": ["app/example.py"],
               "scope_assessment": {"acceptance": "covered", "verify_coverage": "covered", "limitations": []},
@@ -602,12 +614,16 @@ def test_assembled_closing_fallback_reconciles_lost_merge_and_checks_each_criter
         issue["state"] = "closed"
         raise cycle.CycleError("lost response")
     monkeypatch.setattr(cycle, "_command", lost_merge)
-    first = cycle.advance(layout, config, fetch=fetch, http=server)
-    assert "acceptance" in first["results"][1]["reason"] and effects == []
-    saved = cycle._find(layout, 10, record["identity"])
-    saved["review"]["closing_assessments"]["6618"]["criteria"][criteria[1]["criterion_sha256"]] = {
-        "assessment": "covered", "rationale": "second path checked"}
-    cycle._save(layout, saved)
+    material = review_material(issues={"6618": {"body": issue_body}})
+    monkeypatch.setattr(cycle, "_review_context", lambda pr: (
+        {"files_digest": "test", "closing_issue_hashes": {}, "check_config_digest": "test"}, material))
+    # Every exact criterion must be assessed; a partial report is reconciled before any check runs.
+    partial = json.loads(json.dumps(review))
+    partial["closing_assessments"]["6618"]["criteria"].pop(criteria[1]["criterion_sha256"])
+    expected = cycle.report_expectations(layout, config[0], {"head_sha": HEAD, "review_material": material},
+                                         record["identity"])
+    assert cycle.review_gate(partial, expected)["outcome"] == "reconcile_report"
+    assert cycle.review_gate(review, expected)["outcome"] == "pass"
     result = cycle.advance(layout, config, fetch=fetch, http=server)
     assert result["results"][1]["action"] == "wait"
     assert effects == ["merge", "readback-lost"]
@@ -912,6 +928,7 @@ def test_review_context_reads_diff_contract_and_check_rules(monkeypatch):
     pr = {"number": 10, "head_sha": HEAD, "body": "Governing-Issue: #1\nFixes #2"}
     before, material = cycle._review_context(pr)
     assert material["issues"]["2"]["body"] == data["child"]
+    assert material["paths"] == ["app/a.py"]  # the files API names, not parsed diff headers
     data["base"] = "2" * 40
     assert cycle._review_context(pr)[0] == before
     data["patch"] = "-old\n+different"
@@ -1131,7 +1148,7 @@ def test_public_finish_drives_production_review_for_both_engines(tmp_path, monke
         {"kind": "MessageEvent", "source": "agent", "llm_message": {"content": [{"text": "Public progress"}]}},
         {"kind": "ActionEvent", "source": "agent", "tool_name": "finish",
          "action": {"kind": "FinishAction", "message": "public finish"}}]
-    report = {"identity": record["identity"], "head_sha": HEAD, "verdict": "findings", "findings": ["repair"],
+    report = {"identity": record["identity"], "head_sha": HEAD, "verdict": "findings", "findings": [BLOCKING_FINDING],
               "verify_targets": entry["verify_targets"], "owner_doc": {"paths": []}}
     public = json.dumps(report)
     invalid = ["", "not json", "x" * 65537, public + "\n" + public,
@@ -1147,10 +1164,12 @@ def test_public_finish_drives_production_review_for_both_engines(tmp_path, monke
         stopped.append(worker)
         fake_completed_review_stop(layout, worker, **kwargs)
     monkeypatch.setattr(ew, "stop_worker", stop)
+    expected = {"identity": record["identity"], "head_sha": HEAD, "verify_targets": entry["verify_targets"],
+                "sources": ["app/example.py"], "criteria": {}}
     for text in invalid:
-        server.final_responses[cid] = text
-        cycle.advance(layout, config, fetch=fetch, http=server)
-        assert stopped == []
+        parsed = cycle._public_report(text)
+        # A finished conversation's malformed answer is a terminal report for the bounded reconciliation.
+        assert parsed is None or cycle.review_gate(parsed, expected)["outcome"] != "pass"
     server.final_responses[cid] = public
     server.conversations[cid]["id"] = "different-conversation"
     cycle.advance(layout, config, fetch=fetch, http=server)
@@ -1210,7 +1229,7 @@ def test_findings_unknown_stop_reconciles_absence_and_releases_actual_capacity_g
     record = next(row for row in state["compact_receipts"] if row.get("kind") == "pr_cycle")
     cid = state["issue_mappings"]["6618"]["conversation"]["id"]
     server.conversations[cid]["execution_status"] = "finished"
-    report = {"identity": record["identity"], "head_sha": HEAD, "verdict": "findings", "findings": ["repair"],
+    report = {"identity": record["identity"], "head_sha": HEAD, "verdict": "findings", "findings": [BLOCKING_FINDING],
               "verify_targets": config[0]["verify_targets"], "owner_doc": {"paths": []}}
     server.final_responses[cid] = json.dumps(report)
     first = cycle.advance(layout, config, fetch=fetch, http=server)
@@ -1808,9 +1827,11 @@ def test_multiissue_merge_refuses_closing_child_hold_and_final_label_drift(tmp_p
     assert pr is not None
     pr.update(route="native", check_config={"verify_targets": entry["verify_targets"], "test_venv": entry["test_venv"]})
     pr["review_context"], _ = cycle._review_context(pr)
+    pr["review_material"] = review_material(issues={"6618": {"body": issue_body}})
     identity = cycle.completion.work_identity(pr)
     owner_doc = {"outcome": "no_change", "inspected_paths": ["docs/owner.md"], "rationale": "unchanged"}
-    review = {"verdict": "pass", "findings": [], "covered_sources": ["app/example.py"], "owner_doc": owner_doc,
+    review = {"identity": identity, "head_sha": HEAD, "verify_targets": entry["verify_targets"],
+              "verdict": "pass", "findings": [], "covered_sources": ["app/example.py"], "owner_doc": owner_doc,
               "scope_assessment": {"acceptance": "covered", "verify_coverage": "covered", "limitations": []},
               "closing_assessments": {"6618": {"acceptance": "covered", "verify_coverage": "covered", "limitations": [],
                  "criteria": {criteria[0]["criterion_sha256"]: {"assessment": "covered", "rationale": "path reviewed"}}}}}

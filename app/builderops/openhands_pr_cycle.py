@@ -1803,7 +1803,9 @@ def _review_context(pr: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, An
     context = {"files_digest": _digest(files), "diff_digest": hashlib.sha256(diff.stdout.encode()).hexdigest(),
                "closing_issue_hashes": {k: v["hashes"] for k, v in issues.items()},
                "check_config_digest": _digest({"tree": config, "protection": protection, "rules": rules})}
-    return context, {"diff": diff.stdout, "issues": issues}
+    # Changed paths come from the same files API that premerge re-reads, never from diff headers.
+    changed = sorted(str(row["filename"]) for row in files)
+    return context, {"diff": diff.stdout, "issues": issues, "paths": changed}
 
 
 def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, Any],
@@ -1861,27 +1863,169 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
     pr["review_material"]["transfer_to_current"] = material
 
 
-_FINDING_FIELDS = {"severity", "category", "summary", "file", "line", "failure_scenario", "suggested_fix"}
-# Protected classes from verification-and-closure FULL_PATH :: Severity routing must be P0/P1, never P3.
-_PROTECTED_CATEGORY = re.compile(
-    r"acceptance|verif|criteri|contract|closure|merge|false.?green|receipt|\bci\b|secret|credential|auth"
-    r"|security|vault|data.?loss|corrupt|migration|durab|concurren|race|multi.?writer|irreversib"
-    r"|side.?effect|integrity|protected|inconclusive|unknown|blocking", re.I)
+# Explicit review-report grammar. The prompt is rendered from these tables and review_gate validates
+# against the same tables, so producer and consumer cannot drift. A report without report_contract is
+# the legacy v1 shape; it is accepted only when it has nothing to classify.
+REPORT_CONTRACT = "pr_cycle_report.v2"
+# Protected classes from verification-and-closure FULL_PATH :: Severity routing. They block at any severity.
+PROTECTED_CLASSES = {
+    "data_integrity": "data loss or corruption",
+    "authority_integrity": "source, vault or authority-integrity violation",
+    "secret_or_auth": "secret, authentication or authorization failure",
+    "migration_durability": "migration durability failure",
+    "concurrency": "concurrency or multi-writer safety failure",
+    "unauthorized_effect": "irreversible or external side effect without the required authority",
+    "false_green": "false-green CI, receipt, merge or closure evidence",
+    "contract_failure": "failed governing acceptance criterion, Verify target, contract or closure gate",
+    "inconclusive": "evidence cannot distinguish a protected failure from a lesser defect",
+}
+# P3 is non-defect advice only; a defect category with P3 severity is inconsistent and blocks.
+ADVISORY_CATEGORIES = ("documentation", "maintainability", "naming", "readability", "style", "suggestion",
+                       "test_quality")
+DEFECT_CATEGORIES = ("correctness", "performance", "robustness")
+# Informational limitations name a check the reviewer did not perform whose outcome is enforced
+# elsewhere or lies outside the closing contract. Gaps are uncovered obligations and always block.
+LIMITATION_KINDS = {
+    "ci_not_observed": (False, "current-head CI was not observed; the cycle requires it before merge"),
+    "simulated_boundary": (False, "tests replace external ports; the Verify targets still run in the sandbox"),
+    "evidence_not_rerun": (False, "cited evidence was read, not re-executed; every criterion is still assessed"),
+    "out_of_scope_followup": (False, "an obligation owned by another open Issue that this PR does not close"),
+    "operator_note": (False, "an operating or upgrade note that is not a defect"),
+    "acceptance_gap": (True, "an acceptance criterion is not covered by the implementation"),
+    "verify_gap": (True, "a Verify obligation is not covered by executed tests"),
+    "owner_doc_gap": (True, "a required owner-doc update is missing or wrong"),
+    "source_gap": (True, "a changed source path was not examined"),
+    "evidence_gap": (True, "evidence is insufficient to assess an obligation"),
+}
+OWNER_DOC_OUTCOMES = {"no_change": False, "already_updated": False, "required_missing": True}
+_FINDING_REQUIRED = {"severity", "category", "protected_class", "summary", "file", "line", "failure_scenario"}
+_UPDATE_PATH = re.compile(r"[A-Za-z0-9_./-]{1,300}")
+_UPDATE_CLAIM = re.compile(r"[A-Za-z0-9 ,.;:/()_-]{1,300}")
 
 
-def review_gate(review: Any) -> dict[str, Any]:
+def _text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= 4000
+
+
+def report_grammar() -> str:
+    """The exact report grammar given to every reviewer; review_gate enforces the same tables."""
+    kinds = "; ".join(f"{k} ({'blocking gap' if b else 'informational'}: {d})" for k, (b, d) in LIMITATION_KINDS.items())
+    protected = "; ".join(f"{k} ({d})" for k, d in PROTECTED_CLASSES.items())
+    return (f"Report grammar {REPORT_CONTRACT}. Include report_contract set to {REPORT_CONTRACT}, identity, head_sha, "
+            "verdict (pass exactly when findings is empty, otherwise findings), findings (array of objects with "
+            "exactly severity P0, P1, P2 or P3, category, protected_class, summary, file, line (integer >= 1), "
+            "failure_scenario and optional suggested_fix). protected_class is one of: "
+            f"{protected}; or none. Any protected finding blocks merge and must be P0 or P1. P3 is only for "
+            f"non-defect advice and its category is one of {', '.join(ADVISORY_CATEGORIES)}; a defect uses "
+            f"{', '.join(DEFECT_CATEGORIES)} or an advisory category with P0, P1 or P2. P2 waits for the owning "
+            "workflow's Known Defects disposition. Put defects in findings, never in limitations. "
+            "verify_targets (array of exact targets reviewed), covered_sources (sorted array of every changed "
+            "app/, scripts/ or tests/ path examined), scope_assessment (acceptance, verify_coverage, limitations), "
+            "owner_doc (outcome, inspected_paths, rationale, and updates when outcome is already_updated), "
+            "closing_assessments keyed by exact Issue number, each with acceptance and verify_coverage "
+            "(covered or incomplete), limitations, and criteria keyed by SHA-256 of the exact criterion text, "
+            "each with assessment (covered or incomplete) and substantive rationale. Every limitations array "
+            f"holds objects with exactly kind and detail; kind is one of: {kinds}. Use an empty array when there "
+            "is no limitation. owner_doc.outcome is no_change (no owner-doc change is implied), already_updated "
+            "(this PR updates owner docs; updates lists objects with exactly path, a changed and inspected owner-doc "
+            "path, and claim, at most 300 characters of letters, digits, spaces and ,.;:/()_-) or "
+            "required_missing (a required owner-doc update is absent; this blocks).")
+
+
+def _limitations(value: Any, contract: str, where: str, grammar: list[str], blocking: list[str],
+                 informational: list[dict[str, Any]]) -> None:
+    if not isinstance(value, list):
+        grammar.append(f"{where}: limitations must be an array")
+    elif value and contract != REPORT_CONTRACT:
+        grammar.append(f"{where}: legacy limitations are unclassified")
+    else:
+        for index, row in enumerate(value):
+            if (not isinstance(row, dict) or set(row) != {"kind", "detail"} or row.get("kind") not in LIMITATION_KINDS
+                    or not _text(row.get("detail"))):
+                grammar.append(f"{where}: limitation {index} is malformed or of unknown kind")
+            elif LIMITATION_KINDS[row["kind"]][0]:
+                blocking.append(f"{where}: {row['kind']} limitation")
+            else:
+                informational.append({"where": where, "limitation": index, "kind": row["kind"]})
+
+
+_REPORT_FIELDS = {"report_contract", "identity", "head_sha", "verdict", "findings", "verify_targets", "owner_doc",
+                  "covered_sources", "scope_assessment", "closing_assessments"}
+
+
+def report_expectations(layout: workspace.Layout, entry: Mapping[str, Any], pr: Mapping[str, Any],
+                        identity: str) -> dict[str, Any]:
+    """What a report for this exact identity must cover, from the material its reviewer was given."""
+    material = pr.get("review_material")
+    if (not isinstance(material, dict) or not isinstance(material.get("issues"), dict)
+            or not isinstance(material.get("paths"), list) or not material["paths"]
+            or not all(isinstance(p, str) and p for p in material["paths"])):
+        raise CycleError("review material is unavailable")
+    paths = set(material["paths"])
+    criteria = {}
+    for number, issue in material["issues"].items():
+        rows = closure._acceptance_criteria(issue.get("body") if isinstance(issue, dict) else None,
+                                            repo_root=layout.checkout(entry["worker"]))
+        targets = [t.strip("`") for row in rows for t in row["verify_targets"]]
+        if any(not any(t == actual or t.startswith(actual + "::") for actual in entry["verify_targets"])
+               for t in targets):
+            # An admission defect, not a report defect: say so before any sandbox or CI run.
+            raise CycleError("closing Issue Verify targets are not covered by the admitted Verify targets")
+        criteria[str(number)] = sorted(row["criterion_sha256"] for row in rows)
+    return {"identity": identity, "head_sha": pr["head_sha"], "verify_targets": list(entry["verify_targets"]),
+            "paths": sorted(paths), "sources": sorted(p for p in paths if p.startswith(("app/", "scripts/", "tests/"))),
+            "criteria": criteria}
+
+
+def review_gate(review: Any, expected: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Derive the severity-policy gate; see ``_review_gate``. A wrong-typed report reconciles."""
+    try:
+        return _review_gate(review, expected)
+    except (TypeError, AttributeError, KeyError, ValueError):
+        return {"outcome": "reconcile_report", "contract": None, "blocking": [],
+                "grammar": ["report has wrong-typed fields"], "informational": []}
+
+
+def _review_gate(review: Any, expected: Mapping[str, Any] | None) -> dict[str, Any]:
     """Derive the severity-policy gate from an immutable public report.
 
-    P3 is informational only when well formed, unprotected and backed by covered assessments.
-    Any P0/P1, P2 without a canonical Known Defects disposition, or malformed/unknown finding blocks.
+    ``pass`` lets the report reach sandbox verification, current-head CI and the live premerge checks.
+    ``changes_requested`` is a genuine blocker: P0/P1, P2 without a verified disposition, a protected or
+    inconsistently labelled finding, a gap limitation, an incomplete assessment or a missing owner doc.
+    ``reconcile_report`` means the report does not follow the grammar; it is corrected once per
+    contract through a bounded OpenHands reconciliation, never by editing the saved report.
     """
-    if not isinstance(review, dict) or review.get("verdict") not in ("pass", "findings"):
-        return {"outcome": "changes_requested", "blocking": ["malformed report"], "informational": []}
-    findings = review.get("findings")
-    if not isinstance(findings, list) or (review["verdict"] == "pass") != (findings == []):
-        return {"outcome": "changes_requested", "blocking": ["verdict and findings disagree"], "informational": []}
+    grammar: list[str] = []
     blocking: list[str] = []
     informational: list[dict[str, Any]] = []
+    if not isinstance(review, dict):
+        return {"outcome": "reconcile_report", "contract": None, "blocking": [], "grammar": ["report is not an object"],
+                "informational": []}
+    contract = review.get("report_contract", "legacy")
+    if contract not in (REPORT_CONTRACT, "legacy"):
+        grammar.append("unknown report_contract")
+    if not set(review) <= _REPORT_FIELDS:
+        grammar.append("unknown report fields: " + ", ".join(sorted(map(str, set(review) - _REPORT_FIELDS))))
+    binding: list[str] = []
+    if expected is not None:
+        binding = [f"{key} does not match this review" for key in ("identity", "head_sha", "verify_targets")
+                   if review.get(key) != expected[key]]
+        grammar.extend(binding)
+        if review.get("covered_sources") != expected["sources"]:
+            grammar.append("covered_sources differ from the changed source paths")
+        children = review.get("closing_assessments", {})
+        children = children if isinstance(children, dict) else {}
+        if sorted(children) != sorted(expected["criteria"]):
+            grammar.append("closing_assessments do not match the closing Issues")
+        grammar.extend(f"closing #{number}: criteria keys do not match the exact criteria"
+                       for number, hashes in sorted(expected["criteria"].items())
+                       if isinstance(children.get(number), dict) and isinstance(children[number].get("criteria"), dict)
+                       and sorted(children[number]["criteria"]) != hashes)
+    findings = review.get("findings")
+    if (review.get("verdict") not in ("pass", "findings") or not isinstance(findings, list)
+            or (review["verdict"] == "pass") != (findings == [])):
+        grammar.append("verdict and findings disagree")
+        findings = findings if isinstance(findings, list) else []
     for index, item in enumerate(findings):
         severity = item.get("severity") if isinstance(item, dict) else None
         if severity in ("P0", "P1"):
@@ -1889,26 +2033,71 @@ def review_gate(review: Any) -> dict[str, Any]:
         elif severity == "P2":
             # No verified registry disposition is readable here; the owning workflow keeps it.
             blocking.append(f"finding {index}: P2 without verified Known Defects disposition")
-        elif (severity != "P3" or not set(item) <= _FINDING_FIELDS
-              or not all(isinstance(item.get(k), str) and item[k].strip() for k in ("category", "summary", "file"))
-              or not isinstance(item.get("line"), int) or isinstance(item.get("line"), bool) or item["line"] < 1
-              or _PROTECTED_CATEGORY.search(item["category"])):
-            blocking.append(f"finding {index}: malformed, unknown or protected")
-        else:
+        if contract != REPORT_CONTRACT:
+            if severity not in ("P0", "P1", "P2"):
+                grammar.append(f"finding {index}: legacy finding lacks an explicit protected classification")
+            continue
+        protected = item.get("protected_class") if isinstance(item, dict) else None
+        if (not isinstance(item, dict) or not _FINDING_REQUIRED <= set(item) <= _FINDING_REQUIRED | {"suggested_fix"}
+                or severity not in ("P0", "P1", "P2", "P3")
+                or item.get("category") not in ADVISORY_CATEGORIES + DEFECT_CATEGORIES
+                or (protected != "none" and protected not in PROTECTED_CLASSES)
+                or not all(_text(item.get(k)) for k in ("summary", "file", "failure_scenario"))
+                or ("suggested_fix" in item and not isinstance(item["suggested_fix"], str))
+                or type(item.get("line")) is not int or item["line"] < 1):
+            grammar.append(f"finding {index}: malformed or unknown classification")
+        elif protected != "none":
+            blocking.append(f"finding {index}: protected {protected} blocks regardless of severity")
+        elif severity == "P3" and item["category"] not in ADVISORY_CATEGORIES:
+            blocking.append(f"finding {index}: P3 cannot carry defect category {item['category']}")
+        elif severity == "P3":
             informational.append({"index": index, "severity": "P3", "category": item["category"],
                                   "file": item["file"], "line": item["line"]})
-    if informational and not blocking:
-        scope, owner_doc = review.get("scope_assessment"), review.get("owner_doc")
-        children = review.get("closing_assessments", {})
-        if (not isinstance(scope, dict)
-                or not all(isinstance(scope.get(k), str) and scope[k].strip() for k in ("acceptance", "verify_coverage"))
-                or not isinstance(owner_doc, dict) or not isinstance(owner_doc.get("inspected_paths"), list)
-                or not owner_doc["inspected_paths"] or not isinstance(review.get("covered_sources"), list)
-                or not isinstance(children, dict)
-                or any(not isinstance(child, dict) or child.get("acceptance") != "covered"
-                       or child.get("verify_coverage") != "covered" for child in children.values())):
-            blocking.append("informational findings lack covered acceptance, Verify, source or owner-doc evidence")
-    return {"outcome": "changes_requested" if blocking else "pass", "blocking": blocking,
+    scope = review.get("scope_assessment")
+    if not isinstance(scope, dict) or not all(_text(scope.get(k)) for k in ("acceptance", "verify_coverage")):
+        grammar.append("scope_assessment needs acceptance and verify_coverage")
+    else:
+        _limitations(scope.get("limitations"), contract, "scope", grammar, blocking, informational)
+    sources = review.get("covered_sources")
+    if not isinstance(sources, list) or not all(isinstance(x, str) for x in sources) or sources != sorted(sources):
+        grammar.append("covered_sources must be a sorted array of paths")
+    owner_doc = review.get("owner_doc")
+    owner_doc = owner_doc if isinstance(owner_doc, dict) else {}
+    paths, outcome = owner_doc.get("inspected_paths"), owner_doc.get("outcome")
+    if (not isinstance(paths, list) or not paths or not all(_text(x) for x in paths)
+            or outcome not in OWNER_DOC_OUTCOMES or not _text(owner_doc.get("rationale"))):
+        grammar.append("owner_doc needs a known outcome, inspected_paths and rationale")
+    elif OWNER_DOC_OUTCOMES[outcome]:
+        blocking.append("owner_doc: required owner-doc update is missing")
+    elif outcome == "already_updated":
+        updates = owner_doc.get("updates")
+        if (not isinstance(updates, list) or not updates
+                or any(not isinstance(x, dict) or set(x) != {"path", "claim"} or not isinstance(x.get("path"), str)
+                       or not _UPDATE_PATH.fullmatch(x["path"]) or x["path"] not in paths
+                       or (expected is not None and x["path"] not in expected["paths"])
+                       or not isinstance(x.get("claim"), str) or not _UPDATE_CLAIM.fullmatch(x["claim"])
+                       for x in updates)):
+            grammar.append("owner_doc already_updated needs exact inspected update paths and claims")
+    children = review.get("closing_assessments", {})
+    if not isinstance(children, dict):
+        grammar.append("closing_assessments must be an object")
+        children = {}
+    for number, child in sorted(children.items()):
+        where = f"closing #{number}"
+        rows = child.get("criteria") if isinstance(child, dict) else None
+        if (not isinstance(child, dict) or not isinstance(rows, dict)
+                or any(child.get(k) not in ("covered", "incomplete") for k in ("acceptance", "verify_coverage"))
+                or any(not isinstance(row, dict) or row.get("assessment") not in ("covered", "incomplete")
+                       or not _text(row.get("rationale")) for row in rows.values())):
+            grammar.append(f"{where}: assessment is malformed")
+            continue
+        if "incomplete" in (child["acceptance"], child["verify_coverage"]) or any(
+                row["assessment"] == "incomplete" for row in rows.values()):
+            blocking.append(f"{where}: acceptance or Verify assessment is incomplete")
+        _limitations(child.get("limitations"), contract, where, grammar, blocking, informational)
+    # Findings in a report bound to other content are not evidence about this review.
+    outcome = "reconcile_report" if binding else "changes_requested" if blocking else "reconcile_report" if grammar else "pass"
+    return {"outcome": outcome, "contract": contract, "blocking": blocking, "grammar": grammar,
             "informational": informational}
 
 
@@ -1925,20 +2114,15 @@ def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, 
             or saved["conversation_provenance"].get("reviewer") != proof.get("conversation_id")
             or (entry["engine"] == "codex" and proof.get("effort") not in ("high", "xhigh", "max", "ultra"))
             or not isinstance(review, dict)
-            or review_gate(review)["outcome"] != "pass"
             or not isinstance(tests, dict) or tests.get("passed") is not True
             or tests.get("head_sha") != pr["head_sha"] or tests.get("targets") != entry["verify_targets"]):
         raise CycleError("review execution or sandbox verification is incomplete")
-    owner_doc = review.get("owner_doc")
-    assessment = review.get("scope_assessment")
-    if (not isinstance(assessment, dict) or not isinstance(assessment.get("acceptance"), str)
-            or not assessment["acceptance"].strip() or not isinstance(assessment.get("verify_coverage"), str)
-            or not assessment["verify_coverage"].strip() or assessment.get("limitations") != []):
-        raise CycleError("independent scope and Verify coverage assessment is incomplete")
-    if (not isinstance(owner_doc, dict) or owner_doc.get("outcome") not in ("no_change", "already_updated")
-            or not isinstance(owner_doc.get("inspected_paths"), list) or not owner_doc["inspected_paths"]
-            or not isinstance(owner_doc.get("rationale"), str) or not owner_doc["rationale"].strip()):
-        raise CycleError("owner-doc assessment requires governed continuation")
+    # The same gate as the review stage: report grammar, limitations and owner-doc vocabulary are
+    # validated once there; only live PR, Issue and CI evidence is checked below.
+    gate = review_gate(review, report_expectations(layout, entry, pr, saved["identity"]))
+    if gate["outcome"] != "pass":
+        raise CycleError(f"review report gate is {gate['outcome']}: " + "; ".join(gate["blocking"] or gate["grammar"]))
+    owner_doc = review["owner_doc"]
     fresh = observation._observe(observation._Reader(github_fetch, time.monotonic), int(pr["number"]))
     if fresh is None:
         raise CycleError("PR is no longer open")
@@ -1957,12 +2141,8 @@ def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, 
         raise CycleError("independent review does not cover the exact changed source paths")
     doc_receipt = f"post-merge owner-doc check: PR #{pr['number']}; no owner-doc change implied."
     if owner_doc["outcome"] == "already_updated":
-        updates = owner_doc.get("updates")
-        if (not isinstance(updates, list) or not updates or any(not isinstance(x, dict)
-                or x.get("path") not in paths or not isinstance(x.get("path"), str)
-                or not re.fullmatch(r"[A-Za-z0-9_./-]{1,300}", x["path"])
-                or not isinstance(x.get("claim"), str)
-                or not re.fullmatch(r"[A-Za-z0-9 ,.;:/()_-]{1,300}", x["claim"]) for x in updates)):
+        updates = owner_doc["updates"]
+        if any(x["path"] not in paths for x in updates):
             raise CycleError("owner-doc changes lack exact updated paths and claims")
         doc_receipt = (f"post-merge owner-doc check: PR #{pr['number']}; owner docs updated in this PR: "
                        + "; ".join(f"{x['path']} ({x['claim']})" for x in updates) + ".")
@@ -2018,7 +2198,9 @@ def _assert_child_assessment(review: Mapping[str, Any], number: int, criteria: l
     rows = child.get("criteria") if isinstance(child, dict) else None
     hashes = {criterion["criterion_sha256"] for criterion in criteria}
     if (not isinstance(child, dict) or child.get("acceptance") != "covered"
-            or child.get("verify_coverage") != "covered" or child.get("limitations") != []
+            or child.get("verify_coverage") != "covered" or not isinstance(child.get("limitations"), list)
+            or any(not isinstance(x, dict) or x.get("kind") not in LIMITATION_KINDS or LIMITATION_KINDS[x["kind"]][0]
+                   for x in child["limitations"])
             or not isinstance(rows, dict) or set(rows) != hashes or not hashes
             or any(not isinstance(row, dict) or row.get("assessment") != "covered"
                    or not isinstance(row.get("rationale"), str) or not row["rationale"].strip()
@@ -2425,15 +2607,7 @@ def _review_prompt(pr: Mapping[str, Any], identity: str, targets: list[str]) -> 
             "obligations or harmful reverts against the contract; judge intended fixes and refactors on their merits. "
             "Do not write or publish. In your final public response put one JSON "
             "object between <BEGIN_PR_CYCLE_REPORT> and <END_PR_CYCLE_REPORT>. Public closeout text may precede "
-            "the delimiter, but do not put other JSON objects there. Include identity, head_sha, "
-            "verdict (pass or findings), findings (array of objects with severity P0, P1, P2 or P3, category, "
-            "summary, file, line, failure_scenario and suggested_fix), "
-            "verify_targets (array of exact targets reviewed), covered_sources (sorted array of every changed "
-            "app/, scripts/ or tests/ path examined), scope_assessment (acceptance, verify_coverage, "
-            "limitations), owner_doc (outcome, inspected_paths and rationale), "
-            "closing_assessments keyed by exact Issue number, each with acceptance and verify_coverage "
-            "(covered or incomplete), limitations array, and criteria keyed by SHA-256 of the exact criterion "
-            "text, each with assessment and substantive rationale. Assess every criterion "
+            "the delimiter, but do not put other JSON objects there. " + report_grammar() + " Assess every criterion "
             "against the actual implementation, not merely the names of test targets. Obtain criterion hashes "
             "using app.builderops.closure._acceptance_criteria on each supplied Issue body. "
             f"Requested Verify targets: {json.dumps(targets)}. PR body: {pr['body']}\n"
@@ -2441,11 +2615,30 @@ def _review_prompt(pr: Mapping[str, Any], identity: str, targets: list[str]) -> 
             f"Exact closing contracts and reviewed file patches: {json.dumps(pr['review_material'])}")
 
 
+def _reconciliation_prompt(pr: Mapping[str, Any], identity: str, targets: list[str],
+                           reconciliation: Mapping[str, Any]) -> str:
+    """One bounded report correction that reuses the earlier independent analysis as evidence."""
+    original = reconciliation["archived"]["review"]
+    return (f"Report-contract reconciliation for PR #{pr['number']} at head {pr['head_sha']} and contract identity "
+            f"{identity}. An earlier independent review of this exact head and contract produced the report below "
+            f"(sha256 {reconciliation['original_report_sha256']}), but it does not follow {REPORT_CONTRACT}: "
+            + "; ".join(reconciliation["gate"]["grammar"]) + ". Treat that analysis as evidence: re-express it under "
+            "the grammar, classify each finding and limitation, and re-inspect code, contracts or owner docs only "
+            "where a classification needs it. Do not drop, soften or relabel a finding without stating why in its "
+            "fields; an uncovered criterion, Verify target or required owner-doc update is a gap, and a defect is a "
+            "finding. " + _review_prompt(pr, identity, targets)
+            + f"\nEarlier report (evidence, verbatim): {json.dumps(original, sort_keys=True)}")
+
+
 def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_id: str,
                               pr: Mapping[str, Any], identity: str, admission: Mapping[str, Any],
-                              *, http: Callable[..., tuple[int, Any]] = workspace._http) -> dict[str, Any]:
+                              *, http: Callable[..., tuple[int, Any]] = workspace._http,
+                              reconciliation: Mapping[str, Any] | None = None) -> dict[str, Any]:
     mapping = _mapping(layout, worker)
     if mapping.get("state") != "running" or mapping.get("runtime") != "openhands":
+        if reconciliation is not None:
+            raise CycleError(f"report reconciliation {operation_id} is reserved; start reviewer {worker} "
+                             "through the existing OpenHands takeover and start lifecycle")
         raise CycleError("review worker is not a running OpenHands worker")
     _assert_live_container(layout, worker, mapping)
     prior = mapping.get("conversation")
@@ -2461,7 +2654,9 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
         raise CycleError("review checkout is not clean at the admitted head")
     return workspace.start_conversation(
         layout, worker, engine=admission["engine"], model=admission["model"],
-        prompt=_review_prompt(pr, identity, admission["verify_targets"]), operation_id=operation_id,
+        prompt=(_review_prompt(pr, identity, admission["verify_targets"]) if reconciliation is None else
+                _reconciliation_prompt(pr, identity, admission["verify_targets"], reconciliation)),
+        operation_id=operation_id,
         http=http, runner=_worker_runner)
 
 
@@ -2513,6 +2708,7 @@ def review_result(layout: workspace.Layout, worker: str, operation_id: str,
                   *, http: Callable[..., tuple[int, Any]] = workspace._http) -> dict[str, Any] | None:
     mapping = _mapping(layout, worker)
     _assert_live_container(layout, worker, mapping)
+    text = None
     try:
         state = workspace._load_state(layout)
         issue = workspace._issue_for_worker(state, worker)
@@ -2531,19 +2727,19 @@ def review_result(layout: workspace.Layout, worker: str, operation_id: str,
                     or info.get("execution_status") not in ("finished", "FINISHED")):
                 return None
             code, final = http("GET", port, key, f"/conversations/{cid}/agent_final_response", None, 10.0)
-            result = _public_report(final.get("response") if code == 200 and isinstance(final, dict) else None)
+            text = final.get("response") if code == 200 and isinstance(final, dict) else None
+            result = _public_report(text)
     except (OSError, ValueError, RecursionError, workspace.EpicWorkspaceError):
         return None
-    allowed = {"identity", "head_sha", "verdict", "findings", "verify_targets", "owner_doc",
-               "covered_sources", "scope_assessment", "closing_assessments"}
-    if (not isinstance(result, dict) or not set(result) <= allowed
-            or result.get("identity") != identity or result.get("head_sha") != pr["head_sha"]
-            or result.get("verdict") not in ("pass", "findings") or not isinstance(result.get("findings"), list)
-            or result.get("verify_targets") != admission["verify_targets"]
-            or not isinstance(result.get("owner_doc"), dict)
-            or (result["verdict"] == "pass" and result["findings"])
-            or (result["verdict"] == "findings" and not result["findings"])):
+    if result is None:
+        # A finished, bound conversation whose public answer is not one bounded report is terminal.
+        # Its digest stands in for it, and review_gate routes it to the bounded reconciliation.
+        if isinstance(text, str) and text.strip():
+            return {"unreadable_report_sha256": hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(),
+                    "unreadable_report_text": text[:65536]}
         return None
+    # The conversation binds the report to this operation; review_gate classifies every report field,
+    # including identity, head and Verify targets, so a defective report is reconciled, not ignored.
     # A model's own account of its execution is not a runtime authentication receipt.
     # The controller must independently prove the executing engine before qualification.
     return result
@@ -2744,6 +2940,38 @@ def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, An
         saved.update(verified)
 
 
+# One review attempt's fields. A report reconciliation moves them verbatim into history.
+_REVIEW_ATTEMPT_FIELDS = ("review_operation", "review", "public_report_conversation", "conversation_provenance",
+                          "execution_proof", "stop_intent", "stop_verified", "review_gate", "verification", "ci")
+
+
+def _reconciliation(saved: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The one report reconciliation recorded for the current report contract, if any."""
+    rows = saved.get("report_reconciliations", [])
+    if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+        raise CycleError("report reconciliation history is malformed; reconcile the record")
+    matches = [r for r in rows if r.get("contract") == REPORT_CONTRACT]
+    if len(matches) > 1:
+        raise CycleError("report reconciliation history is ambiguous; reconcile the record")
+    return matches[0] if matches else None
+
+
+def _begin_reconciliation(layout: workspace.Layout, saved: dict[str, Any], gate: Mapping[str, Any]) -> None:
+    """Record one bounded correction of a non-conforming report at the same identity.
+
+    The original report, proof, stop and gate stay byte-for-byte in the record's history. The
+    previous reviewer is already proven stopped, so the successor conversation cannot conflict.
+    """
+    if saved.get("merge_intent") is not None or saved.get("stop_verified") is not True:
+        raise CycleError("report reconciliation requires a verified reviewer stop and no merge intent")
+    archived = {key: saved.pop(key) for key in _REVIEW_ATTEMPT_FIELDS if key in saved}
+    digest = hashlib.sha256(json.dumps(archived["review"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    saved.setdefault("report_reconciliations", []).append({
+        "contract": REPORT_CONTRACT, "original_operation": archived["review_operation"],
+        "original_report_sha256": digest, "gate": dict(gate), "archived": archived, "operation": None})
+    _save(layout, saved)
+
+
 def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, Any], *,
                  http: Callable[..., tuple[int, Any]],
                  merge_obligations: Sequence[tuple[str, str]] = ()) -> dict[str, Any]:
@@ -2761,12 +2989,16 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                 "reason": "merge outcome remains unknown; do not repeat"}
     saved = _find(layout, pr["number"], identity)
     operation_id = saved.get("review_operation")
+    exhausted: dict[str, Any] | None = None
     if operation_id:
         worker_record = _mapping(layout, entry["worker"])
         conversation = worker_record.get("conversation")
         cid = conversation.get("id") if isinstance(conversation, dict) else None
         review = saved.get("review") if saved.get("public_report_conversation") == cid and cid else None
-        if review is None:
+        pending = _reconciliation(saved)
+        # A reserved reconciliation has no conversation until its reviewer runs again.
+        if review is None and (pending is None or pending.get("operation") != operation_id
+                               or worker_record.get("state") == "running"):
             review = review_result(layout, entry["worker"], operation_id, pr, identity, entry, http=http)
         if review is not None:
             saved["review"] = review
@@ -2785,14 +3017,23 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                 raise CycleError("public report and native execution proof do not bind the same conversation")
             _save(layout, saved)
             pr["effect_outcomes"][operation_id] = _outcome(operation_id, f"openhands:{operation_id}")
+            # Capacity is released before classification, so a contract-side read failure cannot hold it.
+            _release_reviewer(layout, entry["worker"], saved, worker_record)
             # The saved report stays verbatim; the policy gate is re-derived from it on every tick.
-            gate = review_gate(review)
+            gate = review_gate(review, report_expectations(layout, entry, pr, identity))
             if saved.get("review_gate") != gate:
                 saved["review_gate"] = gate
                 _save(layout, saved)
             pr["review_outcome"] = gate["outcome"]
             pr["independent_review_identity"] = identity
-            _release_reviewer(layout, entry["worker"], saved, worker_record)
+            if gate["outcome"] == "reconcile_report":
+                if pending is None:
+                    _begin_reconciliation(layout, saved, gate)
+                    operation_id = None
+                    pr["review_outcome"] = "missing"
+                else:
+                    pr["review_outcome"] = "changes_requested"
+                    exhausted = gate
             if pr["review_outcome"] == "pass":
                 if "verification" not in saved:
                     verification = sandbox_verify(layout, entry["worker"], pr["head_sha"],
@@ -2807,6 +3048,16 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                 if saved["verification"].get("passed") is True:
                     saved["ci"] = ci_once(pr["number"], Path(__file__).resolve().parents[2])
                     _save(layout, saved)
+    pending = _reconciliation(saved)
+    if pending is not None:
+        # The archived review finished; restate it so a crash before intake cannot leave it unresolved.
+        original = pending["original_operation"]
+        pr["effect_outcomes"][original] = _outcome(original, f"openhands:{original}")
+    if pending is not None and pending.get("operation") is None and not operation_id:
+        # Retry is authorized only for the one recorded reconciliation of this contract version.
+        pr["retry_authorization"] = {**_receipt(identity, f"report-contract:{REPORT_CONTRACT}:"
+                                                + pending["original_report_sha256"]),
+                                     "operation_id": pending["original_operation"]}
     decision = completion.intake([pr], run_id=layout.run_id, root=layout.run_state_dir,
                                  expected_run_id=layout.run_id, expected_root=layout.run_state_dir,
                                  expected_epic_issue_number=layout.epic)[0]
@@ -2826,10 +3077,20 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                             and r.get("outcome") == "unknown"
                             for r in records)
         if op and reserved_here and (operation_id in (None, op)):
+            if pending is not None and op == pending["original_operation"]:
+                raise CycleError("report reconciliation cannot reuse the archived review operation")
             saved["review_operation"] = op
+            if pending is not None and pending.get("operation") in (None, op):
+                pending["operation"] = op
+            else:
+                pending = None
             _save(layout, saved)
-            started = start_or_reconcile_review(layout, entry["worker"], op, pr, identity, entry, http=http)
+            started = start_or_reconcile_review(layout, entry["worker"], op, pr, identity, entry, http=http,
+                                                reconciliation=pending)
             decision["reason"] = f"conversation {started.get('id')} {started.get('status')}"
+    if exhausted is not None and decision["action"] == "wait":
+        decision["reason"] = (f"report reconciliation under {REPORT_CONTRACT} did not produce a conforming report ("
+                              + "; ".join(exhausted["grammar"]) + "); the owning review workflow must repair it")
     return dict(decision)
 
 
