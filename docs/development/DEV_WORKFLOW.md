@@ -270,6 +270,64 @@ with the same Issue and roots to inspect or stop Canvas without stopping the bac
 passes the private session-key file path to the launcher; never print or copy its contents into
 logs or PRs.
 
+## OpenHands owner access on BOB-1
+
+The bounded #6630 owner interface uses upstream Agent Canvas 1.37.0 at
+<https://builder-system.tailcfb3a1.ts.net:9443/conversations/5f3b0e85-dbf6-4666-b650-95728a551601>.
+Connect the iPad to the existing Tailscale network under the owner's personal account. On a new
+browser, keep the prefilled backend URL, give it a name, leave API Key empty and select **Next**;
+select **Skip for now** on agent setup. No provider key, OpenHands Cloud account or SSH is needed.
+If the anonymous-analytics prompt appears, turn it off and confirm. Repeat that browser setup once
+for the separate sandbox origin when first opening it.
+
+In the existing owner conversation, send `status` (or `status #6615`). The model-free ACP bridge
+reads the existing epic run-state, joins Issue, worker, branch and conversation identities, and
+uses the pinned controller's exact endpoint guard for bounded live observations. Recorded next
+actions can lag the active owner's latest comment; follow the linked Issue and PR #6628 for
+current blockers, review, CI and delivery. Stopped/busy/unreachable observations remain unavailable;
+monitoring never starts, loads or stops the existing epic workers. Native descendants are opaque.
+An active or finished conversation is not accepted progress, a merged PR or completed delivery.
+The ongoing #6618/#6619 owners retain their claims and workspaces.
+
+Use `sandbox start` in the owner conversation for a separate owner scratch workspace, then follow
+**Open sandbox Canvas** to <https://builder-system.tailcfb3a1.ts.net:9444>. Open the existing admitted
+conversation and send the next bounded read-only/scratch task there. Browser **New Chat** creation
+is refused: one controller-reserved conversation owns that checkout. The selected native engine
+is Codex `gpt-6.1-terra` using the existing ChatGPT subscription, without paid API/provider fallback.
+The native login directory is a single shared slot; start refuses while another worker mounts it.
+Do not interrupt existing epic work to make room. Repository-wide automatic delivery, issue pickup,
+review/repair/merge and control of the existing epic workers remain with their owning workflows;
+this sandbox is not a second factory coordinator.
+
+Within a live sandbox conversation, **Stop** interrupts it; a subsequent message can continue it.
+That UI state does not prove native descendants stopped. For a verified contained stop, return to
+the owner conversation and send `sandbox stop`. The existing controller checks actual container
+absence and retains the workspace/history/checkpoint. `sandbox status` reads the sandbox state.
+A later explicit `sandbox start` runs the existing takeover/preservation checks and creates a new
+OpenHands conversation; it does not replay the last task. Uncertain creation is reconciled by its
+reserved ID; unavailable or failed engine execution must not be presented as ready.
+
+The new user units are `openhands-owner-backend` (model-free server 1.62.0, loopback 18812),
+`openhands-owner-canvas` (static UI, loopback 18821), and `openhands-owner-primary-gateway` /
+`openhands-owner-sandbox-gateway` (loopback 18820 / 18822). Their private configuration, pinned Node
+24.22.2 executable and copied Canvas assets live under `~/epic-sandbox/owner-access/`. Tailscale
+Serve adds only HTTPS 9443 and 9444; the previous 443/8443 routes remain intact. The gateway admits
+only the configured owner identity from the loopback Serve hop, checks browser Origin, injects
+session keys only upstream and exposes no generic host Bash/file/secret or settings-write API.
+The sole settings mutation supported is disabling anonymous analytics. This follows
+[Tailscale Serve identity-header guidance](https://tailscale.com/docs/features/tailscale-serve#identity-headers).
+The owner backend has its own fixed custom ACP profile and conversation, separate from trusted
+control 18811 and Automation 18810; neither existing service is proxied or restarted.
+
+The sandbox is epic/workspace 6630, worker `owner-sandbox`, with ports 18840–18847, separate from
+existing epic work. Owner commands call the frozen `9fa8001484e5` controller with the already
+approved native image `epic-worker@sha256:3c3c2472b35ea3ccb0df57df7cc9d2303f582dcb2987b259124c9df946d56644`.
+The frozen CLI's upstream 1.60.1 default image is insufficient for this native path; the wrapper
+passes the reviewed image and the existing approved `epicws-6615-egress-20261114` network explicitly. The old default `epicws` bridge cannot reach the provider; a local CLI login-status result alone does not prove working provider access. The recovery `runner/current` remains `c68dd18db4dc`.
+No active controller/image was hot-replaced. Runtime evidence and per-capability acceptance are
+recorded on #6630; physical iPad use remains unverified until the owner opens the URL and sends
+`status` from Safari with Tailscale connected.
+
 ## Persistent epic workspace on TARS (experimental)
 
 Epic #6615 runs a persistent, per-epic workspace on BOB-1 (VM 102, guest `builder-system`). It is a
