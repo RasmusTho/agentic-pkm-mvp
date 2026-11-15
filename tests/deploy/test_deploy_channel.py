@@ -1683,7 +1683,15 @@ def _configure_prod_retry_preflight(
     # process-wide. Symlinking only `app/` sidesteps that entirely.
     if not (pylib_dir / "app").exists():
         (pylib_dir / "app").symlink_to(REPO_ROOT / "app")
-    env["PYTHONPATH"] = str(pylib_dir)
+    # Keep the fixture-only Security.framework shim ahead of the fake psycopg
+    # module. Production code still selects the real provider; only this
+    # isolated subprocess receives the mocked native boundary.
+    shim_paths = [
+        path
+        for path in env.get("PYTHONPATH", "").split(os.pathsep)
+        if path and (Path(path) / "sitecustomize.py").is_file()
+    ]
+    env["PYTHONPATH"] = os.pathsep.join([*shim_paths, str(pylib_dir)])
 
     # H3 (#3903 round 6): always-on connect-attempt log so a test can assert
     # the EXACT host:port a connect() call received, not just "not poison".
