@@ -1440,11 +1440,12 @@ def _assert_local_history_precedes_remote(prior: object, receipt: dict[str, Any]
 
 
 def _screen_transfer_workspace(cwd: Path, worktree: Path, workspace_root: Path) -> None:
-    """Never run host Git against a checkout inside the model workspace root."""
+    """Keep host checkouts disjoint from the model workspace root."""
     if not workspace_root.is_absolute() or _canonical(workspace_root) == Path("/"):
         raise WorktreeLifecycleError("controller workspace root is invalid")
     root = _canonical(workspace_root)
-    if _canonical(cwd).is_relative_to(root) or _canonical(worktree).is_relative_to(root):
+    if any(path.is_relative_to(root) or root.is_relative_to(path)
+           for path in (_canonical(cwd), _canonical(worktree))):
         raise WorktreeLifecycleError("transfer checkout must be outside model workspaces")
 
 

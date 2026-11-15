@@ -135,13 +135,24 @@ def operator_case(tmp_path, monkeypatch):
         return real_run(args, **kwargs)
 
     monkeypatch.setattr(recovery.subprocess, "run", run)
-    return {"cwd": checkout, "issue": 6601, "pr": 6602, "worktree": checkout, "agent": "new-agent",
+    from app.builderops import legacy_run_fence
+    run_state_root = tmp_path / "runs"
+    run_dir = run_state_root / "issue-6601"
+    server_dir = run_dir / "server"
+    server_dir.mkdir(parents=True)
+    (run_dir / "service.json").write_text(json.dumps({"version": 1, "issue": 6601, "worktree": str(checkout)}))
+    (server_dir / "service.json").write_text(json.dumps({"version": 1, "state": "stopped"}))
+    (run_dir / "service.lock").touch()
+    (server_dir / "service.lock").touch()
+    monkeypatch.setattr(legacy_run_fence, "QUALIFIED_STATE_ROOT", run_state_root)
+    monkeypatch.setattr(legacy_run_fence, "_check_processes", lambda *_args: None)
+    return {"run_state_root": run_state_root, "cwd": checkout, "issue": 6601, "pr": 6602, "worktree": checkout, "agent": "new-agent",
             "session": "new-session", "comment_id": 1, "workspace_root": tmp_path / "model", "store": store,
             "old_lease": old_lease, "comments": comments, "old_record": old_record, "receipt": receipt, "pr_data": pr}
 
 
 def _args(case):
-    return {key: case[key] for key in ("cwd", "issue", "pr", "worktree", "agent", "session", "comment_id", "workspace_root")}
+    return {key: case[key] for key in ("cwd", "issue", "pr", "worktree", "agent", "session", "comment_id", "workspace_root", "run_state_root")}
 
 
 def test_operator_cli_emits_the_existing_pickup_receipt_line(monkeypatch, capsys, tmp_path):
@@ -149,7 +160,8 @@ def test_operator_cli_emits_the_existing_pickup_receipt_line(monkeypatch, capsys
     monkeypatch.setattr(recovery, "execute_operator_pickup", lambda **_kwargs: {"state": "pinned", "pickup_receipt": receipt})
     monkeypatch.setattr(sys, "argv", ["legacy_owner_recovery", "pickup", "--issue", "6601", "--pr", "6602",
                                    "--worktree", str(tmp_path), "--agent", "new", "--session", "s",
-                                   "--comment-id", "1", "--workspace-root", str(tmp_path / "model")])
+                                   "--comment-id", "1", "--workspace-root", str(tmp_path / "model"),
+                                   "--legacy-run-state-root", str(tmp_path / "runs")])
     assert recovery._main() == 0
     assert receipt in capsys.readouterr().out.splitlines()
 
@@ -186,12 +198,13 @@ def test_recovery_refuses_authority_or_candidate_drift(operator_case, drift):
     assert 2 not in case["comments"]
 
 
-@pytest.mark.parametrize("kind", ["root", "relative", "overlap"])
+@pytest.mark.parametrize("kind", ["root", "relative", "overlap", "nested"])
 def test_operator_rejects_workspace_before_read_or_claim(operator_case, monkeypatch, kind):
     case = operator_case
     args = _args(case)
     args["workspace_root"] = Path("/") if kind == "root" else (
-        Path("relative") if kind == "relative" else case["worktree"])
+        Path("relative") if kind == "relative" else (
+        case["worktree"] / "model" if kind == "nested" else case["worktree"]))
 
     def unexpected_read(*_args, **_kwargs):
         pytest.fail("workspace boundary was checked after a host read")
@@ -399,7 +412,7 @@ def test_operator_preflight_allows_unpublished_descendant(operator_case):
     receipt["candidate"] = recovery.read_clean_candidate(cwd=case["cwd"], worktree=case["worktree"])
     receipt["unpublished_candidate_head"] = receipt["candidate"]["head"]
     case["comments"][1] = _comment(receipt, 1, time.time() - 5)
-    observed = recovery.preflight_operator_pickup(**_args(case))
+    observed = recovery.preflight_operator_pickup(**{k: v for k, v in _args(case).items() if k != "run_state_root"})
     assert observed["candidate"]["head"] != observed["publication"]["head"]
 
 
@@ -409,14 +422,16 @@ def test_competing_operator_invocations_only_one_can_claim(operator_case, monkey
     rival["successor"]["agent"] = "rival-agent"
     case["comments"][4] = _comment(rival, 4, time.time() - 5)
     original = recovery.preflight_operator_pickup
-    barrier = threading.Barrier(2)
+    entered, proceed = threading.Event(), threading.Event()
 
-    def concurrent_preflight(**kwargs):
+    def held_preflight(**kwargs):
         observed = original(**kwargs)
-        barrier.wait(timeout=15)
+        entered.set()
+        if not proceed.wait(timeout=15):
+            raise AssertionError("competing pickup did not finish")
         return observed
 
-    monkeypatch.setattr(recovery, "preflight_operator_pickup", concurrent_preflight)
+    monkeypatch.setattr(recovery, "preflight_operator_pickup", held_preflight)
     def attempt(index):
         args = _args(case)
         if index:
@@ -427,7 +442,14 @@ def test_competing_operator_invocations_only_one_can_claim(operator_case, monkey
             return None
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(attempt, range(2)))
+        first = pool.submit(attempt, 0)
+        assert entered.wait(timeout=15)
+        second = pool.submit(attempt, 1)
+        try:
+            rival_result = second.result(timeout=10)
+        finally:
+            proceed.set()
+        results = [first.result(timeout=15), rival_result]
     successes = [item for item in results if item is not None]
     assert len(successes) == 1 and successes[0]["state"] == "pinned"
     events = case["store"].list_events(case["receipt"]["predecessor"]["task_id"])

@@ -15,6 +15,7 @@ OPERATOR_ACTION="pickup"
 OPERATOR_COMMENT_ID=""
 OPERATOR_PR=""
 OPERATOR_WORKSPACE_ROOT=""
+LEGACY_RUN_STATE_ROOT=""
 COORDINATION_MODE="auto"
 FALLBACK_REASON=""
 TASK_ID=""
@@ -86,6 +87,11 @@ while [[ $# -gt 0 ]]; do
       OPERATOR_WORKSPACE_ROOT="$2"
       shift 2
       ;;
+    --legacy-run-state-root)
+      OPERATOR_PICKUP=1
+      LEGACY_RUN_STATE_ROOT="$2"
+      shift 2
+      ;;
     --coordination-mode)
       COORDINATION_MODE="$2"
       shift 2
@@ -118,8 +124,8 @@ if [[ "$TAKEOVER_STALE" -eq 1 && "$COORDINATION_MODE" == "github-label-only-fall
   exit 2
 fi
 if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
-  if [[ "$TAKEOVER_STALE" -ne 1 || ! "$OPERATOR_COMMENT_ID" =~ ^[1-9][0-9]*$ || ! "$OPERATOR_PR" =~ ^[1-9][0-9]*$ || -z "$OPERATOR_WORKSPACE_ROOT" ]]; then
-    echo "operator pickup requires --takeover-stale, --operator-comment-id, --operator-pr, and --operator-workspace-root" >&2
+  if [[ "$TAKEOVER_STALE" -ne 1 || ! "$OPERATOR_COMMENT_ID" =~ ^[1-9][0-9]*$ || ! "$OPERATOR_PR" =~ ^[1-9][0-9]*$ || -z "$OPERATOR_WORKSPACE_ROOT" || -z "$LEGACY_RUN_STATE_ROOT" ]]; then
+    echo "operator pickup requires --takeover-stale, --operator-comment-id, --operator-pr, --operator-workspace-root, and --legacy-run-state-root" >&2
     exit 2
   fi
 fi
@@ -141,7 +147,8 @@ root = root.expanduser().resolve(strict=False)
 if root == Path("/"):
     raise SystemExit("operator workspace root cannot be /")
 for name in ("OPERATOR_SCRIPT_ROOT", "OPERATOR_TARGET_WORKTREE"):
-    if Path(os.environ[name]).expanduser().resolve(strict=False).is_relative_to(root):
+    checkout = Path(os.environ[name]).expanduser().resolve(strict=False)
+    if checkout.is_relative_to(root) or root.is_relative_to(checkout):
         raise SystemExit("operator checkout must be outside model workspaces")
 PY_CHECK
   then
@@ -927,7 +934,7 @@ if [[ "$TAKEOVER_STALE" -eq 1 ]]; then
     exec "$PYTHON_BIN" -m app.builderops.legacy_owner_recovery "$OPERATOR_ACTION" \
       --issue "$ISSUE_NUMBER" --pr "$OPERATOR_PR" --worktree "$EXPECTED_WORKTREE" \
       --agent "$AGENT_ID" --session "$SESSION_ID" --comment-id "$OPERATOR_COMMENT_ID" \
-      --workspace-root "$OPERATOR_WORKSPACE_ROOT"
+      --workspace-root "$OPERATOR_WORKSPACE_ROOT" --legacy-run-state-root "$LEGACY_RUN_STATE_ROOT"
   fi
 
   previous_lease=""

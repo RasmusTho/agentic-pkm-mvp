@@ -594,7 +594,7 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
     return ack_id, pinned
 
 
-def execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, agent: str, session: str,
+def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, agent: str, session: str,
                             comment_id: int, workspace_root: Path) -> dict[str, Any]:
     """Execute the supported operator transition after wrapper issue checks.
 
@@ -650,7 +650,7 @@ def execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
             "registration_epoch": pinned["epoch"], "state": "pinned", "pickup_receipt": pickup_receipt}
 
 
-def resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, agent: str, session: str,
+def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, agent: str, session: str,
                            comment_id: int, workspace_root: Path) -> dict[str, Any]:
     """Reconcile an existing claim and exact ACK without repeating a write."""
     if not session or session != os.environ.get("CODEX_SESSION_ID"):
@@ -761,6 +761,60 @@ def resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, ag
             "pickup_receipt": (f"pickup-claim-complete issue={issue} branch={candidate['branch']} worktree={worktree} "
                                f"coordination_mode=dispatcher-backed fallback_reason=none task_id={task_id} "
                                f"lease_id={lease_id} holder={agent} evidence=verified-dispatcher-lease")}
+
+
+def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: int, pr: int,
+                   worktree: Path, agent: str, session: str, comment_id: int,
+                   workspace_root: Path) -> dict[str, Any]:
+    from app.builderops import legacy_run_fence
+
+    try:
+        agent_worktree._screen_transfer_workspace(cwd, worktree, workspace_root)
+    except agent_worktree.WorktreeLifecycleError as exc:
+        raise RecoveryEvidenceError("operator workspace boundary is invalid") from exc
+    try:
+        with legacy_run_fence.hold(state_root=run_state_root, issue=issue, worktree=worktree):
+            result = operation(cwd=cwd, issue=issue, pr=pr, worktree=worktree, agent=agent,
+                               session=session, comment_id=comment_id, workspace_root=workspace_root)
+            row = agent_worktree._locked_lifecycle_snapshot(agent_worktree._default_registry_path(cwd)).get(str(worktree))
+            proof = row.get("operator_registration") if isinstance(row, dict) else None
+            if (not isinstance(proof, dict) or row.get("owner") != session
+                    or proof.get("state") != "pinned" or proof.get("epoch") != result.get("registration_epoch")):
+                raise RecoveryEvidenceError("successor registration changed; retain claim")
+            comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
+            pending, _, _ = agent_worktree._transfer_comment(
+                comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
+            predecessor = pending["predecessor"]
+            events = _read_task_events(cwd=cwd, task_id=result["task_id"])
+            claims = [event for event in events if event.get("event_type") == "task.claimed"
+                      and event.get("actor") == agent and isinstance(event.get("payload"), dict)
+                      and event["payload"].get("session") == session
+                      and isinstance(event["payload"].get("takeover"), dict)
+                      and event["payload"]["takeover"].get("previous_lease_id") == predecessor["lease_id"]]
+            if len(claims) != 1 or not isinstance(claims[0]["payload"].get("claim_id"), str):
+                raise RecoveryEvidenceError("successor claim identity changed; retain claim")
+            current_lease = _successor_claim_readback(cwd=cwd, task_id=result["task_id"], issue=issue,
+                agent=agent, session=session, claim_id=claims[0]["payload"]["claim_id"], predecessor=predecessor)
+            if current_lease != result["lease_id"]:
+                raise RecoveryEvidenceError("successor lease changed; retain claim")
+            legacy_run_fence.check_locked(state_root=run_state_root, issue=issue, worktree=worktree)
+            return result
+    except legacy_run_fence.RunFenceError as exc:
+        raise RecoveryEvidenceError(str(exc)) from exc
+
+
+def execute_operator_pickup(*, run_state_root: Path, cwd: Path, issue: int, pr: int, worktree: Path,
+                            agent: str, session: str, comment_id: int, workspace_root: Path) -> dict[str, Any]:
+    return _fenced_pickup(_execute_operator_pickup, run_state_root=run_state_root, cwd=cwd, issue=issue,
+                          pr=pr, worktree=worktree, agent=agent, session=session, comment_id=comment_id,
+                          workspace_root=workspace_root)
+
+
+def resume_operator_pickup(*, run_state_root: Path, cwd: Path, issue: int, pr: int, worktree: Path,
+                           agent: str, session: str, comment_id: int, workspace_root: Path) -> dict[str, Any]:
+    return _fenced_pickup(_resume_operator_pickup, run_state_root=run_state_root, cwd=cwd, issue=issue,
+                          pr=pr, worktree=worktree, agent=agent, session=session, comment_id=comment_id,
+                          workspace_root=workspace_root)
 
 
 def validate_operator_reconciliation(
@@ -891,10 +945,11 @@ def _main() -> int:
     parser.add_argument("--session", required=True)
     parser.add_argument("--comment-id", type=int, required=True)
     parser.add_argument("--workspace-root", type=Path, required=True)
+    parser.add_argument("--legacy-run-state-root", type=Path, required=True)
     args = parser.parse_args()
     try:
         operation = execute_operator_pickup if args.action == "pickup" else resume_operator_pickup
-        result = operation(cwd=Path.cwd(), issue=args.issue, pr=args.pr, worktree=args.worktree,
+        result = operation(run_state_root=args.legacy_run_state_root, cwd=Path.cwd(), issue=args.issue, pr=args.pr, worktree=args.worktree,
                            agent=args.agent, session=args.session, comment_id=args.comment_id,
                            workspace_root=args.workspace_root)
     except (RecoveryEvidenceError, agent_worktree.WorktreeLifecycleError) as exc:

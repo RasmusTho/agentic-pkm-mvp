@@ -81,8 +81,8 @@ def test_operator_wrapper_delegates_after_issue_readback_without_normal_pickup(t
     fake_python.write_text(content)
     resume_flag = ["--operator-resume"] if action == "resume" else []
     result = harness._run(worktree, env, *resume_flag, "--takeover-stale", "--target-worktree", str(worktree),
-                          "--operator-comment-id", "12", "--operator-pr", "34",
-                          "--operator-workspace-root", str(tmp_path / "model"))
+                          "--operator-comment-id", "12", "--operator-pr", "34", "--legacy-run-state-root", str(tmp_path / "runs"),
+                          "--operator-workspace-root", str(tmp_path.parent / (tmp_path.name + "-model")))
     assert result.returncode == 0, result.stdout + result.stderr
     log = Path(env["COMMAND_LOG"]).read_text()
     assert "gh api repos/RasmusTho/agentic-pkm-mvp/issues/3301" in log
@@ -152,7 +152,7 @@ def test_wrapper_arguments_drive_real_host_cli_and_resume_existing_ack(tmp_path,
         Path(env["COMMAND_LOG"]).write_text("")
         result = pickup._run(case["worktree"], env, *extra, "--takeover-stale", "--target-worktree",
                              str(case["worktree"]), "--operator-comment-id", "1", "--operator-pr", "6602",
-                             "--operator-workspace-root", str(case["workspace_root"]),
+                             "--operator-workspace-root", str(case["workspace_root"]), "--legacy-run-state-root", str(case["run_state_root"]),
                              issue="6601", agent="new-agent", session="new-session")
         assert result.returncode == 0, result.stdout + result.stderr
         lines = Path(env["COMMAND_LOG"]).read_text().splitlines()
@@ -173,7 +173,7 @@ def test_wrapper_arguments_drive_real_host_cli_and_resume_existing_ack(tmp_path,
     assert "coordination_mode=dispatcher-backed" in receipt[0]
 
 
-@pytest.mark.parametrize("case", ["relative", "root", "target", "target_symlink", "script", "missing_target"])
+@pytest.mark.parametrize("case", ["relative", "root", "target", "target_symlink", "target_nested", "script", "script_nested", "missing_target"])
 def test_operator_workspace_refused_before_git_or_external_reads(tmp_path, case):
     import os
     import subprocess
@@ -184,7 +184,8 @@ def test_operator_workspace_refused_before_git_or_external_reads(tmp_path, case)
     alias = tmp_path / "alias"
     alias.symlink_to(target.parent, target_is_directory=True)
     roots = {"relative": "relative/model", "root": "/", "target": str(target.parent),
-             "target_symlink": str(alias), "script": str(script.parent.parent),
+             "target_symlink": str(alias), "target_nested": str(target / "model"),
+             "script": str(script.parent.parent), "script_nested": str(script.parent.parent / "model"),
              "missing_target": str(tmp_path / "safe")}
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -196,7 +197,7 @@ def test_operator_workspace_refused_before_git_or_external_reads(tmp_path, case)
     env = {**os.environ, "PATH": f"{bin_dir}:/usr/bin:/bin", "CALL_LOG": str(log),
            "JSON_PYTHON": sys.executable}
     args = ["bash", str(script), "--issue", "3301", "--takeover-stale", "--operator-comment-id", "1",
-            "--operator-pr", "2", "--operator-workspace-root", roots[case]]
+            "--operator-pr", "2", "--operator-workspace-root", roots[case], "--legacy-run-state-root", str(tmp_path / "runs")]
     if case != "missing_target":
         args += ["--target-worktree", str(target)]
     result = subprocess.run(args, cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
