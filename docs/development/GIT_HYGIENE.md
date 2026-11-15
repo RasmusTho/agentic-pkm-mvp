@@ -22,6 +22,8 @@ acknowledgment. A prepared registration does not authorize work or publication. 
 reconcile the specific stopped run and its PR, and the host holds its existing run locks through
 the claim and acknowledgment transition. The supported host and run scope, process observation
 limits, and resume procedure are specified in [Multi-Agent Workspace Guardrails](DEV_WORKFLOW.md#multi-agent-workspace-guardrails).
+Before a claim, the operator path screens the registered and live checkout inventory against the
+declared model workspace using the same boundary as the native successor proof.
 
 The disposable integration oracle supplies byte input through a temporary regular
 file, including the complete NUL-separated attribute path set. This avoids pipe
