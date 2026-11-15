@@ -248,8 +248,12 @@ def read_live_publication(*, cwd: Path, pr: int, branch: str) -> dict[str, Any]:
         raise RecoveryEvidenceError("GitHub PR identity or head is inconsistent")
     matches = [row for page in pages for row in page]
     listed = matches[0] if len(matches) == 1 and isinstance(matches[0], dict) else {}
-    listed_head = listed.get("head") if isinstance(listed.get("head"), dict) else {}
-    listed_base = listed.get("base") if isinstance(listed.get("base"), dict) else {}
+    listed_head = listed.get("head")
+    listed_base = listed.get("base")
+    if not isinstance(listed_head, dict):
+        listed_head = {}
+    if not isinstance(listed_base, dict):
+        listed_base = {}
     if (len(matches) != 1 or not isinstance(matches[0], dict) or matches[0].get("number") != pr
             or matches[0].get("state") != "open" or listed_head.get("sha") != sha
             or listed_head.get("ref") != branch or listed_base.get("ref") != base.get("ref")):
@@ -473,8 +477,12 @@ def _successor_claim_readback(*, cwd: Path, task_id: str, issue: int, agent: str
     matches = [event for event in events if isinstance(event, dict) and event.get("event_type") == "task.claimed"
                and event.get("lease_id") == lease_id and event.get("actor") == agent]
     event = matches[0] if len(matches) == 1 else {}
-    ep = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-    takeover = ep.get("takeover") if isinstance(ep.get("takeover"), dict) else {}
+    ep = event.get("payload")
+    if not isinstance(ep, dict):
+        ep = {}
+    takeover = ep.get("takeover")
+    if not isinstance(takeover, dict):
+        takeover = {}
     event_index = events.index(event) if event else -1
     before = events[:event_index] if event_index >= 0 else []
     after = events[event_index + 1:] if event_index >= 0 else []
@@ -726,7 +734,7 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
                 "state": "pinned", "pickup_receipt": (f"pickup-claim-complete issue={issue} branch={candidate['branch']} "
                   f"worktree={worktree} coordination_mode=dispatcher-backed fallback_reason=none task_id={task_id} "
                   f"lease_id={lease_id} holder={agent} evidence=verified-dispatcher-lease")}
-    if isinstance(proof, dict) and proof.get("state") == "pinned":
+    if isinstance(row, dict) and isinstance(proof, dict) and proof.get("state") == "pinned":
         try:
             agent_worktree.assert_operator_registration_pinned(row)
             if (row.get("owner") != session or row.get("status") != "active"
@@ -759,7 +767,7 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
                 "pickup_receipt": (f"pickup-claim-complete issue={issue} branch={candidate['branch']} "
                   f"worktree={worktree} coordination_mode=dispatcher-backed fallback_reason=none task_id={task_id} "
                   f"lease_id={lease_id} holder={agent} evidence=verified-dispatcher-lease")}
-    if (not isinstance(proof, dict) or proof.get("state") != "prepared"
+    if (not isinstance(row, dict) or not isinstance(proof, dict) or proof.get("state") != "prepared"
             or proof.get("pending_comment_id") != comment_id or proof.get("pending_digest") != pending_digest
             or row.get("owner") != session or proof.get("epoch") != row.get("registration_epoch")):
         raise RecoveryEvidenceError("prepared operator registration is unavailable; retain claim")
@@ -813,7 +821,7 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
                 row = agent_worktree._locked_lifecycle_snapshot(
                     agent_worktree._default_registry_path(cwd)).get(str(worktree))
                 proof = row.get("operator_registration") if isinstance(row, dict) else None
-                if (not isinstance(proof, dict) or row.get("owner") != session
+                if (not isinstance(row, dict) or not isinstance(proof, dict) or row.get("owner") != session
                         or proof.get("state") != expected_state or proof.get("epoch") != epoch
                         or row.get("registration_epoch") != epoch
                         or (expected_row is not None and row != expected_row)):
