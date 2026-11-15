@@ -82,11 +82,11 @@ bindings; local scratch and a former owner's assertion are context only.
 
 After those readbacks agree, a dispatcher-backed handoff first transfers the exact dispatcher task.
 The current owner releases it with
-`python3 -m app.dispatcher release <task-id> --agent <current-agent> --json` and re-reads the task
+`python3 -m app.dispatcher release <task-id> --agent <current-agent> --expected-lease-id <observed-lease-id> --json` and re-reads the task
 as unleased (`claimed_by: null`, `lease_id: null`) and ready or blocked. Only then may the Issue be
 returned to `agent:ready`; the named successor runs the normal `scripts/issue_pickup_claim.sh`
 dispatcher-backed pickup for that same task and re-reads task id, Issue number, status, holder, lease
-id/resource, future expiry, and `released_at: null`. The dispatcher release → successor
+id/resource, future expiry, `released_at: null`, and the exact Builder session in the claim event. The dispatcher release → successor
 claim/readback must finish before acknowledgment. A label-only fallback authenticates only its
 fallback receipt and never fabricates a dispatcher lease.
 

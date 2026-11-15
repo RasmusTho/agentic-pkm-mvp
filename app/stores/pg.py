@@ -1958,7 +1958,9 @@ def inspect_pg_metadata_completeness(
         source_role = row.get("source_role")
         origin = row.get("origin")
         identity = row.get("embedding_identity")
-        if not language or str(language).strip().lower() in {"", "und"}:
+        # ``und`` is the documented honest value for an indexed unit whose
+        # language is not determined; only absent/empty values are incomplete.
+        if not language or not str(language).strip():
             return True
         if not source_role and not origin:
             return True

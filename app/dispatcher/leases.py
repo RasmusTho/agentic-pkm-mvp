@@ -5,14 +5,20 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import sqlite3
+import stat
 import uuid
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
+from app.dispatcher.events import claim_event_digest, event_history_digest
 from app.dispatcher.models import EventRecord, LeaseRecord, TaskRecord
-from app.dispatcher.store import SqliteStore
+from app.dispatcher.schema import LEGACY_UNTRUSTED_VERIFICATION_STATUS, SCHEMA_VERSION, verification_v6_schema_error
+from app.dispatcher.store import (SqliteStore, _legacy_verification_row_is_quarantined,
+                                  _validate_canonical_verification_row, _verification_authority_migration)
 
 try:
     import fcntl
@@ -62,14 +68,14 @@ def _cleanup_guard_record_path(store: SqliteStore, task_id: str) -> Path:
 
 
 @contextmanager
-def _cleanup_guard_lock(store: SqliteStore) -> Iterator[None]:
+def _cleanup_guard_lock(store: SqliteStore, *, blocking: bool = True) -> Iterator[None]:
     """Serialize guard and claim operations across DB-missing transitions."""
     if fcntl is None:
         raise ValueError("cleanup guard requires POSIX file locking")
     lock_path = store.db_path.with_name(_CLEANUP_GUARD_LOCK_NAME)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "a+", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         try:
             yield
         finally:
@@ -309,6 +315,16 @@ def claim(
     ttl_minutes: int = 90,
     takeover_stale: bool = False,
     expected_lease_id: str | None = None,
+    session: str | None = None,
+    claim_id: str | None = None,
+    expected_lease_holder: str | None = None,
+    expected_lease_expires_at: str | None = None,
+    expected_claim_event_id: str | None = None,
+    expected_claim_event_digest: str | None = None,
+    expected_history_digest: str | None = None,
+    expected_repo: str | None = None,
+    expected_issue_number: int | None = None,
+    expected_db_identity: tuple[int, int] | None = None,
 ) -> tuple[TaskRecord, LeaseRecord]:
     """Claim a task by creating a lease and updating task state.
 
@@ -319,22 +335,84 @@ def claim(
     3. Update task with lease reference and claimed_by
     4. Emit task.claimed event
 
+    Optional exact-predecessor fields compare an observation under the same
+    transaction; they do not establish its provenance, operator authority,
+    worktree ownership, or the absence of an active writer. Callers must use
+    the applicable lifecycle workflow before treating a claim as authority.
+
     Raises ValueError if task doesn't exist, is not ready, or is already claimed.
     """
+    if session is not None and (not session or session.strip() != session or any(c.isspace() for c in session)):
+        raise ValueError("Builder session must be a non-empty exact identifier")
+    if claim_id is not None and (not claim_id or claim_id.strip() != claim_id or any(c.isspace() for c in claim_id)):
+        raise ValueError("Claim attempt id must be a non-empty exact identifier")
     if expected_lease_id is not None:
         if not expected_lease_id or expected_lease_id.strip() != expected_lease_id:
             raise ValueError("Expected stale lease id must be a non-empty exact identifier")
         if not takeover_stale:
             raise ValueError("Expected stale lease id requires --takeover-stale")
+    observed = (expected_lease_holder, expected_lease_expires_at, expected_claim_event_id,
+                expected_claim_event_digest, expected_history_digest, expected_repo, expected_issue_number)
+    if any(value is not None for value in observed) and (
+        not takeover_stale or expected_lease_id is None
+        or any(not isinstance(value, str) or not value or value.strip() != value for value in observed[:-1])
+        or type(expected_issue_number) is not int or expected_issue_number <= 0
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_claim_event_digest or "")
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_history_digest or "")
+    ):
+        raise ValueError("Exact predecessor comparison requires repo, issue, holder, expiry and claim event")
 
     lease_id = _make_lease_id()
     ttl_seconds = ttl_minutes * 60
     event_payload: dict[str, object] = {"ttl_minutes": ttl_minutes}
+    if session is not None:
+        event_payload["session"] = session
+    if claim_id is not None:
+        event_payload["claim_id"] = claim_id
+
+    def check_db_identity() -> None:
+        if expected_db_identity is None:
+            return
+        try:
+            observed_db = os.stat(store.db_path, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError("Expected dispatcher database identity is unavailable") from exc
+        if (not stat.S_ISREG(observed_db.st_mode)
+                or (observed_db.st_dev, observed_db.st_ino) != expected_db_identity):
+            raise ValueError("Expected dispatcher database identity changed")
 
     with ExitStack() as stack:
-        stack.enter_context(_cleanup_guard_lock(store))
-        conn = stack.enter_context(store._connect())
+        check_db_identity()
+        stack.enter_context(_cleanup_guard_lock(store, blocking=expected_db_identity is None))
+        check_db_identity()
+        if expected_db_identity is None:
+            conn = stack.enter_context(store._connect())
+        else:
+            # The operator has already qualified the current schema read-only.
+            # Do not run schema migration while fencing an exact observed inode.
+            connection = sqlite3.connect(store.db_path, timeout=0)
+            stack.callback(connection.close)
+            conn = stack.enter_context(connection)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            check_db_identity()
         conn.execute("BEGIN IMMEDIATE")
+        check_db_identity()
+        if expected_db_identity is not None:
+            version = conn.execute("SELECT value FROM dispatcher_meta WHERE key='schema_version'").fetchone()
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
+            if version is None or version[0] != str(SCHEMA_VERSION) or "repo" not in columns or verification_v6_schema_error(conn):
+                raise ValueError("Expected dispatcher schema is not current")
+            for verification_row in conn.execute("SELECT * FROM verification_runs"):
+                _, inert = _verification_authority_migration(verification_row)
+                if inert:
+                    if not _legacy_verification_row_is_quarantined(verification_row):
+                        raise ValueError("Dispatcher authority requires reconciliation")
+                else:
+                    if verification_row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS:
+                        raise ValueError("Dispatcher authority quarantine is malformed")
+                    _validate_canonical_verification_row(verification_row)
+            store._schema_ensured = True
         now = _utc_now()
         expires = _expires_at(ttl_seconds, now=now)
         task_row = conn.execute(
@@ -374,12 +452,45 @@ def claim(
                 raise ValueError(
                     f"Cannot claim task {task_id}: lease has expired; retry with --takeover-stale"
                 )
+            if expected_lease_holder is not None:
+                rows = conn.execute(
+                    "SELECT event_id, timestamp, task_id, event_type, actor, lease_id, payload "
+                    "FROM dispatcher_events WHERE task_id = ? ORDER BY timestamp, event_id",
+                    (task_id,),
+                ).fetchall()
+                history = []
+                for row in rows:
+                    projection = dict(row)
+                    try:
+                        projection["payload"] = json.loads(projection["payload"]) if projection["payload"] is not None else None
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"Cannot claim task {task_id}: predecessor event is invalid") from exc
+                    history.append(projection)
+                matching_events = [event for event in history if event["event_type"] == "task.claimed"
+                                   and event["lease_id"] == existing_lease_id]
+                event_projection = None
+                if len(matching_events) == 1:
+                    event_projection = matching_events[0]
+                if (existing_lease["holder"] != expected_lease_holder
+                        or existing_lease["expires_at"] != expected_lease_expires_at
+                        or task_row["claimed_by"] != expected_lease_holder
+                        or task_row["lease_expires_at"] != expected_lease_expires_at
+                        or task_row["repo"] != expected_repo or task_row["issue_number"] != expected_issue_number
+                        or existing_lease["resource"] != f"issue:{expected_issue_number}"
+                        or len(matching_events) != 1
+                        or matching_events[0]["event_id"] != expected_claim_event_id
+                        or matching_events[0]["actor"] != expected_lease_holder
+                        or event_projection is None
+                        or claim_event_digest(event_projection) != expected_claim_event_digest
+                        or event_history_digest(history) != expected_history_digest):
+                    raise ValueError(f"Cannot claim task {task_id}: observed predecessor changed")
             if task_row["status"] not in {"claimed", "ready"}:
                 raise ValueError(
                     f"Cannot claim task {task_id}: not eligible for stale takeover "
                     f"(current: {task_row['status']})"
                 )
 
+            check_db_identity()
             result = conn.execute(
                 """
                 UPDATE dispatcher_leases
@@ -458,7 +569,9 @@ def claim(
                 json.dumps(event.payload, sort_keys=True, ensure_ascii=False),
             ),
         )
+        check_db_identity()
         conn.commit()
+        check_db_identity()
 
     lease = LeaseRecord(
         lease_id=lease_id,
@@ -491,9 +604,11 @@ def heartbeat(
 
     Raises ValueError if task/lease not found or held by a different agent.
     """
-    now = _utc_now()
     with store._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        # Sample after acquiring the write lock: a stalled heartbeat must not
+        # renew a lease that expired while it was waiting for that lock.
+        now = _utc_now()
         task = conn.execute("SELECT * FROM dispatcher_tasks WHERE task_id = ?", (task_id,)).fetchone()
         if task is None:
             raise ValueError(f"Task {task_id} not found")
@@ -537,6 +652,7 @@ def release(
     task_id: str,
     agent_id: str,
     reason: str = "manual",
+    expected_lease_id: str | None = None,
 ) -> TaskRecord:
     """Release a task by removing its lease.
 
@@ -544,59 +660,49 @@ def release(
 
     Raises ValueError if task/lease not found or held by a different agent.
     """
-    task = store.get_task(task_id)
-    if task is None:
-        raise ValueError(f"Task {task_id} not found")
-
-    if task.lease_id is None:
-        raise ValueError(f"Task {task_id} has no active lease to release")
-
-    lease = store.get_lease(task.lease_id)
-    if lease is None:
-        raise ValueError(f"Lease {task.lease_id} not found")
-
-    if lease.holder != agent_id:
-        raise ValueError(
-            f"Cannot release lease {task.lease_id}: held by {lease.holder}, not {agent_id}"
+    if expected_lease_id is not None and (not expected_lease_id or expected_lease_id.strip() != expected_lease_id):
+        raise ValueError("Expected lease id must be a non-empty exact identifier")
+    with store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        task_row = conn.execute("SELECT * FROM dispatcher_tasks WHERE task_id = ?", (task_id,)).fetchone()
+        if task_row is None:
+            raise ValueError(f"Task {task_id} not found")
+        lease_id = task_row["lease_id"]
+        if lease_id is None:
+            raise ValueError(f"Task {task_id} has no active lease to release")
+        if expected_lease_id is not None and lease_id != expected_lease_id:
+            raise ValueError(f"Cannot release task {task_id}: expected lease changed")
+        lease_row = conn.execute("SELECT * FROM dispatcher_leases WHERE lease_id = ?", (lease_id,)).fetchone()
+        if lease_row is None or lease_row["released_at"] is not None:
+            raise ValueError(f"Lease {lease_id} is unavailable")
+        if lease_row["holder"] != agent_id:
+            raise ValueError(f"Cannot release lease {lease_id}: held by {lease_row['holder']}, not {agent_id}")
+        if expected_lease_id is not None and task_row["claimed_by"] != agent_id:
+            raise ValueError(f"Cannot release lease {lease_id}: task holder changed")
+        now = _utc_now()
+        updated = conn.execute("UPDATE dispatcher_leases SET released_at = ?, release_reason = ? WHERE lease_id = ? AND holder = ? AND released_at IS NULL", (now, reason, lease_id, agent_id))
+        if updated.rowcount != 1:
+            raise ValueError(f"Cannot release lease {lease_id}: lease changed concurrently")
+        sync_state = json.loads(task_row["sync_state"] or "{}")
+        if not isinstance(sync_state, dict):
+            sync_state = {}
+        sync_state.pop("last_pull_at", None)
+        sync_state["ready_scan_invalidated_at"] = now
+        updated = conn.execute(
+            "UPDATE dispatcher_tasks SET lease_id = NULL, claimed_by = NULL, last_heartbeat_at = NULL, "
+            "lease_expires_at = NULL, status = ?, sync_state = ?, updated_at = ? "
+            "WHERE task_id = ? AND lease_id = ? AND claimed_by IS ?",
+            ("ready" if task_row["blocked_reason"] is None else "blocked", json.dumps(sync_state, sort_keys=True, ensure_ascii=False), now, task_id, lease_id, task_row["claimed_by"]),
         )
-
-    now = _utc_now()
-    lease.released_at = now
-    lease.release_reason = reason
-    store.upsert_lease(lease)
-
-    task.lease_id = None
-    task.claimed_by = None
-    task.last_heartbeat_at = None
-    task.lease_expires_at = None
-
-    # The ready scan predates this lease and may predate the GitHub label
-    # transition to agent:in-progress. Keep an invalidation timestamp as well
-    # as clearing the scan evidence, so a pull already in flight cannot restore
-    # its older ready snapshot after this release commits.
-    task.sync_state = dict(task.sync_state or {})
-    task.sync_state.pop("last_pull_at", None)
-    task.sync_state["ready_scan_invalidated_at"] = now
-
-    if task.blocked_reason is None:
-        task.status = "ready"
-    else:
-        task.status = "blocked"
-
-    task.updated_at = now
-    store.upsert_task(task)
-
-    event = EventRecord(
-        event_id=_make_event_id(),
-        timestamp=now,
-        task_id=task_id,
-        event_type="task.released",
-        actor=agent_id,
-        lease_id=lease.lease_id,
-        payload={"reason": reason},
-    )
-    store.append_event(event)
-
+        if updated.rowcount != 1:
+            raise ValueError(f"Cannot release lease {lease_id}: task changed concurrently")
+        event = EventRecord(_make_event_id(), now, task_id, "task.released", agent_id, lease_id, {"reason": reason})
+        conn.execute("INSERT INTO dispatcher_events (event_id, timestamp, task_id, event_type, actor, lease_id, payload) VALUES (?, ?, ?, ?, ?, ?, ?)", (event.event_id, event.timestamp, event.task_id, event.event_type, event.actor, event.lease_id, json.dumps(event.payload, sort_keys=True, ensure_ascii=False)))
+        conn.commit()
+    if store._event_writer is not None:
+        store._event_writer.append(event)
+    task = store.get_task(task_id)
+    assert task is not None, f"task {task_id} missing after successful release"
     return task
 
 

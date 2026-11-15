@@ -16,6 +16,15 @@ and active lease conflicts before a local mutation. Dedicated worktrees use
 the remote base as publication authority, so a stale shared local base ref is
 advisory only when the dedicated `HEAD` already contains the remote head.
 
+For the explicitly qualified clean legacy runs, operator pickup preserves the previous
+worktree registration and records a prepared successor before it can pin a separate authenticated
+acknowledgment. A prepared registration does not authorize work or publication. The operator must
+reconcile the specific stopped run and its PR, and the host holds its existing run locks through
+the claim and acknowledgment transition. The supported host and run scope, process observation
+limits, and resume procedure are specified in [Multi-Agent Workspace Guardrails](DEV_WORKFLOW.md#multi-agent-workspace-guardrails).
+Before a claim, the operator path screens the registered and live checkout inventory against the
+declared model workspace using the same boundary as the native successor proof.
+
 The disposable integration oracle supplies byte input through a temporary regular
 file, including the complete NUL-separated attribute path set. This avoids pipe
 backpressure while preserving exact input, captured output, bounded Git execution,
@@ -89,7 +98,7 @@ and retires that generation only after the removal succeeds.
 
 Branch deletion is a separate irreversible step. The janitor rechecks both
 the path and branch lease identities immediately before deletion and retains
-prior path-to-branch bindings when a path is reused. A report, missing record,
+historical prior path-to-branch bindings. A report, missing record,
 or missing worktree is never evidence that cleanup is authorized.
 
 An expired `active` record whose checkout is absent remains untouched by
@@ -105,6 +114,43 @@ including case or Unicode-normalisation aliases, and fails authority reads if
 the path is later recreated. It is not a `removed`
 tombstone and cannot resume cleanup. Ordinary-missing restart reconciliation
 continues to process only a previously durable `removal_pending` transition.
+
+Handoff transfer proofs on the unmerged #6618 branch are repository candidate
+support only. They are not deployed or activated, and they do not complete any
+child Issue. The handoff procedure is owned by
+[DEV_WORKFLOW](DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental).
+`agent_worktree.py prepare-transfer` and `pin-transfer` write a
+`transfer_registration` proof into the successor's existing row, and only in
+the repository's default lifecycle registry, under its lock. There is no new
+ledger. Preparation needs an active registration and a clean checkout that
+matches the pending comment. It binds the comment digest, the candidate
+readback and the current registration epoch. Pinning adds the acknowledgment
+digest only if that same epoch stayed live through the acknowledgment's whole
+second. Release, expiry, a path change or a generation change starts a new
+epoch. Repeating an exact prepare or pin reads back the stored proof, and a
+pinned proof cannot be replaced. Same-session re-registration, reclaim and
+verified path moves keep the row's prior-owner, previous-registration and
+transfer snapshots. A new transfer embeds its predecessor's snapshot, including
+that predecessor's earlier proof and moves. Re-registering the same live owner,
+path, branch and generation preserves its continuous epoch; a release, expiry or
+identity change does not fill a gap in that epoch. Nesting is capped at 32 levels
+(`MAX_TRANSFER_HISTORY`); deeper or malformed snapshot evidence makes the
+record invalid instead of being truncated. When a path is reused, the PR-cycle
+authority read ignores a released former path only if that path is absent and
+the active row's preserved previous registration proves the release. A
+conflicting released row refuses. Removed and removal-pending rows retain their
+place in predecessor end-time order, including whether the owner actually
+released; cleanup does not turn expiry or completion into release. A new
+registration for another branch cannot overwrite that path's owner or transfer
+history. Move the checkout to a replacement path and register it, or use the
+existing lifecycle reconciliation; the old row and any unique work stay intact.
+Several conditions refuse instead of
+repairing anything: a predecessor that expired or completed without release,
+an unpinned predecessor transfer, tied ended predecessors, and local history
+that is unreleased or overlaps a reconciled remote predecessor. The owner or
+the existing maintenance route above must then reconcile the preserved
+registry. These proofs are technical readbacks, not owner approval. They grant
+no cleanup, retirement or merge authority and trigger no implicit cleanup.
 
 Remote branch disposition is not a broad-janitor action. The bounded
 `targeted_remote_cleanup` production entrypoint accepts at most five caller-supplied
@@ -277,6 +323,10 @@ partial. A code-formatted fragment does not make visible retention intent
 outside its container narrative; incomplete or malformed assembled intent
 still refuses retirement. Separate receipts and historical delivery statements
 retain their own source boundaries.
+Empty GFM table headers may be omitted by Markdown parsing; source mapping skips
+only blank rows within the same token extent and still requires exact source
+text for every mapped line. Narrative tables therefore do not block retirement,
+while explicit reservations beside them remain protected.
 
 
 ## Rescue-backed serial maintenance policy
@@ -421,7 +471,7 @@ leases (including historical path bindings), and the designated protected target
 remain retained. A complete locked lifecycle snapshot is frozen and reread before
 every batch; any generation/record drift stops progress. Relevant current/prior
 bindings must pass the canonical lifecycle record validator; malformed generations
-remain retained. This operator path also retains all branches while any canonical
+remain retained. By default, this operator path also retains all branches while any canonical
 dispatcher lease is live. Missing historical branch
 bindings are recorded as absent, never reconstructed or fabricated. For a branch
 with no checkout, this explicit owner discard decision plus frozen ref identity
@@ -433,6 +483,25 @@ The durable receipt captures the owner decision and verified snapshot for every
 exact branch, including unmerged branches. Its recovery path is additive object
 recovery from the bundle, not an obligation to resolve old merge conflicts. This
 operator path does not change or grant authority to the daily automation.
+
+For an explicit owner request to retire only refs unrelated to ongoing work,
+`retire_inactive_local_branches` and `retire_absent_remote_tracking_refs` accept
+`allow_unrelated_issue_leases=True`; the receipt records this opt-in. Every live
+lease must have one canonical same-repository nonterminal Issue task, a unique
+lease identity, and matching holder, resource and expiry under the existing
+relationship validator. An orphan, foreign, unknown or inconsistent live claim
+keeps the global preservation rule. This mode does not change or release leases.
+A nonterminal task linked to a closed or unknown PR also retains the global rule;
+open PR identities are already protected by the live open-head census.
+
+All candidate-specific protections still apply, including nonterminal task
+bindings and both local-head and origin-tracking aliases of a branch. Checked-out
+refs, every linked HEAD, open PRs, protected refs and lifecycle bindings remain
+protected, including prior branch names of a live lifecycle generation. The
+dispatcher writer fence and lifecycle lock still span the exact
+CAS and readback. Worktree census drift before deletion refuses the batch; drift
+after deletion restores the absent refs and records compensation. Other ref
+namespaces, remote mutations and automatic cleanup do not inherit this opt-in.
 
 ## Owner-authorized retirement of registered inactive worktrees
 
@@ -554,6 +623,7 @@ reinterpreted by this operator.
 expected SHAs, excluding `HEAD` and protected branch names. It uses a new verified
 bundle, the existing serial local CAS/readback mechanism, and the same checked-out,
 open-PR, lifecycle, lease and protected-branch guards as local branch retirement.
+Its optional selective Issue-lease mode is the explicit owner path described above.
 The canonical remote must prove every corresponding `refs/heads/*` absent before
 snapshot creation and before and after each deletion batch. A recreated source
 stops progress and restores only absent local tracking refs; advanced local refs

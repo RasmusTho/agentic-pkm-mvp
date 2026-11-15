@@ -133,10 +133,37 @@ authority, recovery and closure requirements; they do not replace those common c
 Before publication, merge, or terminal closure, authenticate the current lifecycle owner and session,
 sole writable worktree, branch and base, unpublished candidate head (or `none`), current changed-file
 set, current validation, current review/receipt evidence, and exactly one next authorized action. When
-an owner replacement occurred, require a durable `lifecycle_handoff_receipt.v1` plus the named
-successor's dispatcher task/lease readback when dispatcher-backed, worktree registration, candidate
-HEAD/file-set revalidation, branch/PR head, and review/receipt readback. A former lifecycle owner is read-only after that acknowledgment and cannot
+an owner replacement occurred through a normal handoff, require a durable
+`lifecycle_handoff_receipt.v1` plus the named successor's dispatcher task/lease readback when
+dispatcher-backed, worktree registration, candidate HEAD/file-set revalidation, branch/PR head, and
+review/receipt readback. A former lifecycle owner is read-only after that acknowledgment and cannot
 publish, merge, close, or mutate labels on the transferred work.
+
+For the narrowly supported legacy operator reconciliation, do not invent predecessor consent. In an
+interactive native delivery, the named current successor must run the following read-only proof from
+the qualified host checkout before merge, using the pinned successor identity, its current session,
+and an absolute model-workspace root disjoint from both host checkouts:
+
+```sh
+python3 scripts/verify_operator_successor.py --issue <issue> --pr <pr> --worktree <absolute-path> \
+  --workspace-root <absolute-model-workspace-root> --agent <successor-agent> --session <current-session>
+```
+
+Require exit zero and the current PR head in the result; rerun after any relevant authority or head
+drift. This invokes the existing pinned operator lineage checks against fresh dispatcher, registry,
+GitHub and candidate readbacks. An absent dispatcher PR projection is acceptable only when the
+pinned operator record and current PR establish the same exact Issue, PR, branch, candidate and
+successor; a conflicting projection is refused. The proof reads a current-schema dispatcher database
+in rollback-journal mode and an existing lifecycle lock without initializing either; unavailable,
+older, WAL-mode or recovery-pending state is refused. It supplies successor proof only: apply every
+native scope, review, current-head CI and expected-head merge gate independently. These are
+point-in-time observations, not an atomic GitHub/dispatcher lock. This command does not admit an
+executor or alter its fenced protocol. The OpenHands PR-cycle controller still requires its existing
+exact dispatcher PR link for premerge and postmerge; this proof does not relax or populate that
+projection. For an already dispatched or in-flight operator case, do not
+switch routes or start a new merge without proof accepted by that executor's authority and phase
+gates; an unknown or earlier effect follows its existing readback and recovery protocol. This
+instruction is not a claim that the executor mechanically detects operator recoveries.
 
 Compare evidence by the head or observed-time binding it declares. Newer blocking review evidence
 supersedes an older green receipt, publish recommendation, or closure verdict even when the candidate
@@ -190,9 +217,11 @@ This gate does not authorize deployment or provision credentials.
 
 ### Delivery-path routing (light vs full)
 
-This file applies only after the router in `SKILL.md :: Routing` selects the executor/in-flight
-path. Its full-path protocol is unchanged for dispatched execution, release operations, and
-already-authenticated merge attempts. Review depth or Issue count alone does not select this file.
+`Current SHA truth and scope drift` also applies to resumed native delivery when routed there by
+`SKILL.md :: Validation`. The merge and delivery protocols in this file apply only after
+`SKILL.md :: Routing` selects executor/in-flight delivery. That full-path protocol is unchanged for
+dispatched execution, release operations, and already-authenticated merge attempts. Review depth or
+Issue count alone does not select executor/in-flight delivery.
 
 #### Issue-free reviewed lane compatibility path
 

@@ -1008,10 +1008,10 @@ def _obsidian_required() -> bool:
         settings = load_knowledge_settings()
     except KnowledgeConfigError:
         return True
-    if settings.strict_startup:
-        return True
     if settings.primary_adapter != KnowledgeAdapter.OBSIDIAN_CLI:
         return False
+    if settings.strict_startup:
+        return True
     return not settings.allow_fallback
 
 
@@ -1038,14 +1038,22 @@ def _check_obsidian_dependencies() -> Dict[str, Any]:
         settings = load_knowledge_settings()
     except KnowledgeConfigError as exc:
         return _result(False, f"knowledge settings invalid ({_exception_kind(exc)})")
-    status = obsidian_dependency_status(get_installer_version=_get_obsidian_installer_version)
     data = {
-        **status.details,
         "primary_adapter": settings.primary_adapter.value,
         "fallback_adapter": settings.fallback_adapter.value,
         "strict_startup": settings.strict_startup,
         "allow_fallback": settings.allow_fallback,
     }
+    if settings.primary_adapter != KnowledgeAdapter.OBSIDIAN_CLI:
+        data.update({"skipped": True, "reason": "inactive_adapter"})
+        return _result(
+            True,
+            "Obsidian dependency checks skipped; fs_vault adapter is selected",
+            data=data,
+        )
+
+    status = obsidian_dependency_status(get_installer_version=_get_obsidian_installer_version)
+    data.update(status.details)
     if status.ok:
         return _result(True, "Obsidian dependency checks passed", data=data)
     return _result(False, "Obsidian dependency checks failed", data=data)
@@ -1277,8 +1285,14 @@ def _check_youtube_sync(*, vault_context: Any = None) -> Dict[str, Any]:
         detail = "YouTube sync degraded"
     if reason_codes and state != "connected":
         detail += ": " + ", ".join(reason_codes)
+    auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
+    paused_only = (
+        state == "paused"
+        and set(reason_codes) == {"paused"}
+        and auth.get("status") == "connected"
+    )
     result = _result(
-        state == "connected",
+        state == "connected" or paused_only,
         detail,
         data={
             **payload,

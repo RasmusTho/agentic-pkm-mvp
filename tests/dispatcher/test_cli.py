@@ -371,6 +371,48 @@ def test_claim_verb_takeover_stale_flag(tmp_env, store):
     assert store.list_events(ready.task_id)[-1].payload["takeover"]["previous_lease_id"] == lease.lease_id
 
 
+def test_claim_cli_compares_complete_predecessor_observation(tmp_env, store):
+    from app.dispatcher.events import claim_event_digest, event_history_digest
+    from app.dispatcher.leases import claim
+    from tests.dispatcher.helpers import seed_tasks
+
+    ready = next(t for t in seed_tasks(store) if t.status == "ready")
+    ready.repo = "RasmusTho/agentic-pkm-mvp"
+    store.upsert_task(ready)
+    _, old = claim(store, ready.task_id, "old-agent")
+    old_event = store.list_events(ready.task_id)[-1]
+    expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    old.expires_at = expired
+    store.upsert_lease(old)
+    task = store.get_task(ready.task_id)
+    task.lease_expires_at = expired
+    store.upsert_task(task)
+    history = event_history_digest([event.to_dict() for event in store.list_events(ready.task_id)])
+    args = ["claim", ready.task_id, "--agent", "new-agent", "--session", "new-session",
+            "--takeover-stale", "--expected-lease-id", old.lease_id,
+            "--expected-lease-holder", "old-agent", "--expected-lease-expires-at", expired,
+            "--expected-claim-event-id", old_event.event_id,
+            "--expected-claim-event-digest", claim_event_digest(old_event.to_dict()),
+            "--expected-repo", ready.repo, "--expected-issue-number", str(ready.issue_number), "--json"]
+
+    code, data = _run(["claim", ready.task_id, "--agent", "new-agent", "--takeover-stale",
+                       "--expected-lease-id", old.lease_id, "--expected-lease-holder", "old-agent", "--json"])
+    assert code != 0 and "requires repo, issue, holder" in data["error"]
+    code, data = _run(args + ["--expected-history-digest", "z" * 64])
+    assert code != 0 and "requires repo, issue, holder" in data["error"]
+    assert store.get_task(ready.task_id).lease_id == old.lease_id
+
+    code, data = _run(args + ["--expected-history-digest", "0" * 64])
+    assert code != 0 and "observed predecessor changed" in data["error"]
+    assert store.get_task(ready.task_id).lease_id == old.lease_id
+    assert store.list_events(ready.task_id) == [old_event]
+
+    code, data = _run(args + ["--expected-history-digest", history])
+    assert code == 0 and data["lease"]["holder"] == "new-agent"
+    assert store.list_events(ready.task_id)[0] == old_event
+    assert store.list_events(ready.task_id)[-1].payload["session"] == "new-session"
+
+
 # ---------------------------------------------------------------------------
 # AC: heartbeat --json returns updated lease state or explicit no-active-lease error
 # Verify: test_heartbeat_json_output

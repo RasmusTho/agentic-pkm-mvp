@@ -54,3 +54,15 @@ def test_terminal_closure_requires_source_thread_and_dispatcher_readback() -> No
         "Only then make the explicit lifecycle mutation and read it back",
     ):
         assert requirement in text
+
+
+def test_resumed_native_reads_current_sha_without_switching_merge_route() -> None:
+    full = SKILL.read_text(encoding="utf-8")
+    entrypoint = (ROOT / ".codex/skills/verification-and-closure/SKILL.md").read_text(encoding="utf-8")
+    validation = entrypoint.split("## Validation", 1)[1].split("## Review", 1)[0]
+    routing = full.split("### Delivery-path routing (light vs full)", 1)[1].split("#### Issue-free", 1)[0]
+    assert "For a resumed run or owner handoff" in validation
+    assert "Current SHA truth and scope drift" in validation
+    assert "also applies to resumed native delivery" in routing
+    assert "merge and delivery protocols" in routing
+    assert "only after" in routing and "selects executor/in-flight delivery" in routing
