@@ -256,8 +256,9 @@ The worker, test verifier and independent reviewer run Git with global and syste
 disabled; repository-local Git configuration remains in effect.
 
 For the owner interface, install the independently reviewed `scripts/openhands_canvas.py` from
-the #6602 candidate as `/absolute/install/root/bin/openhands_canvas.py`, retaining its source and
-commit receipt. #6602 is a draft and this launcher is not yet merged. Start the installed official
+the source merged in #6602 as `/absolute/install/root/bin/openhands_canvas.py`, retaining its source
+and commit receipt. The merge does not establish that the launcher is installed or the live service
+is qualified. Start the installed official
 Agent Canvas against the recorded service using the same paths and Issue:
 
 ```sh
