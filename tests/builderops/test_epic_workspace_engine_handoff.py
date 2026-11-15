@@ -161,6 +161,21 @@ class Harness:
         return [call for call in self.server.calls if call[0] == "POST" and call[2] == "/conversations"]
 
 
+
+def reserve_fixture_decision(h, decision, observed):
+    """Persist the synthetic decision required by the current reservation fence."""
+    from app.builderops import epic_coordination_effects as effects, epic_run_state
+
+    def update(state):
+        state["dispatch_decisions"].append(dict(decision))
+        state["issue_mappings"][str(ISSUE)]["coordination"] = {"last_result": {"decision_id": decision["id"]}}
+        return state
+
+    epic_run_state.update_epic_run_state(h.layout.run_id, root=h.layout.run_state_dir,
+                                        updater=update, expected_epic_issue_number=h.layout.epic)
+    return effects._reserve(h.layout, ISSUE, "w-a", decision, "prior-pass", observed)
+
+
 def test_quota_exhaustion_hands_off_to_terra_without_competing_writers(tmp_path, capsys):
     h = Harness(tmp_path, capsys, peer=True)
     ew._record_worker(h.layout, ISSUE, next_action=TASK_ACTION)
@@ -461,7 +476,7 @@ def test_unknown_old_directive_does_not_block_preserved_quota_continuation(tmp_p
     h = Harness(tmp_path, capsys)
     observed = ew.assignment_of(h.mapping())
     decision = {"id": "synthetic-quota-prior-directive", "action": "change_approach", "assignment": observed}
-    effect = effects._reserve(h.layout, ISSUE, "w-a", decision, "prior-pass", observed)
+    effect = reserve_fixture_decision(h, decision, observed)
     assert effect is not None and effects._pending(ew._load_state(h.layout), ISSUE)
     h.failure()
     result = h.tick(capsys)[ISSUE]
@@ -474,15 +489,13 @@ def test_unknown_old_directive_does_not_block_preserved_quota_continuation(tmp_p
 
 
 def test_task_action_survives_unknown_directive_and_interrupted_quota_handoff(tmp_path, capsys):
-    from app.builderops import epic_coordination_effects as effects
-
     h = Harness(tmp_path, capsys)
     checkout = h.layout.checkout("w-a")
     (checkout / "partial.py").write_text("unfinished task work\n")
     ew._record_worker(h.layout, ISSUE, next_action=TASK_ACTION)
     observed = ew.assignment_of(h.mapping())
     decision = {"id": "quota-unknown-directive-with-task", "action": "change_approach", "assignment": observed}
-    effect = effects._reserve(h.layout, ISSUE, "w-a", decision, "prior-pass", observed)
+    effect = reserve_fixture_decision(h, decision, observed)
     assert effect is not None
     assert TASK_ACTION in ew.continuation_brief(h.layout, "w-a")["prompt"]
     h.failure()
@@ -511,15 +524,13 @@ def test_task_action_survives_unknown_directive_and_interrupted_quota_handoff(tm
 
 
 def test_new_task_action_supersedes_an_older_diagnostic_snapshot(tmp_path, capsys):
-    from app.builderops import epic_coordination_effects as effects
-
     h = Harness(tmp_path, capsys)
     h.github.inventory_down = True
     h.tick(capsys)  # a gap records its diagnostic before the task changes
     ew._record_worker(h.layout, ISSUE, next_action=TASK_ACTION)
     observed = ew.assignment_of(h.mapping())
     decision = {"id": "updated-task-with-directive", "action": "change_approach", "assignment": observed}
-    assert effects._reserve(h.layout, ISSUE, "w-a", decision, "prior-pass", observed) is not None
+    assert reserve_fixture_decision(h, decision, observed) is not None
     h.failure()
     assert h.tick(capsys)[ISSUE]["handoff"]["state"] == "continued"
     assert h.mapping()["engine_handoff"]["context"]["next_action"] == TASK_ACTION

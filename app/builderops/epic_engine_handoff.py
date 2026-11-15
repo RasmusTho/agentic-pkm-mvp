@@ -89,10 +89,25 @@ def continuation_context(layout: ew.Layout, worker: str, handoff: Mapping[str, A
     state = ew._load_state(layout)
     issue = ew._issue_for_worker(state, worker)
     mapping = state["issue_mappings"][str(issue)]
+    # The reservation is historical evidence; only the still-bound assignment can supply
+    # its current task. Callers hold the worker lifecycle lock through conversation reservation.
+    predecessor = handoff.get("predecessor")
+    owner_binding = handoff.get("owner_binding")
+    intent = handoff.get("recovery_stop_intent") or handoff.get("stop_intent")
+    takeover = ew._takeover_of(mapping)
+    if (mapping.get("engine_handoff") != handoff or not isinstance(predecessor, Mapping)
+            or predecessor.get("worker") != worker or predecessor.get("branch") != mapping.get("branch")
+            or not isinstance(owner_binding, Mapping)
+            or set(owner_binding) != {"lifecycle_owner", "owner", "builder_session"}
+            or any(mapping.get(key) != value for key, value in owner_binding.items())
+            or not isinstance(intent, Mapping) or takeover.get("status") != "consumed"
+            or takeover.get("stop_id") != intent.get("stop_id") or mapping.get("stop_id") != intent.get("stop_id")):
+        raise ew.TakeoverRefused("handoff no longer binds the current assignment and stop generation")
     stopped = mapping.get("work_at_stop") if isinstance(mapping.get("work_at_stop"), Mapping) else {}
     retained = {k: stopped.get(k) for k in ("branch", "head", "uncommitted_count", "uncommitted_paths",
                                               "ignored_count", "unpublished_commits", "unique_work")}
-    return {**handoff["context"], "actual_checkout": str(layout.checkout(worker)),
+    return {**handoff["context"], "next_action": str(ew._continuation_task_action(mapping) or "unknown")[:600],
+            "actual_checkout": str(layout.checkout(worker)),
             "execution_branch": brief["execution_branch"], "execution_head": brief["execution_head"],
             "retained_work": retained, "publication_operations": brief["publication_operations"]}
 

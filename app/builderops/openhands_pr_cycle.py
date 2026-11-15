@@ -2934,6 +2934,7 @@ def _reconciliation_prompt(pr: Mapping[str, Any], identity: str, targets: list[s
             + f"\nEarlier report (evidence, verbatim): {json.dumps(original, sort_keys=True)}")
 
 
+@workspace._serialized_worker
 def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_id: str,
                               pr: Mapping[str, Any], identity: str, admission: Mapping[str, Any],
                               *, http: Callable[..., tuple[int, Any]] = workspace._http,
@@ -2952,7 +2953,7 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
         admission = {**admission, "engine": "codex", "model": "gpt-6.1-terra"}
     if isinstance(prior, dict) and prior.get("operation_id") == operation_id:
         if prior.get("status") in ("creating", "unknown"):
-            return workspace.reconcile_worker_conversation(layout, worker, http=http, runner=_worker_runner)
+            return workspace._reconcile_worker_conversation_locked(layout, worker, http=http, runner=_worker_runner)
         if not (prior.get("status") == workspace.CONVERSATION_ENDED and isinstance(handoff, Mapping)
                 and handoff.get("status") == "awaiting_pr_cycle" and handoff.get("operation_id") == operation_id):
             return prior
@@ -2971,7 +2972,7 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
         context = epic_engine_handoff.continuation_context(layout, worker, handoff)
         prompt = ("Compact controller records for this same review (unknown means not established):\n"
                   + json.dumps(context, ensure_ascii=True, sort_keys=True, default=str) + "\n\n" + prompt)
-    return workspace.start_conversation(
+    return workspace._start_conversation_locked(
         layout, worker, engine=admission["engine"], model=admission["model"],
         prompt=prompt,
         operation_id=operation_id,

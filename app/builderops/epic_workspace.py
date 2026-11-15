@@ -383,6 +383,10 @@ def _reserve_worker(layout: Layout, issue: int, worker: str, **fields: Any) -> d
             if other_key != key and other.get("worker") == worker:
                 raise LaunchRefused(f"worker {worker!r} already owns issue #{other_key}")
         mapping = dict(mappings.get(key, {}))
+        # An explicit worker-create action is authoritative even when its text happens to
+        # equal an earlier coordinator diagnostic. Discard that superseded diagnostic tag.
+        if "next_action" in fields:
+            mapping.pop("coordination_continuation", None)
         mapping.update(fields, worker=worker, updated_at=_now())
         mappings[key] = mapping
         return state
