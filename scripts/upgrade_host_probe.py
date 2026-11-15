@@ -262,6 +262,7 @@ def _lease_readback(lease_id: str, *, rendering_successor: bool = False) -> dict
         sys.path.insert(0, str(REPOSITORY_ROOT))
     from scripts.agent_worktree import (
         WorktreeLifecycleError,
+        assert_operator_registration_pinned,
         load_lifecycle_authority,
         load_lifecycle_records,
     )
@@ -286,6 +287,10 @@ def _lease_readback(lease_id: str, *, rendering_successor: bool = False) -> dict
         or (rendering_successor and record.get("path") != str(REPOSITORY_ROOT))
     ):
         raise CarrierRefusal("sole registered worktree is not owned by the successor")
+    try:
+        assert_operator_registration_pinned(record)
+    except WorktreeLifecycleError as exc:
+        raise CarrierRefusal("worktree operator registration is unqualified") from exc
     if (
         rendering_successor
         and sum(

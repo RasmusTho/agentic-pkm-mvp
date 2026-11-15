@@ -20,10 +20,12 @@ python -m app.cli health --json
 | `yt_dlp` | `app/cli/health.py:30-36` | Module import | `pip install -r requirements.txt`. |
 | `index_outbox` | `app/cli/health.py` | Existing `INDEX_OUTBOX_PATH` is a readable, writable regular file; missing paths are reported without creating them. | Start the producer/bootstrap path or fix permissions and adjust the env path. |
 | `llm_access` | `app/cli/health.py` + `app/model_access/capability_health.py` | Required, no-inference health over logical capabilities required by active configured text routes. Only fresh `available` capability observations pass; degraded, unavailable, unknown, missing, malformed, and stale observations fail closed. `transport_observation` reports configured network-path reachability separately, including when a pre-completion path fallback was used. Skipped eval routes and embeddings are not probed; embedding identity stays separate under `embedding_index`. The public API omits provider, model, transport, endpoint, and selected-path identity from model-access health. | Inspect `checks.llm_access.capabilities`, `checks.llm_access.transport_observation`, and correlate `trace_id`. The local CLI retains route configuration under `checks.llm_router` for operator diagnosis. |
-| `obsidian` | `app/cli/health.py` + `app/knowledge/health.py` | Obsidian CLI in `PATH` and installer compatibility (`>=1.12.4`) when knowledge policy requires Obsidian adapter | Install/update Obsidian installer and ensure `obsidian` command is available. |
+| `obsidian` | `app/cli/health.py` + `app/knowledge/health.py` | Obsidian CLI in `PATH` and installer compatibility (`>=1.12.4`) when knowledge policy selects the Obsidian CLI adapter; an explicit `fs_vault` primary reports this dependency as skipped | Install/update Obsidian installer and ensure `obsidian` command is available when the CLI adapter is active. |
 | `companion_diagnostics` | `app/cli/health.py:586-635` + `app/services/companion_diagnostics.py` | Calls `companion_diagnostics_summary(vault_root)`; reports `duplicate_companion_count` (UUIDs present in both canonical `⚙️ System/companions/` and legacy `_system/companions/`). Optional check — does not affect the `ok` boolean; skipped when `vault_root` cannot be resolved. | Inspect `checks.companion_diagnostics.data.duplicate_companion_count` in the JSON output (`python -m app.cli health --json`). Non-zero counts indicate historical duplicates from a dual-write era; remove the legacy `_system/companions/<uuid>.md` files manually or wait for a future migration tool. |
 
 `checks.llm_access` is an `/api/health` dependency signal only. It does not change `/readyz`, whose readiness contract remains based on store/Postgres readiness; embedding identity remains separate under `checks.embedding_index`.
+
+An explicit DEV/TEST `fs_vault` primary with fallback disabled is a valid non-production posture. Health checks the selected filesystem adapter and does not probe the inactive Obsidian CLI; production defaults remain unchanged.
 
 ## Provider-neutral capability health
 
@@ -153,10 +155,13 @@ Thresholds (configurable in the vault `health.md` `thresholds:` block, same as t
 Posture — **alerting signal only, read-only, no auto-repair**:
 
 - A breach sets `dead_letter_status: warn` and appends an inspection hint to `suggested_actions`, and the CLI dependency check (`python -m app.cli health --json`, key `checks.dead_letters`) reports `ok: false` with the same fields.
+- The YouTube sync projection consumes `dead_letter_status` for this global audit signal: a historical `dead_lettered_count` with status `pass` does not add `dead_letters_present`; request-store dead letters remain their own queue signal.
 - A malformed or indeterminate JSONL audit tail sets the dead-letter fields to `null` and `dead_letter_status: unknown`; it is never treated as an empty/pass result. Inspect the outbox with `python -m app.cli events-doctor --path $INDEX_OUTBOX_PATH`.
 - A breach does **not** block vault writes: dead-letter breach is not in `WRITE_BLOCKED_STATES` (`writes_allowed` stays `true`). Dead-letters are downstream-processing failures; capture is the product and stays available while processing is repaired.
 - `checks.dead_letters` is a non-required check: it never flips the aggregate `/api/health` `ok`/`required_ok` booleans, so a full dead-letter queue cannot restart containers.
 - Re-driving or clearing dead-lettered rows is an explicit operator/agent action; no health surface mutates the outbox.
+
+The optional `checks.youtube_sync` diagnostic preserves `status: paused` when sync gates are intentionally off. The CLI reports that paused-only state as informational (`ok: true`) only when authentication is connected and no other reason code is present; auth, offline, queue, quota, and source failures remain degraded.
 
 ## Store-resolution signal
 

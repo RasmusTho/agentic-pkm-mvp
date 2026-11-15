@@ -148,7 +148,7 @@ def run_git(args: list[str], cwd: Path) -> str:
         check=True,
         capture_output=True,
         text=True,
-        env=_sanitized_git_environment(),
+        env={**_sanitized_git_environment(), "GIT_NO_REPLACE_OBJECTS": "1"},
         timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base", "ls-remote"} else None,
     )
     return result.stdout.strip()
@@ -161,7 +161,7 @@ def run_git_result(args: list[str], cwd: Path) -> subprocess.CompletedProcess[st
         check=False,
         capture_output=True,
         text=True,
-        env=_sanitized_git_environment(),
+        env={**_sanitized_git_environment(), "GIT_NO_REPLACE_OBJECTS": "1"},
         timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base", "ls-remote"} else None,
     )
 
@@ -2648,12 +2648,19 @@ def _dispatcher_example_block(
     for row in rows:
         starts.append(starts[-1] + len(row))
     offsets: list[int] = []
-    for index, line in enumerate(token.content.splitlines(keepends=True)):
-        row = token.map[0] + index
+    row = token.map[0]
+    for line in token.content.splitlines(keepends=True):
+        # Markdown may omit an empty GFM header after pipe normalization.
+        # Skip only blank source rows, within this token's original extent.
+        while row < token.map[1] and not rows[row].strip() and line.strip():
+            row += 1
+        if row >= token.map[1]:
+            raise RuntimeError("dispatcher_activity_invalid")
         column = rows[row].find(line.rstrip("\n"))
         if column < 0:
             raise RuntimeError("dispatcher_activity_invalid")
         offsets.extend(origins[starts[row] + column : starts[row] + column + len(line)])
+        row += 1
 
     class Events(_DispatcherHTMLBlockTextParser):
         def __init__(
@@ -5702,9 +5709,55 @@ def _retirement_local_activity(
     return protected_shas, resources
 
 
+def _retirement_has_unscoped_live_lease(
+    dispatcher: list[dict[str, object]], repository: str, pr_heads: Mapping[str, str],
+) -> bool:
+    """Only a uniquely owned canonical Issue lease can be scoped to its task."""
+    tasks: list[dict[str, Any]] = []
+    leases: list[dict[str, Any]] = []
+    for row in dispatcher:
+        record = row.get("record")
+        if row.get("kind") not in {"task", "lease"} or not isinstance(record, dict):
+            return True
+        (tasks if row["kind"] == "task" else leases).append(record)
+    open_pulls = {int(key.split(":", 1)[0]) for key in pr_heads}
+    for task in tasks:
+        if task.get("status") in _NONTERMINAL_DISPATCHER_STATUSES:
+            linked_pr = _dispatcher_linked_pr(task.get("linked_pr"))
+            if linked_pr is not None and linked_pr not in open_pulls:
+                return True  # A retained closed/unknown PR needs its own disposition.
+    now = dt.datetime.now(dt.UTC)
+    for lease in leases:
+        if not _dispatcher_live_lease(lease, now=now):
+            continue
+        lease_id = lease.get("lease_id")
+        owners = [task for task in tasks if task.get("lease_id") == lease_id]
+        if (not isinstance(lease_id, str) or not lease_id
+                or sum(row.get("lease_id") == lease_id for row in leases) != 1
+                or len(owners) != 1):
+            return True
+        task = owners[0]
+        issue = task.get("issue_number")
+        task_repo = task.get("repo")
+        if (not isinstance(task_repo, str) or task_repo.casefold() != repository.casefold()
+                or not _positive_int(issue)
+                or task.get("task_id") != github_issue_task_id(task_repo, issue)
+                or task.get("status") not in _NONTERMINAL_DISPATCHER_STATUSES):
+            return True
+        try:
+            if _validate_dispatcher_task_lease_relationship(
+                task, lease, lease_reference_count=1, now=now,
+            ) is not True:
+                return True
+        except RuntimeError:
+            return True
+    return False
+
+
 def _retire_inactive_ref_phase(
     cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
     owner_discard: str, batch_size: int = 25, kind: str,
+    allow_unrelated_issue_leases: bool = False,
 ) -> dict[str, object]:
     """Retire exact local refs under an explicit owner decision.
 
@@ -5715,6 +5768,9 @@ def _retire_inactive_ref_phase(
 
     if kind not in {"legacy_archive", "local_branch", "auxiliary_ref", "remote_tracking"}:
         raise ValueError("ref_retirement_kind_invalid")
+    if (type(allow_unrelated_issue_leases) is not bool
+            or (allow_unrelated_issue_leases and kind not in {"local_branch", "remote_tracking"})):
+        raise ValueError("selective_issue_lease_scope_invalid")
     if not owner_discard.strip() or not targets or not 1 <= batch_size <= 25:
         raise ValueError("explicit_archive_disposition_required")
     for ref, sha in targets.items():
@@ -5755,6 +5811,7 @@ def _retire_inactive_ref_phase(
     receipt_path = snapshot_directory / "retirement.json"
     receipt: dict[str, Any] = {
         "schema": f"{kind}_retirement.v1", "owner_discard": owner_discard,
+        "allow_unrelated_issue_leases": allow_unrelated_issue_leases,
         "snapshot": snapshot["snapshot"], "targets": dict(targets),
         "deleted": [], "retained": {}, "state": "prepared", "batches": [],
     }
@@ -5780,6 +5837,7 @@ def _retire_inactive_ref_phase(
                 if registry != initial_registry:
                     raise RuntimeError("lifecycle_generation_drift")
                 dispatcher = _dispatcher_snapshot_from_connection(connection)
+                worktree_census = run_git(["worktree", "list", "--porcelain"], cwd)
                 protected, resources = _retirement_local_activity(cwd, registry, dispatcher)
                 protected.update(pr_heads.values())
                 any_live_lease = any(
@@ -5787,10 +5845,14 @@ def _retire_inactive_ref_phase(
                     and _parse_dispatcher_time(row["record"].get("expires_at")).timestamp() > time.time()
                     for row in dispatcher
                 )
+                blocking_live_lease = any_live_lease and (
+                    not allow_unrelated_issue_leases
+                    or _retirement_has_unscoped_live_lease(dispatcher, identity.full_name, pr_heads)
+                )
                 selected = {}
                 checked_refs = {
                     item.get("branch") for item in
-                    _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))
+                    _parse_worktrees(worktree_census)
                 }
                 open_branches = {key.split(":", 1)[1] for key in pr_heads}
                 for ref, sha in batch.items():
@@ -5809,22 +5871,26 @@ def _retire_inactive_ref_phase(
                             receipt["retained"][ref] = "invalid_lifecycle_binding"
                             continue
                     branch_protected = kind in {"local_branch", "remote_tracking"} and (
-                        any_live_lease or f"refs/heads/{branch}" in checked_refs or branch in open_branches
+                        blocking_live_lease or f"refs/heads/{branch}" in checked_refs or branch in open_branches
                         or _branch_has_worktree_path_lease(branch, resources, registry)
                         or _branch_has_missing_preserved_lifecycle(branch, registry)
-                        or any(record.get("branch") == branch and record.get("expires_at", 0) > time.time()
+                        or any((record.get("branch") == branch or _record_previously_bound(record, branch))
+                               and record.get("expires_at", 0) > time.time()
                                for record in registry.values())
                         or (special_protected is not None and (
                             f"refs/heads/{branch}" == special_protected.pull_ref or sha == special_protected.pull_sha
                             or re.search(r"(?:^|[-_/])" + str(special_protected.issue_number) + r"(?:$|[-_/])", branch)
                         ))
-                        or any(f"branch:{branch}" in resource for resource in resources)
+                        or any(resource == branch or f"branch:{branch}" in resource
+                               or f"refs/heads/{branch}" in resource
+                               or f"refs/remotes/origin/{branch}" in resource
+                               for resource in resources)
                         or any(resource == f"issue:{number}"
                                for number in re.findall(r"(?:^|[-_/])(\d+)(?=$|[-_/])", branch)
                                for resource in resources)
                     )
                     auxiliary_protected = kind in {"auxiliary_ref", "remote_tracking"} and (
-                        any_live_lease
+                        blocking_live_lease
                         or (special_protected is not None and sha == special_protected.pull_sha)
                         or any(re.search(r"(?:^|[-_/])(?:pr)?" + number + r"(?:$|[-_/])", ref)
                                for number in [*(key.split(":", 1)[0] for key in pr_heads), str(special_protected.issue_number)])
@@ -5834,6 +5900,8 @@ def _retire_inactive_ref_phase(
                     else:
                         selected[ref] = sha
                 if selected:
+                    if run_git(["worktree", "list", "--porcelain"], cwd) != worktree_census:
+                        raise RuntimeError("archive_worktree_activity_drift")
                     commands = ["start", *(f"delete {ref} {sha}" for ref, sha in selected.items()), "prepare", "commit"]
                     subprocess.run(
                         ["git", "update-ref", "--no-deref", "--stdin"], cwd=cwd,
@@ -5843,6 +5911,8 @@ def _retire_inactive_ref_phase(
                     try:
                         if external_changed():
                             raise RuntimeError("archive_pr_activity_drift")
+                        if run_git(["worktree", "list", "--porcelain"], cwd) != worktree_census:
+                            raise RuntimeError("archive_worktree_activity_drift")
                         for ref in selected:
                             if run_git_result(["show-ref", "--verify", "--quiet", ref], cwd).returncode != 1:
                                 raise RuntimeError("archive_delete_readback_failed")
@@ -5899,11 +5969,13 @@ def _tracking_sources_absent(cwd: Path, identity: RepositoryIdentity, targets: M
 def retire_absent_remote_tracking_refs(
     cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
     owner_discard: str, batch_size: int = 25,
+    allow_unrelated_issue_leases: bool = False,
 ) -> dict[str, object]:
     """Retire exact origin tracking refs only while every remote source is absent."""
     return _retire_inactive_ref_phase(
         cwd, targets=targets, snapshot_directory=snapshot_directory,
         owner_discard=owner_discard, batch_size=batch_size, kind="remote_tracking",
+        allow_unrelated_issue_leases=allow_unrelated_issue_leases,
     )
 
 
@@ -5920,11 +5992,13 @@ def retire_inactive_auxiliary_refs(
 def retire_inactive_local_branches(
     cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
     owner_discard: str, batch_size: int = 25,
+    allow_unrelated_issue_leases: bool = False,
 ) -> dict[str, object]:
     """Owner-authorized discard of exact inactive branches, independent of merge."""
     return _retire_inactive_ref_phase(
         cwd, targets=targets, snapshot_directory=snapshot_directory,
         owner_discard=owner_discard, batch_size=batch_size, kind="local_branch",
+        allow_unrelated_issue_leases=allow_unrelated_issue_leases,
     )
 
 

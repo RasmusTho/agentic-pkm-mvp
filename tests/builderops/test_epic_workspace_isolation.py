@@ -1,0 +1,322 @@
+"""Isolation and resource boundaries of the epic workspace launch path (#6616)."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import uuid
+from pathlib import Path
+
+
+from app.builderops import epic_workspace as ew
+
+
+class FakeEngine:
+    """Records docker calls; delegates git to the real binary."""
+
+    def __init__(self, *, available: bool = True) -> None:
+        self.available = available
+        self.calls: list[list[str]] = []
+        self.containers: dict[str, str] = {}
+        self.host_git: list[list[str]] = []
+        self.labels: dict[str, list[str]] = {}
+        self.ports: dict[str, int] = {}
+        self.inspections: list[list[str]] = []
+        self.writable_inspections = 0
+        self.timeouts: list[float | None] = []
+        self.hang_inspections = False
+        self.ids: dict[str, str] = {}
+        self.pending: dict[str, list[str]] = {}
+        self.launches: dict[str, list[str]] = {}
+
+    @staticmethod
+    def worker_for_name(name: str) -> str:
+        return name.split("-", 2)[-1]
+
+    def __call__(self, argv, **kwargs):
+        argv = list(argv)
+        if argv[0] == "git":
+            self.host_git.append(argv)
+            return subprocess.run(argv, **kwargs)
+        self.calls.append(argv)
+        if not self.available:
+            return subprocess.CompletedProcess(argv, 1, "", "Cannot connect to the Docker daemon")
+        if argv[1] == "version":
+            return subprocess.CompletedProcess(argv, 0, "29.1.3\n", "")
+        if argv[1] == "ps" and "--no-trunc" in argv:
+            name_filter = next((a[7:-1] for a in argv if a.startswith("name=^/") and a.endswith("$")), None)
+            id_filter = next((a[3:] for a in argv if a.startswith("id=")), None)
+            matches = []
+            for name, cid in self.ids.items():
+                worker = self.worker_for_name(name)
+                if worker not in self.containers and cid not in self.pending:
+                    continue
+                if name_filter is not None and name != name_filter:
+                    continue
+                if id_filter is not None and cid != id_filter:
+                    continue
+                matches.append(cid)
+            return subprocess.CompletedProcess(argv, 0, "".join(f"{cid}\n" for cid in matches), "")
+        if argv[1] == "inspect":
+            cid = argv[-1]
+            name = next((n for n, value in self.ids.items() if value == cid), None)
+            if name is None:
+                return subprocess.CompletedProcess(argv, 1, "", "not found")
+            if cid in self.pending:
+                labels = [self.pending[cid][i + 1] for i, item in enumerate(self.pending[cid]) if item == "--label"]
+            else:
+                labels = self.labels.get(self.worker_for_name(name), [])
+            labels_dict = dict(label.split("=", 1) for label in labels)
+            if "{{json .}}" in argv:
+                worker = self.worker_for_name(name)
+                if worker not in self.containers or worker not in self.launches:
+                    return subprocess.CompletedProcess(argv, 1, "", "not found")
+                launch = self.launches[worker]
+                mounts = []
+                for i, arg in enumerate(launch):
+                    if arg == "--mount":
+                        fields = dict(part.split("=", 1) for part in launch[i + 1].split(",") if "=" in part)
+                        mounts.append({"Type": fields["type"], "Source": fields["source"], "Destination": fields["target"]})
+                port = self.ports.get(worker)
+                info = {"Id": cid, "Config": {"Labels": labels_dict},
+                        "State": {"Status": self.containers[worker], "OOMKilled": False, "ExitCode": 0},
+                        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(port)}]}},
+                        "Mounts": mounts}
+                return subprocess.CompletedProcess(argv, 0, json.dumps(info), "")
+            return subprocess.CompletedProcess(argv, 0, json.dumps(labels_dict), "")
+        if argv[1] == "ps" and not any(a.startswith(f"label={ew.LABEL_WORKER}=") for a in argv):
+            if "{{.Ports}}" in argv:
+                return subprocess.CompletedProcess(argv, 0, "".join(f"127.0.0.1:{p}->8000/tcp\n" for p in self.ports.values()), "")
+            label = next((a for a in argv if a.startswith("label=")), "")
+            busy = [w for w, labels in self.labels.items() if label[len("label="):] in labels and w in self.containers]
+            return subprocess.CompletedProcess(argv, 0, "".join(f"{w}\n" for w in busy), "")
+        if argv[1] == "ps":
+            prefix = f"label={ew.LABEL_WORKER}="
+            worker = next(a[len(prefix):] for a in argv if a.startswith(prefix))
+            state = self.containers.get(worker)
+            return subprocess.CompletedProcess(argv, 0, f"{state}\n" if state else "", "")
+        if argv[1] == "run" and "--rm" in argv:
+            # Contained git: emulate by running the same git argv on the host with the mount targets
+            # mapped back to their sources. The mount flags are what a real engine would enforce.
+            self.inspections.append(argv)
+            self.timeouts.append(kwargs.get("timeout"))
+            if kwargs.get("input") is not None:
+                assert "--interactive" in argv, "Docker must forward stdin to contained git"
+            if self.hang_inspections:
+                if kwargs.get("timeout") is None:
+                    raise AssertionError("contained git call without a timeout would hang")
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "--mount"]
+            targets = {}
+            for mount in mounts:
+                fields = dict(f.split("=", 1) for f in mount.split(",") if "=" in f)
+                targets[fields["target"]] = fields["source"]
+                if fields["target"] == ew.INSPECT_TARGET:
+                    assert mount.endswith(",readonly"), "the worker checkout must be mounted read-only"
+                else:
+                    assert fields["target"] == ew.SCRATCH_TARGET
+                    self.writable_inspections += 0 if mount.endswith(",readonly") else 1
+            assert argv[argv.index("--network") + 1] == "none"
+
+            def host(text):
+                for target in sorted(targets, key=len, reverse=True):
+                    text = text.replace(target, targets[target])
+                return text
+
+            env = {k: host(v) for k, v in (argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "--env") if k.startswith("GIT_")}
+            kwargs = {**kwargs, "env": {**os.environ, **env}}
+            git = argv[argv.index("git"):]
+            cleaned = []
+            skip = False
+            for position, arg in enumerate(git):
+                if skip:
+                    skip = False
+                elif arg == "-c" and git[position + 1].startswith("safe.directory="):
+                    skip = True
+                else:
+                    cleaned.append(host(arg))
+            return subprocess.run(cleaned, **kwargs)
+        if argv[1] == "create":
+            name = argv[argv.index("--name") + 1]
+            if name in self.ids and (self.ids[name] in self.pending or self.worker_for_name(name) in self.containers):
+                return subprocess.CompletedProcess(argv, 125, "", "name already in use")
+            cid = uuid.uuid4().hex * 2
+            self.ids[name] = cid
+            if "--rm" in argv:
+                self.pending[cid] = argv
+            else:
+                labels = [argv[i + 1] for i, a in enumerate(argv) if a == "--label"]
+                worker = next(v.split("=", 1)[1] for v in labels if v.startswith(f"{ew.LABEL_WORKER}="))
+                self.containers[worker] = "created"
+                self.labels[worker] = labels
+                self.launches[worker] = argv
+            return subprocess.CompletedProcess(argv, 0, cid + "\n", "")
+        if argv[1] == "start":
+            cid = argv[-1]
+            name = next((n for n, value in self.ids.items() if value == cid), None)
+            if name is None:
+                return subprocess.CompletedProcess(argv, 1, "", "not found")
+            if cid in self.pending:
+                create = self.pending[cid]
+                synthetic = ["docker", "run", *create[2:]]
+                try:
+                    result = self(synthetic, **kwargs)
+                except (subprocess.TimeoutExpired, OSError):
+                    raise
+                del self.pending[cid]
+                self.ids.pop(name, None)
+                return result
+            worker = self.worker_for_name(name)
+            if worker not in self.containers:
+                return subprocess.CompletedProcess(argv, 1, "", "not found")
+            self.containers[worker] = "running"
+            create = next(c for c in reversed(self.calls) if c[1] == "create" and c[c.index("--name") + 1] == name)
+            if "--publish" in create:
+                self.ports[worker] = int(create[create.index("--publish") + 1].split(":")[1])
+            return subprocess.CompletedProcess(argv, 0, name + "\n", "")
+        if argv[1] == "run":
+            labels = [argv[i + 1] for i, a in enumerate(argv) if a == "--label"]
+            worker = next(v.split("=", 1)[1] for v in labels if v.startswith(f"{ew.LABEL_WORKER}="))
+            self.containers[worker] = "running"
+            self.labels[worker] = labels
+            if "--publish" in argv:
+                self.ports[worker] = int(argv[argv.index("--publish") + 1].split(":")[1])
+            return subprocess.CompletedProcess(argv, 0, "c0ffee" * 10 + "\n", "")
+        if argv[1] == "rm":
+            name = argv[-1]
+            name = next((n for n, cid in self.ids.items() if cid == name), name)
+            cid = self.ids.pop(name, None)
+            if cid:
+                self.pending.pop(cid, None)
+            for worker in list(self.containers):
+                if name.endswith(f"-{worker}"):
+                    del self.containers[worker]
+                    self.ports.pop(worker, None)
+            return subprocess.CompletedProcess(argv, 0, name + "\n", "")
+        raise AssertionError(f"unexpected docker call {argv}")
+
+    def runs(self) -> list[list[str]]:
+        return [c for c in self.calls if c[1] == "create" and "--rm" not in c]
+
+
+def _seed_repo(tmp_path: Path) -> str:
+    origin = tmp_path / "origin"
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+    subprocess.run(["git", "init", "--quiet", "--initial-branch=main", str(origin)], check=True)
+    (origin / "README.md").write_text("fixture\n")
+    subprocess.run(["git", "-C", str(origin), "add", "README.md"], check=True)
+    subprocess.run(["git", "-C", str(origin), "commit", "--quiet", "-m", "seed"], check=True, env=env)
+    return str(origin)
+
+
+def _cli(root: Path, epic: int, engine: FakeEngine, *args: str) -> int:
+    return ew.main(["--root", str(root), "--epic", str(epic), *args], runner=engine)
+
+
+def test_production_launch_enforces_workspace_and_resource_boundaries(tmp_path, capsys):
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = FakeEngine()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    assert _cli(root, 6615, engine, "worker-create", "--worker", "w-a", "--issue", "6617", "--branch", "b/a", "--next-action", "implement") == 0
+    assert _cli(root, 6615, engine, "worker-create", "--worker", "w-b", "--issue", "6618", "--branch", "b/b", "--next-action", "implement") == 0
+    # A second, disposable fixture epic under the same root.
+    assert _cli(root, 9001, engine, "init", "--repo-url", repo) == 0
+    assert _cli(root, 9001, engine, "worker-create", "--worker", "w-a", "--issue", "1", "--branch", "b/x", "--next-action", "fixture") == 0
+
+    secret = tmp_path / "secrets" / "claude.env"
+    secret.parent.mkdir()
+    secret.write_text("CLAUDE_CODE_OAUTH_TOKEN=placeholder\n")
+    secret.chmod(0o600)
+    capsys.readouterr()
+
+    assert _cli(root, 6615, engine, "worker-start", "--worker", "w-a", "--cpus", "0.75", "--memory", "768m", "--pids", "128", "--env-file", str(secret), "--model", "claude-sonnet-5-5", "--", "sleep", "60") == 0
+    [run] = engine.runs()
+    layout = ew.Layout(root.resolve(), 6615)
+    mounts = [run[i + 1] for i, a in enumerate(run) if a == "--mount"]
+    assert mounts == [
+        f"type=bind,source={layout.checkout('w-a')},target=/workspace",
+        f"type=bind,source={layout.home('w-a')},target=/home/worker",
+    ]
+    for flag, value in [("--cpus", "0.75"), ("--memory", "768m"), ("--memory-swap", "768m"), ("--pids-limit", "128"), ("--cap-drop", "ALL"), ("--security-opt", "no-new-privileges"), ("--user", "1000:1000"), ("--network", "epicws")]:
+        assert run[run.index(flag) + 1] == value
+    assert "--read-only" in run and "--privileged" not in run
+    assert not any("docker.sock" in a for a in run)
+    assert run[run.index("--env-file") + 1] == str(secret)
+    assert "placeholder" not in json.dumps(run)
+
+    # Refusals happen before any engine effect.
+    refused = [
+        ["--mount", "/var/run/docker.sock:/var/run/docker.sock"],
+        ["--mount", f"{Path.home()}:/host-home"],
+        ["--mount", f"{layout.checkout('w-a')}:/other"],
+        # Repeated-key CSV injection through the target or a comma in the source.
+        ["--mount", f"{layout.worker_dir('w-b')}:/mnt/x,source=/var/run/docker.sock"],
+        ["--mount", f"{layout.worker_dir('w-b')}/a,source=:/mnt/x"],
+        ["--mount", f"{layout.worker_dir('w-b')}:/workspace"],
+        ["--mount", f"{layout.worker_dir('w-b')}:/mnt/../etc"],
+        ["--image=--privileged -- -v /:/host alpine"],
+        ["--image", "alpine -v /:/host"],
+        ["--mount", f"{layout.source}:/source"],
+        ["--mount", f"{ew.Layout(root.resolve(), 9001).checkout('w-a')}:/fixture"],
+        ["--memory", "unbounded"],
+        ["--pids", "0"],
+        ["--network", "host"],
+        ["--network", "container:other"],
+    ]
+    for extra in refused:
+        before = len(engine.calls)
+        assert _cli(root, 6615, engine, "worker-start", "--worker", "w-b", *extra, "--", "true") == 2
+        assert engine.calls[before:] == [], extra
+    world_readable = tmp_path / "secrets" / "open.env"
+    world_readable.write_text("X=1\n")
+    world_readable.chmod(0o644)
+    before = len(engine.calls)
+    assert _cli(root, 6615, engine, "worker-start", "--worker", "w-b", "--env-file", str(world_readable), "--", "true") == 2
+    assert engine.calls[before:] == []
+
+    # A successor cannot start beside a live container for the same worker.
+    assert _cli(root, 6615, engine, "worker-start", "--worker", "w-a", "--", "true") == 2
+    assert len(engine.runs()) == 1
+
+    # Engine loss is a refusal, never a host fallback.
+    down = FakeEngine(available=False)
+    assert _cli(root, 6615, down, "worker-start", "--worker", "w-b", "--", "touch", "/tmp/host-effect") == 2
+    assert [c[1] for c in down.calls] == ["version"]
+    err = capsys.readouterr().err
+    assert "EngineUnavailable" in err
+
+    # Workers have separate clones: an edit in one is invisible to the other.
+    (layout.checkout("w-a") / "only-a.txt").write_text("a\n")
+    assert not (layout.checkout("w-b") / "only-a.txt").exists()
+    assert ew.inspect_checkout(layout, "w-b", runner=engine)["unique_work"] is False
+
+
+def test_issue_cannot_be_reassigned_and_worker_git_config_never_runs_on_host(tmp_path, capsys):
+    repo = _seed_repo(tmp_path)
+    root = tmp_path / "ws"
+    engine = FakeEngine()
+    assert _cli(root, 6615, engine, "init", "--repo-url", repo) == 0
+    assert _cli(root, 6615, engine, "worker-create", "--worker", "w-a", "--issue", "6617", "--branch", "b/a", "--next-action", "x") == 0
+    capsys.readouterr()
+    # A second worker cannot take over an issue that already has one.
+    assert _cli(root, 6615, engine, "worker-create", "--worker", "w-b", "--issue", "6617", "--branch", "b/b", "--next-action", "x") == 2
+    assert "already belongs to worker 'w-a'" in capsys.readouterr().err
+    layout = ew.Layout(root.resolve(), 6615)
+    assert not layout.checkout("w-b").exists()
+    assert ew._load_state(layout)["issue_mappings"]["6617"]["worker"] == "w-a"
+
+    # Worker-controlled git config must not be executed by the controller on the host.
+    marker = tmp_path / "fsmonitor-ran"
+    hook = tmp_path / "fsmonitor.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    hook.chmod(0o755)
+    subprocess.run(["git", "-C", str(layout.checkout("w-a")), "config", "core.fsmonitor", str(hook)], check=True)
+    engine.host_git.clear()
+    assert _cli(root, 6615, engine, "worker-start", "--worker", "w-a", "--", "true") == 0
+    assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "r") == 0
+    assert _cli(root, 6615, engine, "status") == 0
+    assert engine.host_git == []
+    assert engine.inspections, "inspection must run in a contained, read-only, no-network container"
+    assert not marker.exists()
