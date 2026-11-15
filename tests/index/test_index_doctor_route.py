@@ -178,6 +178,89 @@ def test_doctor_flags_incomplete_metadata(tmp_path, monkeypatch) -> None:
         _drop_schema(base_dsn, schema)
 
 
+@pytest.mark.pg
+def test_metadata_completeness_accepts_und_without_hiding_missing_fields(tmp_path, monkeypatch):
+    """The indexed-unit contract permits ``und`` as an honest language value."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    from app.components.embeddings import EmbeddingIdentity
+    from app.index.artifact_metadata import embedding_identity_provenance
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test,
+        _drop_schema,
+        _reset_store_backend_cache_only,
+    )
+
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    reset_diagnose_cache()
+    monkeypatch.setenv("EMBED_MODEL", "embed-test")
+    try:
+        from app.stores import get_vector_index
+
+        identity = EmbeddingIdentity(provider="mock", model="embed-test", dim=8, normalize=False)
+        identity_payload = embedding_identity_provenance(identity)
+        index_store = get_vector_index()
+
+        def seed(object_id, payload):
+            index_store.upsert(
+                object_id=object_id,
+                kind="note",
+                source_ref=f"unit-test:metadata-{object_id}",
+                payload=payload,
+                embedding=[0.1] * 8,
+                model=identity.model,
+                identity=identity,
+            )
+
+        valid_und = uuid4()
+        missing_language = uuid4()
+        missing_provenance = uuid4()
+        missing_identity = uuid4()
+        seed(
+            valid_und,
+            {
+                "text": "undetermined language is valid",
+                "language": "und",
+                "origin": "unit-test",
+                "embedding_identity": identity_payload,
+            },
+        )
+        seed(
+            missing_language,
+            {
+                "text": "missing language",
+                "origin": "unit-test",
+                "embedding_identity": identity_payload,
+            },
+        )
+        seed(
+            missing_provenance,
+            {
+                "text": "missing provenance",
+                "language": "en",
+                "embedding_identity": identity_payload,
+            },
+        )
+        seed(
+            missing_identity,
+            {"text": "missing embedding identity", "language": "en", "origin": "unit-test"},
+        )
+
+        reset_diagnose_cache()
+        result = diagnose_index()
+        completeness = result.get("metadata_completeness") or {}
+        missing_ids = set(completeness.get("missing_sample_ids") or [])
+
+        assert completeness.get("missing_count") == 3
+        assert str(valid_und) not in missing_ids
+        assert {str(missing_language), str(missing_provenance), str(missing_identity)} <= missing_ids
+    finally:
+        reset_diagnose_cache()
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
+
+
 def test_no_retrieval_index_divergence(monkeypatch) -> None:
     """KERNEL-05 AC: index doctor reports zero retrieval-vs-index divergence
     on a synced fixture (durable index rebuilt into the in-process cache).
