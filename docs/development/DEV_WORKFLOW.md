@@ -453,9 +453,27 @@ owner and Builder-session fields, when present, must match the claim; their exac
 absence on older mappings, are fenced when the conversation is reserved and immediately before POST.
 A lost create
 is reconciled using the same recorded conversation ID; an unresolved earlier publication holds repair.
-The default merge-purpose check still requires review threads clear. This source candidate does not
-yet process the finished author's result, stop and checkpoint that author, publish its work, or continue
-through renewed review and closure. A legacy or
+The default merge-purpose check still requires review threads clear. In the source candidate, a
+finished repair author is bound to its native execution proof and stopped through the existing
+ID-bound preservation lifecycle. The stopped result can bind a clean additive candidate in the sole
+registered host publisher worktree. For a file-backed admission, the controller may supply
+`repair_publication` with `candidate_head`, `paths` (the exact changed-file list), and an absolute
+`evidence_file` outside the worker workspace. The host-owned full-evidence receipt must bind the
+candidate head and base, independent reviewer and risk surfaces, and passing sources for every exact
+closing Issue's Verify targets. For multiple Issue contracts, `review.scope_issue_body_sha256` maps
+the governing and every closing Issue number to its current body hash; the independent review source
+must contain those hashes and the candidate SHA. A distinct open parent is the governing contract;
+its unfinished targets are not required unless it also closes. The admission and evidence are supplied
+by the trusted controller, not the model worker. Automatic production and dispatch of this candidate
+review/evidence is not yet wired.
+
+The source cycle invokes the existing governed native publisher under its cycle and worker locks. It
+records the original observation and push intent, reconciles uncertain outcomes before ordinary
+head admission, and atomically refreshes the same file-backed admission only after exact PR/head
+readback. The refreshed entry drops the old review disposition and publication request so the next
+head needs fresh review, Verify and CI. An unresolved effect holds that PR while other PRs continue.
+This describes the source candidate, not a claim that the currently running controller has adopted it;
+new-head review dispatch, full qualification and closure remain to be completed. A legacy or
 non-conforming report is never edited and never passed. When it has no known blocker, the original
 report, proof and stop move verbatim into the record's `report_reconciliations` history, and one retry
 of the same identity is reserved. Once the reviewer runs again through the existing takeover/start lifecycle, that retry

@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from scripts.validate_issue_readiness import (
     _declared_verify_targets,
@@ -1105,7 +1105,8 @@ def publish(
                 "validation": "Host supplied test and review attestations; independent evidence was not verified here."}
 
 
-def _evidence_artifact(reference: Any, evidence_dir: Path, worktree: Path) -> tuple[str, str]:
+def _evidence_artifact(reference: Any, evidence_dir: Path, worktree: Path, *,
+                       excluded_roots: tuple[Path, ...] = ()) -> tuple[str, str]:
     if not isinstance(reference, dict) or not isinstance(reference.get("path"), str):
         raise DeliveryError("Review or verification evidence path is missing")
     value = reference["path"]
@@ -1113,7 +1114,8 @@ def _evidence_artifact(reference: Any, evidence_dir: Path, worktree: Path) -> tu
     if not path.is_absolute():
         path = evidence_dir / path
     path = path.resolve(strict=True)
-    if path == worktree or worktree in path.parents or not path.is_file():
+    if (path == worktree or worktree in path.parents or not path.is_file()
+            or any(path == root or root in path.parents for root in excluded_roots)):
         raise DeliveryError("Evidence must be a host-side file outside the worker worktree")
     data = path.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -1143,11 +1145,14 @@ def _candidate_document_is_regular(worktree: Path, head: str, path: str) -> bool
 
 def _full_evidence(
     receipt_file: Path, state: dict[str, Any], head: str, base: str, issue_body: str,
+    *, excluded_roots: tuple[Path, ...] = (),
+    closing_contracts: dict[int, str] | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Check host-provided sources and their bindings; do not claim signer authentication."""
     receipt_file = receipt_file.resolve(strict=True)
     worktree = Path(state["worktree"]).resolve(strict=True)
-    if receipt_file == worktree or worktree in receipt_file.parents:
+    if (receipt_file == worktree or worktree in receipt_file.parents
+            or any(receipt_file == root or root in receipt_file.parents for root in excluded_roots)):
         raise DeliveryError("Evidence receipt must be outside the worker worktree")
     raw = receipt_file.read_bytes()
     try:
@@ -1165,7 +1170,7 @@ def _full_evidence(
     source_digests = []
     workflow_review = receipt.get("workflow_review_receipt")
     if workflow_review is not None:
-        digest, _ = _evidence_artifact(workflow_review, receipt_file.parent, worktree)
+        digest, _ = _evidence_artifact(workflow_review, receipt_file.parent, worktree, excluded_roots=excluded_roots)
         source_digests.append(digest)
     fallback = receipt.get("stateful_fallback", False)
     if type(fallback) is not bool or (
@@ -1181,19 +1186,27 @@ def _full_evidence(
             or review["reviewer"] in {state.get("agent_id"), state.get("session_id")}
             or review.get("blocking_findings") != []):
         raise DeliveryError("Independent convergence review is missing, blocking, or stale")
-    digest, review_text = _evidence_artifact(review.get("evidence"), receipt_file.parent, worktree)
+    digest, review_text = _evidence_artifact(review.get("evidence"), receipt_file.parent, worktree, excluded_roots=excluded_roots)
     source_digests.append(digest)
     if head not in review_text:
         raise DeliveryError("Review source does not identify the candidate commit")
-    acceptance = extract_sections(issue_body).get("acceptance criteria", "")
-    items = _extract_acceptance_items(acceptance)
-    if not items or any(not _has_concrete_verify_marker(item) for item in items):
-        raise DeliveryError("Issue Verify targets cannot be resolved for this full path")
+    contracts = closing_contracts if closing_contracts else {state["issue"]: issue_body}
+    scope_hashes = {str(number): _sha(body) for number, body in contracts.items()}
+    scope_hashes[str(state["issue"])] = _sha(issue_body)
+    multi_scope = len(scope_hashes) > 1
+    if multi_scope and (review.get("scope_issue_body_sha256") != scope_hashes
+                        or any(digest not in review_text for digest in scope_hashes.values())):
+        raise DeliveryError("Independent review does not bind all current Issue contracts")
     targets = []
-    for item in items:
-        for raw_target in _declared_verify_targets(item):
-            quoted = re.fullmatch(r"`([^`]+)`(?:\s+.*)?", raw_target)
-            targets.append(quoted[1] if quoted else raw_target)
+    for body in contracts.values():
+        acceptance = extract_sections(body).get("acceptance criteria", "")
+        items = _extract_acceptance_items(acceptance)
+        if not items or any(not _has_concrete_verify_marker(item) for item in items):
+            raise DeliveryError("Issue Verify targets cannot be resolved for this full path")
+        for item in items:
+            for raw_target in _declared_verify_targets(item):
+                quoted = re.fullmatch(r"`([^`]+)`(?:\s+.*)?", raw_target)
+                targets.append(quoted[1] if quoted else raw_target)
     if any(target.startswith("doc writeback at ") and not _doc_writeback_path(target) for target in targets):
         raise DeliveryError("Document writeback target cannot be resolved for independent review")
     doc_targets = list(dict.fromkeys(target for target in targets if _doc_writeback_path(target)))
@@ -1203,7 +1216,7 @@ def _full_evidence(
             parsed_review = openhands_review._parse_result(review_text, head, doc_targets)
         except openhands_review.ReviewError as exc:
             raise DeliveryError("Document writeback review source is incomplete or stale") from exc
-        if (review.get("issue_body_sha256") != _sha(issue_body)
+        if ((not multi_scope and review.get("issue_body_sha256") != _sha(issue_body))
                 or parsed_review["verdict"] != "pass"
                 or any(check["result"] != "pass" for check in parsed_review["doc_writebacks"])):
             raise DeliveryError("Document writeback review did not establish a pass for the current Issue")
@@ -1223,7 +1236,7 @@ def _full_evidence(
         if (not isinstance(entry, dict) or not isinstance(entry.get("target"), str)
                 or entry.get("head_sha") != head or entry.get("result") != "pass"):
             raise DeliveryError("Candidate verification is missing, failed, or stale")
-        digest, source = _evidence_artifact(entry.get("evidence"), receipt_file.parent, worktree)
+        digest, source = _evidence_artifact(entry.get("evidence"), receipt_file.parent, worktree, excluded_roots=excluded_roots)
         source_digests.append(digest)
         target = entry["target"]
         if target.startswith("tests/"):
@@ -1239,8 +1252,10 @@ def _full_evidence(
             raise DeliveryError("Verification source does not substantiate its passing target")
         covered.add(target)
     if not set(targets).issubset(covered):
-        raise DeliveryError("Not every governing Issue Verify target has evidence")
-    return receipt, hashlib.sha256(raw + "\n".join(source_digests).encode()).hexdigest()
+        scope = "governing" if closing_contracts is None else "closing"
+        raise DeliveryError(f"Not every {scope} Issue Verify target has evidence")
+    scope_binding = json.dumps(scope_hashes, sort_keys=True).encode() if closing_contracts is not None else b""
+    return receipt, hashlib.sha256(raw + "\n".join(source_digests).encode() + scope_binding).hexdigest()
 
 
 def _full_claim_readback(
@@ -1319,6 +1334,8 @@ def _full_claim_readback(
 def _full_snapshot(
     state: dict[str, Any], runner: publication.CommandExecutor, paths: list[str],
     evidence_file: Path, *, expected: dict[str, Any] | None = None,
+    native_claim_check: Callable[[dict[str, Any]], None] | None = None,
+    excluded_evidence_roots: tuple[Path, ...] = (),
 ) -> dict[str, Any]:
     worktree = Path(state["worktree"]).resolve(strict=True)
     if (Path(publication._git_text(runner, worktree, "rev-parse", "--show-toplevel")).resolve() != worktree
@@ -1335,7 +1352,9 @@ def _full_snapshot(
     if not actual or actual != intended:
         raise DeliveryError("Candidate commit history does not match the intended file set")
     issue = publication._read_issue(runner, worktree, REPOSITORY, state["issue"])
-    publication._require_publishable_issue(issue, state["issue"])
+    publication._require_publishable_issue(
+        issue, state["issue"], claimed=(native_claim_check is None or
+                                        state.get("claim_issue", state["issue"]) == state["issue"]))
     if issue["body_sha256"] != state.get("issue_body_sha256"):
         raise DeliveryError("Issue contract changed after the worker started")
     issue_result = publication._checked(
@@ -1356,8 +1375,49 @@ def _full_snapshot(
             or str(issue_raw.get("state", "")).lower() != issue["state"]
             or issue_raw.get("title") != issue["title"] or sorted(raw_labels) != issue["labels"]):
         raise DeliveryError("Issue contract or lifecycle changed during readback")
-    evidence, evidence_digest = _full_evidence(evidence_file, state, head, authority.base_sha, issue_body)
-    _full_claim_readback(state, runner, worktree)
+    closing_contracts = None
+    closing_snapshots = None
+    if native_claim_check is not None:
+        from app.builderops import openhands_pr_cycle as cycle
+        numbers = state.get("closing_issues")
+        if (not isinstance(numbers, list) or len(numbers) > publication.MAX_CLOSING_ISSUES
+                or any(type(number) is not int or number <= 0 for number in numbers)
+                or len(set(numbers)) != len(numbers)
+                or state.get("claim_issue") not in {state["issue"], *numbers}):
+            raise DeliveryError("Native closing Issue scope is unavailable")
+        closing_contracts, closing_snapshots = {}, {}
+        for number in numbers:
+            if number == state["issue"]:
+                current, raw_issue, body = issue, issue_raw, issue_body
+            else:
+                current = publication._read_issue(runner, worktree, REPOSITORY, number)
+                result = publication._checked(
+                    runner, ["gh", "api", "--hostname", "github.com", "--method", "GET",
+                             f"repos/{REPOSITORY}/issues/{number}"], worktree)
+                try:
+                    raw_issue = json.loads(result.stdout)
+                    body = raw_issue["body"]
+                    labels = [label.get("name") if isinstance(label, dict) else label
+                              for label in raw_issue["labels"]]
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise DeliveryError("Closing Issue readback is unavailable") from exc
+                if (not isinstance(body, str) or any(not isinstance(label, str) for label in labels)
+                        or raw_issue.get("number") != current["number"]
+                        or str(raw_issue.get("state", "")).lower() != current["state"]
+                        or raw_issue.get("title") != current["title"]
+                        or sorted(labels) != current["labels"] or _sha(body) != current["body_sha256"]):
+                    raise DeliveryError("Closing Issue contract or lifecycle changed during readback")
+            publication._require_publishable_issue(current, number)
+            cycle._assert_unheld_issue(raw_issue)
+            closing_contracts[number] = body
+            closing_snapshots[str(number)] = current
+    evidence, evidence_digest = _full_evidence(evidence_file, state, head, authority.base_sha, issue_body,
+                                               excluded_roots=excluded_evidence_roots,
+                                               closing_contracts=closing_contracts)
+    if native_claim_check is not None and not {"concurrency", "state-machine"}.issubset(evidence["risk_surfaces"]):
+        raise DeliveryError("Native repair evidence must cover concurrency and state-machine risks")
+    if native_claim_check is None:
+        _full_claim_readback(state, runner, worktree)
     remote = publication._read_remote_head(runner, worktree, state["branch"])
     prs = publication._read_pr_history(runner, worktree, REPOSITORY, state["branch"])
     workflow_review = evidence.get("workflow_review_receipt")
@@ -1373,6 +1433,11 @@ def _full_snapshot(
                 "stateful_fallback": evidence.get("stateful_fallback", False),
                 "workflow_review_receipt": workflow_path,
                 "remote": remote, "prs": prs}
+    if native_claim_check is not None:
+        snapshot["closing_issues"] = closing_snapshots
+        native_claim_check(snapshot)
+    if expected is not None and native_claim_check is not None and snapshot["closing_issues"] != expected["closing_issues"]:
+        raise DeliveryError("Full-path closing Issue scope changed")
     if expected is not None:
         for key in ("head", "base", "authority", "issue", "paths", "evidence_sha256", "risk_surfaces", "stateful_fallback", "workflow_review_receipt"):
             if snapshot[key] != expected[key]:
@@ -1440,7 +1505,7 @@ def _full_workspace_gate(
 
 def _update_pr_readback(
     snapshot: dict[str, Any], state: dict[str, Any], previous: dict[str, Any],
-    pr_number: int, title: str, body: str,
+    pr_number: int, title: str, body: str, *, native: bool = False,
 ) -> tuple[dict[str, Any], str, str]:
     prs = snapshot["prs"]
     if len(prs) != 1 or type(pr_number) is not int or pr_number <= 0:
@@ -1449,7 +1514,7 @@ def _update_pr_readback(
     head = publication._nested(pr, "head", "sha")
     pr_body = pr.get("body")
     if (pr.get("number") != pr_number or pr.get("state") != "open"
-            or pr.get("merged_at") is not None or pr.get("draft") is not True
+            or pr.get("merged_at") is not None or pr.get("draft") is not (False if native else True)
             or publication._nested(pr, "head", "ref") != state["branch"]
             or publication._nested(pr, "head", "repo", "full_name") != REPOSITORY
             or publication._nested(pr, "base", "ref") != "main"
@@ -1459,9 +1524,10 @@ def _update_pr_readback(
             or not isinstance(pr_body, str)):
         raise DeliveryError("Existing draft PR or branch does not match the recorded publication")
     authority = resolve_native_issue_authority(pr_body)
+    closing = tuple(state.get("closing_issues", (state["issue"],))) if native else (state["issue"],)
     if (authority is None or authority.governing_issue != state["issue"]
-            or tuple(authority.closing_issues) != (state["issue"],)):
-        raise DeliveryError("Existing draft PR issue scope changed")
+            or tuple(authority.closing_issues) != closing):
+        raise DeliveryError("Existing PR issue scope changed")
     old_metadata = pr.get("title") == previous["title"] and _sha(pr_body) == previous["body_sha256"]
     new_metadata = pr.get("title") == title and pr_body == body
     if not old_metadata and not new_metadata:
@@ -1474,12 +1540,18 @@ def _update_pr_readback(
 def _publish_full_update(
     directory: Path, state: dict[str, Any], runner: publication.CommandExecutor,
     paths: list[str], title: str, body: str, evidence_file: Path,
-    snapshot: dict[str, Any], binding: dict[str, Any], binding_hash: str, prior: dict[str, Any],
+    snapshot: dict[str, Any], binding: dict[str, Any], binding_hash: str, prior: dict[str, Any] | None,
+    *, native_previous: dict[str, Any] | None = None,
+    native_claim_check: Callable[[dict[str, Any]], None] | None = None,
+    persist: Callable[[dict[str, Any]], None] | None = None,
+    excluded_evidence_roots: tuple[Path, ...] = (),
 ) -> dict[str, Any]:
+    native = native_previous is not None
+    write = persist if persist is not None else lambda value: service._write(directory, value)
     worktree = Path(state["worktree"]).resolve(strict=True)
-    retry = prior.get("binding_sha256") == binding_hash
-    previous = prior.get("previous_candidate") if retry else prior.get("candidate")
-    pr_number = prior.get("pr_number")
+    retry = isinstance(prior, dict) and prior.get("binding_sha256") == binding_hash
+    previous = prior.get("previous_candidate") if retry else (native_previous if native else prior.get("candidate"))
+    pr_number = state.get("native_pr_number") if native else prior.get("pr_number")
     if type(pr_number) is not int or pr_number <= 0:
         raise DeliveryError("Previous publication has no valid PR number")
     if (not isinstance(previous, dict) or previous.get("issue") != state["issue"]
@@ -1491,18 +1563,21 @@ def _publish_full_update(
             or not isinstance(previous.get("body_sha256"), str)
             or not re.fullmatch(r"[0-9a-f]{64}", previous["body_sha256"])):
         raise DeliveryError("Previous published candidate does not bind an additive update")
-    if not retry and (prior.get("state") != "draft_published"
+    if native and prior is not None and not retry:
+        raise DeliveryError("An earlier native publication remains unresolved or has different evidence")
+    if not retry and not native and (prior.get("state") != "draft_published"
                       or prior.get("binding_sha256") != _sha(publication.canonical_json(previous))):
         raise DeliveryError("Earlier publication must be reconciled before an update")
     if retry and (prior.get("candidate") != binding or prior.get("state") not in {
-        "update_prepared", "update_pushing", "update_pushed", "update_patching", "check_readback_pending"
+        "update_prepared", "update_pushing", "update_pushed", "update_patching", "check_readback_pending",
+        *({"native_published"} if native else set())
     }):
         raise DeliveryError("Existing draft update attempt is inconsistent")
     ancestor = runner.run(["git", "merge-base", "--is-ancestor", previous["head"], snapshot["head"]],
                           cwd=worktree)
     if ancestor.returncode != 0:
         raise DeliveryError("Reviewed candidate is not an additive successor to the published draft")
-    pr, head_state, metadata_state = _update_pr_readback(snapshot, state, previous, pr_number, title, body)
+    pr, head_state, metadata_state = _update_pr_readback(snapshot, state, previous, pr_number, title, body, native=native)
     if not retry and (head_state != "old" or metadata_state != "old"):
         # Identical old and new metadata may classify as new; the old binding must still match exactly.
         old_body = pr.get("body") or ""
@@ -1514,62 +1589,281 @@ def _publish_full_update(
         state["full_publication"] = {"binding_sha256": binding_hash, "state": "update_prepared",
                                      "candidate": binding, "previous_candidate": previous,
                                      "pr_number": pr_number, "evidence_file": str(evidence_file.resolve())}
-        service._write(directory, state)
+        write(state)
     attempt = state["full_publication"]
     if head_state == "old":
         if attempt["state"] != "update_prepared":
             raise DeliveryError("Earlier draft push remains unresolved; reconcile before retry")
         _full_workspace_gate(runner, worktree, state)
-        snapshot = _full_snapshot(state, runner, paths, evidence_file, expected=snapshot)
-        pr, head_state, metadata_state = _update_pr_readback(snapshot, state, previous, pr_number, title, body)
+        snapshot = _full_snapshot(state, runner, paths, evidence_file, expected=snapshot, native_claim_check=native_claim_check,
+                                  excluded_evidence_roots=excluded_evidence_roots)
+        pr, head_state, metadata_state = _update_pr_readback(snapshot, state, previous, pr_number, title, body, native=native)
         if head_state != "old":
             raise DeliveryError("Draft branch changed before push; reconcile before retry")
         attempt["state"] = "update_pushing"
-        service._write(directory, state)
+        write(state)
         pushed = runner.run(["git", "push", "origin", f"{snapshot['head']}:refs/heads/{state['branch']}"],
                             cwd=worktree)
-        snapshot = _full_snapshot(state, runner, paths, evidence_file, expected=snapshot)
-        pr, head_state, metadata_state = _update_pr_readback(snapshot, state, previous, pr_number, title, body)
+        snapshot = _full_snapshot(state, runner, paths, evidence_file, expected=snapshot, native_claim_check=native_claim_check,
+                                  excluded_evidence_roots=excluded_evidence_roots)
+        pr, head_state, metadata_state = _update_pr_readback(snapshot, state, previous, pr_number, title, body, native=native)
         if head_state != "new":
             raise DeliveryError("Draft push outcome is uncertain; reconcile before retry")
         if pushed.returncode:
             attempt["push_reconciled"] = True
         attempt["state"] = "update_pushed"
-        service._write(directory, state)
+        write(state)
     elif attempt["state"] == "update_prepared":
         raise DeliveryError("Draft branch changed before the recorded push; reconcile before retry")
+    if native and metadata_state != "new":
+        raise DeliveryError("Native PR metadata changed; reconcile before publication")
     if metadata_state == "old":
         if attempt["state"] in {"update_patching", "check_readback_pending"}:
             raise DeliveryError("Earlier draft metadata update remains unresolved; reconcile before retry")
         _full_review_gate(runner, worktree, state, snapshot, pr)
-        snapshot = _full_snapshot(state, runner, paths, evidence_file, expected=snapshot)
-        pr, head_state, metadata_state = _update_pr_readback(snapshot, state, previous, pr_number, title, body)
+        snapshot = _full_snapshot(state, runner, paths, evidence_file, expected=snapshot, native_claim_check=native_claim_check,
+                                  excluded_evidence_roots=excluded_evidence_roots)
+        pr, head_state, metadata_state = _update_pr_readback(snapshot, state, previous, pr_number, title, body, native=native)
         if head_state != "new" or metadata_state != "old":
             raise DeliveryError("Draft changed before metadata update; reconcile before retry")
         attempt["state"] = "update_patching"
-        service._write(directory, state)
+        write(state)
         patched = runner.run(["gh", "api", "--hostname", "github.com", "--method", "PATCH",
                               f"repos/{REPOSITORY}/pulls/{pr_number}", "-f", f"title={title}",
                               "-f", f"body={body}"], cwd=worktree)
-        snapshot = _full_snapshot(state, runner, paths, evidence_file, expected=snapshot)
-        pr, head_state, metadata_state = _update_pr_readback(snapshot, state, previous, pr_number, title, body)
+        snapshot = _full_snapshot(state, runner, paths, evidence_file, expected=snapshot, native_claim_check=native_claim_check,
+                                  excluded_evidence_roots=excluded_evidence_roots)
+        pr, head_state, metadata_state = _update_pr_readback(snapshot, state, previous, pr_number, title, body, native=native)
         if head_state != "new" or metadata_state != "new":
             raise DeliveryError("Draft metadata update outcome is uncertain; reconcile before retry")
         if patched.returncode:
             attempt["metadata_reconciled"] = True
     attempt["state"] = "check_readback_pending"
-    service._write(directory, state)
+    write(state)
     checks = _check_readback(runner, worktree, snapshot["head"])
-    final = _full_snapshot(state, runner, paths, evidence_file, expected=snapshot)
-    final_pr, head_state, metadata_state = _update_pr_readback(final, state, previous, pr_number, title, body)
+    final = _full_snapshot(state, runner, paths, evidence_file, expected=snapshot, native_claim_check=native_claim_check,
+                                  excluded_evidence_roots=excluded_evidence_roots)
+    final_pr, head_state, metadata_state = _update_pr_readback(final, state, previous, pr_number, title, body, native=native)
     if head_state != "new" or metadata_state != "new":
         raise DeliveryError("Updated draft changed during check readback")
-    attempt.update(state="draft_published", checks=checks)
-    service._write(directory, state)
-    return {"draft": True, "pr_number": pr_number, "url": final_pr.get("html_url"),
+    attempt.update(state="native_published" if native else "draft_published", checks=checks)
+    write(state)
+    return {"draft": not native, "pr_number": pr_number, "url": final_pr.get("html_url"),
             "commit_sha": snapshot["head"], "base_sha": snapshot["base"], "checks": checks,
             "evidence_file": str(evidence_file.resolve()), "evidence_sha256": snapshot["evidence_sha256"],
             "note": "Local sources and bindings checked; reviewer identity is host-attested."}
+
+
+def publish_native_repair(
+    layout: Any, pr: Mapping[str, Any], entry: Mapping[str, Any], identity: str,
+    paths: list[str], evidence_file: Path, *, executor: publication.CommandExecutor | None = None,
+) -> dict[str, Any]:
+    """Publish one already-bound stopped repair to its exact existing native PR.
+
+    This host-side callable does not create a PR, change metadata, schedule
+    reviews, refresh admission, or merge. The caller supplies the original PR
+    observation and controller admission; every effect is fenced by live reads.
+    For multiple Issue contracts, review evidence must identify each current
+    body hash in both its scope_issue_body_sha256 mapping and review source.
+    Verify evidence covers every exact closing Issue; a distinct open parent
+    remains a governing contract without requiring its unfinished targets.
+    """
+    from app.builderops import epic_workspace as workspace
+    from app.builderops import openhands_pr_cycle as cycle
+
+    worker = entry.get("worker")
+    if not isinstance(worker, str):
+        raise DeliveryError("Native worker identity is unavailable")
+    workspace.validate_worker_id(worker)
+    with cycle._single_advancement(layout), workspace._worker_lifecycle_lock(layout, worker):
+        return _publish_native_repair_locked(layout, pr, entry, identity, paths, evidence_file, executor=executor)
+
+
+def _publish_native_repair_locked(
+    layout: Any, pr: Mapping[str, Any], entry: Mapping[str, Any], identity: str,
+    paths: list[str], evidence_file: Path, *, executor: publication.CommandExecutor | None = None,
+) -> dict[str, Any]:
+    """Run the native publisher while its cycle and worker lifecycle locks are held."""
+    from app.builderops import epic_run_state, epic_workspace as workspace
+    from app.builderops import openhands_pr_cycle as cycle
+
+    number, worker = pr.get("number"), entry.get("worker")
+    if (type(number) is not int or number <= 0 or not isinstance(worker, str)
+            or entry.get("number") != number or entry.get("head_sha") != pr.get("head_sha")
+            or entry.get("native_session_owned") is not True or not isinstance(identity, str)
+            or pr.get("draft") is not False or pr.get("restrictions")
+            or not isinstance(pr.get("body"), str) or not isinstance(pr.get("title"), str)
+            or re.search(r"\b(?:draft[ -]only|do[ -]not[ -]merge|do not merge|merge hold)\b", pr.get("body", ""), re.I)):
+        raise DeliveryError("Native PR admission or original contract is unavailable")
+    workspace.validate_worker_id(worker)
+    runner = executor or publication.SubprocessExecutor()
+    saved = cycle._find(layout, number, identity)
+    candidate = saved.get("repair_candidate")
+    original = saved.get("repair_authority_binding")
+    result = saved.get("repair_result")
+    if (not isinstance(candidate, dict) or candidate.get("status") != "awaiting_independent_review"
+            or candidate.get("repository") != REPOSITORY or candidate.get("number") != number
+            or candidate.get("identity") != identity or candidate.get("old_head") != pr.get("head_sha")
+            or candidate.get("operation_id") != saved.get("repair_operation")
+            or not isinstance(original, dict) or not isinstance(result, dict)
+            or original.get("number") != number or original.get("head_sha") != pr.get("head_sha")
+            or original.get("body") != pr.get("body") or original.get("title") != pr.get("title")
+            or result.get("status") != "pending_trusted_publication"):
+        raise DeliveryError("Stopped repair candidate is unavailable; bind it before publication")
+    head, branch, path = candidate.get("candidate_head"), candidate.get("branch"), candidate.get("worktree")
+    if (not isinstance(head, str) or not publication.GIT_SHA_RE.fullmatch(head)
+            or not isinstance(branch, str) or not isinstance(path, str)
+            or not Path(path).is_absolute() or str(Path(path).resolve()) != path
+            or workspace._is_within(Path(path), layout.root.resolve())
+            or path != entry.get("owner_worktree") or branch != original.get("branch")):
+        raise DeliveryError("Registered publisher worktree or candidate is unavailable")
+    worktree = Path(path)
+    issue = original.get("governing_issue")
+    hashes = original.get("governing_issue_hashes")
+    if (type(issue) is not int or not isinstance(hashes, dict)
+            or not isinstance(hashes.get("body_sha256"), str)
+            or not isinstance(original.get("closing_issues"), list)
+            or any(held in (number, issue) or re.search(rf"#{held}(?![0-9])", pr["body"])
+                   for held in cycle.observation.HELD_ISSUES)):
+        raise DeliveryError("Native Issue scope is unavailable")
+    state = {"worktree": path, "branch": branch, "issue": issue,
+             "issue_body_sha256": hashes["body_sha256"], "agent_id": entry.get("claimant"),
+             "session_id": entry.get("session"), "closing_issues": original["closing_issues"],
+             "claim_issue": original.get("claim_issue"), "native_pr_number": number}
+    previous = {"issue": issue, "branch": branch, "head": pr["head_sha"],
+                "title": pr["title"], "body_sha256": _sha(pr["body"])}
+    prior = saved.get("repair_publication")
+    if prior is not None and not isinstance(prior, dict):
+        raise DeliveryError("Native publication attempt is unavailable")
+    if prior is not None:
+        state["full_publication"] = prior
+
+    def check(snapshot: dict[str, Any]) -> None:
+        current = cycle._find(layout, number, identity)
+        mapping = cycle._mapping(layout, worker)
+        if current.get("repair_candidate") != candidate:
+            raise DeliveryError("Repair candidate changed during publication")
+        cycle._review_stop_checkpoint(mapping, current, require_receipt=True, prefix="repair_")
+        intent = current["repair_stop_intent"]
+        work = workspace._completed_stop(mapping, intent["stop_id"])
+        checkpoint = work.get("checkpoint")
+        if (not isinstance(checkpoint, dict) or checkpoint not in mapping.get("checkpoints", [])
+                or checkpoint.get("status") != "preserved" or checkpoint.get("ignored_count") != 0
+                or checkpoint.get("ref") != candidate.get("checkpoint_ref")
+                or checkpoint.get("tree") != candidate.get("tree")
+                or result.get("work_at_stop") != work or candidate.get("stop_id") != intent["stop_id"]
+                or candidate.get("native_proof_sha256") != cycle._digest(current.get("repair_execution_proof"))):
+            raise DeliveryError("Stopped author source or proof changed")
+        if (snapshot.get("head") != head or publication._git_text(runner, worktree, "rev-parse", "HEAD^{tree}") != candidate.get("tree")):
+            raise DeliveryError("Publisher candidate no longer matches the stopped source")
+        rows = snapshot.get("prs")
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise DeliveryError("Existing PR history is unavailable or ambiguous")
+        observed = publication._nested(rows[0], "head", "sha")
+        if observed not in (pr["head_sha"], head) or snapshot.get("remote") != observed:
+            raise DeliveryError("PR or remote branch changed outside this publication")
+        fresh_pr = {**pr, "head_sha": observed}
+        fresh = cycle.native_authority(layout, fresh_pr, entry, purpose="repair")
+        normalized = {**fresh, "head_sha": original.get("head_sha")}
+        if not cycle._repair_authority_continues(original, normalized):
+            raise DeliveryError("Native claim, PR contract or publisher registration changed")
+        registration = fresh.get("worktree_owner")
+        if (not isinstance(registration, dict) or registration.get("path") != path
+                or registration.get("generation") != candidate.get("generation")
+                or registration.get("registration_epoch") != candidate.get("registration_epoch")):
+            raise DeliveryError("Native publisher registration changed")
+        ops = mapping.get("publication_ops", [])
+        attempt = current.get("repair_publication")
+        own = attempt.get("operation_id") if isinstance(attempt, dict) else None
+        if not isinstance(ops, list):
+            raise DeliveryError("Publication operation history is unavailable")
+        cycle._assert_repair_publications_settled({**mapping, "publication_ops": [
+            op for op in ops if not isinstance(op, dict) or op.get("id") != own]})
+        if own is not None:
+            matched = [op for op in ops if isinstance(op, dict) and op.get("id") == own]
+            if (len(matched) != 1 or matched[0].get("branch") != branch
+                    or matched[0].get("expect_sha") != head
+                    or matched[0].get("status") not in ("intended", "quarantined", "confirmed")):
+                raise DeliveryError("Recorded publication operation changed")
+
+    def persist(value: dict[str, Any]) -> None:
+        attempt = value["full_publication"]
+        def update(run_state: dict[str, Any]) -> dict[str, Any]:
+            issue_number = workspace._issue_for_worker(run_state, worker)
+            mapping = run_state["issue_mappings"][str(issue_number)]
+            records = [r for r in run_state["compact_receipts"] if isinstance(r, dict)
+                       and r.get("kind") == "pr_cycle" and r.get("number") == number
+                       and r.get("identity") == identity]
+            if (len(records) != 1 or records[0].get("repair_candidate") != candidate
+                    or mapping.get("state") != "stopped_verified"
+                    or mapping.get("stop_id") != candidate.get("stop_id")
+                    or mapping.get("work_at_stop") != result.get("work_at_stop")):
+                raise DeliveryError("Stopped source or receipt changed before recording publication")
+            row = records[0]
+            old = row.get("repair_publication")
+            if old is not None and (not isinstance(old, dict)
+                    or old.get("binding_sha256") != attempt.get("binding_sha256")):
+                raise DeliveryError("Another publication attempt is already recorded")
+            ops = mapping.setdefault("publication_ops", [])
+            if not isinstance(ops, list):
+                raise DeliveryError("Publication history is unavailable")
+            op_id = old.get("operation_id") if isinstance(old, dict) else None
+            if attempt["state"] == "update_pushing" and op_id is None:
+                cycle._assert_repair_publications_settled(mapping)
+                op_id = f"branch_push-{len(ops) + 1}"
+                ops.append({"id": op_id, "kind": "branch_push", "branch": branch,
+                            "expect_sha": head, "status": "intended", "intent_at": workspace._now()})
+            if op_id is not None:
+                attempt["operation_id"] = op_id
+                matches = [op for op in ops if isinstance(op, dict) and op.get("id") == op_id]
+                if len(matches) != 1 or matches[0].get("expect_sha") != head:
+                    raise DeliveryError("Publication operation identity changed")
+                if attempt["state"] in ("update_pushed", "check_readback_pending", "native_published"):
+                    op = matches[0]
+                    op.update(status="confirmed", confirmed_at=workspace._now(),
+                              result={"branch": branch, "sha": head, "number": number})
+                    op.pop("reason", None)
+                    workspace._record_published_head(mapping, op)
+            if attempt["state"] == "native_published":
+                attempt["published_head"] = head
+                attempt["next_action"] = "refresh admission and perform new-head review, Verify and CI"
+            row["repair_publication"] = dict(attempt)
+            return run_state
+        epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=update,
+                                             expected_epic_issue_number=layout.epic)
+
+    # Existing effects are read back even when new-write evidence has gone stale.
+    if isinstance(prior, dict) and prior.get("state") == "update_pushing":
+        old_binding, attempted = prior.get("previous_candidate"), prior.get("candidate")
+        if (not isinstance(old_binding, dict) or old_binding.get("head") != pr["head_sha"]
+                or old_binding.get("title") != pr["title"] or old_binding.get("body_sha256") != _sha(pr["body"])
+                or not isinstance(attempted, dict) or attempted.get("head") != head
+                or attempted.get("identity") != identity or prior.get("pr_number") != number
+                or not isinstance(prior.get("operation_id"), str)):
+            raise DeliveryError("Native publication intent is not bound to this candidate")
+        remote = publication._read_remote_head(runner, worktree, branch)
+        prs = publication._read_pr_history(runner, worktree, REPOSITORY, branch)
+        if remote == head:
+            observed = {"remote": remote, "prs": prs, "head": head, "base": old_binding.get("base")}
+            _, head_state, metadata_state = _update_pr_readback(
+                observed, state, old_binding, number, pr["title"], pr["body"], native=True)
+            if head_state != "new" or metadata_state != "new":
+                raise DeliveryError("Native publication readback is ambiguous")
+            prior = {**prior, "state": "update_pushed", "push_reconciled": True}
+            state["full_publication"] = prior
+            persist(state)
+    snapshot = _full_snapshot(state, runner, paths, evidence_file, native_claim_check=check,
+                              excluded_evidence_roots=(layout.root.resolve(),))
+    previous["base"] = snapshot["base"]
+    binding = {"issue": issue, "branch": branch, "base": snapshot["base"], "head": head,
+               "paths": snapshot["paths"], "title": pr["title"], "body_sha256": _sha(pr["body"]),
+               "evidence_sha256": snapshot["evidence_sha256"], "risk_surfaces": snapshot["risk_surfaces"],
+               "identity": identity, "repair_operation": saved["repair_operation"],
+               "stop_id": candidate["stop_id"], "tree": candidate["tree"]}
+    return _publish_full_update(layout.run_state_dir, state, runner, paths, pr["title"], pr["body"],
+                                evidence_file, snapshot, binding, _sha(publication.canonical_json(binding)), prior,
+                                native_previous=previous, native_claim_check=check, persist=persist,
+                                excluded_evidence_roots=(layout.root.resolve(),))
 
 
 def publish_full(

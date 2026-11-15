@@ -458,7 +458,7 @@ def test_host_authority_uses_real_contract_and_dispatcher_not_body_flags(tmp_pat
         if candidate.get("session") != entry["session"] or candidate.get("owner_worktree") != str(tmp_path):
             raise cycle.CycleError("current registered worktree owner mismatch")
         return ({"path": str(tmp_path), "branch": branch, "owner": entry["session"],
-                 "generation": "1" * 32, "registered_at": 100.0, "expires_at": 9999999999.0}, {})
+                 "generation": "1" * 32, "registration_epoch": "2" * 32, "registered_at": 100.0, "expires_at": 9999999999.0}, {})
     monkeypatch.setattr(cycle, "_lifecycle_owner", registered)
     monkeypatch.setattr(cycle.closure, "_pr", lambda *args: live)
     monkeypatch.setattr(cycle.closure, "_issue", lambda *args: {"number": 6618, "state": "open", "title": "issue title", "body": "issue", "labels": []})
