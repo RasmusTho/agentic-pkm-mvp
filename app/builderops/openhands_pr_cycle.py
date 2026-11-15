@@ -29,6 +29,7 @@ from urllib.parse import urlencode
 from app.builderops import closure, epic_run_state, epic_workspace as workspace
 from app.builderops import openhands_pr_completion as completion
 from app.builderops import openhands_pr_observation as observation
+from app.builderops import openhands_delivery as delivery
 from app.builderops import publication
 from app.builderops.publication import SubprocessExecutor
 from app.dispatcher.sync_github import github_issue_task_id
@@ -333,10 +334,8 @@ def _sandbox_verify_locked(layout: workspace.Layout, worker: str, head: str, tar
         raise CycleError("verification checkout changed while testing")
     digest = hashlib.sha256((result.stdout + "\n" + result.stderr).encode()).hexdigest()
     summary = result.stdout + "\n" + result.stderr
-    passed = bool(re.search(r"\b[1-9][0-9]* passed\b", summary))
-    incomplete = bool(re.search(r"\b[1-9][0-9]* (?:skipped|xfailed|xpassed|deselected)\b", summary))
     return {"head_sha": head, "targets": targets, "exit_code": result.returncode,
-            "passed": result.returncode == 0 and passed and not incomplete, "output_sha256": digest}
+            "passed": result.returncode == 0 and bool(delivery._pytest_pass_count(summary)), "output_sha256": digest}
 
 
 def ci_once(number: int, source_root: Path) -> dict[str, Any]:
@@ -3551,10 +3550,73 @@ def _repair_source_base(saved: Mapping[str, Any], pr: Mapping[str, Any]) -> str:
     if (not isinstance(base, str) or not workspace._OID.fullmatch(base)
             or not isinstance(candidate, Mapping) or candidate.get("candidate_head") != base
             or candidate.get("old_head") != pr.get("head_sha")
-            or not isinstance(review, Mapping) or review.get("state") != "pending_candidate_repair"
+            or not isinstance(review, Mapping) or review.get("state") not in
+            ("pending_candidate_repair", "awaiting_verify_evidence")
             or review.get("candidate_head") != base or review.get("candidate_tree") != candidate.get("tree")):
         raise CycleError("candidate repair source base does not bind the retained predecessor review")
     return base
+
+
+def _verify_failure_cause(layout: workspace.Layout, saved: Mapping[str, Any],
+                          binding: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the retained failed command and exact stopped verifier before author writes."""
+    verification = saved.get("candidate_verification")
+    candidate = binding.get("candidate")
+    if (not isinstance(verification, Mapping) or not isinstance(candidate, Mapping)
+            or verification.get("state") != "failed" or verification.get("stop_verified") is not True
+            or verification.get("binding_sha256") != _digest(binding)
+            or verification.get("candidate_head") != candidate.get("candidate_head")
+            or verification.get("candidate_tree") != candidate.get("tree")):
+        raise CycleError("candidate Verify failure binding changed")
+    commands, targets = verification.get("commands"), verification.get("targets")
+    if (not isinstance(commands, list) or not commands or not isinstance(targets, list)
+            or len(commands) > len(targets)):
+        raise CycleError("candidate Verify failure command history changed")
+    for index, row in enumerate(commands):
+        if (not isinstance(row, Mapping) or row.get("state") != "finished"
+                or row.get("target") != targets[index] or type(row.get("exit_code")) is not int
+                or not isinstance(row.get("stdout"), str) or not isinstance(row.get("stderr"), str)
+                or not isinstance(row.get("command_id"), str)
+                or not isinstance(row.get("output_event_ids"), list) or not row["output_event_ids"]
+                or not isinstance(row.get("output_events_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", row["output_events_sha256"])):
+            raise CycleError("candidate Verify failure output lineage changed")
+        try:
+            uuid.UUID(row["command_id"])
+            event_ids = [str(uuid.UUID(str(event_id))) for event_id in row["output_event_ids"]]
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise CycleError("candidate Verify failure event identity changed") from exc
+        if len(set(event_ids)) != len(event_ids):
+            raise CycleError("candidate Verify failure event identity is ambiguous")
+        if index < len(commands) - 1 and (row["exit_code"] != 0 or not delivery._pytest_pass_count(
+                row["stdout"] + "\n" + row["stderr"])):
+            raise CycleError("candidate Verify continued after an incomplete result")
+    failed = commands[-1]
+    if (failed["exit_code"] == 0 and delivery._pytest_pass_count(failed["stdout"] + "\n" + failed["stderr"])):
+        raise CycleError("candidate Verify result is not a failure")
+    if (verification.get("failing_target") != failed["target"]
+            or verification.get("failing_exit") != failed["exit_code"]):
+        raise CycleError("candidate Verify failure result changed")
+    worker, stop = verification.get("worker"), verification.get("stop_intent")
+    if not isinstance(worker, str) or not isinstance(stop, Mapping):
+        raise CycleError("candidate Verify stop is unavailable")
+    mapping = _mapping(layout, worker)
+    if (stop.get("container_id") != mapping.get("container_id")
+            or not isinstance(stop.get("assignment"), Mapping)
+            or any(stop["assignment"].get(field) != mapping.get(field)
+                   for field in workspace.ASSIGNMENT_FIELDS if field != "state")):
+        raise CycleError("candidate Verify stop assignment changed")
+    _assert_stopped(layout, worker, mapping)
+    work = workspace._completed_stop(mapping, stop.get("stop_id"))
+    if work.get("head") != candidate.get("candidate_head") or work.get("uncommitted_count") != 0:
+        raise CycleError("candidate Verify stopped source changed")
+    observed, _ = workspace._inspect(layout, worker, runner=_worker_runner, image=workspace.DEFAULT_IMAGE)
+    if workspace._checkout_identity(observed) != workspace._checkout_identity(work):
+        raise CycleError("candidate Verify source changed after its stop")
+    return {"kind": "verify_failure", "verification_sha256": _digest(verification),
+            "binding_sha256": _digest(binding), "target": failed["target"],
+            "exit_code": failed["exit_code"], "command_id": failed["command_id"],
+            "output_event_ids": failed["output_event_ids"], "output_events_sha256": failed["output_events_sha256"]}
 
 
 def _verify_candidate_repair_history(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
@@ -3580,7 +3642,7 @@ def _verify_candidate_repair_history(layout: workspace.Layout, pr: Mapping[str, 
         receipt, gate = previous.get("candidate_review_receipt"), previous.get("candidate_review_result")
         if (not isinstance(candidate, Mapping) or not isinstance(dispatch, Mapping)
                 or not isinstance(receipt, Mapping) or not isinstance(gate, Mapping)
-                or gate.get("state") != "pending_candidate_repair"
+                or gate.get("state") not in ("pending_candidate_repair", "awaiting_verify_evidence")
                 or gate.get("candidate_head") != candidate.get("candidate_head")
                 or gate.get("candidate_tree") != candidate.get("tree")
                 or receipt.get("binding_sha256") != dispatch.get("binding_sha256")
@@ -3591,11 +3653,16 @@ def _verify_candidate_repair_history(layout: workspace.Layout, pr: Mapping[str, 
                 or hashlib.sha256(receipt["raw_response"].encode("utf-8")).hexdigest() != receipt.get("raw_sha256")
                 or _public_report(receipt["raw_response"]) != receipt.get("report")
                 or receipt.get("native_proof") != previous.get("candidate_review_execution_proof")
-                or receipt.get("report_sha256") != _digest(receipt.get("report"))
-                or not isinstance(gate.get("bounded_repair"), Mapping)
-                or gate["bounded_repair"].get("report_sha256") != receipt.get("report_sha256")):
+                or receipt.get("report_sha256") != _digest(receipt.get("report"))):
             raise CycleError("candidate repair predecessor review changed")
         binding = dispatch["binding"]
+        if gate.get("state") == "pending_candidate_repair":
+            if (not isinstance(gate.get("bounded_repair"), Mapping)
+                    or gate["bounded_repair"].get("report_sha256") != receipt.get("report_sha256")):
+                raise CycleError("candidate repair predecessor findings changed")
+        elif (receipt.get("report", {}).get("verdict") != "pass"
+              or row.get("cause") != _verify_failure_cause(layout, previous, binding)):
+            raise CycleError("candidate repair predecessor Verify failure changed")
         if scope_check:
             assert context is not None
             governing = binding.get("authority_binding", {}).get("governing_issue")
@@ -4460,6 +4527,10 @@ def _advance_candidate_review(layout: workspace.Layout, pr: Mapping[str, Any], e
                 return _advance_candidate_repair(layout, pr, entry, saved, binding, candidate_pr,
                                                  http=http, codex_home=codex_home)
             if finished["action"] == "awaiting-candidate-verify":
+                verification = saved.get("candidate_verification")
+                if isinstance(verification, Mapping) and verification.get("state") == "failed":
+                    return _advance_candidate_repair(layout, pr, entry, saved, binding, candidate_pr,
+                                                     http=http, codex_home=codex_home)
                 return _advance_candidate_verify(layout, pr, entry, saved, binding, candidate_pr, http=http)
             return finished
         workspace._reserve_review_worker(layout, binding["candidate"]["claim_issue"], author, worker)
@@ -4746,7 +4817,7 @@ def _advance_candidate_verify(layout: workspace.Layout, pr: Mapping[str, Any], e
                 or record.get("state") not in ("intent", "sent_unknown", "finished")):
             raise CycleError("candidate Verify command identity changed")
         if record.get("state") == "finished":
-            if record.get("exit_code") != 0:
+            if record.get("exit_code") != 0 or not delivery._pytest_pass_count(record.get("stdout", "") + "\n" + record.get("stderr", "")):
                 break
             continue
         if mapping.get("state") != "running":
@@ -4814,7 +4885,7 @@ def _advance_candidate_verify(layout: workspace.Layout, pr: Mapping[str, Any], e
             record.update(state="finished", exit_code=exit_code, stdout=stdout, stderr=stderr,
                           output_event_ids=event_ids, output_events_sha256=_digest(output))
             _save(layout, saved)
-            if exit_code != 0:
+            if exit_code != 0 or not delivery._pytest_pass_count(stdout + "\n" + stderr):
                 break
     stop = intent.get("stop_intent")
     mapping = _mapping(layout, worker)
@@ -4838,8 +4909,13 @@ def _advance_candidate_verify(layout: workspace.Layout, pr: Mapping[str, Any], e
     current, _ = _candidate_review_snapshot(layout, pr, entry, saved)
     if current != binding:
         raise CycleError("candidate scope changed during Verify")
-    if any(row.get("exit_code") != 0 for row in commands):
-        failed = next(row for row in commands if row.get("exit_code") != 0)
+    if len(commands) != len(targets) and all(row.get("exit_code") == 0 and delivery._pytest_pass_count(
+            row.get("stdout", "") + "\n" + row.get("stderr", "")) for row in commands):
+        raise CycleError("candidate Verify command history is incomplete")
+    if any(row.get("exit_code") != 0 or not delivery._pytest_pass_count(
+            row.get("stdout", "") + "\n" + row.get("stderr", "")) for row in commands):
+        failed = next(row for row in commands if row.get("exit_code") != 0 or not delivery._pytest_pass_count(
+            row.get("stdout", "") + "\n" + row.get("stderr", "")))
         intent.update(state="failed", failing_target=failed["target"], failing_exit=failed["exit_code"],
                       next_action=(f"continue candidate-aware repair at {candidate['candidate_head']} for "
                                    f"{failed['target']} using the retained OpenHands output and exit {failed['exit_code']}"))
@@ -4885,6 +4961,22 @@ def _advance_candidate_verify(layout: workspace.Layout, pr: Mapping[str, Any], e
 def _advance_candidate_repair(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
                               saved: dict[str, Any], binding: Mapping[str, Any], candidate_pr: Mapping[str, Any],
                               *, http: Callable[..., tuple[int, Any]], codex_home: Path | None) -> dict[str, Any]:
+    verification = saved.get("candidate_verification")
+    if isinstance(verification, Mapping) and verification.get("state") == "failed":
+        worker = verification.get("worker")
+        if not isinstance(worker, str):
+            raise CycleError("candidate Verify worker is unavailable")
+        # Keep the stopped verifier generation stable through author materialization and POST.
+        with workspace._worker_lifecycle_lock(layout, worker):
+            return _advance_candidate_repair_locked(layout, pr, entry, saved, binding, candidate_pr,
+                                                    http=http, codex_home=codex_home)
+    return _advance_candidate_repair_locked(layout, pr, entry, saved, binding, candidate_pr,
+                                            http=http, codex_home=codex_home)
+
+
+def _advance_candidate_repair_locked(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                                     saved: dict[str, Any], binding: Mapping[str, Any], candidate_pr: Mapping[str, Any],
+                                     *, http: Callable[..., tuple[int, Any]], codex_home: Path | None) -> dict[str, Any]:
     """Start one isolated author at the reviewed local candidate, preserving both predecessors."""
     review = saved.get("candidate_review_receipt")
     result = saved.get("candidate_review_result")
@@ -4895,25 +4987,40 @@ def _advance_candidate_repair(layout: workspace.Layout, pr: Mapping[str, Any], e
     _review_stop_checkpoint(reviewer_mapping, saved, require_receipt=True, prefix="candidate_review_")
     _assert_stopped(layout, reviewer, reviewer_mapping)
     if (not isinstance(review, Mapping) or not isinstance(result, Mapping)
-            or result.get("state") != "pending_candidate_repair"
-            or not isinstance(result.get("bounded_repair"), Mapping)
-            or result["bounded_repair"].get("report_sha256") != review.get("report_sha256")
             or result.get("binding_sha256") != _digest(binding)
             or result.get("candidate_head") != candidate.get("candidate_head")
             or result.get("candidate_tree") != candidate.get("tree")):
         raise CycleError("candidate repair findings or review binding changed")
+    if result.get("state") == "pending_candidate_repair":
+        if (not isinstance(result.get("bounded_repair"), Mapping)
+                or result["bounded_repair"].get("report_sha256") != review.get("report_sha256")):
+            raise CycleError("candidate repair findings changed")
+        cause = {"kind": "review_findings", "report_sha256": review["report_sha256"]}
+    elif result.get("state") == "awaiting_verify_evidence" and review.get("report", {}).get("verdict") == "pass":
+        cause = _verify_failure_cause(layout, saved, binding)
+        verification = saved["candidate_verification"]
+        if (verification.get("targets") != _candidate_verify_targets(layout, entry, candidate_pr, Path(candidate["worktree"]))
+                or verification.get("test_venv") != str(_test_venv_source(layout, entry["test_venv"]))):
+            raise CycleError("candidate Verify target or environment changed")
+    else:
+        raise CycleError("candidate repair cause is unavailable")
     if entry.get("engine") != "codex" or workspace.resolve_engine("codex", entry.get("model"))[1] != entry.get("model"):
         raise CycleError("candidate repair requires the admitted native Codex model")
     attempt = result.get("attempt")
     if type(attempt) is not int or attempt < 1:
         raise CycleError("candidate repair attempt identity is unavailable")
-    operation = "pr-completion-" + _digest({"request": "candidate-repair-author",
-        "binding": _digest(binding), "report": review["report_sha256"], "attempt": attempt})
+    operation_data = {"request": "candidate-repair-author", "binding": _digest(binding),
+                      "report": review["report_sha256"], "attempt": attempt}
+    if cause["kind"] == "verify_failure":
+        operation_data["cause"] = cause
+    operation = "pr-completion-" + _digest(operation_data)
     worker = "repair-" + _digest({"operation": operation})[:24]
     expected = {"operation_id": operation, "worker": worker, "attempt": attempt,
                 "review_binding_sha256": _digest(binding), "report_sha256": review["report_sha256"],
                 "source_base_head": candidate["candidate_head"], "source_base_tree": candidate["tree"],
                 "remote_head": pr["head_sha"], "branch": candidate["branch"]}
+    if cause["kind"] == "verify_failure":
+        expected["cause"] = cause
     intent = saved.get("candidate_repair")
     if intent is None:
         if layout.worker_dir(worker).exists() or layout.worker_dir(worker).is_symlink():
@@ -4959,14 +5066,19 @@ def _advance_candidate_repair(layout: workspace.Layout, pr: Mapping[str, Any], e
             current_binding, _ = _candidate_review_snapshot(layout, pr, entry, saved)
             if current_binding != binding:
                 raise CycleError("candidate scope changed before repair conversation")
-            prompt = (f"Repair the bounded findings for PR #{pr['number']}. The actual remote PR head is "
+            if cause["kind"] == "verify_failure":
+                failed = saved["candidate_verification"]["commands"][-1]
+                task = (f"Repair the failed required Verify target {failed['target']} (exit {failed['exit_code']}).\n"
+                        f"stdout:\n{failed['stdout']}\nstderr:\n{failed['stderr']}\n"
+                        "Make the bounded correction and run the target again.")
+            else:
+                task = f"Bounded findings: {json.dumps(result['bounded_repair'], sort_keys=True)}\nFull review: {json.dumps(review['report'], sort_keys=True)}"
+            prompt = (f"Repair the bounded issue for PR #{pr['number']}. The actual remote PR head is "
                       f"{pr['head_sha']}; this workspace starts at reviewed local candidate "
                       f"{candidate['candidate_head']} with tree {candidate['tree']}. Preserve scope and unrelated work. "
                       "Do not publish, push, change claims or access host credentials. Report changes and tests.\n"
                       f"Issue contracts and candidate scope: {json.dumps(candidate_pr['review_material']['issues'], sort_keys=True)}\n"
-                      f"Scope binding: {json.dumps(binding['scope_hashes'], sort_keys=True)}\n"
-                      f"Bounded findings: {json.dumps(result['bounded_repair'], sort_keys=True)}\n"
-                      f"Full review: {json.dumps(review['report'], sort_keys=True)}")
+                      f"Scope binding: {json.dumps(binding['scope_hashes'], sort_keys=True)}\n{task}")
             conversation = workspace._start_conversation_locked(layout, worker, engine=entry["engine"],
                 model=entry["model"], effort=entry.get("effort"), prompt=prompt, operation_id=operation,
                 expected_owner_binding=saved["repair_owner_binding"], http=http, runner=_worker_runner)
@@ -5029,13 +5141,13 @@ def _promote_candidate_repair(layout: workspace.Layout, pr: Mapping[str, Any], e
             or saved.get("candidate_repair_stop_verified") is not True):
         raise CycleError("candidate repair stop does not bind its reviewed source base")
     fields = {key: value for key, value in saved.items()
-              if key.startswith("repair_") or key.startswith("candidate_review_")}
+              if key.startswith("repair_") or key.startswith("candidate_review_") or key == "candidate_verification"}
     history = saved.setdefault("candidate_repair_history", [])
     if not isinstance(history, list):
         raise CycleError("candidate repair history is malformed")
-    history.append({"fields": fields})
+    history.append({"fields": fields, **({"cause": intent["cause"]} if "cause" in intent else {})})
     for key in list(saved):
-        if key.startswith("candidate_review_") or key == "repair_candidate_preparation":
+        if key.startswith("candidate_review_") or key in ("repair_candidate_preparation", "candidate_verification"):
             del saved[key]
     intent["status"] = "preparing"
     saved.update(repair_worker=worker, repair_source_base_head=intent["source_base_head"],

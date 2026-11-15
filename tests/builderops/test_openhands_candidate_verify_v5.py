@@ -73,12 +73,12 @@ def repaired_review(tmp_path, capsys, monkeypatch):
 
 
 def verify_fixture(tmp_path, capsys, monkeypatch, *, fail=False, lose=False, lose_output=False, repaired=False,
-                   missing_api=False):
-    source = 'def test_example(): assert False\n' if fail else 'def test_example(): pass\n'
+                   missing_api=False, test_source=None, sol=False):
+    source = test_source or ('def test_example(): assert False\n' if fail else 'def test_example(): pass\n')
     if repaired:
         data, fetch, identity, server, home = repaired_review(tmp_path, capsys, monkeypatch)
     else:
-        data, fetch, identity, server, home, _, _, _, _ = prepared(tmp_path, capsys, monkeypatch, test_source=source)
+        data, fetch, identity, server, home, _, _, _, _ = prepared(tmp_path, capsys, monkeypatch, test_source=source, sol=sol)
     layout, _, publisher, _, pr, entry, _, _, _ = data
     venv = tmp_path / 'approved-venv'
     (venv / 'bin').mkdir(parents=True)
@@ -169,6 +169,69 @@ def test_failed_real_pytest_holds_without_publication(tmp_path, capsys, monkeypa
     assert 'repair_publication' not in saved
 
 
+@pytest.mark.parametrize('body', [
+    'if n: pytest.skip("missing")',
+    'if n: pytest.xfail("missing")',
+])
+def test_incomplete_real_pytest_cannot_make_candidate_artifact(tmp_path, capsys, monkeypatch, body):
+    source = ('import pytest\n@pytest.mark.parametrize("n", [0, 1])\n'
+              f'def test_example(n):\n    {body}\n    assert True\n')
+    data, _, identity, _, _, _, advance, _, _ = verify_fixture(
+        tmp_path, capsys, monkeypatch, test_source=source)
+    result = advance()
+    assert result['action'] == 'candidate-verify-failed', result
+    saved = cycle._find(data[0], 10, identity)
+    verify = saved['candidate_verification']
+    assert verify['commands'][0]['exit_code'] == 0
+    assert verify['commands'][0]['output_event_ids'] and verify['stop_verified'] is True
+    assert 'evidence_file' not in verify and 'repair_publication' not in saved
+
+
+def test_missing_real_pytest_collection_cannot_make_candidate_artifact(tmp_path, capsys, monkeypatch):
+    data, _, identity, _, _, _, advance, _, _ = verify_fixture(
+        tmp_path, capsys, monkeypatch, test_source='def test_other(): pass\n')
+    assert advance()['action'] == 'candidate-verify-failed'
+    verify = cycle._find(data[0], 10, identity)['candidate_verification']
+    assert verify['commands'][0]['exit_code'] != 0 and verify['stop_verified'] is True
+    assert 'evidence_file' not in verify
+
+
+@pytest.mark.parametrize(('case', 'accepted'), [('pass', True), ('skip', False), ('xfail', False), ('missing', False)])
+def test_full_validator_checks_real_pytest_summary(tmp_path, case, accepted):
+    import sys
+    from app.builderops import openhands_delivery as delivery
+
+    work = tmp_path / 'work'
+    (work / 'tests').mkdir(parents=True)
+    behavior = {'pass': 'pass', 'skip': 'pytest.skip("missing")', 'xfail': 'pytest.xfail("missing")',
+                'missing': 'pass'}[case]
+    (work / 'tests/test_example.py').write_text(
+        'import pytest\n@pytest.mark.parametrize("n", [0, 1])\n'
+        f'def test_example(n):\n    if n: {behavior}\n    assert True\n')
+    target = 'tests/test_example.py::' + ('test_absent' if case == 'missing' else 'test_example')
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', target],
+                            cwd=work, capture_output=True, text=True,
+                            env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
+    head, base = 'a' * 40, 'b' * 40
+    review, output = tmp_path / 'review.txt', tmp_path / 'output.txt'
+    review.write_text(f'independent review candidate {head} pass\n')
+    output.write_text(result.stdout + '\n' + result.stderr)
+    body = f'## Acceptance Criteria\n- [ ] Required behavior.\n  - Verify: `{target}`\n'
+    receipt = {'version': 1, 'repository': delivery.REPOSITORY, 'issue': 123, 'head_sha': head, 'base_sha': base,
+        'risk_surfaces': [], 'review': {'verdict': 'pass', 'head_sha': head, 'reviewer': 'independent',
+        'blocking_findings': [], 'evidence': {'path': str(review)}}, 'verification': [
+        {'target': target, 'head_sha': head, 'result': 'pass', 'evidence': {'path': str(output)}}]}
+    path = tmp_path / 'evidence.json'
+    path.write_text(json.dumps(receipt))
+    args = (path, {'worktree': str(work), 'issue': 123}, head, base, body)
+    if accepted:
+        assert result.returncode == 0
+        delivery._full_evidence(*args)
+    else:
+        with pytest.raises(delivery.DeliveryError, match='Test source does not substantiate'):
+            delivery._full_evidence(*args)
+
+
 def test_lost_result_readback_reconciles_the_same_command(tmp_path, capsys, monkeypatch):
     data, _, identity, _, _, _, advance, _, calls = verify_fixture(tmp_path, capsys, monkeypatch, lose_output=True)
     first = advance()
@@ -215,13 +278,210 @@ def test_missing_upstream_bash_api_holds_without_command(tmp_path, capsys, monke
     assert not [call for call in calls if call[0] == 'POST']
 
 
+def test_verify_failure_repairs_real_candidate_then_publishes(tmp_path, capsys, monkeypatch):
+    source = 'from pathlib import Path\ndef test_example():\n    assert Path("new.py").read_text() == "fixed\\n"\n'
+    fixture = verify_fixture(tmp_path, capsys, monkeypatch, test_source=source, lose_output=True)
+    data, _, identity, server, _, _, advance, _, calls = fixture
+    layout, original_author, publisher, engine, pr, entry, _, _, _ = data
+    assert advance()['action'] == 'wait'  # lost Verify output readback
+    failed = advance()
+    assert failed['action'] == 'candidate-verify-failed', failed
+    saved = cycle._find(layout, 10, identity)
+    old = saved['repair_candidate']
+    verification = saved['candidate_verification']
+    old_review = saved['candidate_review_receipt']
+    assert verification['stop_verified'] and verification['commands'][-1]['exit_code'] == 1
+    assert 'AssertionError' in verification['commands'][-1]['stdout']
+    server.lose_next_create = True
+    started = advance()
+    assert started['action'] == 'candidate-repair-author' and started['conversation_status'] in ('unknown', 'created'), started
+    worker, cid = started['worker'], started['conversation_id']
+    post = [c for c in server.calls if c[0] == 'POST' and c[2] == '/conversations'][-1]
+    prompt = post[3]['initial_message']['content'][0]['text']
+    assert 'tests/example.py::test_example' in prompt and 'AssertionError' in prompt and 'exit 1' in prompt
+    assert old['candidate_head'] in prompt
+    assert cycle._candidate_git(layout.checkout(worker), 'rev-parse', 'HEAD').strip() == old['candidate_head']
+    resumed = advance()
+    assert resumed['conversation_id'] == cid and resumed['conversation_status'] == 'created', resumed
+    assert len([c for c in server.calls if c[0] == 'POST' and c[2] == '/conversations']) == 2
+
+    def native_finished(worker, cid, session):
+        container_id = cycle._mapping(layout, worker)['container_id']
+        original_command = cycle._command
+
+        def command(argv, *, timeout):
+            if argv[:2] == ['docker', 'inspect'] and worker in engine.containers and argv[-1] == container_id:
+                return subprocess.CompletedProcess(argv, 0, json.dumps([{'Id': container_id, 'Image': 'sha256:image',
+                    'Name': '/' + layout.container_name(worker), 'State': {'Running': True}, 'Config': {
+                        'Image': ew.OPENHANDS_IMAGE, 'Env': [], 'Labels': {
+                            ew.LABEL_EPIC: str(layout.epic), ew.LABEL_WORKER: worker}}}]), '')
+            if argv[1:3] == ['image', 'inspect']:
+                return subprocess.CompletedProcess(argv, 0, '[{"Id":"sha256:image"}]', '')
+            if argv[1:3] == ['exec', container_id]:
+                if argv[-2:] == ['login', 'status']:
+                    value = 'Logged in using ChatGPT'
+                elif argv[-2:] == ['codex', cid]:
+                    value = json.dumps({'engine': 'codex', 'conversation_id': cid, 'session_id': session,
+                        'model': entry['model'], 'effort': entry.get('effort', 'ultra'),
+                        'timestamp': '2026-11-15T00:00:00Z'})
+                else:
+                    value = 'route-ok\n'
+                return subprocess.CompletedProcess(argv, 0, value, '')
+            return original_command(argv, timeout=timeout)
+
+        monkeypatch.setattr(cycle, '_command', command)
+        server.conversations[cid].update(execution_status='finished',
+            agent={'kind': 'ACPAgent', 'acp_server': 'codex', 'acp_model': entry['model']},
+            current_model_id=entry['model'], current_effort=entry.get('effort', 'ultra'),
+            available_efforts=[{'value': entry.get('effort', 'ultra')}],
+            agent_state={'acp_session_id': session, 'acp_session_cwd': '/workspace'})
+        server.events = [{'kind': 'MessageEvent', 'source': 'agent'}]
+
+    (layout.checkout(worker) / 'new.py').write_text('fixed\n')
+    (layout.checkout(worker) / 'repair-unique.cache').write_text('preserved\n')
+    native_finished(worker, cid, 'verify-repair-native')
+    prepared_result = advance()
+    assert prepared_result['action'] == 'awaiting-candidate-review', prepared_result
+    saved = cycle._find(layout, 10, identity)
+    candidate = saved['repair_candidate']
+    assert cycle._candidate_git(publisher, 'rev-parse', 'HEAD^').strip() == old['candidate_head']
+    assert candidate['source_base_head'] == old['candidate_head']
+    assert saved['candidate_repair_history'][-1]['fields']['candidate_verification'] == verification
+    assert saved['candidate_repair_history'][-1]['fields']['candidate_review_receipt'] == old_review
+    assert 'candidate_verification' not in saved
+    assert cycle._mapping(layout, worker)['state'] == 'stopped_verified'
+    assert (layout.checkout(worker) / 'repair-unique.cache').read_text() == 'preserved\n'
+    assert (original_author / 'private.cache').read_text() == 'ignored unique work\n'
+    reviewer = advance()
+    assert reviewer['action'] == 'candidate-review-dispatched', reviewer
+    native_finished(reviewer['worker'], reviewer['conversation_id'], 'fresh-review-native')
+    saved = cycle._find(layout, 10, identity)
+    report = dict(old_review['report'], identity=saved['candidate_review_dispatch']['binding_sha256'],
+                  head_sha=candidate['candidate_head'])
+    server.final_responses[reviewer['conversation_id']] = json.dumps(report)
+    assert advance()['action'] == 'awaiting-candidate-verify'
+    _publish_verified_fixture(tmp_path, monkeypatch, fixture, lost_push=True, verify_posts=2)
+    assert len([c for c in calls if c[0] == 'POST']) == 2
+
+
+def test_verify_repair_drift_holds_and_peer_progresses(tmp_path, capsys, monkeypatch):
+    import copy
+
+    fixture = verify_fixture(tmp_path, capsys, monkeypatch, fail=True)
+    data, fetch, identity, server, home, http, advance, _, _ = fixture
+    layout, _, _, engine, _, entry, _, _, lease = data
+    assert advance()['action'] == 'candidate-verify-failed'
+    original = cycle._find(layout, 10, identity)
+    for drift in ('binding', 'stop', 'scope'):
+        changed = copy.deepcopy(original)
+        if drift == 'binding':
+            changed['candidate_verification']['binding_sha256'] = '0' * 64
+        elif drift == 'stop':
+            changed['candidate_verification']['stop_intent']['stop_id'] = 'f' * 32
+        else:
+            changed['candidate_review_dispatch']['binding']['scope_hashes']['6617']['body_sha256'] = '0' * 64
+        cycle._save(layout, changed)
+        held = advance()
+        assert held['action'] == 'wait', (drift, held)
+        assert 'candidate_repair' not in cycle._find(layout, 10, identity)
+        cycle._save(layout, copy.deepcopy(original))
+    old_holder = lease['holder']
+    lease['holder'] = 'foreign'
+    assert advance()['action'] == 'wait'
+    lease['holder'] = old_holder
+    assert 'candidate_repair' not in cycle._find(layout, 10, identity)
+    verifier = original['candidate_verification']['worker']
+    with ew._worker_lifecycle_lock(layout, verifier):
+        assert advance()['action'] == 'wait'
+        assert 'candidate_repair' not in cycle._find(layout, 10, identity)
+    started = advance()
+    assert started['action'] == 'candidate-repair-author', started
+    worker = started['worker']
+    retained = cycle._find(layout, 10, identity)
+    retained['candidate_verification']['commands'][-1]['stdout'] += '\nchanged\n'
+    cycle._save(layout, retained)
+
+    ew.create_worker(layout, 'peer', issue=6619, branch='b/peer', next_action='review', runner=engine)
+    ew.start_openhands_worker(layout, 'peer', runner=engine, http=server)
+    old_head = entry['head_sha']
+    peer_issue = {'number': 6619, 'state': 'open', 'title': 'Peer',
+                  'body': data[4]['governing_issue']['body'], 'labels': [{'name': 'agent:in-progress'}]}
+    peer_pr = {'number': 9, 'state': 'open', 'draft': False, 'title': 'Peer', 'labels': [],
+               'body': 'Governing-Issue: #6619\nFixes #6619\n',
+               'head': {'sha': old_head, 'ref': 'b/peer', 'repo': {'full_name': cycle.completion.REPOSITORY}},
+               'base': {'sha': old_head, 'ref': 'main'}}
+    original_pr, original_issue, original_refs = cycle.closure._pr, cycle.closure._issue, cycle.closure._closing_issue_references
+    monkeypatch.setattr(cycle.closure, '_pr', lambda executor, cwd, repo, number:
+                        peer_pr if number == 9 else original_pr(executor, cwd, repo, number))
+    monkeypatch.setattr(cycle.closure, '_issue', lambda executor, cwd, repo, number:
+                        peer_issue if number == 6619 else original_issue(executor, cwd, repo, number))
+    monkeypatch.setattr(cycle.closure, '_closing_issue_references', lambda executor, cwd, repo, number:
+                        [6619] if number == 9 else original_refs(executor, cwd, repo, number))
+
+    def peer_fetch(path, timeout):
+        if '/pulls?' in path:
+            value = [{'number': 9}, {'number': 10}]
+        elif '/pulls/9/reviews' in path:
+            value = []
+        elif path.endswith('/pulls/9'):
+            value = peer_pr
+        elif path.endswith('/issues/6619'):
+            value = peer_issue
+        else:
+            return fetch(path, timeout)
+        return 200, json.dumps(value).encode()
+
+    result = cycle.advance(layout, [{**entry, 'number': 9, 'worker': 'peer'}, entry],
+                           fetch=peer_fetch, http=http, codex_home=home)['results']
+    assert result[0]['action'] == 'independent-review' and result[1]['action'] == 'wait', result
+    assert cycle._mapping(layout, worker)['state'] == 'stopped_verified'
+    assert cycle._find(layout, 10, identity)['candidate_repair']['held'] is True
+    assert len([call for call in server.calls if call[0] == 'POST' and call[2] == '/conversations']) == 3
+
+
+def test_verify_repair_unknown_author_post_retains_id_and_sol_high(tmp_path, capsys, monkeypatch):
+    data, _, identity, server, _, _, advance, _, _ = verify_fixture(tmp_path, capsys, monkeypatch, fail=True, sol=True)
+    assert advance()['action'] == 'candidate-verify-failed'
+    server.lose_next_create = True
+    server.create_not_applied = True
+    first = advance()
+    assert first['action'] == 'candidate-repair-author' and first['conversation_status'] == 'unknown', first
+    second = advance()
+    assert second['conversation_id'] == first['conversation_id'] and second['conversation_status'] == 'unknown', second
+    posts = [c for c in server.calls if c[0] == 'POST' and c[2] == '/conversations']
+    assert len(posts) == 2
+    body = posts[-1][3]
+    assert body['agent_settings'] == {'agent_kind': 'acp', 'acp_server': 'codex',
+                                      'acp_model': 'gpt-6.1-sol', 'acp_effort': 'high'}
+    assert cycle._find(data[0], 10, identity)['candidate_verification']['state'] == 'failed'
+    assert cycle._mapping(data[0], first['worker'])['state'] == 'running'
+
+
+def test_verify_repair_refuses_changed_stopped_verifier_source(tmp_path, capsys, monkeypatch):
+    data, _, identity, server, _, _, advance, _, _ = verify_fixture(tmp_path, capsys, monkeypatch, fail=True)
+    assert advance()['action'] == 'candidate-verify-failed'
+    verify = cycle._find(data[0], 10, identity)['candidate_verification']
+    changed = data[0].checkout(verify['worker']) / 'new.py'
+    changed.write_text('preserve changed verifier source\n')
+    held = advance()
+    assert held['action'] == 'wait' and 'Verify source changed' in held['reason'], held
+    assert 'candidate_repair' not in cycle._find(data[0], 10, identity)
+    assert changed.read_text() == 'preserve changed verifier source\n'
+    assert len([call for call in server.calls if call[0] == 'POST' and call[2] == '/conversations']) == 1
+
+
 @pytest.mark.parametrize(('repaired', 'lost_push', 'explicit'),
                          [(False, False, False), (True, True, False), (False, False, True)])
 def test_default_artifact_reaches_real_native_publisher(tmp_path, capsys, monkeypatch, repaired, lost_push, explicit):
+    fixture = verify_fixture(tmp_path, capsys, monkeypatch, repaired=repaired)
+    _publish_verified_fixture(tmp_path, monkeypatch, fixture, lost_push=lost_push, explicit=explicit)
+
+
+def _publish_verified_fixture(tmp_path, monkeypatch, fixture, *, lost_push=False, explicit=False, verify_posts=1):
     import shutil
     from app.builderops import publication
 
-    data, fetch, identity, _, home, http, advance, _, calls = verify_fixture(tmp_path, capsys, monkeypatch, repaired=repaired)
+    data, fetch, identity, _, home, http, advance, _, calls = fixture
     layout, _, publisher, _, original, entry, _, _, _ = data
     candidate = cycle._find(layout, 10, identity)['repair_candidate']
     base = entry['head_sha']
@@ -321,7 +581,7 @@ def test_default_artifact_reaches_real_native_publisher(tmp_path, capsys, monkey
     assert port.remote == candidate['candidate_head']
     assert json.loads(admission_path.read_text())['admissions'][0]['head_sha'] == candidate['candidate_head']
     assert len([call for call in port.calls if call[:2] == ('git', 'push')]) == 1
-    assert len([call for call in calls if call[0] == 'POST']) == 1
+    assert len([call for call in calls if call[0] == 'POST']) == verify_posts
 
 
 def test_installed_bash_service_records_actual_fixture_exit(tmp_path, monkeypatch):

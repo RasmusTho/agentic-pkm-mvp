@@ -58,6 +58,22 @@ class DeliveryError(RuntimeError):
     """Preparation or execution cannot safely proceed."""
 
 
+def _pytest_pass_count(source: str) -> int:
+    """Count passes only from a complete pytest summary, never arbitrary output."""
+    summary = re.compile(
+        r"^\s*(?:=+\s*)?((?:[0-9]+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|warnings?)"
+        r"(?:,\s*)?)+)(?:\s+in\s+\S+)?\s*(?:=+)?\s*$", re.IGNORECASE
+    )
+    matches = [match for line in source.splitlines() if (match := summary.fullmatch(line))]
+    if not matches:
+        return 0
+    counts = re.findall(r"([0-9]+)\s+(passed|failed|errors?|skipped|xfailed|xpassed|deselected)",
+                        matches[-1].group(1), re.IGNORECASE)
+    if any(int(count) and kind.lower() != "passed" for count, kind in counts):
+        return 0
+    return sum(int(count) for count, kind in counts if kind.lower() == "passed")
+
+
 class _BoundWorkerKey(str):
     """Require a worker to prove key possession on the same TCP connection."""
 
@@ -1264,11 +1280,10 @@ def _full_evidence(
         source_digests.append(digest)
         target = entry["target"]
         if target.startswith("tests/"):
-            passed = re.search(r"(?i)\b([1-9][0-9]*) passed\b", source)
-            if (not passed
-                    or re.search(r"(?i)\b[1-9][0-9]* (?:failed|errors?)\b", source)):
+            passed = _pytest_pass_count(source)
+            if not passed:
                 raise DeliveryError("Test source does not substantiate a passing run")
-            count, run_targets = test_runs.setdefault(digest, (int(passed.group(1)), set()))
+            count, run_targets = test_runs.setdefault(digest, (passed, set()))
             run_targets.add(target)
             if len(run_targets) > count:
                 raise DeliveryError("Test run has fewer passes than its claimed Verify targets")

@@ -483,7 +483,7 @@ must contain those hashes and the candidate SHA. A distinct open parent is the g
 its unfinished targets are not required unless it also closes. The admission and evidence are supplied
 by the trusted controller, not the model worker. Source dispatches an isolated candidate review and
 retains its bounded finished response and independently observed native execution proof before the
-reviewer stop. Full evidence production remains outstanding.
+reviewer stop.
 
 The source cycle invokes the existing governed native publisher under its cycle and worker locks. It
 records the original observation and push intent, reconciles uncertain outcomes before ordinary
@@ -520,8 +520,12 @@ read-only test environment. It records command intent before dispatch, reconcile
 command after an unknown reply, retains actual output and exit status, and stops the exact workspace.
 A successful run produces a controller-owned artifact checked by the existing full-publication
 validator before the native publisher; unsupported targets or unknown outcomes remain held. Bounded
-findings start one separately materialized author at the reviewed
-local candidate, while the observed remote PR head and both predecessor checkpoints remain bound.
+findings or a retained failed or incomplete Verify result start one separately materialized author at
+the reviewed local candidate, while the observed remote PR head and predecessor checkpoints remain
+bound. A Verify-triggered assignment binds the actual target, exit, output and event lineage and
+requires the exact verifier stop; it retains the clean review and failed Verify with the predecessor
+generation. The verifier lifecycle lock fences the failure check through author dispatch. Unknown
+command and conversation effects continue to reconcile their recorded IDs.
 After native author proof and an exact stop, the publisher prepares a new additive commit whose parent
 is that reviewed candidate; the next candidate needs a fresh review. No passing Verify artifact is
 inferred from a review or from an unknown command outcome.
