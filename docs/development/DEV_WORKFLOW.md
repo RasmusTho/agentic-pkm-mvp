@@ -1611,6 +1611,9 @@ Immediately before the claim, the host refreshes Issue authority after the final
 is a check followed by a dispatcher write, not an atomic GitHub/SQLite lock. The native successor
 proof refreshes its dispatcher and worktree authority after its external lineage reads; a later
 change still requires the consuming delivery gate to revalidate authority.
+Before claiming, the host applies the same registered and live checkout workspace screen used by
+the native successor proof. The supplied model workspace root must reflect actual access; this
+screen does not establish that a controller or its shared authority is protected from model access.
 The original candidate and claim remain historical provenance. A reviewed descendant can proceed
 only through the ordinary current-head scope, review, CI, native or executor merge and closure gates.
 

@@ -266,6 +266,20 @@ def test_issue_drift_during_final_run_check_refuses_before_claim(operator_case, 
     assert 2 not in case["comments"]
 
 
+def test_operator_refuses_workspace_overlap_before_claim(operator_case):
+    case = operator_case
+    case["workspace_root"].mkdir()
+    overlapping = case["workspace_root"] / "other-checkout"
+    _git(case["cwd"], "worktree", "add", "--detach", str(overlapping))
+    with pytest.raises(recovery.RecoveryEvidenceError, match="outside model workspaces"):
+        recovery.execute_operator_pickup(**_args(case))
+    task_id = case["receipt"]["predecessor"]["task_id"]
+    claims = [event for event in case["store"].list_events(task_id) if event.event_type == "task.claimed"]
+    assert len(claims) == 1
+    assert case["store"].get_task(task_id).lease_id == case["old_lease"].lease_id
+    assert 2 not in case["comments"]
+
+
 @pytest.mark.parametrize("kind", ["root", "relative", "overlap", "nested"])
 def test_operator_rejects_workspace_before_read_or_claim(operator_case, monkeypatch, kind):
     case = operator_case

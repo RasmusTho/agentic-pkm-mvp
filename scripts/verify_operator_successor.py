@@ -43,11 +43,7 @@ def _readonly_lifecycle(*, cwd: Path, worktree: Path, workspace_root: Path,
             records = agent_worktree._lifecycle_records(payload)
             live = agent_worktree.git_hygiene._parse_worktrees(
                 agent_worktree.git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd))
-            paths = [*records, *(row.get("worktree") for row in live)]
-            for value in paths:
-                if not isinstance(value, str):
-                    raise cycle.CycleError("lifecycle checkout path is unavailable")
-                agent_worktree._screen_transfer_workspace(cwd, Path(value), workspace_root)
+            agent_worktree._screen_transfer_worktree_inventory(cwd, workspace_root, records, live)
             candidate_paths = {str(Path(row["worktree"]).resolve()) for row in live
                                if row.get("branch", "").removeprefix("refs/heads/") == branch}
             selected = agent_worktree._select_authority_records(
