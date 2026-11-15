@@ -35,6 +35,16 @@ class _Quota:
         return {"spent_today": budget, "budget": budget, "exhausted": True}
 
 
+class _HealthyAccountStore:
+    def list_all(self):
+        return (SimpleNamespace(account_binding_id="binding-1", state="connected", reason_code=None),)
+
+
+class _HealthyQuota:
+    def status(self, budget):
+        return {"spent_today": 0, "budget": budget, "exhausted": False}
+
+
 def _source(reason_code=None):
     return SimpleNamespace(
         binding_id="source-1",
@@ -66,6 +76,11 @@ class _Requests:
         )
 
 
+class _RequestsEmpty:
+    def list_all(self):
+        return ()
+
+
 def test_doctor_check_reason_codes_and_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
     import app.knowledge_acquisition.sync_observability as observed
 
@@ -86,6 +101,60 @@ def test_doctor_check_reason_codes_and_redaction(monkeypatch: pytest.MonkeyPatch
     reasons = set(result["data"]["reason_codes"])
     assert {"auth_revoked", "quota_exhausted", "runner_offline", "dead_letters_present"} <= reasons
     assert "00" * 32 not in str(result)
+    assert result["ok"] is False
+
+
+def test_global_dead_letter_pass_does_not_degrade_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.knowledge_acquisition.sync_observability as observed
+
+    now = datetime(2026, 10, 15, 1, tzinfo=timezone.utc)
+    monkeypatch.setenv("YOUTUBE_TOKEN_STORE_KEY", "00" * 32)
+    monkeypatch.setattr(
+        observed,
+        "_health_contract_projection",
+        lambda: {
+            "dead_lettered_count": 9,
+            "oldest_undelivered_age_seconds": 0.0,
+            "dead_letter_status": "pass",
+        },
+    )
+    result = collect_youtube_sync_status(
+        now=now,
+        source_registry=_Registry(()),
+        request_store=_RequestsEmpty(),
+        account_store=_HealthyAccountStore(),
+        token_store=_TokenStore(),
+        quota_store=_HealthyQuota(),
+        sync_state=_State({"at": now.isoformat()}),
+        gates={"youtubeSync.enabled": True, "youtubeSync.runnerEnabled": True},
+    )
+
+    assert result["status"] == "connected"
+    assert result["reason_codes"] == []
+    assert result["health_contract"]["dead_letter_status"] == "pass"
+
+
+def test_authenticated_intentionally_paused_is_informational(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.knowledge_acquisition.sync_observability as observed
+
+    monkeypatch.setattr(
+        observed,
+        "collect_youtube_sync_status",
+        lambda **_: {
+            "status": "paused",
+            "ok": False,
+            "reason_code": "paused",
+            "reason_codes": ["paused"],
+            "auth": {"status": "connected", "reason_code": None},
+            "suggested_actions": [],
+        },
+    )
+
+    result = _check_youtube_sync()
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "paused"
+    assert result["data"]["reason_codes"] == ["paused"]
 
 
 def test_doctor_resolves_accepted_gates_from_active_context(
