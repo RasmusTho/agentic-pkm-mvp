@@ -90,7 +90,7 @@ def recovery(monkeypatch):
         return b'file.py\0'
     monkeypatch.setattr(cycle.legacy_owner_recovery, '_git_read', git_read)
     return dict(events=[old, new], owner={'task_id': task, 'lease_id': 'new-lease', 'lease_holder': 'new-agent'},
-       origin={'mode': 'dispatcher-backed', 'lease_id': 'old-lease', 'agent': 'old-agent'}, registration=reg, records={path: reg},
+       origin={'mode': 'dispatcher-backed', 'lease_id': 'new-lease', 'agent': 'new-agent', 'path': path}, registration=reg, records={path: reg},
        comments=[c1, c2], issue_comments=[], issue=issue, pr_number=pr, branch=branch, head='b'*40,
        files=['file.py'], entry={'claimant': 'new-agent', 'session': 'new-session', 'lease_id': 'new-lease', 'base_sha': 'd'*40,
                                   'lifecycle_repo': '/isolated/repo'})
@@ -201,6 +201,7 @@ def test_operator_candidate_allows_only_real_descendants(recovery, tmp_path, mon
     proof['pending_digest'] = hashlib.sha256(data['comments'][0]['body'].encode()).hexdigest()
     proof['ack_digest'] = hashlib.sha256(data['comments'][1]['body'].encode()).hexdigest()
     data['records'] = {path: reg}
+    data['origin']['path'] = path
     data['head'] = head
     data['entry']['base_sha'] = base
     current = {**pending['candidate'], 'head': head, 'tree': git('rev-parse', 'HEAD^{tree}')}
@@ -264,12 +265,9 @@ def production_path(operator_case_fixture, tmp_path, monkeypatch):  # noqa: F811
     checkout = layout.checkout(entry['worker'])
     (checkout / 'tests').mkdir(parents=True, exist_ok=True)
     (checkout / 'tests' / 'example.py').write_text('def test_example(): pass\n')
-    old = case['receipt']['predecessor']
     body = (f"Governing-Issue: #{case['issue']}\nFixes #{case['issue']}\n"
-            f"Pickup-Receipt: pickup-claim-complete issue={case['issue']} branch=codex/example "
-            f"worktree={case['worktree']} coordination_mode=dispatcher-backed fallback_reason=none "
-            f"task_id={result['task_id']} lease_id={old['lease_id']} holder={old['holder']} "
-            'evidence=verified-dispatcher-lease')
+            f"Pickup-Receipt: {result['pickup_receipt']}\n"
+            f"## Validation\nReviewed repair at {head}.")
     issue_body = '## Acceptance Criteria\n- [ ] Correct result\n  Verify: tests/example.py::test_example\n'
     issue = {'number': case['issue'], 'state': 'open', 'title': 'Recovery', 'body': issue_body, 'labels': []}
     repo = cycle.completion.REPOSITORY
@@ -400,3 +398,28 @@ def test_operator_full_path_rejects_current_head_or_gate_drift(production_path, 
         cycle._premerge(f['layout'], f['pr'], f['entry'], f['saved'])
     if failure in ('red_ci', 'pending_ci'):
         assert f['controls']['ci_calls'] == 1
+
+
+@pytest.mark.parametrize('drift', ['old_pickup', 'wrong_owner', 'wrong_path', 'wrong_scope', 'wrong_head'])
+def test_successor_body_rejects_unbound_authority(production_path, drift):
+    f = production_path
+    body = f['live']['body']
+    if drift == 'old_pickup':
+        predecessor = f['case']['receipt']['predecessor']
+        body = body.replace(f"lease_id={f['entry']['lease_id']}", f"lease_id={predecessor['lease_id']}")
+        body = body.replace(f"holder={f['entry']['claimant']}", f"holder={predecessor['holder']}")
+    elif drift == 'wrong_owner':
+        body = body.replace(f"holder={f['entry']['claimant']}", 'holder=other-agent')
+    elif drift == 'wrong_path':
+        body = body.replace(str(f['case']['worktree']), '/foreign/worktree')
+    elif drift == 'wrong_scope':
+        body = body.replace(f"Fixes #{f['case']['issue']}", 'Fixes #999999')
+    else:
+        f['live']['head']['sha'] = '0' * 40
+    f['live']['body'] = body
+    updated = cycle.observation._observe(cycle.observation._Reader(cycle.github_fetch, cycle.time.monotonic),
+                                          f['case']['pr'])
+    assert updated is not None
+    updated.update(route='native', check_config={})
+    with pytest.raises(cycle.CycleError):
+        cycle.native_authority(f['layout'], updated, f['entry'])

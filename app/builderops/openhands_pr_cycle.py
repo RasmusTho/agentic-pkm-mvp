@@ -847,8 +847,8 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
             or old.get("actor") != predecessor.get("holder") or old.get("lease_id") != predecessor.get("lease_id")
             or old.get("event_id") != predecessor.get("claim_event_id") or old_digest != predecessor.get("claim_event_digest")
             or digest != predecessor.get("history_digest") or origin.get("mode") != closure.DISPATCHER_MODE
-            or origin.get("lease_id") != old.get("lease_id") or origin.get("agent") != old.get("actor")
-            or (origin.get("path") is not None and origin.get("path") != prior.get("path"))
+            or origin.get("lease_id") != new.get("lease_id") or origin.get("agent") != new.get("actor")
+            or origin.get("path") != registration.get("path")
             or new.get("lease_id") != owner.get("lease_id") or new.get("lease_id") != entry.get("lease_id")
             or new.get("actor") != owner.get("lease_holder")
             or new.get("actor") != successor.get("agent") or _claim_session(new) != successor.get("session")
