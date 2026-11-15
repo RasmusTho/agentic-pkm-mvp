@@ -34,6 +34,7 @@ from scripts.validate_issue_readiness import (
 from scripts.pr_body_generator import generate_pr_body_from_mapping, resolve_native_issue_authority
 from scripts import agent_worktree
 
+from app.builderops import legacy_codex_6560_guard
 from app.builderops import openhands_service as service
 from app.builderops import publication
 
@@ -1602,6 +1603,10 @@ def publish_full(
         raise DeliveryError("Draft PR title is required")
     with service._locked(directory):
         state = _finished_run(directory)
+        if (state.get("issue") == 6560 or (isinstance(state.get("worktree"), str)
+                and str(Path(state["worktree"]).resolve())
+                == legacy_codex_6560_guard.WORKTREE)):
+            raise DeliveryError("#6560 requires its qualified native full-path publication proof")
         worktree = Path(state["worktree"]).resolve(strict=True)
         runner = DraftOnlyExecutor(executor)
         body_values = dict(body_inputs)

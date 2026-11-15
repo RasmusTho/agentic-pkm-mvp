@@ -1811,3 +1811,26 @@ def test_resumed_history_retains_commit_message_authority_guard(tmp_path: Path, 
     assert not any(call[:2] in {("git", "add"), ("git", "commit"), ("git", "push")} or _is_gh_api_call(call, "POST") or _is_gh_api_call(call, "PATCH") or call[:3] == ("gh", "pr", "create") for call in executor.calls)
     assert _run("git", "rev-parse", "HEAD", cwd=repo).strip() == before_head
     assert _run("git", "status", "--short", cwd=repo).strip() == "M feature.txt"
+
+
+@pytest.mark.parametrize('changes', [
+    {'governing_issue': 6560}, {'closing_issues': (6560,)}, {'existing_pr_number': 6565},
+    {'worktree': Path.home() / '.codex/worktrees/issue-6560-operations-fixture-preparation/agentic-pkm-mvp'},
+])
+def test_6560_normal_publication_refuses_before_any_read_or_effect(tmp_path, changes):
+    runner = FakeExecutor(tmp_path)
+    with pytest.raises(PublicationRefusal, match='qualified full-path'):
+        build_publication_plan(replace(_request(tmp_path), **changes), executor=runner)
+    assert runner.calls == []
+
+
+def test_6560_existing_plan_refuses_before_any_read_or_effect(tmp_path):
+    (tmp_path / 'feature.txt').write_text('new\n')
+    runner = FakeExecutor(tmp_path)
+    plan = build_publication_plan(_request(tmp_path), executor=runner)
+    plan['governing_issue']['number'] = 6560
+    plan['plan_sha256'] = publication_plan_hash(plan)
+    runner.calls.clear()
+    with pytest.raises(PublicationRefusal, match='qualified full-path'):
+        apply_publication_plan(plan, expected_plan_sha256=plan['plan_sha256'], executor=runner)
+    assert runner.calls == []

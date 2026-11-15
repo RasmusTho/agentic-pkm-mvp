@@ -1294,3 +1294,15 @@ def test_full_path_declares_required_final_review_depth(high_risk_publication):
         delivery.publish_full(state_dir, ["feature.txt"], "Add deterministic publication adapter",
                               body, evidence_file, executor=executor)
     assert not executor.calls
+
+
+def test_6560_full_draft_adapter_refuses_before_any_effect(high_risk_publication, monkeypatch):
+    state_dir, body, executor, evidence_file, _ = high_risk_publication
+    original = delivery._finished_run
+    def fixture_state(directory):
+        return {**original(directory), 'issue': 6560}
+    monkeypatch.setattr(delivery, '_finished_run', fixture_state)
+    executor.calls.clear()
+    with pytest.raises(delivery.DeliveryError, match='qualified native full-path'):
+        delivery.publish_full(state_dir, ['feature.txt'], 'Fixture', body, evidence_file, executor=executor)
+    assert executor.calls == []

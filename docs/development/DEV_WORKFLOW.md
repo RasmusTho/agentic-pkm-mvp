@@ -1585,7 +1585,7 @@ wrapper's first Git command, the host checks its qualified Git binary and existi
 and linked-worktree configuration without following config includes; unsupported includes, filters,
 helpers or worktree config are refused. The qualified GitHub credential helper remains unchanged.
 This is a coordinated host check, not a fence against uncoordinated file writers. Other legacy runs
-or unknown active work are not covered and must remain unresolved.
+except the separately scoped #6560 procedure below, and any unknown active work, remain unresolved.
 
 Use the pickup wrapper with `--takeover-stale`, the explicit target worktree,
 `--operator-comment-id`, `--operator-pr`, `--operator-workspace-root` and
@@ -1606,6 +1606,26 @@ to repost. Missing or ambiguous readback remains unresolved; do not release anot
 or retry a write blindly.
 The original candidate and claim remain historical provenance. A reviewed descendant can proceed
 only through the ordinary current-head scope, review, CI, native or executor merge and closure gates.
+
+For the separately qualified dirty Codex recovery #6560 and its existing PR #6565, provide an
+explicit JSON file containing exactly `index_blobs`, `file_sha256`, `patch_sha256` and absolute
+`backup` for the two designated tracked files. The blob and content maps use the same two paths;
+the backup is independently preserved and hash-verified. Use the same read-only draft command above
+with `--issue 6560 --pr 6565 --dirty-material-json <absolute-contract.json>` to produce an
+intentionally incomplete candidate-bound receipt. It does not make a claim or attest the operator's
+unknown fields. On isolated fixtures this producer is exercised through pickup, acknowledgment and
+publication proof. The operator must independently establish and cite the identified app child and
+delegate projections, SQLite parent links, available journal and publication attempts, rejected
+postboot resume, host boot, scoped process and restart observations, and current PR/ref. Missing or
+unreconciled identified work stays unknown, including a postboot interrupted tool; failed or
+interrupted historical delegates are not relabeled completed. The operator must explicitly
+coordinate no new manual starts and no Git configuration changes during the transition. This is a
+bounded, source-backed observation; it does not mechanically prevent app starts or arbitrary writers.
+The identified historical publication commands must use their full execution IDs. Their terminal
+statuses and the current PR/ref may be observed without knowing the exact historical push outputs
+or edited body bytes: those two fields remain `unknown`, not asserted equal to the current PR.
+The Issue, ACK, registry and dispatcher are point-in-time readbacks, not a distributed atomic lock.
+Follow the #6560 full-path publication proof in `publish-pr/FULL_PATH.md` for each subsequent PR effect.
 
 - Preflight before claim/integration:
   - `scripts/agent_workspace_preflight.sh --expected-branch "$(git branch --show-current)" --expected-worktree "$(git rev-parse --show-toplevel)"`

@@ -52,6 +52,54 @@ promotion remain with their named skills.
    Report commit SHA, PR number, base SHA, checks run, plan/gate receipts, and the next workflow.
    Never fabricate a receipt or treat publication as merge, closure, release, or delivery success.
 
+### #6560 existing PR proof
+
+For recovery of #6560 into its existing PR #6565, run the read-only proof below immediately before
+each effect, with `--effect push` or `--effect patch`, the actual successor agent/session, the exact
+local commit, and the freshly read remote PR head. Before the first PATCH, pass
+`--just-pushed-from <original-pr-head>` only after exact readback of that specific push.
+
+Before each PATCH, generate and inspect the exact new body, including exactly one invisible marker
+`<!-- operator-publication-attempt:<32 lowercase hexadecimal characters> -->` with a fresh attempt
+ID. Preserve that body as an absolute file outside the worktree. After the file exists and is
+reviewed, the authenticated operator uses the existing Issue or PR comment channel to record a JSON
+object with the sole root `operator_publication_intent.v1`. Its fields are `issue`, `pr`,
+`repository`, `branch`, `session`, `agent`, `lease_id`, `head`, `before_body_sha256`,
+`body_sha256`, `body`, `attempt_id`, and `reviewed: true`. The body field contains the entire
+reviewed body, not merely its hash. Read back the unedited owner-account comment and pass its ID and
+the body file as `--next-intent-comment-id` and `--next-body-file`. For any later push or PATCH
+after a successor body is live, also pass that body's original file and comment ID with
+`--prior-body-file` and `--prior-intent-comment-id`. A later PATCH needs both the prior live-body
+intent and the new attempt's intent. A missing, foreign, edited, duplicate, mismatched or late
+intent stops the effect.
+
+The comment authenticates the account and binds the bytes attested by the operator; it does not
+authenticate a human signature or establish that a PATCH actually ran. The coordinating operator
+must preserve and inspect the active session's actual ordered command records: the completed proof
+with that comment ID, the specific subsequent PATCH invocation and its exact body input, and its
+response/readback. Bind these records to the same issue, PR, head, session and attempt ID. If the
+records do not establish that the comment and proof preceded the specific attempt, its exact input,
+or the outcome, retain UNKNOWN and do not issue another PATCH. Generic PR `updated_at`, an arbitrary
+caller hash, a source label, or a body copied from a later GitHub response is not that evidence.
+After an ambiguous response, exact authenticated live body/head may reconcile only that earlier
+reviewed, source-established attempt. The single-coordinator and no-new-manual-starts conditions
+remain necessary. This proof is not a distributed lock and does not replace review, scope, CI or
+branch gates.
+
+```bash
+python3 -m scripts.legacy_6560_publication_gate \
+  --worktree <original-6560-worktree> --agent <successor-agent> --session <successor-session> \
+  --effect push --head <local-candidate-sha> --expected-remote-head <observed-pr-head-sha>
+```
+
+The first candidate commit must contain exactly the two acknowledged dirty files and their preserved
+bytes; use an isolated temporary index for that commit so unrelated existing staging is preserved.
+After the commit, reconcile only those two selected entries in the ordinary index to the new HEAD,
+then verify the previously staged unrelated entries still have their exact prior blob IDs. Do not
+reset or otherwise rewrite the unrelated index entries.
+The normal `publication.py` and OpenHands draft adapters refuse this scoped recovery. This procedure
+cannot prevent a raw, ungoverned Git push or a manually initiated Codex session.
+
 ## Recovery outcomes
 
 - Exact unchanged pre-effect state: rerun the owning gate, then retry the single failed command.
