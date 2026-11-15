@@ -196,6 +196,16 @@ ownership on cross-branch path reuse, and adds bounded merge and sandbox-verific
 still needs current-head CI and the parent's guarded delivery; see the #6619 snapshot above for
 dated review evidence.
 
+**Scoped legacy Builder recovery repository candidate (2026-11-15).** Issue #6637 adds an
+operator-led path for the two recorded stopped OpenHands runs #6601 and #6597, preserving their
+predecessor claims and existing PR identities while admitting a verified successor. This is a
+bounded repository capability; it does not establish that either real transfer has occurred,
+qualify the whole #6600 factory, activate a service, or cover dirty candidates. The supported
+host, evidence and limits are in [Multi-Agent Workspace Guardrails](development/DEV_WORKFLOW.md#multi-agent-workspace-guardrails).
+Last reviewed: 2026-11-15 UTC. Last verified against: `app/builderops/legacy_owner_recovery.py`,
+`app/builderops/legacy_run_fence.py`, and the focused synthetic recovery tests; real transfers and
+live environment acceptance remain unverified.
+
 The August 22 baseline formerly here and the dated October 5 observations above are historical.
 Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those
 older paragraphs. Infrastructure-reference review on 2026-10-21 does not revalidate the other

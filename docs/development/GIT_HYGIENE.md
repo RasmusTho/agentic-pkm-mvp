@@ -16,6 +16,13 @@ and active lease conflicts before a local mutation. Dedicated worktrees use
 the remote base as publication authority, so a stale shared local base ref is
 advisory only when the dedicated `HEAD` already contains the remote head.
 
+For the explicitly qualified clean legacy runs, operator pickup preserves the previous
+worktree registration and records a prepared successor before it can pin a separate authenticated
+acknowledgment. A prepared registration does not authorize work or publication. The operator must
+reconcile the specific stopped run and its PR, and the host holds its existing run locks through
+the claim and acknowledgment transition. The supported host and run scope, process observation
+limits, and resume procedure are specified in [Multi-Agent Workspace Guardrails](DEV_WORKFLOW.md#multi-agent-workspace-guardrails).
+
 The disposable integration oracle supplies byte input through a temporary regular
 file, including the complete NUL-separated attribute path set. This avoids pipe
 backpressure while preserving exact input, captured output, bounded Git execution,
