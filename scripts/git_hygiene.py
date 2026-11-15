@@ -148,7 +148,7 @@ def run_git(args: list[str], cwd: Path) -> str:
         check=True,
         capture_output=True,
         text=True,
-        env=_sanitized_git_environment(),
+        env={**_sanitized_git_environment(), "GIT_NO_REPLACE_OBJECTS": "1"},
         timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base", "ls-remote"} else None,
     )
     return result.stdout.strip()
@@ -161,7 +161,7 @@ def run_git_result(args: list[str], cwd: Path) -> subprocess.CompletedProcess[st
         check=False,
         capture_output=True,
         text=True,
-        env=_sanitized_git_environment(),
+        env={**_sanitized_git_environment(), "GIT_NO_REPLACE_OBJECTS": "1"},
         timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base", "ls-remote"} else None,
     )
 

@@ -13,6 +13,13 @@ from tests.builderops.test_openhands_pr_cycle import (
 )
 
 
+@pytest.fixture
+def qualified_test_checkout(monkeypatch):
+    """Isolate production host qualification for the temporary test checkout."""
+    monkeypatch.setattr(cycle.legacy_git_config, "check_host_config", lambda: None)
+    monkeypatch.setattr(cycle.legacy_git_config, "check", lambda **kwargs: None)
+
+
 def _pickup(comment_id, at, agent, session, path, *, branch="codex/example", issue=6618):
     """An authenticated label-only fallback pickup comment as the wrapper posts it."""
     return {"id": comment_id, "user": {"login": "RasmusTho"}, "author_association": "OWNER",
@@ -482,7 +489,9 @@ def _first_fallback_hop(tmp_path, monkeypatch, *, second_ttl):
 
 
 @pytest.mark.parametrize("returning,ended", [("original", "expired"), ("third", "expired"), ("original", "complete")])
-def test_expired_successor_is_retained_when_an_earlier_owner_returns(tmp_path, monkeypatch, returning, ended):
+def test_expired_successor_is_retained_when_an_earlier_owner_returns(
+    tmp_path, monkeypatch, qualified_test_checkout, returning, ended
+):
     f = _first_fallback_hop(tmp_path, monkeypatch, second_ttl=500 if ended == "expired" else 3600)
     now, repo, path = f["now"], f["source"], f["worktree"]
     if ended == "complete":
@@ -593,7 +602,7 @@ def _remote_after_local_history(tmp_path, monkeypatch, *, released_before=5000, 
     return f
 
 
-def test_older_local_owner_is_history_for_a_reconciled_remote_predecessor(tmp_path, monkeypatch):
+def test_older_local_owner_is_history_for_a_reconciled_remote_predecessor(tmp_path, monkeypatch, qualified_test_checkout):
     f = _remote_after_local_history(tmp_path, monkeypatch)
     now, repo, path = f["now"], f["source"], f["worktree"]
     f["comments"].extend(_prepare_and_pin(f, f["record"], receipt_at=now - 3700, ack_at=now - 3100))

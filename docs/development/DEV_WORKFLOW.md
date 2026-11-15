@@ -562,6 +562,7 @@ remain bound to the current head. The controller never runs host Git against a m
 Only a comment from the existing authenticated GitHub identity with OWNER, MEMBER or COLLABORATOR
 association is considered.
 
+
 The reviewer uses the public final response for its exact finished conversation. One bounded JSON
 report may be enclosed between `<BEGIN_PR_CYCLE_REPORT>` and `<END_PR_CYCLE_REPORT>` after plain
 public closeout text. The controller binds the report to the native execution observation, persists
@@ -1560,6 +1561,51 @@ Enforcement surfaces:
 - Consumption: `issue-to-code` gates on `Verify:` presence and reuses meaningful behavioral coverage and performs non-behavioral writeback.
 
 ## Multi-Agent Workspace Guardrails
+
+For an explicitly authorized local legacy task whose predecessor claim has no recorded Builder
+session, the trusted host operator may use the separate operator reconciliation path. First record
+the exact user mandate, successor agent and actual current Builder session, predecessor claim and
+registry history, candidate, writer/delegation and restart observations, attempted effects and
+current PR in an immutable `operator_reconciliation.v1` Issue comment under the authenticated
+owner account. The comment identifies the accountable operator's observations; it does not claim
+the old owner signed or released anything, or that a human personally authored the account comment.
+Name the sources used for execution, delegation, restart, attempted effects and GitHub readback.
+An active or genuinely uncertain competing writer, automatic restart or relevant external effect
+must remain unknown and blocks the corresponding conflicting work.
+
+For the qualified post-reboot, stopped runs #6601 and #6597 only, the host operator can prepare an
+intentionally incomplete read-only receipt draft using `python -m scripts.legacy_operator_evidence
+--issue <issue> --pr <pr> --worktree <absolute-path> --base <full-base-sha> --agent <successor>`
+with the actual `CODEX_SESSION_ID`. The operator must fill the missing explicit mandate and sourced
+writer, delegation, restart and publication observations from real evidence; nulls are not proof.
+Before admission establish that the reboot followed the recorded activity, inspect the exact run's
+restart configuration and observe that no identified post-reboot writer or delegated work remains.
+Coordinate no new direct starts or Git configuration changes during the transition. Before the
+wrapper's first Git command, the host checks its qualified Git binary and existing global, common
+and linked-worktree configuration without following config includes; unsupported includes, filters,
+helpers or worktree config are refused. The qualified GitHub credential helper remains unchanged.
+This is a coordinated host check, not a fence against uncoordinated file writers. Other legacy runs
+or unknown active work are not covered and must remain unresolved.
+
+Use the pickup wrapper with `--takeover-stale`, the explicit target worktree,
+`--operator-comment-id`, `--operator-pr`, `--operator-workspace-root` and
+`--legacy-run-state-root <absolute-factory-state-root>`. The host takes the existing watcher lock
+when present, issue lock and server lock in that order, checks the run and scoped factory/service
+processes, and retains the locks through claim, prepared registration and ACK readback. It checks
+successor claim and registration and the run status again before unlocking. A busy lock, matching or
+ambiguous process, or inconsistent state refuses the transition. This directed check and the
+operator's no-new-start coordination do not prove the absence of arbitrary renamed or in-process
+commands. The wrapper compares exact predecessor and branch history, claims as the new agent/session,
+registers a prepared successor, and pins a separate account-read-back ACK. A
+prepared registration is not worker or publication authority. If a response is lost, use the same
+wrapper and arguments with `--operator-resume`: it reads the exact new claim and, when an ACK may
+have been sent, searches for one matching existing ACK instead of posting another. The existing
+registry records an ACK intent before POST: when no intent exists, resume may complete that first
+attempt; after an intent exists, absence of a matching ACK remains unknown and is never permission
+to repost. Missing or ambiguous readback remains unresolved; do not release another owner's claim
+or retry a write blindly.
+The original candidate and claim remain historical provenance. A reviewed descendant can proceed
+only through the ordinary current-head scope, review, CI, native or executor merge and closure gates.
 
 - Preflight before claim/integration:
   - `scripts/agent_workspace_preflight.sh --expected-branch "$(git branch --show-current)" --expected-worktree "$(git rev-parse --show-toplevel)"`

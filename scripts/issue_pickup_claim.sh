@@ -10,6 +10,12 @@ AGENT_ID=""
 SESSION_ID=""
 PREFLIGHT_ONLY=0
 TAKEOVER_STALE=0
+OPERATOR_PICKUP=0
+OPERATOR_ACTION="pickup"
+OPERATOR_COMMENT_ID=""
+OPERATOR_PR=""
+OPERATOR_WORKSPACE_ROOT=""
+LEGACY_RUN_STATE_ROOT=""
 COORDINATION_MODE="auto"
 FALLBACK_REASON=""
 TASK_ID=""
@@ -61,6 +67,31 @@ while [[ $# -gt 0 ]]; do
       TAKEOVER_STALE=1
       shift
       ;;
+    --operator-resume)
+      OPERATOR_PICKUP=1
+      OPERATOR_ACTION="resume"
+      shift
+      ;;
+    --operator-comment-id)
+      OPERATOR_PICKUP=1
+      OPERATOR_COMMENT_ID="$2"
+      shift 2
+      ;;
+    --operator-pr)
+      OPERATOR_PICKUP=1
+      OPERATOR_PR="$2"
+      shift 2
+      ;;
+    --operator-workspace-root)
+      OPERATOR_PICKUP=1
+      OPERATOR_WORKSPACE_ROOT="$2"
+      shift 2
+      ;;
+    --legacy-run-state-root)
+      OPERATOR_PICKUP=1
+      LEGACY_RUN_STATE_ROOT="$2"
+      shift 2
+      ;;
     --coordination-mode)
       COORDINATION_MODE="$2"
       shift 2
@@ -92,6 +123,39 @@ if [[ "$TAKEOVER_STALE" -eq 1 && "$COORDINATION_MODE" == "github-label-only-fall
   echo "--takeover-stale requires dispatcher-backed coordination" >&2
   exit 2
 fi
+if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+  if [[ "$TAKEOVER_STALE" -ne 1 || ! "$OPERATOR_COMMENT_ID" =~ ^[1-9][0-9]*$ || ! "$OPERATOR_PR" =~ ^[1-9][0-9]*$ || -z "$OPERATOR_WORKSPACE_ROOT" || -z "$LEGACY_RUN_STATE_ROOT" ]]; then
+    echo "operator pickup requires --takeover-stale, --operator-comment-id, --operator-pr, --operator-workspace-root, and --legacy-run-state-root" >&2
+    exit 2
+  fi
+fi
+if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+  if [[ "$TARGET_WORKTREE_EXPLICIT" -ne 1 || -z "$TARGET_WORKTREE" ]]; then
+    echo "operator pickup requires an explicit target worktree" >&2
+    exit 2
+  fi
+  if ! OPERATOR_WORKSPACE_ROOT="$OPERATOR_WORKSPACE_ROOT" \
+    OPERATOR_TARGET_WORKTREE="$TARGET_WORKTREE" OPERATOR_SCRIPT_ROOT="$SCRIPT_REPO_ROOT" \
+    "$JSON_PYTHON_BIN" - <<'PY_CHECK'
+import os
+from pathlib import Path
+
+root = Path(os.environ["OPERATOR_WORKSPACE_ROOT"])
+if not root.is_absolute():
+    raise SystemExit("operator workspace root must be absolute")
+root = root.expanduser().resolve(strict=False)
+if root == Path("/"):
+    raise SystemExit("operator workspace root cannot be /")
+for name in ("OPERATOR_SCRIPT_ROOT", "OPERATOR_TARGET_WORKTREE"):
+    checkout = Path(os.environ[name]).expanduser().resolve(strict=False)
+    if checkout.is_relative_to(root) or root.is_relative_to(checkout):
+        raise SystemExit("operator checkout must be outside model workspaces")
+PY_CHECK
+  then
+    echo "operator pickup refused: workspace root is invalid or overlaps a checkout" >&2
+    exit 1
+  fi
+fi
 if ! [[ "$TTL_MINUTES" =~ ^[1-9][0-9]*$ ]]; then
   echo "--ttl-minutes must be a positive integer" >&2
   exit 2
@@ -107,6 +171,17 @@ fi
 if ! TARGET_WORKTREE="$(cd "$TARGET_WORKTREE" 2>/dev/null && pwd -P)"; then
   echo "pickup refused: target worktree path is unavailable" >&2
   exit 1
+fi
+if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+  # Do not let inherited Git overrides select uninspected configuration or a different index.
+  while IFS= read -r git_variable; do
+    unset "$git_variable"
+  done < <(compgen -A variable GIT_ || true)
+  if ! "$PYTHON_BIN" "$SCRIPT_REPO_ROOT/app/builderops/legacy_git_config.py" \
+      --cwd "$SCRIPT_REPO_ROOT" --worktree "$TARGET_WORKTREE"; then
+    echo "operator pickup refused: Git configuration is unsupported" >&2
+    exit 1
+  fi
 fi
 if ! EXPECTED_WORKTREE="$(git -C "$TARGET_WORKTREE" rev-parse --show-toplevel 2>/dev/null)"; then
   echo "pickup refused: target path is not a Git worktree" >&2
@@ -283,11 +358,21 @@ PY
 run_dispatcher() {
   (
     cd "$SCRIPT_REPO_ROOT"
+    if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+      unset DISPATCHER_STATE_DIR DISPATCHER_DB_PATH DISPATCHER_EVENTS_PATH
+    fi
     "$PYTHON_BIN" -m app.dispatcher "$@"
   )
 }
 
-read -r DETECTED_MODE DETECTED_REASON < <(detect_coordination_receipt)
+if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+  # Route only: the operator host must qualify and read the exact dispatcher
+  # before any claim. Generic status could choose a relative fallback first.
+  DETECTED_MODE="dispatcher-backed"
+  DETECTED_REASON="none"
+else
+  read -r DETECTED_MODE DETECTED_REASON < <(detect_coordination_receipt)
+fi
 if [[ "$DETECTED_MODE" == "dispatcher-status-unavailable" || \
       "$DETECTED_MODE" == "dispatcher-state-unavailable" || \
       "$DETECTED_MODE" == "dispatcher-status-inconsistent" ]]; then
@@ -511,55 +596,18 @@ try:
 except (KeyError, json.JSONDecodeError):
     raise SystemExit("GitHub issue read is not valid JSON")
 
-if not isinstance(issue, dict):
-    raise SystemExit("GitHub issue read did not return an object")
-try:
-    expected_number = int(os.environ["ISSUE_NUMBER"])
-except (KeyError, ValueError):
-    raise SystemExit("requested issue number is invalid")
-if issue.get("number") != expected_number or isinstance(issue.get("number"), bool):
-    raise SystemExit("GitHub issue read returned a different issue number")
-if str(issue.get("state", "")).lower() != "open":
-    raise SystemExit("GitHub issue is not open")
-labels = issue.get("labels")
-if not isinstance(labels, list):
-    raise SystemExit("GitHub issue read did not include a labels list")
-names = []
-for label in labels:
-    name = label.get("name") if isinstance(label, dict) else label
-    if not isinstance(name, str):
-        raise SystemExit("GitHub issue read contained an invalid label")
-    names.append(name)
-if "agent:in-progress" not in names:
-    raise SystemExit("fresh GitHub issue read no longer contains agent:in-progress")
-agent_state_labels = {name for name in names if name.startswith("agent:")}
-if agent_state_labels != {"agent:in-progress"}:
-    raise SystemExit("fresh GitHub issue read contains conflicting agent-state labels")
-body = issue.get("body")
-if not isinstance(body, str):
-    body = ""
 validator_repository_root = os.environ.get("ISSUE_READINESS_REPO_ROOT")
-if not isinstance(validator_repository_root, str) or not validator_repository_root:
+verification_repository_root = os.environ.get("ISSUE_VERIFY_REPO_ROOT") or validator_repository_root
+if not validator_repository_root or not verification_repository_root:
     raise SystemExit("issue readiness validator path is unavailable")
-verification_repository_root = (
-    os.environ.get("ISSUE_VERIFY_REPO_ROOT") or validator_repository_root
-)
-if not verification_repository_root:
-    raise SystemExit("issue verification repository root is unavailable")
 sys.path.insert(0, validator_repository_root)
-from scripts.validate_issue_readiness import classify_issue_body
+from scripts.validate_issue_readiness import validate_in_progress_issue
+try:
+    validate_in_progress_issue(issue, issue_number=int(os.environ["ISSUE_NUMBER"]),
+                               repo_root=verification_repository_root)
+except (KeyError, ValueError) as exc:
+    raise SystemExit(str(exc))
 
-report = classify_issue_body(
-    body,
-    issue_number=expected_number,
-    labels=names,
-    repo_root=verification_repository_root,
-)
-if report.readiness_classification != "ready_candidate":
-    raise SystemExit(
-        "fresh GitHub issue failed strict readiness validation: "
-        + report.readiness_classification
-    )
 PY
 }
 
@@ -857,6 +905,20 @@ if [[ "$TAKEOVER_STALE" -eq 1 ]]; then
     ISSUE_NUMBER="$ISSUE_NUMBER" verify_current_in_progress_issue; then
     echo "stale takeover refused: exact Issue is not freshly open, in-progress, and strictly valid" >&2
     exit 1
+  fi
+
+  if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+    if [[ "$REPO" != "RasmusTho/agentic-pkm-mvp" || "$TTL_MINUTES" != "90" || "$TARGET_WORKTREE_EXPLICIT" -ne 1 ]]; then
+      echo "operator pickup refused: explicit target worktree, supported repository, and default TTL required" >&2
+      exit 1
+    fi
+    # The host owns the entire successor transition. Never run the normal
+    # stale-lease, heartbeat, claim, release, or label path around it.
+    cd "$SCRIPT_REPO_ROOT"
+    exec "$PYTHON_BIN" -m app.builderops.legacy_owner_recovery "$OPERATOR_ACTION" \
+      --issue "$ISSUE_NUMBER" --pr "$OPERATOR_PR" --worktree "$EXPECTED_WORKTREE" \
+      --agent "$AGENT_ID" --session "$SESSION_ID" --comment-id "$OPERATOR_COMMENT_ID" \
+      --workspace-root "$OPERATOR_WORKSPACE_ROOT" --legacy-run-state-root "$LEGACY_RUN_STATE_ROOT"
   fi
 
   previous_lease=""
