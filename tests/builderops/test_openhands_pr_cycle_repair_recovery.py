@@ -195,7 +195,7 @@ def test_current_codex_admission_does_not_return_to_claude(tmp_path, monkeypatch
     assert payload["agent_settings"]["acp_model"] == "gpt-6.1-terra"
 
 
-@pytest.mark.parametrize("change", ["model", "engine", "handoff", "owner"])
+@pytest.mark.parametrize("change", ["handoff", "owner"])
 def test_handoff_or_selection_changes_block_reserved_attempt(tmp_path, monkeypatch, change):
     layout, config, server, _ = repair_setup(tmp_path, monkeypatch)
     saved = next(r for r in ew._load_state(layout)["compact_receipts"] if r.get("kind") == "pr_cycle")
@@ -203,14 +203,97 @@ def test_handoff_or_selection_changes_block_reserved_attempt(tmp_path, monkeypat
     ew._record_worker(layout, 6618, engine_handoff=handoff)
     config[0].update(engine="claude-code", model="claude-sonnet-5-5")
     _interrupt_before_takeover(layout, config, server, monkeypatch)
-    if change == "model":
-        config[0]["model"] = "claude-sonnet-4-5"
-    elif change == "engine":
-        config[0].update(engine="codex", model="gpt-6.1-terra")
-    elif change == "handoff":
+    if change == "handoff":
         ew._record_worker(layout, 6618, engine_handoff={**handoff, "operation_id": "another-review"})
     else:
         ew._record_worker(layout, 6618, builder_session="foreign")
     result = cycle.advance(layout, config, fetch=fetch, http=server)["results"][1]
     assert result["action"] == "wait"
+    assert len(repair_records(layout)) == 1 and len([c for c in server.calls if c[0] == "POST"]) == 1
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_same_effective_policy_resumes_reserved_handoff_before_create(tmp_path, monkeypatch, legacy):
+    layout, config, server, _ = repair_setup(tmp_path, monkeypatch)
+    saved = next(r for r in ew._load_state(layout)["compact_receipts"] if r.get("kind") == "pr_cycle")
+    handoff = {"status": "complete", "operation_id": saved["review_operation"],
+               "confirmation": {"engine": "claude-code", "model": "claude-sonnet-5-5"}}
+    ew._record_worker(layout, 6618, engine_handoff=handoff)
+    config[0].update(engine="claude-code", model="claude-sonnet-5-5")
+    _interrupt_before_takeover(layout, config, server, monkeypatch)
+    if legacy:
+        _saved_update(layout, lambda row: (row.pop("repair_admission_selection"), row.pop("repair_handoff_binding")))
+    # Producer may add observations without changing the bound operation.
+    ew._record_worker(layout, 6618, engine_handoff={**handoff, "observation": "updated"})
+    config[0].update(engine="codex", model="gpt-6.1-terra")
+    result = cycle.advance(layout, config, fetch=fetch, http=server)["results"][1]
+    assert result["action"] == "repair-author"
+    assert cycle.advance(layout, config, fetch=fetch, http=server)["results"][1]["operation_id"] == result["operation_id"]
+    assert len(repair_records(layout)) == 1 and len([c for c in server.calls if c[0] == "POST"]) == 2
+    payload = [c[3] for c in server.calls if c[0] == "POST"][-1]
+    assert payload["agent_settings"]["acp_server"] == "codex"
+    assert payload["agent_settings"]["acp_model"] == "gpt-6.1-terra"
+
+
+def test_changed_handoff_producer_confirmation_holds_before_writer(tmp_path, monkeypatch):
+    layout, config, server, _ = repair_setup(tmp_path, monkeypatch)
+    saved = next(r for r in ew._load_state(layout)["compact_receipts"] if r.get("kind") == "pr_cycle")
+    handoff = {"status": "complete", "operation_id": saved["review_operation"],
+               "confirmation": {"engine": "claude-code", "model": "claude-sonnet-5-5"}}
+    ew._record_worker(layout, 6618, engine_handoff=handoff)
+    config[0].update(engine="claude-code", model="claude-sonnet-5-5")
+    _interrupt_before_takeover(layout, config, server, monkeypatch)
+    ew._record_worker(layout, 6618, engine_handoff={**handoff, "confirmation": {
+        "engine": "claude-code", "model": "claude-sonnet-4-5"}})
+    config[0].update(engine="codex", model="gpt-6.1-terra")
+    result = cycle.advance(layout, config, fetch=fetch, http=server)["results"][1]
+    assert result["action"] == "wait" and "handoff does not bind" in result["reason"]
+    assert len(repair_records(layout)) == 1 and len([c for c in server.calls if c[0] == "POST"]) == 1
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("changed_engine", [False, True])
+def test_policy_reads_unknown_effect_without_new_writer(tmp_path, monkeypatch, legacy, changed_engine):
+    layout, config, server, _ = repair_setup(tmp_path, monkeypatch)
+    saved = next(r for r in ew._load_state(layout)["compact_receipts"] if r.get("kind") == "pr_cycle")
+    ew._record_worker(layout, 6618, engine_handoff={"status": "complete", "operation_id": saved["review_operation"]})
+    config[0].update(engine="claude-code", model="claude-sonnet-5-5")
+    server.lose_next_create = True
+    block = [False]
+    def transient(method, port, key, path, body, timeout):
+        if method == "POST" and path == "/conversations":
+            block[0] = True
+        elif method == "GET" and path.startswith("/conversations/") and block[0]:
+            block[0] = False
+            raise OSError("temporary readback failure")
+        return server(method, port, key, path, body, timeout)
+    first = cycle.advance(layout, config, fetch=fetch, http=transient)["results"][1]
+    conversation = cycle._mapping(layout, "reviewer")["conversation"]
+    assert conversation["status"] == "unknown"
+    if legacy:
+        _saved_update(layout, lambda row: (row.pop("repair_admission_selection"), row.pop("repair_handoff_binding")))
+    count = len([c for c in server.calls if c[0] == "POST"])
+    if changed_engine:
+        # Readback remains possible even if the old handoff no longer authorizes a write.
+        ew._record_worker(layout, 6618, engine_handoff=None)
+    else:
+        config[0].update(engine="codex", model="gpt-6.1-terra")
+    for _ in range(2):
+        result = cycle.advance(layout, config, fetch=fetch, http=transient)["results"][1]
+        assert result["operation_id"] == first["operation_id"]
+        assert cycle._mapping(layout, "reviewer")["conversation"]["id"] == conversation["id"]
+    assert cycle._mapping(layout, "reviewer")["conversation"]["status"] == "created"
+    assert len(repair_records(layout)) == 1 and len([c for c in server.calls if c[0] == "POST"]) == count
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_changed_effective_policy_holds_before_writer(tmp_path, monkeypatch, legacy):
+    layout, config, server, _ = repair_setup(tmp_path, monkeypatch)
+    _interrupt_before_takeover(layout, config, server, monkeypatch)
+    if legacy:
+        _saved_update(layout, lambda row: (row.pop("repair_admission_selection"), row.pop("repair_handoff_binding")))
+    config[0].update(engine="claude-code", model="claude-sonnet-5-5")
+    for _ in range(2):
+        result = cycle.advance(layout, config, fetch=fetch, http=server)["results"][1]
+        assert result["action"] == "wait" and "selection changed" in result["reason"]
     assert len(repair_records(layout)) == 1 and len([c for c in server.calls if c[0] == "POST"]) == 1

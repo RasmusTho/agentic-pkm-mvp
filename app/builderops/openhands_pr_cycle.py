@@ -3273,11 +3273,18 @@ def _effective_repair_entry(entry: Mapping[str, Any], mapping: Mapping[str, Any]
                and saved.get("review_operation") is not None
                and handoff.get("operation_id") == saved.get("review_operation"))
     binding = _digest(handoff) if matches else None
-    if "repair_admission_selection" in saved and saved["repair_admission_selection"] != selection:
-        raise CycleError("repair engine selection changed after reservation")
-    if "repair_handoff_binding" in saved and saved["repair_handoff_binding"] != binding:
+    # The digest is historical evidence; the handoff producer's operation and
+    # confirmation, rather than all mutable handoff metadata, bind continuation.
+    if saved.get("repair_handoff_binding") is not None and not matches:
         raise CycleError("repair handoff changed after reservation")
     effective = dict(entry)
+    original = saved.get("repair_admission_selection", selection)
+    if matches and isinstance(original, Mapping) and original.get("engine") == "claude-code":
+        confirmation = handoff.get("confirmation")
+        if confirmation is not None and (not isinstance(confirmation, Mapping)
+                or confirmation.get("engine") != original.get("engine")
+                or confirmation.get("model") != original.get("model")):
+            raise CycleError("repair handoff does not bind the admitted engine and model")
     if matches and selection["engine"] == "claude-code":
         confirmation = handoff.get("confirmation")
         if confirmation is not None and (not isinstance(confirmation, Mapping)
@@ -3333,7 +3340,10 @@ def _advance_repair(layout: workspace.Layout, worker: str, pr: Mapping[str, Any]
                 conversation = workspace._reconcile_worker_conversation_locked(layout, worker, http=http, runner=_worker_runner)
             return {"number": pr["number"], "identity": identity, "action": "repair-author",
                     "operation_id": op, "reason": f"conversation {conversation.get('id')} {conversation.get('status')}"}
-    else:
+    # Readback above cannot create a writer. Resolve fresh write policy only
+    # after checking for the already-attempted exact operation.
+    entry = _effective_repair_entry(entry, mapping, saved)
+    if op is None:
         if candidate is None or entry["engine"] != "codex":
             raise CycleError("a bound Codex repair candidate is required")
         _review_stop_checkpoint(mapping, saved, require_receipt=True)
@@ -3701,13 +3711,13 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     same_head_merge_unknown = any(old_head == pr["head_sha"] for _, old_head in merge_obligations)
     saved = _find(layout, pr["number"], identity)
     worker_record = _mapping(layout, entry["worker"])
-    entry = _effective_repair_entry(entry, worker_record, saved)
     if saved.get("repair_operation"):
         if merge_obligations:
             return {"number": pr["number"], "identity": identity, "action": "wait",
                     "reason": "earlier merge outcome remains unknown; reconcile before repair"}
         return _advance_repair(layout, entry["worker"], pr, entry, saved, candidate=None,
                                http=http, codex_home=codex_home)
+    entry = _effective_repair_entry(entry, worker_record, saved)
     operation_id = saved.get("review_operation")
     handoff = worker_record.get("engine_handoff")
     if (isinstance(handoff, Mapping) and handoff.get("status") == "pending"
@@ -3849,9 +3859,8 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                         and current_handoff.get("operation_id") == saved.get("review_operation")):
                     return {"number": pr["number"], "identity": identity, "action": "wait",
                             "reason": "complete the existing review handoff before repair"}
-                entry = _effective_repair_entry({**entry, **entry["_repair_admission_selection"]},
-                                                _mapping(layout, entry["worker"]), saved)
-                return _advance_repair(layout, entry["worker"], pr, entry, saved,
+                admission = {**entry, **entry["_repair_admission_selection"]}
+                return _advance_repair(layout, entry["worker"], pr, admission, saved,
                                        candidate=repair_candidate, http=http, codex_home=codex_home)
     if (same_head_merge_unknown and pr["review_outcome"] == "pass" and decision["action"] == "wait"
             and decision["reason"] == "active or unknown writable owner"):
