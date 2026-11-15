@@ -113,6 +113,61 @@ PARENT_CALLS = {
     "call_502e1f09fb21461c9f017a9a61a4281c": ("interrupt_agent", "2026-11-15T08:03:36.531Z", "89a58a63926d758792eec0002db7e32848687ed2ccfe681a7e29ccd65d136b0e"),
 }
 
+# The separately observed later inventory did not transfer ownership. These
+# identities bind only that exact child/parent chronology and its known effects.
+LATER_TURN = "01a1e11d-1f3e-7f12-8d72-644bf6d7c3e6"
+LATER_PARENT_TURN = "01a1e11c-e0ac-7020-aa2c-3c948275e0dd"
+# This binds the preserved parent snapshot, including other target-related
+# calls. It does not establish their downstream effects or a stopped delegation.
+# A caller-supplied digest cannot validate an extended, unexamined prefix.
+LATER_PARENT_PREFIX_BYTES = 113_921_951
+LATER_PARENT_PREFIX_SHA256 = "e8187cd4b957dc98eec12002ea4f30023880d966478444fb758767b9ea1bd8bb"
+LATER_COMMANDS = {
+    "exec-5b76527d-fe36-452b-9468-f4f51c857dc8": (75210, "73d7f91678d09e28c0569f254c0a163826f631701d0ea81c009783f6556fda55"),
+    "exec-8cba6500-040a-4b07-b953-6a14149646ae": (5308, "d63c7a21cf0bd2d69ef12a3e27c57746d323400d7f64702c5b21c5cbf05b6d96"),
+    "exec-62dd00fb-b475-4c3a-aaf9-27a2167b6136": (98766, "91816b0f81b2cc58cca0ab64be7fa26d1805eccb59364b0baf9beabd8013b02e"),
+    "exec-37332db3-9ecd-4b07-9dde-7bb8c00308a6": (34415, "1dc49cc8e6b6a61c1266a55e7b68a7d71ccce9f6026aae3a105c8a888b740d91"),
+    "exec-4f7cdf6f-edae-47ba-8542-f33c137073c1": (99896, "bdce7df2862a20899c93b2661c2edf01f85d5d2a13c7761939d5f04e5e2c4536"),
+    "exec-20f75295-9588-4b2c-b74d-03f0951f67ef": (38424, "0e6dba0d1742eb0b51793f7484dfa46853256b6f73903e11ea22601ddf7c739a"),
+}
+LATER_CALLS = {
+    "call_43f18ca9a462410d88ad2f727f44fbce": ("send_message", "e172060ac0cf2c30dad170ecb8a085ceeea5680e8d478caf44a737c4327ca815", "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126"),
+    "call_8bd0eebdd3cd4cfe8b5d8c52037e2a31": ("exec", "c3262bd56f69c069aa7327a214877e5c56cd385ccfa64202a813bebf8ac86425", "7a359824c10b7f65850043208e4dc0f85d2caecd3a7c6782d47acaf1d8d6cebb"),
+    "call_6580877fde24499ba3e926fdae777bfe": ("exec", "9dd225e9432d356fbcca569353ae7c40e60ce74ac698542314dbd40a1a8d1eb8", "10287010058a9d8b063d37ade6514fcdd3ec51f4aa3488a3a92aa14efdb2fac5"),
+    "call_0026f4a866de432d8d6928199ecb29ee": ("send_message", "1244a5187e40eaad910c6a1575042284becd088262d5364dac891890aa3fe48a", "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126"),
+    "call_1a44d2585f0f476390abf3ee58f8cf15": ("exec", "8bb816a16e957bb0b877051e2c913cfe1f4c3c483d2e80c626f178006ad9af57", "91b826ee0b697b8d7ccd344bbf37a5df14ddf87540eed928375337f609ee834a"),
+    "call_383be8bf8a2b471f94a127ee1719981d": ("exec", "8fc8c7c2606a803444c0c5d4ec54b7770ce31c21b9f9575ffd6d907b86cf3d65", "84bff8c7f02252ac0ccd17bbe1020bc3d5499fa4aecd9da4cf9a07ef8c4cb8e5"),
+}
+LATER_MCP = {
+    "exec-a55c1e2b-7866-4017-996d-6c519f27fe47": ("github.fetch_commit_workflow_runs", "f580e7e8d44c9a476b82d550f0281a1dadbb937fb2677c419ffce00186d98c18"),
+    "exec-ce0a0129-5fb8-47c3-928f-c4e4879e03a3": ("github.fetch_issue_comments", "5b01857b9ecb67616362726b444aac8d5e3f009c010f5b7e04f445cc936e58a4"),
+    "exec-c6e6d78e-474f-4f2b-bd18-3be8fac0f4c1": ("github.fetch_issue", "5448de0865f75029a099baf7ced9e41afdedf055d57d2fe7e4750115f8cb5c1c"),
+    "exec-cf132233-2882-491a-a200-3603b130760e": ("github.get_pr_info", "63bf9239aeef3ff3e31470a75b11f413da3e30464f10ad72902af4448c0e223c"),
+}
+LATER_EXEC_ITEMS = {
+    "call_8bd0eebdd3cd4cfe8b5d8c52037e2a31": (
+        "exec-5b76527d-fe36-452b-9468-f4f51c857dc8", "exec-a55c1e2b-7866-4017-996d-6c519f27fe47",
+        "exec-8cba6500-040a-4b07-b953-6a14149646ae"),
+    "call_6580877fde24499ba3e926fdae777bfe": (
+        "exec-62dd00fb-b475-4c3a-aaf9-27a2167b6136", "exec-ce0a0129-5fb8-47c3-928f-c4e4879e03a3"),
+    "call_1a44d2585f0f476390abf3ee58f8cf15": (
+        "exec-37332db3-9ecd-4b07-9dde-7bb8c00308a6", "exec-4f7cdf6f-edae-47ba-8542-f33c137073c1",
+        "exec-c6e6d78e-474f-4f2b-bd18-3be8fac0f4c1", "exec-cf132233-2882-491a-a200-3603b130760e"),
+    "call_383be8bf8a2b471f94a127ee1719981d": ("exec-20f75295-9588-4b2c-b74d-03f0951f67ef",),
+}
+LATER_PARENT_CALLS = {
+    "call_ec19063d697e4834b48f94798d0143d7": ("followup_task", "2026-11-15T21:29:04.528Z", "fb3338488c8ed0cd4ba7e45dddcaa6bbceb3708b21364892920be2641daeb6e2"),
+    "call_0898c98eb3214d43932225d115ee75d9": ("send_message", "2026-11-15T21:30:28.662Z", "9eded963151b495e701341881b58f17ffc9a1fc08367ee56292026bc4ebaaf56"),
+    "call_6a0e3b32fcfb47ff9d22ccda7e56f2d4": ("send_message", "2026-11-15T21:33:44.834Z", "a69517d43af878334fb49a1a2f4b83c18bb915e0e74fcf581994a3c681e44819"),
+    "call_61cfe322c42a4b5ca331bfc420127d0c": ("send_message", "2026-11-15T21:35:22.677Z", "9c0c40cf675e8fc49cbc22f7c11b31db2aa9a8d5e52219fadeee9c852533a9a2"),
+    "call_24383eceb3b24154b372c41be9d8fbae": ("send_message", "2026-11-15T21:37:38.204Z", "04ef9b64d3ae637740f0d34f663eb26f4885fc58b0e3c2ab337a83988a13b751"),
+}
+LATER_LOCAL_FILES = {
+    ".codex-tmp/issue-6561/handoff-process-readback-20261115.json": "80147de49443dc55309fe76d00056777435498feab613b933f6eb80966593130",
+    ".codex-tmp/issue-6561/handoff-process-current-20261115.json": "8193254e36fbb1d1dbe8558f7e3826671ef6ce3f3a6d09fb55ef46edf616c7e0",
+    ".codex-tmp/issue-6561/lifecycle-handoff-preparation-20261115.json": "f2f3089c5561608ce57e22c2e328b27e72eb4da17d7e231ee05053aa4a46959a",
+}
+
 
 def _read_source(path: Path, limit: int) -> tuple[bytes, str]:
     try:
@@ -231,12 +286,138 @@ def _journal_timestamp(row: dict[str, Any]) -> datetime:
         raise GuardRefused("UNKNOWN: journal timing is unavailable") from exc
 
 
+def _later_child_check(rows: list[dict[str, Any]], *, abort_index: int) -> tuple[datetime, datetime]:
+    """Validate only the identified subsequent inventory, including its outputs."""
+    starts = [i for i, row in enumerate(rows) if row.get("type") == "event_msg"
+              and row["payload"].get("type") == "task_started" and row["payload"].get("turn_id") == LATER_TURN]
+    contexts = [i for i, row in enumerate(rows) if row.get("type") == "turn_context"
+                and row["payload"].get("turn_id") == LATER_TURN]
+    ends = [i for i, row in enumerate(rows) if row.get("type") == "event_msg"
+            and row["payload"].get("type") == "task_complete" and row["payload"].get("turn_id") == LATER_TURN]
+    if (len(starts) != 1 or len(contexts) != 1 or len(ends) != 1
+            or not abort_index < starts[0] < contexts[0] < ends[0]):
+        raise GuardRefused("UNKNOWN: later child turn boundary changed")
+    start, end = starts[0], ends[0]
+    times = [_journal_timestamp(row) for row in rows[start:end + 1]]
+    if (times[0] != datetime.fromisoformat("2026-11-15T21:29:04.582+00:00")
+            or times[-1] != datetime.fromisoformat("2026-11-15T21:38:55.138+00:00")
+            or _journal_timestamp(rows[abort_index]) > times[0]
+            or any(left > right for left, right in zip(times, times[1:]))):
+        raise GuardRefused("UNKNOWN: later child chronology changed")
+    calls: dict[str, tuple[str, str]] = {}
+    outputs: dict[str, tuple[str, str]] = {}
+    commands: dict[str, dict[str, Any]] = {}
+    mcps: dict[str, dict[str, Any]] = {}
+    interactions: set[str] = set()
+    call_positions: dict[str, int] = {}
+    output_positions: dict[str, int] = {}
+    item_positions: dict[str, int] = {}
+    for offset, row in enumerate(rows[start:end + 1], start=start):
+        p = row["payload"]
+        if (row.get("type") not in {"event_msg", "turn_context", "inter_agent_communication_metadata",
+                                    "response_item", "token_usage_record"}
+                or (row.get("type") == "event_msg" and p.get("type") not in
+                    {"task_started", "task_complete", "item_completed", "token_count"})
+                or (row.get("type") == "response_item" and p.get("type") not in
+                    {"agent_message", "custom_tool_call", "custom_tool_call_output", "function_call",
+                     "function_call_output", "message", "reasoning"})):
+            raise GuardRefused("UNKNOWN: later child journal record is unrecognized")
+        if ((p.get("type") in {"task_started", "task_complete", "turn_aborted"} and offset not in {start, end})
+                or (row.get("type") == "turn_context" and p.get("turn_id") != LATER_TURN)):
+            raise GuardRefused("UNKNOWN: unexpected child turn boundary")
+        if row.get("type") == "response_item" and p.get("type") in {"function_call", "custom_tool_call"}:
+            identity, name = p.get("call_id"), p.get("name")
+            if not isinstance(identity, str) or identity in calls:
+                raise GuardRefused("UNKNOWN: later child call is ambiguous")
+            arg = p.get("input") if p["type"] == "custom_tool_call" else p.get("arguments")
+            calls[identity] = (str(name), hashlib.sha256(
+                json.dumps(arg, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest())
+            call_positions[identity] = offset
+        if row.get("type") == "response_item" and p.get("type") in {"function_call_output", "custom_tool_call_output"}:
+            identity = p.get("call_id")
+            if not isinstance(identity, str) or identity in outputs:
+                raise GuardRefused("UNKNOWN: later child output is ambiguous")
+            outputs[identity] = (str(p["type"]), hashlib.sha256(
+                json.dumps(p.get("output"), ensure_ascii=False, separators=(",", ":")).encode()).hexdigest())
+            output_positions[identity] = offset
+        item = p.get("item")
+        if p.get("type") == "item_completed" and not isinstance(item, dict):
+            raise GuardRefused("UNKNOWN: later child item is unavailable")
+        if not isinstance(item, dict):
+            continue
+        if (p.get("type") != "item_completed" or p.get("thread_id") != CHILD
+                or p.get("turn_id") != LATER_TURN):
+            raise GuardRefused("UNKNOWN: later child item identity changed")
+        identity, kind = item.get("id"), item.get("type")
+        if kind not in {"Reasoning", "AgentMessage", "CommandExecution", "McpToolCall", "SubAgentActivity"}:
+            raise GuardRefused("UNKNOWN: later child item is unrecognized")
+        if kind in {"CommandExecution", "McpToolCall"}:
+            target = commands if kind == "CommandExecution" else mcps
+            if not isinstance(identity, str) or identity in target:
+                raise GuardRefused("UNKNOWN: later child item is ambiguous")
+            target[identity] = item
+            item_positions[identity] = offset
+        elif kind == "SubAgentActivity":
+            if (not isinstance(identity, str) or identity in interactions or item.get("kind") != "interacted"
+                    or item.get("agent_thread_id") != PARENT):
+                raise GuardRefused("UNKNOWN: later child interaction changed")
+            interactions.add(identity)
+            item_positions[identity] = offset
+    if (calls != {identity: (value[0], value[1]) for identity, value in LATER_CALLS.items()}
+            or list(calls) != list(LATER_CALLS)
+            or outputs != {identity: ("custom_tool_call_output" if value[0] == "exec" else "function_call_output",
+                                      value[2]) for identity, value in LATER_CALLS.items()}
+            or interactions != {identity for identity, value in LATER_CALLS.items() if value[0] == "send_message"}
+            or set(commands) != set(LATER_COMMANDS) or set(mcps) != set(LATER_MCP)):
+        raise GuardRefused("UNKNOWN: later child inventory is incomplete or changed")
+    ordered_calls = list(calls)
+    if (any(call_positions[identity] >= output_positions[identity] for identity in calls)
+            or any(output_positions[left] >= call_positions[right] for left, right in zip(ordered_calls, ordered_calls[1:]))
+            or any(not any(name == "exec" and call_positions[call] < position < output_positions[call]
+                           for call, (name, _) in calls.items())
+                   for identity, position in item_positions.items() if identity in commands or identity in mcps)
+            or any(not call_positions[identity] < item_positions[identity] < output_positions[identity]
+                   for identity in interactions)):
+        raise GuardRefused("UNKNOWN: later child call and completion order changed")
+    for call, expected_items in LATER_EXEC_ITEMS.items():
+        observed_items = tuple(identity for identity, position in sorted(item_positions.items(), key=lambda entry: entry[1])
+                               if identity in commands or identity in mcps
+                               if call_positions[call] < position < output_positions[call])
+        if observed_items != expected_items:
+            raise GuardRefused("UNKNOWN: later exec item sequence changed")
+    for identity, item in commands.items():
+        pid, digest = LATER_COMMANDS[identity]
+        command = json.dumps(item.get("command"), ensure_ascii=False, separators=(",", ":")).encode()
+        if (str(item.get("process_id")) != str(pid) or item.get("status") != "completed"
+                or type(item.get("exit_code")) is not int or item["exit_code"] != 0
+                or hashlib.sha256(command).hexdigest() != digest):
+            raise GuardRefused("UNKNOWN: later child command changed or is nonterminal")
+    for identity, item in mcps.items():
+        tool, digest = LATER_MCP[identity]
+        args = json.dumps(item.get("arguments"), sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+        result = item.get("result")
+        if (item.get("server") != "codex_apps" or item.get("tool") != tool or item.get("status") != "completed"
+                or item.get("readOnlyHint") is not True or not isinstance(result, dict)
+                or result.get("isError") is not False or hashlib.sha256(args).hexdigest() != digest):
+            raise GuardRefused("UNKNOWN: later child GitHub read changed or is nonterminal")
+    for row in rows[end + 1:]:
+        p = row["payload"]
+        if (p.get("turn_id") in {TURN, LATER_TURN} or (isinstance(p.get("item"), dict) and p.get("thread_id") == CHILD)
+                or p.get("type") in {"task_started", "task_complete", "turn_aborted"}
+                or (row.get("type") == "response_item"
+                and p.get("type") in {"function_call", "custom_tool_call"})):
+            raise GuardRefused("UNKNOWN: child activity follows the later inventory")
+    return times[0], times[-1]
+
+
 def _journal_check(child: bytes, parent: bytes) -> datetime:
     rows = list(_events(child))
     meta = [r["payload"] for r in rows if r.get("type") == "session_meta"]
     turns = [r["payload"].get("turn_id") for r in rows if r.get("type") == "turn_context"]
-    if len(meta) != 1 or meta[0].get("id") != CHILD or not turns or turns[-1] != TURN or turns.count(TURN) != 1:
+    if (len(meta) != 1 or meta[0].get("id") != CHILD or turns.count(TURN) != 1
+            or turns[turns.index(TURN):] not in ([TURN], [TURN, LATER_TURN])):
         raise GuardRefused("UNKNOWN: child identity or subsequent turn")
+    has_later = turns[-1] == LATER_TURN
     context = next(r for r in rows if r.get("type") == "turn_context" and r["payload"].get("turn_id") == TURN)
     if not str(context.get("timestamp", "")).startswith("2026-11-15T07:55:"):
         raise GuardRefused("UNKNOWN: postboot turn timing")
@@ -298,12 +479,21 @@ def _journal_check(child: bytes, parent: bytes) -> datetime:
     times = [_journal_timestamp(row) for row in rows[start_index:abort_index + 1]]
     if any(left > right for left, right in zip(times, times[1:])):
         raise GuardRefused("UNKNOWN: journal activity timing changed")
-    for row in rows[abort_index + 1:]:
+    later_start_index = next((i for i, row in enumerate(rows) if row.get("type") == "event_msg"
+                              and row["payload"].get("type") == "task_started"
+                              and row["payload"].get("turn_id") == LATER_TURN), len(rows))
+    for row in rows[abort_index + 1:later_start_index]:
         payload = row["payload"]
-        if (payload.get("turn_id") == TURN or (row.get("type") == "response_item"
+        if (payload.get("turn_id") in {TURN, LATER_TURN}
+                or (isinstance(payload.get("item"), dict) and payload.get("thread_id") == CHILD)
+                or payload.get("type") in {"task_started", "task_complete", "turn_aborted"}
+                or (row.get("type") == "response_item"
                 and payload.get("type") in {"function_call", "custom_tool_call"})):
             raise GuardRefused("UNKNOWN: journal activity follows the interrupted turn")
     aborted_at = times[-1]
+    later_child = _later_child_check(rows, abort_index=abort_index) if has_later else None
+    if not has_later and later_start_index != len(rows):
+        raise GuardRefused("UNKNOWN: unpaired later child start")
     for identity, item in inventory.items():
         pid, command_hash = INVENTORY_COMMANDS[identity]
         command = json.dumps(item.get("command"), ensure_ascii=False, separators=(",", ":")).encode()
@@ -335,6 +525,8 @@ def _journal_check(child: bytes, parent: bytes) -> datetime:
         raise GuardRefused("UNKNOWN: final PATCH body readback is unavailable") from exc
     calls: dict[str, tuple[str, str, str]] = {}
     completed = []
+    later_parent_started = []
+    later_parent_completed = []
     parent_meta = []
     for row in _events(parent):
         if row.get("type") == "session_meta":
@@ -342,6 +534,10 @@ def _journal_check(child: bytes, parent: bytes) -> datetime:
         p = row["payload"]
         if p.get("type") == "task_complete" and p.get("turn_id") == PARENT_TURN:
             completed.append(row)
+        if p.get("type") == "task_started" and p.get("turn_id") == LATER_PARENT_TURN:
+            later_parent_started.append(row)
+        if p.get("type") == "task_complete" and p.get("turn_id") == LATER_PARENT_TURN:
+            later_parent_completed.append(row)
         if row.get("type") == "response_item" and p.get("type") == "function_call":
             args = str(p.get("arguments", ""))
             if row.get("timestamp", "") >= "2026-11-15T07:55" and (CHILD in args or "issue6561_normal_transport" in args):
@@ -352,8 +548,9 @@ def _journal_check(child: bytes, parent: bytes) -> datetime:
                     arg_hash = hashlib.sha256(json.dumps(p.get("arguments"), ensure_ascii=False,
                                                           separators=(",", ":")).encode()).hexdigest()
                     calls[identity] = (str(p.get("name")), str(row.get("timestamp")), arg_hash)
+    expected_parent_calls = PARENT_CALLS | LATER_PARENT_CALLS if has_later else PARENT_CALLS
     if (len(parent_meta) != 1 or parent_meta[0].get("id") != PARENT
-            or calls != PARENT_CALLS or len(completed) != 1
+            or calls != expected_parent_calls or list(calls) != list(expected_parent_calls) or len(completed) != 1
             or not str(completed[0].get("timestamp", "")).startswith("2026-11-15T08:16:")):
         raise GuardRefused("UNKNOWN: parent activity or completion changed")
     interrupt_times = [_journal_timestamp({"timestamp": at}) for name, at, _ in calls.values()
@@ -361,6 +558,23 @@ def _journal_check(child: bytes, parent: bytes) -> datetime:
     if (len(interrupt_times) != 1 or not interrupt_times[0] <= aborted_at
             <= _journal_timestamp(completed[0])):
         raise GuardRefused("UNKNOWN: interruption and completion ordering changed")
+    if has_later:
+        if later_child is None or len(later_parent_started) != 1 or len(later_parent_completed) != 1:
+            raise GuardRefused("UNKNOWN: later parent boundary changed")
+        _parent_checkpoint(parent, length=LATER_PARENT_PREFIX_BYTES, digest=LATER_PARENT_PREFIX_SHA256,
+                           observed=datetime.now(timezone.utc))
+        parent_start = _journal_timestamp(later_parent_started[0])
+        parent_end = _journal_timestamp(later_parent_completed[0])
+        followup = [_journal_timestamp({"timestamp": at}) for name, at, _ in LATER_PARENT_CALLS.values()
+                    if name == "followup_task"]
+        parent_times = [_journal_timestamp({"timestamp": at}) for _, at, _ in LATER_PARENT_CALLS.values()]
+        if (len(followup) != 1 or not parent_start <= followup[0] <= later_child[0] <= later_child[1] <= parent_end
+                or any(not parent_start <= value <= parent_end for value in parent_times)
+                or parent_end != datetime.fromisoformat("2026-11-15T21:39:26.072+00:00")):
+            raise GuardRefused("UNKNOWN: later child and parent ordering changed")
+        return parent_end
+    if later_parent_started or later_parent_completed:
+        raise GuardRefused("UNKNOWN: unpaired later parent activity")
     return aborted_at
 
 
@@ -440,7 +654,7 @@ def _check_host() -> None:
     launchctl = _run_readback("/bin/launchctl", "print", f"gui/{os.getuid()}")
     crontab = _run_readback("/usr/bin/crontab", "-l", allow_no_crontab=True)
     targets = (WORKTREE, CHILD, "issue-6561-normal-host-transport", "issue6561_normal_transport")
-    pids = {pid for pid, _ in INVENTORY_COMMANDS.values()}
+    pids = {pid for pid, _ in (*INVENTORY_COMMANDS.values(), *LATER_COMMANDS.values())}
     own = {os.getpid(), os.getppid()}
     for line in processes.splitlines():
         parts = line.strip().split(None, 2)
@@ -464,6 +678,17 @@ def _check_host() -> None:
         raise GuardRefused("UNKNOWN: identified automatic restart target")
     if _boot() != int(BOOT.timestamp()):
         raise GuardRefused("UNKNOWN: host boot changed during readback")
+
+
+def _check_later_local_files(worktree: Path) -> None:
+    """Compare the three preserved local outputs to the observed snapshot.
+
+    These point-in-time hashes do not attest a historical writer signature.
+    """
+    for name, expected in LATER_LOCAL_FILES.items():
+        _, actual = _read_source(worktree / name, 1_000_000)
+        if actual != expected:
+            raise GuardRefused("UNKNOWN: later local inventory output changed")
 
 
 def _read_publication(cwd: Path, expected: dict[str, Any]) -> None:
@@ -532,7 +757,9 @@ def _check(*, cwd: Path, issue: int, pr: int, worktree: Path, session: str, comm
         raise GuardRefused("UNKNOWN: operator receipt identity or custody mismatch")
     fields = {"child_sha256", "parent_sha256", "parent_prefix_bytes", "observed_at", "no_new_manual_starts", "historical_push_output",
               "earlier_body", "historical_ppids", "unrecorded_effects", "boot", "relations"}
-    if (set(evidence) != fields or evidence.get("no_new_manual_starts") is not True
+    if (set(evidence) not in (fields, fields | {"later_git_status_index_effect"})
+            or ("later_git_status_index_effect" in evidence and evidence["later_git_status_index_effect"] != "unknown")
+            or evidence.get("no_new_manual_starts") is not True
             or any(evidence.get(k) != "unknown" for k in
                    ("historical_push_output", "earlier_body", "historical_ppids", "unrecorded_effects"))
             or any(not isinstance(evidence.get(k), str) or not re.fullmatch(r"[a-f0-9]{64}", evidence[k])
@@ -556,15 +783,22 @@ def _check(*, cwd: Path, issue: int, pr: int, worktree: Path, session: str, comm
         raise GuardRefused("UNKNOWN: child journal changed since operator observation")
     parent_prefix = _parent_checkpoint(parent, length=evidence["parent_prefix_bytes"],
                                        digest=evidence["parent_sha256"], observed=observed)
-    aborted_at = _journal_check(child, parent_prefix)
-    if last_activity < aborted_at:
-        raise GuardRefused("UNKNOWN: stopped window precedes the recorded interruption")
+    verified_activity = _journal_check(child, parent_prefix)
+    later_observed = verified_activity == datetime.fromisoformat("2026-11-15T21:39:26.072+00:00")
+    if last_activity < verified_activity:
+        raise GuardRefused("UNKNOWN: stopped window precedes the recorded activity")
+    if later_observed:
+        if evidence.get("later_git_status_index_effect") != "unknown":
+            raise GuardRefused("UNKNOWN: later git status index effect is not recorded")
+        _check_later_local_files(worktree)
     expected_relations = _check_operator_relations(evidence, observed=observed, last_activity=last_activity)
     _check_host()
     if initial_publication:
         _read_publication(cwd, publication)
     if _read_source(CHILD_JOURNAL, 20_000_000)[1] != child_digest:
         raise GuardRefused("UNKNOWN: child journal changed during observation")
+    if later_observed:
+        _check_later_local_files(worktree)
     _check_fresh_relations(expected_relations)
     latest_parent, _ = _read_source(PARENT_JOURNAL, 160_000_000)
     _parent_checkpoint(latest_parent, length=evidence["parent_prefix_bytes"],
@@ -582,6 +816,7 @@ def _check(*, cwd: Path, issue: int, pr: int, worktree: Path, session: str, comm
             "child_sha256": child_digest, "parent_sha256": evidence["parent_sha256"],
             "parent_prefix_bytes": evidence["parent_prefix_bytes"], "operator_digest": digest,
             "historical_push_output": "UNKNOWN", "earlier_body": "UNKNOWN", "historical_ppids": "UNKNOWN",
+            "later_git_status_index_effect": "UNKNOWN",
             "unrecorded_effects": "UNKNOWN", "unregistered_delegations": "UNKNOWN",
             "arbitrary_or_future_processes": "UNKNOWN"}
 

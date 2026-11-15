@@ -698,3 +698,259 @@ def test_abort_follows_the_recorded_parent_interrupt(source_bound, monkeypatch, 
     else:
         with pytest.raises(guard.GuardRefused, match="interruption and completion ordering"):
             _check()
+
+
+def _add_later_inventory(data, monkeypatch, *, worktree):
+    """Create a source-shaped later turn entirely inside the synthetic worktree."""
+    import hashlib
+    from pathlib import Path
+
+    worktree = Path(worktree)
+    worktree.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(guard, 'WORKTREE', str(worktree))
+    data['receipt']['candidate']['path'] = str(worktree)
+    data['receipt']['registration']['path'] = str(worktree)
+    local_files = {}
+    for index, name in enumerate(guard.LATER_LOCAL_FILES):
+        path = worktree / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        value = f'{{"synthetic": {index}}}\n'.encode()
+        path.write_bytes(value)
+        local_files[name] = hashlib.sha256(value).hexdigest()
+    monkeypatch.setattr(guard, 'LATER_LOCAL_FILES', local_files)
+    commands = {identity: (pid, _digest(['later-command', str(index)]))
+                for index, (identity, (pid, _)) in enumerate(guard.LATER_COMMANDS.items())}
+    calls = {identity: (name, _digest(f'later input {index}'), _digest(f'later output {index}'))
+             for index, (identity, (name, _, _)) in enumerate(guard.LATER_CALLS.items())}
+    mcps = {identity: (tool, _digest({'query': index}, sort_keys=True))
+            for index, (identity, (tool, _)) in enumerate(guard.LATER_MCP.items())}
+    parent_arg = '{"target":"issue6561_normal_transport"}'
+    parent_calls = {identity: (name, timestamp, _digest(parent_arg))
+                    for identity, (name, timestamp, _) in guard.LATER_PARENT_CALLS.items()}
+    monkeypatch.setattr(guard, 'LATER_COMMANDS', commands)
+    monkeypatch.setattr(guard, 'LATER_CALLS', calls)
+    monkeypatch.setattr(guard, 'LATER_MCP', mcps)
+    monkeypatch.setattr(guard, 'LATER_PARENT_CALLS', parent_calls)
+    child = data['child']
+    child.append({'type': 'event_msg', 'timestamp': '2026-11-15T21:29:04.582Z',
+                  'payload': {'type': 'task_started', 'turn_id': guard.LATER_TURN}})
+    child.append({'type': 'turn_context', 'timestamp': '2026-11-15T21:29:06.346Z',
+                  'payload': {'turn_id': guard.LATER_TURN}})
+    command_items, mcp_items = list(commands.items()), list(mcps.items())
+    command_index = mcp_index = exec_index = 0
+    for index, (identity, (name, _, _)) in enumerate(calls.items()):
+        call_type = 'custom_tool_call' if name == 'exec' else 'function_call'
+        output_type = 'custom_tool_call_output' if name == 'exec' else 'function_call_output'
+        payload = {'type': call_type, 'name': name, 'call_id': identity}
+        payload['input' if name == 'exec' else 'arguments'] = f'later input {index}'
+        timestamp = f'2026-11-15T21:30:{index:02d}'
+        child.append({'type': 'response_item', 'timestamp': timestamp + '.100Z', 'payload': payload})
+        if name == 'send_message':
+            child.append({'type': 'event_msg', 'timestamp': timestamp + '.500Z',
+                          'payload': {'type': 'item_completed', 'thread_id': guard.CHILD, 'turn_id': guard.LATER_TURN,
+                                      'item': {'id': identity, 'type': 'SubAgentActivity', 'kind': 'interacted',
+                                               'agent_thread_id': guard.PARENT}}})
+        else:
+            for item_type in (('c', 'm', 'c'), ('c', 'm'), ('c', 'c', 'm', 'm'), ('c',))[exec_index]:
+                if item_type == 'c':
+                    item_id, (pid, _) = command_items[command_index]
+                    item = {'id': item_id, 'type': 'CommandExecution', 'process_id': str(pid),
+                            'status': 'completed', 'exit_code': 0, 'command': ['later-command', str(command_index)]}
+                    command_index += 1
+                else:
+                    item_id, (tool, _) = mcp_items[mcp_index]
+                    item = {'id': item_id, 'type': 'McpToolCall', 'server': 'codex_apps',
+                            'tool': tool, 'arguments': {'query': mcp_index}, 'status': 'completed',
+                            'readOnlyHint': True, 'result': {'isError': False}}
+                    mcp_index += 1
+                child.append({'type': 'event_msg', 'timestamp': timestamp + '.500Z',
+                              'payload': {'type': 'item_completed', 'thread_id': guard.CHILD,
+                                          'turn_id': guard.LATER_TURN, 'item': item}})
+            exec_index += 1
+        child.append({'type': 'response_item', 'timestamp': timestamp + '.900Z',
+                      'payload': {'type': output_type, 'call_id': identity, 'output': f'later output {index}'}})
+    child.append({'type': 'event_msg', 'timestamp': '2026-11-15T21:38:55.138Z',
+                  'payload': {'type': 'task_complete', 'turn_id': guard.LATER_TURN}})
+    parent = data['parent']
+    parent.append({'type': 'event_msg', 'timestamp': '2026-11-15T21:28:48.605Z',
+                   'payload': {'type': 'task_started', 'turn_id': guard.LATER_PARENT_TURN}})
+    for identity, (name, timestamp, _) in parent_calls.items():
+        parent.append({'type': 'response_item', 'timestamp': timestamp,
+                       'payload': {'type': 'function_call', 'call_id': identity, 'name': name,
+                                   'arguments': parent_arg}})
+    parent.append({'type': 'event_msg', 'timestamp': '2026-11-15T21:39:26.072Z',
+                   'payload': {'type': 'task_complete', 'turn_id': guard.LATER_PARENT_TURN}})
+    data['child_path'].write_bytes(_jsonl(child))
+    data['parent_path'].write_bytes(_jsonl(parent))
+    parent_snapshot = data['parent_path'].read_bytes()
+    monkeypatch.setattr(guard, 'LATER_PARENT_PREFIX_BYTES', len(parent_snapshot))
+    monkeypatch.setattr(guard, 'LATER_PARENT_PREFIX_SHA256', hashlib.sha256(parent_snapshot).hexdigest())
+    writer = data['receipt']['writer']
+    writer['last_activity'] = '2026-11-15T21:39:26.072Z'
+    evidence = writer['codex_custody']
+    evidence['observed_at'] = '2026-11-15T21:41:00Z'
+    evidence['later_git_status_index_effect'] = 'unknown'
+    evidence['relations']['coordination_started_at'] = '2026-11-15T21:40:00Z'
+    evidence['relations']['observed_at'] = '2026-11-15T21:40:30Z'
+    _refresh_comment(data)
+
+
+@pytest.fixture
+def later_source(source_bound, monkeypatch, tmp_path):
+    _add_later_inventory(source_bound, monkeypatch, worktree=tmp_path / 'synthetic-worktree')
+    return source_bound
+
+
+def test_later_inventory_binds_both_turns_and_keeps_index_effect_unknown(later_source):
+    result = _check()
+    assert result['later_git_status_index_effect'] == 'UNKNOWN'
+    assert result['unrecorded_effects'] == result['historical_ppids'] == 'UNKNOWN'
+
+
+def test_later_inventory_refuses_new_parent_exec_inside_refreshed_checkpoint(later_source):
+    parent = later_source['parent']
+    parent.extend([
+        {'type': 'event_msg', 'timestamp': '2026-11-15T21:41:00.000Z',
+         'payload': {'type': 'task_started', 'turn_id': 'new-parent-turn'}},
+        {'type': 'response_item', 'timestamp': '2026-11-15T21:41:01.000Z',
+         'payload': {'type': 'custom_tool_call', 'name': 'exec', 'call_id': 'new-parent-exec',
+                     'input': f'synthetic target {guard.WORKTREE}'}},
+        {'type': 'response_item', 'timestamp': '2026-11-15T21:41:02.000Z',
+         'payload': {'type': 'custom_tool_call_output', 'call_id': 'new-parent-exec', 'output': 'done'}},
+        {'type': 'event_msg', 'timestamp': '2026-11-15T21:41:03.000Z',
+         'payload': {'type': 'task_complete', 'turn_id': 'new-parent-turn'}},
+    ])
+    evidence = later_source['receipt']['writer']['codex_custody']
+    evidence['observed_at'] = '2026-11-15T21:42:00Z'
+    evidence['relations']['observed_at'] = '2026-11-15T21:41:30Z'
+    later_source['parent_path'].write_bytes(_jsonl(parent))
+    _refresh_comment(later_source)
+    with pytest.raises(guard.GuardRefused, match='UNKNOWN'):
+        _check()
+
+
+def test_later_inventory_refuses_new_parent_exec_within_examined_prefix(later_source):
+    parent = later_source['parent']
+    parent.insert(-1, {'type': 'response_item', 'timestamp': '2026-11-15T21:39:25.000Z',
+                       'payload': {'type': 'custom_tool_call', 'name': 'exec', 'call_id': 'new-parent-exec',
+                                   'input': f'synthetic target {guard.WORKTREE}'}})
+    later_source['parent_path'].write_bytes(_jsonl(parent))
+    _refresh_comment(later_source)
+    with pytest.raises(guard.GuardRefused, match='UNKNOWN'):
+        _check()
+
+
+def test_later_inventory_allows_accounting_after_examined_parent_prefix(later_source):
+    later_source['parent'].append({'type': 'event_msg', 'timestamp': '2026-11-15T21:40:01.000Z',
+                                   'payload': {'type': 'token_count', 'info': None, 'rate_limits': None}})
+    later_source['parent_path'].write_bytes(_jsonl(later_source['parent']))
+    _refresh_comment(later_source)
+    assert _check()['later_git_status_index_effect'] == 'UNKNOWN'
+
+
+@pytest.mark.parametrize('mutation', [
+    'new_turn', 'unpaired_start', 'extra_call', 'changed_command', 'nonterminal_command',
+    'mcp_write_hint', 'mcp_error', 'changed_output', 'output_before_call', 'item_after_output', 'swap_exec_items',
+    'item_before_start', 'unknown_record', 'missing_item', 'missing_parent_call', 'parent_call_order', 'later_parent_completion',
+    'earlier_stopped_window', 'earlier_coordination', 'unknown_index_missing', 'unknown_index_denied',
+])
+def test_later_inventory_refuses_changed_sources_or_false_effect_claim(later_source, mutation):
+    child, parent = later_source['child'], later_source['parent']
+    writer = later_source['receipt']['writer']
+    evidence = writer['codex_custody']
+    if mutation == 'new_turn':
+        child.append({'type': 'turn_context', 'timestamp': '2026-11-15T21:50:00Z',
+                      'payload': {'turn_id': 'unapproved'}})
+    elif mutation == 'unpaired_start':
+        child.append({'type': 'event_msg', 'timestamp': '2026-11-15T21:50:00Z',
+                      'payload': {'type': 'task_started', 'turn_id': 'unapproved'}})
+    elif mutation == 'extra_call':
+        child.append({'type': 'response_item', 'timestamp': '2026-11-15T21:50:00Z',
+                      'payload': {'type': 'custom_tool_call', 'call_id': 'extra', 'name': 'exec', 'input': 'extra'}})
+    elif mutation in ('changed_command', 'nonterminal_command'):
+        item = next(r['payload']['item'] for r in child if r['payload'].get('turn_id') == guard.LATER_TURN
+                    and r['payload'].get('item', {}).get('type') == 'CommandExecution')
+        item['command' if mutation == 'changed_command' else 'status'] = ['changed'] if mutation == 'changed_command' else 'in_progress'
+    elif mutation in ('mcp_write_hint', 'mcp_error'):
+        item = next(r['payload']['item'] for r in child if r['payload'].get('turn_id') == guard.LATER_TURN
+                    and r['payload'].get('item', {}).get('type') == 'McpToolCall')
+        if mutation == 'mcp_write_hint': item['readOnlyHint'] = False
+        else: item['result']['isError'] = True
+    elif mutation == 'changed_output':
+        next(r for r in child if r['payload'].get('type') == 'custom_tool_call_output'
+             and r['payload'].get('call_id') in guard.LATER_CALLS)['payload']['output'] = 'changed'
+    elif mutation == 'output_before_call':
+        identity = next(iter(guard.LATER_CALLS))
+        call_index = next(i for i, row in enumerate(child) if row['payload'].get('call_id') == identity
+                          and row['payload'].get('type') == 'function_call')
+        output_index = next(i for i, row in enumerate(child) if row['payload'].get('call_id') == identity
+                            and row['payload'].get('type') == 'function_call_output')
+        output = child.pop(output_index)
+        output['timestamp'] = child[call_index]['timestamp']
+        child.insert(call_index, output)
+    elif mutation == 'item_after_output':
+        identity = next(identity for identity, value in guard.LATER_CALLS.items() if value[0] == 'exec')
+        output_index = next(i for i, row in enumerate(child) if row['payload'].get('call_id') == identity
+                            and row['payload'].get('type') == 'custom_tool_call_output')
+        item_index = next(i for i, row in enumerate(child) if row['payload'].get('turn_id') == guard.LATER_TURN
+                          and row['payload'].get('item', {}).get('type') == 'CommandExecution')
+        item = child.pop(item_index)
+        output_index -= 1
+        item['timestamp'] = child[output_index]['timestamp']
+        child.insert(output_index + 1, item)
+    elif mutation == 'item_before_start':
+        start = next(i for i, row in enumerate(child) if row['payload'].get('type') == 'task_started'
+                     and row['payload'].get('turn_id') == guard.LATER_TURN)
+        child.insert(start, {'type': 'event_msg', 'timestamp': '2026-11-15T21:29:04.500Z',
+            'payload': {'type': 'item_completed', 'thread_id': guard.CHILD, 'turn_id': guard.LATER_TURN,
+                        'item': {'id': 'unexpected', 'type': 'CommandExecution'}}})
+    elif mutation == 'swap_exec_items':
+        first, second, _ = next(iter(guard.LATER_EXEC_ITEMS.values()))
+        left = next(i for i, row in enumerate(child) if row['payload'].get('item', {}).get('id') == first)
+        right = next(i for i, row in enumerate(child) if row['payload'].get('item', {}).get('id') == second)
+        child[left], child[right] = child[right], child[left]
+    elif mutation in ('unknown_record', 'missing_item'):
+        end = next(i for i, row in enumerate(child) if row['payload'].get('type') == 'task_complete'
+                   and row['payload'].get('turn_id') == guard.LATER_TURN)
+        row = ({'type': 'unexpected', 'timestamp': '2026-11-15T21:38:55.000Z', 'payload': {}}
+               if mutation == 'unknown_record' else
+               {'type': 'event_msg', 'timestamp': '2026-11-15T21:38:55.000Z',
+                'payload': {'type': 'item_completed', 'thread_id': guard.CHILD, 'turn_id': guard.LATER_TURN}})
+        child.insert(end, row)
+    elif mutation == 'missing_parent_call':
+        parent[:] = [r for r in parent if r['payload'].get('call_id') != next(iter(guard.LATER_PARENT_CALLS))]
+    elif mutation == 'parent_call_order':
+        first, second = list(guard.LATER_PARENT_CALLS)[:2]
+        left = next(i for i, row in enumerate(parent) if row['payload'].get('call_id') == first)
+        right = next(i for i, row in enumerate(parent) if row['payload'].get('call_id') == second)
+        parent[left], parent[right] = parent[right], parent[left]
+    elif mutation == 'later_parent_completion':
+        next(r for r in parent if r['payload'].get('type') == 'task_complete'
+             and r['payload'].get('turn_id') == guard.LATER_PARENT_TURN)['timestamp'] = '2026-11-15T21:39:25.000Z'
+    elif mutation == 'earlier_stopped_window':
+        writer['last_activity'] = '2026-11-15T21:39:26.071Z'
+    elif mutation == 'earlier_coordination':
+        evidence['relations']['coordination_started_at'] = '2026-11-15T21:39:26.071Z'
+    elif mutation == 'unknown_index_missing':
+        del evidence['later_git_status_index_effect']
+    else:
+        evidence['later_git_status_index_effect'] = 'unchanged'
+    later_source['child_path'].write_bytes(_jsonl(child))
+    later_source['parent_path'].write_bytes(_jsonl(parent))
+    _refresh_comment(later_source)
+    with pytest.raises(guard.GuardRefused, match='UNKNOWN'):
+        _check()
+
+
+def test_later_inventory_refuses_changed_preserved_local_file(later_source):
+    from pathlib import Path
+    name = next(iter(guard.LATER_LOCAL_FILES))
+    (Path(guard.WORKTREE) / name).write_bytes(b'changed')
+    with pytest.raises(guard.GuardRefused, match='local inventory output changed'):
+        _check()
+
+
+def test_later_inventory_refuses_an_active_identified_later_pid(later_source):
+    later_source['host']['/bin/ps'] = f'{next(iter(guard.LATER_COMMANDS.values()))[0]} 1 synthetic\n'
+    with pytest.raises(guard.GuardRefused, match='process'):
+        _check()

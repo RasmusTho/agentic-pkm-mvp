@@ -95,6 +95,7 @@ def build_draft(*, cwd: Path, issue: int, pr: int, worktree: Path, base: str,
             "child_sha256": None, "parent_sha256": None, "parent_prefix_bytes": None,
             "observed_at": None, "no_new_manual_starts": None, "historical_push_output": "unknown",
             "earlier_body": "unknown", "historical_ppids": "unknown", "unrecorded_effects": "unknown",
+            "later_git_status_index_effect": "unknown",
             "boot": None, "relations": {key: None for key in (
                 "source", "source_tables", "read_method", "parent", "child", "child_rollout", "parent_rollout",
                 "child_thread_source", "parent_edge_count", "child_thread_count", "parent_thread_count",
