@@ -796,6 +796,7 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
     predecessor, successor = pending["predecessor"], pending["successor"]
     candidate = proof.get("candidate_readback")
     ack = acknowledged.get("successor_acknowledgment")
+    intent = proof.get("ack_intent")
     expected_registration = {"path": registration.get("path"), "branch": branch, "owner": registration.get("owner"),
                              "generation": registration.get("generation"), "epoch": proof.get("epoch"),
                              "observed_at": proof.get("registration_read_at")}
@@ -803,6 +804,10 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
             or pending != {k: v for k, v in acknowledged.items() if k != "successor_acknowledgment"}
             or "successor_acknowledgment" in pending or not isinstance(ack, dict)
             or ack.get("successor_registration") != expected_registration or ack.get("candidate_readback") != candidate
+            or not isinstance(intent, dict) or set(intent) != {"attempt_id", "intent_at"}
+            or not agent_worktree._valid_generation(intent.get("attempt_id"))
+            or not agent_worktree._valid_authority_timestamp(intent.get("intent_at"))
+            or ack.get("ack_attempt_id") != intent.get("attempt_id")
             or proof.get("predecessor") != pending.get("predecessor_registration")
             or proof.get("branch_history_digest") != pending.get("branch_history_digest")
             or proof.get("epoch") != registration.get("registration_epoch")
@@ -811,7 +816,7 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
             or registration.get("owner") != entry.get("session")
             or not all(agent_worktree._valid_authority_timestamp(proof.get(k)) for k in
                        ("authority_since", "registration_read_at", "verified_through"))
-            or not pending_at + 1 <= proof["authority_since"] <= proof["registration_read_at"] < ack_at
+            or not pending_at + 1 <= proof["authority_since"] <= proof["registration_read_at"] <= intent["intent_at"] < ack_at
             or proof.get("ack_at") != ack_at or not ack_at + 1 <= proof["verified_through"] <= registration.get("expires_at", 0)):
         raise CycleError("operator registration or acknowledgment drifted")
     prior = proof.get("predecessor")
@@ -852,6 +857,7 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
             or not old_at < expiry <= datetime.fromtimestamp(pending_at, timezone.utc)
             or not datetime.fromtimestamp(pending_at + 1, timezone.utc) <= new_at
             or new_at.timestamp() >= proof["authority_since"]
+            or new_at.timestamp() > intent["intent_at"]
             or new_at.timestamp() >= ack_at
             or any(row.get("event_type") in {"task.released", "task.completed"} for row in task_events[:new_index])):
         raise CycleError("operator takeover does not bind the legacy claim")

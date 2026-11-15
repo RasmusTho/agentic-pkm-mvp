@@ -783,7 +783,7 @@ def assert_operator_registration_pinned(record: Mapping[str, Any]) -> None:
     proof = record.get("operator_registration")
     required = {"state", "issue", "pending_comment_id", "pending_digest", "predecessor",
                 "branch_history_digest", "candidate_readback", "epoch", "authority_since",
-                "registration_read_at", "ack_comment_id", "ack_digest", "ack_at", "verified_through"}
+                "registration_read_at", "ack_intent", "ack_comment_id", "ack_digest", "ack_at", "verified_through"}
     if (not isinstance(proof, dict) or set(proof) != required or proof.get("state") != "pinned"
             or type(proof.get("issue")) is not int or proof["issue"] < 1
             or not isinstance(proof.get("branch_history_digest"), str)
@@ -798,9 +798,13 @@ def assert_operator_registration_pinned(record: Mapping[str, Any]) -> None:
             or any(not isinstance(proof.get(k), str) or not re.fullmatch(r"[0-9a-f]{64}", proof[k])
                    for k in ("pending_digest", "ack_digest"))
             or not _valid_authority_timestamp(proof.get("registration_read_at"))
+            or not isinstance(proof.get("ack_intent"), dict)
+            or set(proof["ack_intent"]) != {"attempt_id", "intent_at"}
+            or not _valid_generation(proof["ack_intent"].get("attempt_id"))
+            or not _valid_authority_timestamp(proof["ack_intent"].get("intent_at"))
             or not _valid_authority_timestamp(proof.get("ack_at"))
             or not _valid_authority_timestamp(proof.get("verified_through"))
-            or not proof["authority_since"] <= proof["registration_read_at"] < proof["ack_at"]
+            or not proof["authority_since"] <= proof["registration_read_at"] <= proof["ack_intent"]["intent_at"] < proof["ack_at"]
             or proof["ack_at"] + 1 > proof["verified_through"]
             or not _valid_authority_timestamp(record.get("expires_at"))
             or proof["verified_through"] > record["expires_at"]):
@@ -1662,6 +1666,62 @@ def prepare_operator_registration(cwd: Path, *, worktree: Path, owner: str, issu
             "candidate_readback": candidate}
 
 
+def begin_operator_ack(cwd: Path, *, worktree: Path, owner: str, issue: int,
+                       pending_comment: dict[str, Any], workspace_root: Path,
+                       pr: int | None = None, now: float | None = None) -> dict[str, Any]:
+    """Record the sole ACK POST attempt before any external write.
+
+    A committed intent is never permission to retry a POST: after an unknown
+    outcome the controller must search for the unique attempt-bound ACK.
+    """
+    pending, pending_at, pending_digest = _transfer_comment(
+        pending_comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
+    _screen_transfer_workspace(cwd, worktree, workspace_root)
+    registry = _canonical(_default_registry_path(cwd))
+    requested, snapshot = _lifecycle_update_snapshot(registry, worktree=worktree, owner=owner,
+                         statuses={"active"}, error="active successor registration is required")
+    proof = snapshot.get("operator_registration")
+    if (not isinstance(proof, dict) or proof.get("state") != "prepared"
+            or "ack_intent" in proof or proof.get("issue") != issue
+            or proof.get("pending_comment_id") != pending_comment["id"]
+            or proof.get("pending_digest") != pending_digest
+            or not isinstance(proof.get("predecessor"), dict)
+            or not isinstance(proof.get("branch_history_digest"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", proof["branch_history_digest"])
+            or not _valid_generation(proof.get("epoch"))
+            or not _valid_authority_timestamp(proof.get("authority_since"))
+            or not _valid_authority_timestamp(proof.get("registration_read_at"))):
+        raise WorktreeLifecycleError("operator ACK intent already exists or preparation changed")
+    candidate = proof.get("candidate_readback")
+    if (not isinstance(candidate, dict) or not isinstance(candidate.get("base_sha"), str)
+            or not _valid_authority_timestamp(candidate.get("observed_at"))):
+        raise WorktreeLifecycleError("operator candidate readback is invalid")
+    canonical, branch = _worktree_identity(cwd, worktree)
+    generation = _worktree_generation(cwd, canonical, create=False)
+    readback = _operator_candidate(cwd, worktree=canonical, receipt=pending,
+                  base_sha=candidate["base_sha"], observed_at=candidate["observed_at"], verify_base_ref=False)
+    if canonical != requested or readback != candidate:
+        raise WorktreeLifecycleError("operator candidate changed before ACK intent")
+    with _locked_registry(registry) as payload:
+        timestamp = time.time() if now is None else now
+        record = payload["worktrees"].get(str(canonical))
+        prior_history = dict(payload["worktrees"])
+        prior_history[str(canonical)] = proof["predecessor"]
+        if (not _valid_authority_timestamp(timestamp) or record != snapshot
+                or _branch_history_digest(prior_history, branch) != proof["branch_history_digest"]
+                or not isinstance(record, dict) or record.get("status") != "active"
+                or record.get("registration_epoch") != proof["epoch"] or record.get("generation") != generation
+                or record.get("branch") != branch or record.get("authority_since") != proof["authority_since"]
+                or not _valid_authority_timestamp(record.get("expires_at"))
+                or not _valid_authority_timestamp(record.get("heartbeat_at"))
+                or timestamp < max(record["heartbeat_at"], proof["registration_read_at"], pending_at + 1)
+                or timestamp >= record["expires_at"]):
+            raise WorktreeLifecycleError("operator successor epoch changed before ACK intent")
+        intent = {"attempt_id": uuid.uuid4().hex, "intent_at": timestamp}
+        record["operator_registration"] = {**proof, "ack_intent": intent}
+        return dict(intent)
+
+
 def pin_operator_registration(cwd: Path, *, worktree: Path, owner: str, issue: int,
                               pending_comment: dict[str, Any], ack_comment: dict[str, Any],
                               workspace_root: Path, pr: int | None = None,
@@ -1692,10 +1752,17 @@ def pin_operator_registration(cwd: Path, *, worktree: Path, owner: str, issue: i
                 "generation": snapshot.get("generation"), "epoch": proof.get("epoch"),
                 "observed_at": proof.get("registration_read_at")}
     ack = receipt.get("successor_acknowledgment")
-    if (proof.get("issue") != issue or proof.get("pending_comment_id") != pending_comment["id"]
+    intent = proof.get("ack_intent")
+    if (not isinstance(intent, dict) or set(intent) != {"attempt_id", "intent_at"}
+            or not _valid_generation(intent.get("attempt_id"))
+            or not _valid_authority_timestamp(intent.get("intent_at"))
+            or intent["intent_at"] < proof["registration_read_at"]
+            or ack_at <= intent["intent_at"]
+            or proof.get("issue") != issue or proof.get("pending_comment_id") != pending_comment["id"]
             or proof.get("pending_digest") != pending_digest or ack_comment["id"] == pending_comment["id"]
             or pending_at + 1 > ack_at or pending != {k: v for k, v in receipt.items() if k != "successor_acknowledgment"}
             or not isinstance(ack, dict) or ack.get("successor_registration") != expected
+            or ack.get("ack_attempt_id") != intent["attempt_id"]
             or ack.get("candidate_readback") != candidate
             or ack_at <= max(proof["registration_read_at"], candidate["observed_at"])):
         raise WorktreeLifecycleError("operator acknowledgment differs from prepared readbacks")

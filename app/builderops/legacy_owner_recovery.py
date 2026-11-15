@@ -69,11 +69,7 @@ def read_expired_registration(*, cwd: Path, candidate: Mapping[str, Any]) -> dic
     for other_path, other in before.items():
         if other_path == path or other.get("branch") != branch:
             continue
-        if (not agent_worktree._valid_authority_timestamp(other.get("registered_at"))
-                or not agent_worktree._valid_authority_timestamp(other.get("expires_at"))
-                or (other.get("status") == "active" and other["expires_at"] > now)
-                or other["registered_at"] >= registered):
-            raise RecoveryEvidenceError("worktree successor history is ambiguous")
+        raise RecoveryEvidenceError("worktree successor history is ambiguous")
     try:
         branch_history_digest = agent_worktree._branch_history_digest(before, branch)
     except agent_worktree.WorktreeLifecycleError as exc:
@@ -235,12 +231,13 @@ def read_live_publication(*, cwd: Path, pr: int, branch: str) -> dict[str, Any]:
         raise RecoveryEvidenceError("GitHub publication readback is invalid")
     head = current.get("head")
     base = current.get("base")
+    body = current.get("body")
     sha = head.get("sha") if isinstance(head, dict) else None
     if (current.get("number") != pr or current.get("state") != "open"
             or not isinstance(head, dict) or head.get("ref") != branch
             or not isinstance(head.get("repo"), dict)
             or head["repo"].get("full_name") != "RasmusTho/agentic-pkm-mvp"
-            or not isinstance(base, dict) or not isinstance(base.get("repo"), dict)
+            or not isinstance(body, str) or not isinstance(base, dict) or not isinstance(base.get("repo"), dict)
             or base["repo"].get("full_name") != "RasmusTho/agentic-pkm-mvp"
             or repository.get("full_name") != "RasmusTho/agentic-pkm-mvp"
             or not isinstance(repository.get("default_branch"), str)
@@ -258,7 +255,33 @@ def read_live_publication(*, cwd: Path, pr: int, branch: str) -> dict[str, Any]:
             or listed_head.get("ref") != branch or listed_base.get("ref") != base.get("ref")):
         raise RecoveryEvidenceError("open PR publication is missing, duplicated or ambiguous")
     return {"state": "open_pr_observed", "pr": pr, "head": sha, "repo": "RasmusTho/agentic-pkm-mvp",
-            "branch": branch, "pr_state": "OPEN"}
+            "branch": branch, "pr_state": "OPEN", "body_sha256": hashlib.sha256(body.encode()).hexdigest()}
+
+
+def _verify_pr_origin(*, cwd: Path, issue: int, pr: int, worktree: Path, candidate: Mapping[str, Any],
+                      predecessor: Mapping[str, Any], publication: Mapping[str, Any]) -> None:
+    """Check the same original pickup and ancestry required by the PR consumer."""
+    from app.builderops import openhands_pr_cycle
+    from scripts.pr_body_generator import resolve_native_issue_authority
+    try:
+        current = json.loads(_github_read([f"repos/RasmusTho/agentic-pkm-mvp/pulls/{pr}"], cwd=cwd))
+        body = current.get("body") if isinstance(current, dict) else None
+        if not isinstance(body, str) or hashlib.sha256(body.encode()).hexdigest() != publication.get("body_sha256"):
+            raise RecoveryEvidenceError("PR body changed during original pickup readback")
+        authority = resolve_native_issue_authority(body)
+        if authority is None or authority.governing_issue != issue or issue not in authority.closing_issues:
+            raise RecoveryEvidenceError("PR governing or closing issue does not match the task")
+        origin, _ = openhands_pr_cycle._pickup_origin(body, issue=issue, closing=authority.closing_issues,
+                                                       branch=candidate["branch"], comments=[])
+        if (origin.get("mode") != "dispatcher-backed" or origin.get("path") != str(worktree)
+                or origin.get("lease_id") != predecessor.get("lease_id")
+                or origin.get("agent") != predecessor.get("holder")):
+            raise RecoveryEvidenceError("PR original pickup does not bind the predecessor")
+        _git_read(worktree, "merge-base", "--is-ancestor", str(publication["head"]), str(candidate["head"]))
+    except RecoveryEvidenceError:
+        raise
+    except (KeyError, ValueError, TypeError, openhands_pr_cycle.CycleError) as exc:
+        raise RecoveryEvidenceError("PR origin or candidate ancestry is unavailable") from exc
 
 
 def _timestamp(value: object) -> float:
@@ -382,6 +405,8 @@ def preflight_operator_pickup(
     candidate = read_clean_candidate(cwd=cwd, worktree=worktree)
     registration = read_expired_registration(cwd=cwd, candidate=candidate)
     publication_live = read_live_publication(cwd=cwd, pr=pr, branch=candidate["branch"])
+    _verify_pr_origin(cwd=cwd, issue=issue, pr=pr, worktree=worktree, candidate=candidate,
+                      predecessor=predecessor, publication=publication_live)
     publication_recorded = receipt.get("publication")
     if not isinstance(publication_recorded, dict):
         raise RecoveryEvidenceError("publication reconciliation is missing")
@@ -531,7 +556,14 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
         if ("successor_acknowledgment" in prior_ack
                 and {k: v for k, v in prior_ack.items() if k != "successor_acknowledgment"} == receipt):
             raise RecoveryEvidenceError("a prior ACK exists; reconcile it without reposting")
-    target_time = max(prepared["successor_registration"]["observed_at"], prepared["candidate_readback"]["observed_at"])
+    try:
+        intent = agent_worktree.begin_operator_ack(cwd, worktree=worktree, owner=session, issue=issue,
+                    pr=pr, pending_comment=pending_comment, workspace_root=workspace_root)
+    except agent_worktree.WorktreeLifecycleError as exc:
+        raise RecoveryEvidenceError("ACK intent could not be established; retain prepared registration") from exc
+    prepared = {**prepared, "ack_attempt_id": intent["attempt_id"]}
+    target_time = max(prepared["successor_registration"]["observed_at"], prepared["candidate_readback"]["observed_at"],
+                      intent["intent_at"])
     time.sleep(max(0.0, int(target_time) + 1.1 - time.time()))
     ack_body = json.dumps({"operator_reconciliation.v1": {**receipt, "successor_acknowledgment": prepared}}, sort_keys=True)
     try:
@@ -633,6 +665,8 @@ def resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, ag
         raise RecoveryEvidenceError("operator account is not the authenticated repository owner")
     candidate = read_clean_candidate(cwd=cwd, worktree=worktree)
     live_pr = read_live_publication(cwd=cwd, pr=pr, branch=candidate["branch"])
+    _verify_pr_origin(cwd=cwd, issue=issue, pr=pr, worktree=worktree, candidate=candidate,
+                      predecessor=pending["predecessor"], publication=live_pr)
     recorded_pr = pending["publication"]
     comparable_publication = {k: v for k, v in recorded_pr.items() if k not in {"state", "sources"}}
     if (candidate != pending.get("candidate")
@@ -686,9 +720,22 @@ def resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, ag
             or proof.get("pending_comment_id") != comment_id or proof.get("pending_digest") != pending_digest
             or row.get("owner") != session or proof.get("epoch") != row.get("registration_epoch")):
         raise RecoveryEvidenceError("prepared operator registration is unavailable; retain claim")
-    expected_ack = {"successor_registration": {"path": str(worktree), "branch": candidate["branch"],
+    prepared = {"successor_registration": {"path": str(worktree), "branch": candidate["branch"],
                     "owner": session, "generation": candidate["generation"], "epoch": proof["epoch"],
                     "observed_at": proof["registration_read_at"]}, "candidate_readback": proof["candidate_readback"]}
+    if proof.get("ack_intent") is None:
+        ack_id, pinned = _post_and_pin_operator_ack(cwd=cwd, issue=issue, pr=pr, worktree=worktree, session=session,
+                            workspace_root=workspace_root, pending_comment=pending_comment, receipt=pending,
+                            prepared=prepared)
+        return {"task_id": task_id, "lease_id": lease_id, "holder": agent, "session": session,
+                "pending_comment_id": comment_id, "ack_comment_id": ack_id, "registration_epoch": pinned["epoch"],
+                "state": "pinned", "pickup_receipt": (f"pickup-claim-complete issue={issue} branch={candidate['branch']} "
+                  f"worktree={worktree} coordination_mode=dispatcher-backed fallback_reason=none task_id={task_id} "
+                  f"lease_id={lease_id} holder={agent} evidence=verified-dispatcher-lease")}
+    intent = proof.get("ack_intent")
+    if not isinstance(intent, dict) or not isinstance(intent.get("attempt_id"), str):
+        raise RecoveryEvidenceError("ACK intent is ambiguous; retain prepared registration")
+    expected_ack = {**prepared, "ack_attempt_id": intent["attempt_id"]}
     try:
         ack_comment = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr,
                                                 pending=pending, expected_ack=expected_ack)
@@ -813,6 +860,7 @@ def validate_operator_reconciliation(
             raise RecoveryEvidenceError("operator receipt candidate or predecessor binding changed")
     if (publication.get("pr") != pr or publication.get("repo") != "RasmusTho/agentic-pkm-mvp"
             or publication.get("branch") != candidate.get("branch") or publication.get("pr_state") != "OPEN"
+            or not re.fullmatch(r"[0-9a-f]{64}", str(publication.get("body_sha256", "")))
             or not re.fullmatch(r"[0-9a-f]{40,64}", str(publication.get("head", "")))):
         raise RecoveryEvidenceError("publication is not bound to an observed PR head")
     if (not _timestamp(writer.get("last_activity")) < _timestamp(writer.get("boot")) <= created_at

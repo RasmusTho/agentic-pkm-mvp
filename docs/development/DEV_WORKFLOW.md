@@ -1579,8 +1579,11 @@ explicit target worktree, `--operator-comment-id`, `--operator-pr` and
 new agent/session, registers a prepared successor, and pins a separate account-read-back ACK. A
 prepared registration is not worker or publication authority. If a response is lost, use the same
 wrapper and arguments with `--operator-resume`: it reads the exact new claim and, when an ACK may
-have been sent, searches for one matching existing ACK instead of posting another. Missing or
-ambiguous readback remains unresolved; do not release another owner's claim or retry a write blindly.
+have been sent, searches for one matching existing ACK instead of posting another. The existing
+registry records an ACK intent before POST: when no intent exists, resume may complete that first
+attempt; after an intent exists, absence of a matching ACK remains unknown and is never permission
+to repost. Missing or ambiguous readback remains unresolved; do not release another owner's claim
+or retry a write blindly.
 The original candidate and claim remain historical provenance. A reviewed descendant can proceed
 only through the ordinary current-head scope, review, CI, native or executor merge and closure gates.
 

@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import subprocess
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -86,8 +89,13 @@ def operator_case(tmp_path, monkeypatch):
               "boot": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
               "sources": {"execution": ["fixture:execution"], "delegations": ["fixture:delegations"],
                           "restart": ["fixture:restart"]}}
+    origin_receipt = (f"pickup-claim-complete issue=6601 branch=codex/example worktree={checkout} "
+                      f"coordination_mode=dispatcher-backed fallback_reason=none task_id={task_id} "
+                      f"lease_id={old_lease.lease_id} holder=old-agent evidence=verified-dispatcher-lease")
+    pr_body = f"Governing-Issue: #6601\n\nPickup-Receipt: {origin_receipt}\n\nCloses #6601\n"
     publication = {"state": "reconciled", "pr": 6602, "head": head, "repo": "RasmusTho/agentic-pkm-mvp",
                    "branch": "codex/example", "pr_state": "OPEN", "sources": sources}
+    publication["body_sha256"] = hashlib.sha256(pr_body.encode()).hexdigest()
     receipt = {"issue": 6601, "mode": "operator", "account": "RasmusTho",
                "mandate": {"reference": "fixture:explicit-user-direction", "repo": "RasmusTho/agentic-pkm-mvp",
                            "issue": 6601, "effects": ["reconcile", "claim", "register", "acknowledge"]},
@@ -97,7 +105,7 @@ def operator_case(tmp_path, monkeypatch):
                "branch_history_digest": registration["branch_history_digest"], "base": base,
                "unpublished_candidate_head": head, "changed_files": ["file.txt"]}
     comments = {1: _comment(receipt, 1, now - 5)}
-    pr = {"number": 6602, "state": "open", "head": {"ref": "codex/example", "sha": head,
+    pr = {"number": 6602, "state": "open", "body": pr_body, "head": {"ref": "codex/example", "sha": head,
           "repo": {"full_name": "RasmusTho/agentic-pkm-mvp"}},
           "base": {"ref": "main", "repo": {"full_name": "RasmusTho/agentic-pkm-mvp"}}}
 
@@ -129,7 +137,7 @@ def operator_case(tmp_path, monkeypatch):
     monkeypatch.setattr(recovery.subprocess, "run", run)
     return {"cwd": checkout, "issue": 6601, "pr": 6602, "worktree": checkout, "agent": "new-agent",
             "session": "new-session", "comment_id": 1, "workspace_root": tmp_path / "model", "store": store,
-            "old_lease": old_lease, "comments": comments, "old_record": old_record, "receipt": receipt}
+            "old_lease": old_lease, "comments": comments, "old_record": old_record, "receipt": receipt, "pr_data": pr}
 
 
 def _args(case):
@@ -229,6 +237,28 @@ def test_lost_ack_response_retains_prepared_state_and_never_reposts(operator_cas
     assert len(post_count) == 1
 
 
+def test_unknown_ack_without_a_readable_match_never_reposts(operator_case, monkeypatch):
+    case = operator_case
+    delegate = recovery.subprocess.run
+    post_count = []
+
+    def lost_post(args, **kwargs):
+        if args[0] == "gh" and "POST" in args:
+            post_count.append(1)
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="unknown")
+        return delegate(args, **kwargs)
+
+    monkeypatch.setattr(recovery.subprocess, "run", lost_post)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="ACK publication outcome unknown"):
+        recovery.execute_operator_pickup(**_args(case))
+    with pytest.raises(recovery.RecoveryEvidenceError, match="unknown or ambiguous"):
+        recovery.resume_operator_pickup(**_args(case))
+    row = agent_worktree._locked_lifecycle_snapshot(agent_worktree._default_registry_path(case["cwd"]))[str(case["worktree"])]
+    assert row["operator_registration"]["state"] == "prepared"
+    assert row["operator_registration"]["ack_intent"] is not None
+    assert len(post_count) == 1
+
+
 def test_lost_claim_response_is_reconciled_without_another_claim(operator_case, monkeypatch):
     case = operator_case
     delegate = recovery.subprocess.run
@@ -270,6 +300,26 @@ def test_resume_after_claim_before_registration_uses_the_existing_claim(operator
     assert result["ack_comment_id"] == 2
 
 
+def test_resume_after_registration_before_ack_intent_posts_once(operator_case, monkeypatch):
+    case = operator_case
+    post_and_pin = recovery._post_and_pin_operator_ack
+
+    def interrupted_before_intent(**_kwargs):
+        raise recovery.RecoveryEvidenceError("fixture interruption before ACK intent")
+
+    monkeypatch.setattr(recovery, "_post_and_pin_operator_ack", interrupted_before_intent)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="before ACK intent"):
+        recovery.execute_operator_pickup(**_args(case))
+    row = agent_worktree._locked_lifecycle_snapshot(agent_worktree._default_registry_path(case["cwd"]))[str(case["worktree"])]
+    assert row["operator_registration"]["state"] == "prepared"
+    assert row["operator_registration"].get("ack_intent") is None
+    assert 2 not in case["comments"]
+    monkeypatch.setattr(recovery, "_post_and_pin_operator_ack", post_and_pin)
+    result = recovery.resume_operator_pickup(**_args(case))
+    assert result["state"] == "pinned" and result["ack_comment_id"] == 2
+    assert len([e for e in case["store"].list_events(result["task_id"]) if e.event_type == "task.claimed"]) == 2
+
+
 @pytest.mark.parametrize("history", ["session-bound", "earlier-claim"])
 def test_unsupported_predecessor_history_is_refused_before_claim(operator_case, history):
     case = operator_case
@@ -292,6 +342,79 @@ def test_unsupported_predecessor_history_is_refused_before_claim(operator_case, 
         recovery.execute_operator_pickup(**_args(case))
     assert case["store"].get_task(task_id).lease_id == case["old_lease"].lease_id
     assert 2 not in case["comments"]
+
+
+@pytest.mark.parametrize("problem", ["governing-issue", "old-registry", "diverged-head"])
+def test_unusable_pr_or_registry_is_refused_before_claim(operator_case, tmp_path, problem):
+    case = operator_case
+    receipt = copy.deepcopy(case["receipt"])
+    if problem == "governing-issue":
+        case["pr_data"]["body"] = case["pr_data"]["body"].replace("Governing-Issue: #6601", "Governing-Issue: #9999")
+        receipt["publication"]["body_sha256"] = hashlib.sha256(case["pr_data"]["body"].encode()).hexdigest()
+    elif problem == "old-registry":
+        other = copy.deepcopy(case["old_record"])
+        other["path"] = str(tmp_path / "old-checkout")
+        other["registered_at"] -= 1000
+        other["heartbeat_at"] -= 1000
+        other["expires_at"] -= 1000
+        with agent_worktree._locked_registry(agent_worktree._default_registry_path(case["cwd"])) as payload:
+            payload["worktrees"][other["path"]] = other
+    else:
+        tree = _git(case["cwd"], "rev-parse", "HEAD^{tree}")
+        unrelated = _git(case["cwd"], "commit-tree", tree, "-m", "unrelated fixture")
+        _git(case["cwd"], "reset", "--hard", unrelated)
+        receipt["candidate"] = recovery.read_clean_candidate(cwd=case["cwd"], worktree=case["worktree"])
+        receipt["unpublished_candidate_head"] = unrelated
+    case["comments"][1] = _comment(receipt, 1, time.time() - 5)
+    with pytest.raises(recovery.RecoveryEvidenceError):
+        recovery.execute_operator_pickup(**_args(case))
+    assert case["store"].get_task(case["receipt"]["predecessor"]["task_id"]).lease_id == case["old_lease"].lease_id
+    assert 2 not in case["comments"]
+
+
+def test_operator_preflight_allows_unpublished_descendant(operator_case):
+    case = operator_case
+    (case["worktree"] / "file.txt").write_text("unpublished descendant\n")
+    _git(case["worktree"], "add", "file.txt")
+    _git(case["worktree"], "commit", "-m", "unpublished descendant")
+    receipt = copy.deepcopy(case["receipt"])
+    receipt["candidate"] = recovery.read_clean_candidate(cwd=case["cwd"], worktree=case["worktree"])
+    receipt["unpublished_candidate_head"] = receipt["candidate"]["head"]
+    case["comments"][1] = _comment(receipt, 1, time.time() - 5)
+    observed = recovery.preflight_operator_pickup(**{k: v for k, v in _args(case).items() if k != "workspace_root"})
+    assert observed["candidate"]["head"] != observed["publication"]["head"]
+
+
+def test_competing_operator_invocations_only_one_can_claim(operator_case, monkeypatch):
+    case = operator_case
+    rival = copy.deepcopy(case["receipt"])
+    rival["successor"]["agent"] = "rival-agent"
+    case["comments"][4] = _comment(rival, 4, time.time() - 5)
+    original = recovery.preflight_operator_pickup
+    barrier = threading.Barrier(2)
+
+    def concurrent_preflight(**kwargs):
+        observed = original(**kwargs)
+        barrier.wait(timeout=15)
+        return observed
+
+    monkeypatch.setattr(recovery, "preflight_operator_pickup", concurrent_preflight)
+    def attempt(index):
+        args = _args(case)
+        if index:
+            args.update(agent="rival-agent", comment_id=4)
+        try:
+            return recovery.execute_operator_pickup(**args)
+        except recovery.RecoveryEvidenceError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, range(2)))
+    successes = [item for item in results if item is not None]
+    assert len(successes) == 1 and successes[0]["state"] == "pinned"
+    events = case["store"].list_events(case["receipt"]["predecessor"]["task_id"])
+    assert len([item for item in events if item.event_type == "task.claimed"]) == 2
+    assert sorted(case["comments"]) == [1, 2, 4]
 
 
 def test_successor_preserves_delivery_gates(operator_case):

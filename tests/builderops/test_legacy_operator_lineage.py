@@ -27,6 +27,7 @@ def stamp(value):
 @pytest.fixture
 def recovery(monkeypatch):
     issue, pr = 6601, 6602
+    historical_body = f'Governing-Issue: #{issue}\nFixes #{issue}\n'
     task = f'github-RasmusTho--agentic-pkm-mvp-issue-{issue}'
     branch, path = 'codex/issue-6601', '/isolated/worktree'
     old = {'event_id': 'old', 'timestamp': '2026-11-08T00:00:00Z', 'task_id': task,
@@ -62,7 +63,9 @@ def recovery(monkeypatch):
                   'last_activity': '2026-11-09T00:00:00Z', 'boot': '2026-11-14T00:00:00Z',
                   'sources': {'execution': ['execution observation'], 'delegations': ['delegation observation'], 'restart': ['boot observation']}},
        'publication': {'state': 'reconciled', 'pr': pr, 'head': 'b'*40, 'repo': 'RasmusTho/agentic-pkm-mvp',
-                       'branch': branch, 'pr_state': 'OPEN', 'sources': {'attempts': ['attempt observation'], 'github': ['PR observation']}},
+                       'branch': branch, 'pr_state': 'OPEN',
+                       'body_sha256': hashlib.sha256(historical_body.encode()).hexdigest(),
+                       'sources': {'attempts': ['attempt observation'], 'github': ['PR observation']}},
        'branch': branch, 'writable_worktree': path, 'predecessor_registration': prior,
        'branch_history_digest': 'c'*64, 'base': 'd'*40, 'unpublished_candidate_head': 'b'*40, 'changed_files': ['file.py']}
     def comment(number, at, body):
@@ -71,12 +74,13 @@ def recovery(monkeypatch):
                 'created_at': at, 'updated_at': at, 'body': json.dumps({'operator_reconciliation.v1': body})}
     c1 = comment(1, '2026-11-15T08:00:00Z', receipt)
     c2 = comment(2, '2026-11-15T08:00:06Z', {**receipt, 'successor_acknowledgment':
-                  {'successor_registration': ack_reg, 'candidate_readback': transfer}})
+                  {'successor_registration': ack_reg, 'candidate_readback': transfer, 'ack_attempt_id': '1'*32}})
     proof = {'state': 'pinned', 'issue': issue, 'pending_comment_id': 1, 'ack_comment_id': 2,
              'pending_digest': hashlib.sha256(c1['body'].encode()).hexdigest(),
              'ack_digest': hashlib.sha256(c2['body'].encode()).hexdigest(), 'predecessor': prior,
              'branch_history_digest': 'c'*64, 'candidate_readback': transfer, 'epoch': 'f'*32,
              'authority_since': reg['authority_since'], 'registration_read_at': reg['authority_since'],
+             'ack_intent': {'attempt_id': '1'*32, 'intent_at': stamp('2026-11-15T08:00:05Z')},
              'ack_at': stamp(c2['created_at']), 'verified_through': stamp('2026-11-15T08:00:08Z')}
     reg['operator_registration'] = proof
     monkeypatch.setattr(cycle.legacy_owner_recovery, 'read_clean_candidate', lambda **kw: candidate)
@@ -99,7 +103,10 @@ def test_pinned_operator_recovery_binds_the_real_legacy_takeover(recovery):
 
 
 @pytest.mark.parametrize('mutation', ['prepared', 'digest', 'session', 'unknown', 'missing', 'claim',
-                                     'extra_claim', 'expiry', 'candidate', 'edited', 'registry'])
+                                     'extra_claim', 'expiry', 'candidate', 'edited', 'registry',
+                                     'no_intent', 'intent_id', 'ack_id', 'no_ack_id',
+                                     'intent_before_registration', 'intent_at_ack', 'invalid_intent',
+                                     'no_body_hash', 'invalid_body_hash'])
 def test_operator_recovery_refuses_drift_or_unknown(recovery, mutation):
     data = copy.deepcopy(recovery)
     proof = data['registration']['operator_registration']
@@ -119,6 +126,27 @@ def test_operator_recovery_refuses_drift_or_unknown(recovery, mutation):
     if mutation == 'candidate': data['head'] = '0'*40
     if mutation == 'edited': data['comments'][1]['updated_at'] = '2026-11-15T08:00:07Z'
     if mutation == 'registry': data['records']['/another'] = {'branch': data['branch']}
+    if mutation == 'no_intent': proof.pop('ack_intent')
+    if mutation == 'intent_id': proof['ack_intent']['attempt_id'] = '2'*32
+    if mutation == 'intent_before_registration': proof['ack_intent']['intent_at'] = proof['registration_read_at'] - 1
+    if mutation == 'intent_at_ack': proof['ack_intent']['intent_at'] = proof['ack_at']
+    if mutation == 'invalid_intent': proof['ack_intent']['attempt_id'] = 'UNKNOWN'
+    if mutation in ('ack_id', 'no_ack_id'):
+        comment = data['comments'][1]
+        body = json.loads(comment['body'])
+        ack = body['operator_reconciliation.v1']['successor_acknowledgment']
+        if mutation == 'ack_id': ack['ack_attempt_id'] = '2'*32
+        else: ack.pop('ack_attempt_id')
+        comment['body'] = json.dumps(body)
+        proof['ack_digest'] = hashlib.sha256(comment['body'].encode()).hexdigest()
+    if mutation in ('no_body_hash', 'invalid_body_hash'):
+        for comment, digest in zip(data['comments'], ('pending_digest', 'ack_digest')):
+            body = json.loads(comment['body'])
+            publication = body['operator_reconciliation.v1']['publication']
+            if mutation == 'no_body_hash': publication.pop('body_sha256')
+            else: publication['body_sha256'] = 'not-a-sha'
+            comment['body'] = json.dumps(body)
+            proof[digest] = hashlib.sha256(comment['body'].encode()).hexdigest()
     with pytest.raises(cycle.CycleError):
         cycle._operator_lineage(**data)
 
@@ -323,7 +351,30 @@ def test_operator_full_path_accepts_reviewed_descendant_and_successor_heartbeat(
     assert f['pr']['review_material']['transfer_to_current']['current_head'] == f['pr']['head_sha']
 
 
-@pytest.mark.parametrize('failure', ['head', 'review', 'red_ci', 'pending_ci', 'executor_fence', 'inflight_fence'])
+def test_later_pr_body_update_requires_fresh_review_identity(production_path):
+    f = production_path
+    historical_digest = f['case']['receipt']['publication']['body_sha256']
+    f['live']['body'] += '\nReview context: updated after recovery.\n'
+    assert hashlib.sha256(f['live']['body'].encode()).hexdigest() != historical_digest
+    with pytest.raises(cycle.CycleError, match='PR contract, head or actionable review drifted'):
+        cycle._premerge(f['layout'], f['pr'], f['entry'], f['saved'])
+    updated = cycle.observation._observe(cycle.observation._Reader(cycle.github_fetch, cycle.time.monotonic),
+                                          f['case']['pr'])
+    assert updated is not None
+    updated.update(route='native', check_config={})
+    updated['review_context'], updated['review_material'] = cycle._review_context(updated)
+    cycle._add_transfer_review_context(f['layout'], f['entry'], updated)
+    assert cycle.completion.work_identity(updated) != cycle.completion.work_identity(f['pr'])
+    rereview = copy.deepcopy(f['saved'])
+    rereview['review_operation'] = 'new-review'
+    rereview['execution_proof']['operation_id'] = 'new-review'
+    rereview['execution_proof']['conversation_id'] = 'new-conversation'
+    rereview['conversation_provenance']['reviewer'] = 'new-conversation'
+    assert cycle._premerge(f['layout'], updated, f['entry'], rereview)['head_sha'] == updated['head_sha']
+
+
+@pytest.mark.parametrize('failure', ['head', 'review', 'red_ci', 'pending_ci', 'executor_fence', 'inflight_fence',
+                                     'stale_ack'])
 def test_operator_full_path_rejects_current_head_or_gate_drift(production_path, failure):
     f = production_path
     if failure == 'head': f['live']['head']['sha'] = '0' * 40
@@ -332,9 +383,19 @@ def test_operator_full_path_rejects_current_head_or_gate_drift(production_path, 
     if failure == 'executor_fence': f['controls']['fence'] = True
     if failure == 'inflight_fence':
         f['controls']['pr_comments'].append({'id': 90, 'body': 'verification_dispatch_request.v3'})
+    if failure == 'stale_ack':
+        comment = f['case']['comments'][2]
+        body = json.loads(comment['body'])
+        body['operator_reconciliation.v1']['successor_acknowledgment']['ack_attempt_id'] = '0'*32
+        comment['body'] = json.dumps(body)
+        registry = cycle.agent_worktree._default_registry_path(f['case']['cwd'])
+        with cycle.agent_worktree._locked_registry(registry) as payload:
+            proof = payload['worktrees'][str(f['case']['worktree'])]['operator_registration']
+            proof['ack_digest'] = hashlib.sha256(comment['body'].encode()).hexdigest()
     expected = {'head': 'operator candidate readback', 'review': 'review execution or sandbox verification',
                 'red_ci': 'current-head CI', 'pending_ci': 'current-head CI',
-                'executor_fence': 'verification-dispatch state', 'inflight_fence': 'verification or fenced authority'}
+                'executor_fence': 'verification-dispatch state', 'inflight_fence': 'verification or fenced authority',
+                'stale_ack': 'operator registration or acknowledgment drifted'}
     with pytest.raises(cycle.CycleError, match=expected[failure]):
         cycle._premerge(f['layout'], f['pr'], f['entry'], f['saved'])
     if failure in ('red_ci', 'pending_ci'):

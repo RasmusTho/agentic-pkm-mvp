@@ -47,6 +47,7 @@ def evidence():
                                "restart": ["fixture:restart"]}},
         "publication": {"state": "reconciled", "pr": 6602, "head": "d" * 40,
                         "repo": "RasmusTho/agentic-pkm-mvp", "branch": "codex/issue-6601", "pr_state": "OPEN",
+                        "body_sha256": "f" * 64,
                         "sources": {"attempts": ["fixture:attempt"], "github": ["fixture:github"]}},
     }
     receipt = {
@@ -113,6 +114,7 @@ def test_operator_preflight_reads_current_sources_and_refuses_claim_drift(eviden
     live_pr = {k: v for k, v in observed["publication"].items() if k != "sources"}
     live_pr["state"] = "open_pr_observed"
     monkeypatch.setattr(recovery, "read_live_publication", lambda **_kwargs: live_pr)
+    monkeypatch.setattr(recovery, "_verify_pr_origin", lambda **_kwargs: None)
 
     args = dict(cwd=tmp_path, issue=6601, pr=6602, worktree=Path(prior["path"]),
                 agent="new-agent", session="new-session", comment_id=123)
@@ -176,7 +178,7 @@ def test_live_github_publication_readback_refuses_duplicate_or_drift(tmp_path, m
     gh.chmod(0o755)
     pr_path, pages_path, repo_path, ref_path = (tmp_path / "pr.json", tmp_path / "pages.json",
                                                tmp_path / "repo.json", tmp_path / "ref.json")
-    pr_data = {"number": 6602, "state": "open", "head": {"ref": "codex/issue-6601", "sha": "d" * 40,
+    pr_data = {"number": 6602, "state": "open", "body": "fixture body", "head": {"ref": "codex/issue-6601", "sha": "d" * 40,
                "repo": {"full_name": "RasmusTho/agentic-pkm-mvp"}},
                "base": {"ref": "main", "repo": {"full_name": "RasmusTho/agentic-pkm-mvp"}}}
     pr_path.write_text(json.dumps(pr_data), encoding="utf-8")

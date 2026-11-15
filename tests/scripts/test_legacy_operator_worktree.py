@@ -57,9 +57,20 @@ def _prepare(f):
              expected_branch_history_digest=history, now=9600)
 
 
-def _pin(f, readbacks, *, at=9702):
+def _begin(f, *, at=9601):
     repo, _, _, receipt, _, workspace = f
-    ack = {**copy.deepcopy(receipt), "successor_acknowledgment": readbacks}
+    return worktrees.begin_operator_ack(repo, worktree=repo, owner="new", issue=6636,
+             pending_comment=_comment(receipt, 1, 9500), workspace_root=workspace, now=at)
+
+
+def _pin(f, readbacks, *, at=9702):
+    repo, registry, _, receipt, _, workspace = f
+    row = worktrees._locked_lifecycle_snapshot(registry)[str(repo)]
+    intent = row["operator_registration"].get("ack_intent")
+    if intent is None:
+        intent = _begin(f)
+    acknowledgment = {**copy.deepcopy(readbacks), "ack_attempt_id": intent["attempt_id"]}
+    ack = {**copy.deepcopy(receipt), "successor_acknowledgment": acknowledgment}
     return worktrees.pin_operator_registration(repo, worktree=repo, owner="new", issue=6636,
              pending_comment=_comment(receipt, 1, 9500), ack_comment=_comment(ack, 2, 9700),
              workspace_root=workspace, now=at)
@@ -174,3 +185,57 @@ def test_pinned_check_rejects_malformed_proof(fixture, field):
     row["operator_registration"][field] = None
     with pytest.raises(worktrees.WorktreeLifecycleError):
         worktrees.assert_operator_registration_pinned(row)
+
+
+def test_ack_intent_survives_interruption_and_refuses_second_post(fixture):
+    f = fixture
+    readbacks = _prepare(f)
+    row = worktrees._locked_lifecycle_snapshot(f[1])[str(f[0])]
+    assert "ack_intent" not in row["operator_registration"]
+    ack = {**copy.deepcopy(f[3]), "successor_acknowledgment": {**readbacks, "ack_attempt_id": "a" * 32}}
+    with pytest.raises(worktrees.WorktreeLifecycleError):
+        worktrees.pin_operator_registration(f[0], worktree=f[0], owner="new", issue=6636,
+             pending_comment=_comment(f[3], 1, 9500), ack_comment=_comment(ack, 2, 9700),
+             workspace_root=f[5], now=9702)
+    intent = _begin(f)
+    assert worktrees._locked_lifecycle_snapshot(f[1])[str(f[0])]["operator_registration"]["ack_intent"] == intent
+    with pytest.raises(worktrees.WorktreeLifecycleError, match="already exists"):
+        _begin(f)
+    with pytest.raises(worktrees.WorktreeLifecycleError, match="unpinned"):
+        worktrees.load_lifecycle_authority(f[0], candidate_branch="codex/example")
+    assert _pin(f, readbacks)["ack_intent"] == intent
+    with pytest.raises(worktrees.WorktreeLifecycleError):
+        _begin(f)
+
+
+def test_ack_intent_refuses_changed_epoch_and_candidate(fixture):
+    f = fixture
+    _prepare(f)
+    with worktrees._locked_registry(f[1]) as payload:
+        payload["worktrees"][str(f[0])]["registration_epoch"] = "e" * 32
+    with pytest.raises(worktrees.WorktreeLifecycleError, match="epoch"):
+        _begin(f)
+    row = worktrees._locked_lifecycle_snapshot(f[1])[str(f[0])]
+    assert "ack_intent" not in row["operator_registration"]
+
+
+def test_ack_requires_exact_attempt_id(fixture):
+    f = fixture
+    readbacks = _prepare(f)
+    intent = _begin(f)
+    ack = {**copy.deepcopy(f[3]), "successor_acknowledgment": {**readbacks, "ack_attempt_id": "f" * 32}}
+    assert intent["attempt_id"] != "f" * 32
+    with pytest.raises(worktrees.WorktreeLifecycleError):
+        worktrees.pin_operator_registration(f[0], worktree=f[0], owner="new", issue=6636,
+             pending_comment=_comment(f[3], 1, 9500), ack_comment=_comment(ack, 2, 9700),
+             workspace_root=f[5], now=9702)
+
+
+def test_ack_intent_rechecks_candidate_after_prepare(fixture):
+    f = fixture
+    _prepare(f)
+    (f[0] / "file").write_text("changed\n")
+    with pytest.raises(worktrees.WorktreeLifecycleError):
+        _begin(f)
+    row = worktrees._locked_lifecycle_snapshot(f[1])[str(f[0])]
+    assert "ack_intent" not in row["operator_registration"]
