@@ -1538,6 +1538,15 @@ def _screen_transfer_workspace(cwd: Path, worktree: Path, workspace_root: Path) 
         raise WorktreeLifecycleError("transfer checkout must be outside model workspaces")
 
 
+def _screen_transfer_worktree_inventory(cwd: Path, workspace_root: Path,
+                                        records: Mapping[str, Any], live: list[dict[str, Any]]) -> None:
+    """Apply the same workspace boundary to registered and live checkouts."""
+    for value in [*records, *(row.get("worktree") for row in live)]:
+        if not isinstance(value, str):
+            raise WorktreeLifecycleError("lifecycle checkout path is unavailable")
+        _screen_transfer_workspace(cwd, Path(value), workspace_root)
+
+
 def prepare_transfer_registration(cwd: Path, *, worktree: Path, owner: str, issue: int,
                                   pending_comment: dict[str, Any], base_sha: str,
                                   workspace_root: Path,

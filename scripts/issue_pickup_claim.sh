@@ -257,6 +257,12 @@ if [[ "$TAKEOVER_STALE" -eq 1 ]]; then
   # A governed self-resume must preserve the unpublished candidate in place.
   PREFLIGHT_ARGS+=(--allow-dirty)
 fi
+if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+  # The historical candidate must be claimed before it can integrate main.
+  # The host recovery still binds the exact clean candidate and all authority;
+  # normal pickup and publication retain the current-base gate.
+  PREFLIGHT_ARGS+=(--base-branch "")
+fi
 "$SCRIPT_REPO_ROOT/scripts/agent_workspace_preflight.sh" "${PREFLIGHT_ARGS[@]}"
 
 if [[ "$PREFLIGHT_ONLY" -eq 1 ]]; then
