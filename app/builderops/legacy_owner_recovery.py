@@ -802,12 +802,14 @@ def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, 
     with agent_worktree._locked_existing_registry(registry_path) as reader:
         records = _raw_branch_under_lock(registry_path, branch=candidate["branch"], worktree=worktree,
                                          registry_reader=reader)
-        try:
-            live_worktrees = agent_worktree.git_hygiene._parse_worktrees(
-                agent_worktree.git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd))
-            agent_worktree._screen_transfer_worktree_inventory(cwd, workspace_root, records, live_worktrees)
-        except (OSError, subprocess.SubprocessError, agent_worktree.WorktreeLifecycleError) as exc:
-            raise RecoveryEvidenceError(str(exc)) from exc
+        def screen_inventory() -> None:
+            try:
+                live_worktrees = agent_worktree.git_hygiene._parse_worktrees(
+                    agent_worktree.git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd))
+                agent_worktree._screen_transfer_worktree_inventory(cwd, workspace_root, records, live_worktrees)
+            except (OSError, subprocess.SubprocessError, agent_worktree.WorktreeLifecycleError) as exc:
+                raise RecoveryEvidenceError(str(exc)) from exc
+        screen_inventory()
         if (reader(registry_path).get("worktrees") != records
                 or records.get(str(worktree)) != receipt.get("predecessor_registration")
                 or agent_worktree._operator_branch_history_digest(records, branch=candidate["branch"], worktree=worktree) != registration["branch_history_digest"]):
@@ -826,6 +828,7 @@ def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, 
                           predecessor=prior, publication=preflight["publication"])
         _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
         check_run()
+        screen_inventory()
         if (reader(registry_path).get("worktrees") != records
                 or _dispatcher_db_identity(paths.db_path) != preflight["dispatcher_identity"]):
             raise RecoveryEvidenceError("claim effect identity changed before execution")

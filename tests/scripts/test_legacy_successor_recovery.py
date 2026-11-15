@@ -280,6 +280,32 @@ def test_operator_refuses_workspace_overlap_before_claim(operator_case):
     assert 2 not in case["comments"]
 
 
+def test_operator_refuses_workspace_overlap_during_final_run_check(operator_case, monkeypatch):
+    from app.builderops import legacy_run_fence
+
+    case = operator_case
+    case["workspace_root"].mkdir()
+    check = legacy_run_fence.check_locked
+    calls = 0
+
+    def add_worktree_during_check(**kwargs):
+        nonlocal calls
+        check(**kwargs)
+        calls += 1
+        if calls == 2:
+            _git(case["cwd"], "worktree", "add", "--detach", str(case["workspace_root"] / "late-checkout"))
+
+    monkeypatch.setattr(legacy_run_fence, "check_locked", add_worktree_during_check)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="outside model workspaces"):
+        recovery.execute_operator_pickup(**_args(case))
+    task_id = case["receipt"]["predecessor"]["task_id"]
+    claims = [event for event in case["store"].list_events(task_id) if event.event_type == "task.claimed"]
+    assert calls == 2
+    assert len(claims) == 1
+    assert case["store"].get_task(task_id).lease_id == case["old_lease"].lease_id
+    assert 2 not in case["comments"]
+
+
 @pytest.mark.parametrize("kind", ["root", "relative", "overlap", "nested"])
 def test_operator_rejects_workspace_before_read_or_claim(operator_case, monkeypatch, kind):
     case = operator_case
