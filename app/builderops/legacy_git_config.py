@@ -123,7 +123,9 @@ def _screen(data: bytes, *, global_config: bool = False,
                 continue
             if global_config and key == b'credential.helper' and value in (b'', b'osxkeychain'):
                 continue
-            if (key.startswith((b'include.', b'includeif.', b'filter.', b'pager.'))
+            if ((key.startswith(b'url.') and key.endswith((b'.insteadof', b'.pushinsteadof')))
+                    or (key.startswith((b'http.', b'https.')) and key.endswith(b'.extraheader'))
+                    or key.startswith((b'include.', b'includeif.', b'filter.', b'pager.'))
                     or key in {b'core.fsmonitor', b'core.hookspath', b'diff.external',
                                b'credential.helper', b'core.sshcommand', b'core.editor',
                                b'sequence.editor', b'core.attributesfile', b'core.excludesfile',

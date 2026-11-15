@@ -29,6 +29,8 @@ def test_safe_linked_checkout(checkout):
     '[include]\n path = /ignored/secret\n',
     '[includeIf "gitdir:foo"]\n path = /ignored/secret\n',
     '[filter "bad"]\n process = touch /tmp/never\n',
+    '[url "https://other.invalid/"]\n insteadOf = https://github.com/\n',
+    '[http "https://github.com/"]\n extraHeader = Authorization: redacted\n',
     '[credential]\n helper = evil\n',
     '[core]\n hooksPath = /tmp/evil\n',
 ])
