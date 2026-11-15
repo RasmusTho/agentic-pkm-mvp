@@ -825,6 +825,9 @@ def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, 
             raise RecoveryEvidenceError("claim effect identity changed before execution")
         claim_env = {**os.environ, "DISPATCHER_STATE_DIR": str(paths.state_dir),
                      "DISPATCHER_DB_PATH": str(paths.db_path), "DISPATCHER_EVENTS_PATH": str(paths.events_path)}
+        # GitHub cannot be locked with the dispatcher CAS. Refresh authority
+        # after the run check and immediately before the claim attempt.
+        _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
         try:
             claim = subprocess.run(args, cwd=cwd, env=claim_env, capture_output=True, text=True, timeout=30, check=False)
             claim_exit = claim.returncode

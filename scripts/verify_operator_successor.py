@@ -131,6 +131,23 @@ def verify(*, issue: int, pr: int, worktree: Path, workspace_root: Path,
     if cycle.closure._pr(executor, cwd, repo, pr) != live:
         raise cycle.CycleError("PR changed during operator proof")
     recovery._verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
+    # Re-read authority after the network/lineage work; a heartbeat may renew
+    # expiry without changing the claimant or the registration's identity.
+    fresh_registration, _ = _readonly_lifecycle(
+        cwd=cwd, worktree=worktree, workspace_root=workspace_root, branch=head["ref"], session=session)
+    if ({k: v for k, v in fresh_registration.items() if k not in {"heartbeat_at", "expires_at"}}
+            != {k: v for k, v in registration.items() if k not in {"heartbeat_at", "expires_at"}}):
+        raise cycle.CycleError("lifecycle successor changed during operator proof")
+    fresh_task, fresh_events, fresh_lease = _readonly_dispatcher(cwd=cwd, task_id=task_id)
+    fresh_owner = cycle.closure._dispatcher_lease_snapshot(
+        fresh_task, task_id, repository=repo, issue_number=issue, lease=fresh_lease)
+    cycle.closure._validate_claimant_history(fresh_events, fresh_owner)
+    if ({k: v for k, v in fresh_owner.items() if k != "lease_expires_at"}
+            != {k: v for k, v in owner.items() if k != "lease_expires_at"}
+            or fresh_task.get("linked_pr") != linked_pr):
+        raise cycle.CycleError("dispatcher successor changed during operator proof")
+    if fresh_registration["expires_at"] <= time.time():
+        raise cycle.CycleError("lifecycle successor expired during operator proof")
     return {"issue": issue, "pr": pr, "head": head["sha"], "agent": agent, "session": session,
             "lease_id": owner["lease_id"], "registration_epoch": registration["registration_epoch"],
             "task_pr_projection": task.get("linked_pr")}
