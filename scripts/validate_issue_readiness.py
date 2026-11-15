@@ -672,6 +672,29 @@ def _unknown_body(body: str, present: Sequence[str]) -> bool:
     return False
 
 
+def validate_in_progress_issue(issue: object, *, issue_number: int, repo_root: str | Path) -> None:
+    """Validate a fresh issue read for an already claimed delivery."""
+    if not isinstance(issue, dict):
+        raise ValueError("GitHub issue read did not return an object")
+    if type(issue_number) is not int or issue_number <= 0 or type(issue.get("number")) is not int or issue["number"] != issue_number:
+        raise ValueError("GitHub issue read returned a different issue number")
+    if str(issue.get("state", "")).lower() != "open":
+        raise ValueError("GitHub issue is not open")
+    labels = issue.get("labels")
+    if not isinstance(labels, list):
+        raise ValueError("GitHub issue read did not include a labels list")
+    names = [label.get("name") if isinstance(label, dict) else label for label in labels]
+    if any(not isinstance(name, str) for name in names):
+        raise ValueError("GitHub issue read contained an invalid label")
+    if {name for name in names if name.startswith("agent:")} != {"agent:in-progress"}:
+        raise ValueError("fresh GitHub issue lacks the sole agent:in-progress label")
+    body = issue.get("body")
+    report = classify_issue_body(body if isinstance(body, str) else "", issue_number=issue_number,
+                                 labels=names, repo_root=repo_root)
+    if report.readiness_classification != "ready_candidate":
+        raise ValueError("fresh GitHub issue failed strict readiness validation: " + report.readiness_classification)
+
+
 def classify_issue_body(
     body: str,
     *,

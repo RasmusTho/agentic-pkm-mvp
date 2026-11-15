@@ -1329,6 +1329,10 @@ def _full_claim_readback(
             or isinstance(record["expires_at"], bool) or not math.isfinite(record["expires_at"])
             or record["expires_at"] <= time.time()):
         raise DeliveryError("Current worktree registration is missing, expired, or mismatched")
+    try:
+        agent_worktree.assert_operator_registration_pinned(record)
+    except agent_worktree.WorktreeLifecycleError as exc:
+        raise DeliveryError("Worktree operator registration is unqualified") from exc
     if agent_worktree._worktree_generation(Path(state["root"]), worktree, create=False) != record["generation"]:
         raise DeliveryError("Worktree registration generation changed")
     dispatcher = re.search(

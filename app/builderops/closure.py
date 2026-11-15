@@ -787,13 +787,12 @@ def _dispatcher_snapshot(
     )
 
 
-def _dispatcher_snapshot_from_task(
+def _dispatcher_lease_snapshot(
     task: Mapping[str, Any],
     task_id: str,
     *,
     repository: str,
     issue_number: int,
-    pr_number: int,
     allow_expired: bool = False,
     lease: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
@@ -801,7 +800,7 @@ def _dispatcher_snapshot_from_task(
         raise ClosureError("unknown", "dispatcher task identity was not exact")
     if task.get("repo") != repository or task.get("issue_number") != issue_number:
         raise ClosureError("incomplete", "dispatcher task is not bound to the governing repository and Issue")
-    holder, lease_id, linked_pr = task.get("claimed_by"), task.get("lease_id"), task.get("linked_pr")
+    holder, lease_id = task.get("claimed_by"), task.get("lease_id")
     lease_expires_at = task.get("lease_expires_at")
     if task.get("status") != "claimed" or not isinstance(holder, str) or not holder or not isinstance(lease_id, str) or not lease_id:
         raise ClosureError("incomplete", "dispatcher task has no active lease-holder identity")
@@ -819,8 +818,6 @@ def _dispatcher_snapshot_from_task(
     lease_expiry = _parse_timestamp(lease_expires_at, "dispatcher lease")
     if not allow_expired and lease_expiry <= datetime.now(timezone.utc):
         raise ClosureError("incomplete", "dispatcher lease is expired")
-    if str(linked_pr) != str(pr_number):
-        raise ClosureError("incomplete", "dispatcher task is not linked to the exact PR")
     return {
         "task_id": task_id,
         "repository": repository,
@@ -828,8 +825,18 @@ def _dispatcher_snapshot_from_task(
         "lease_holder": holder,
         "lease_id": lease_id,
         "lease_expires_at": lease_expires_at,
-        "linked_pr": str(pr_number),
     }
+
+
+def _dispatcher_snapshot_from_task(
+    task: Mapping[str, Any], task_id: str, *, repository: str, issue_number: int,
+    pr_number: int, allow_expired: bool = False, lease: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    result = _dispatcher_lease_snapshot(task, task_id, repository=repository, issue_number=issue_number,
+                                        allow_expired=allow_expired, lease=lease)
+    if str(task.get("linked_pr")) != str(pr_number):
+        raise ClosureError("incomplete", "dispatcher task is not linked to the exact PR")
+    return {**result, "linked_pr": str(pr_number)}
 
 
 def _dispatcher_inspect(
