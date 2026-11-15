@@ -58,7 +58,10 @@ def _comment(body, ident, timestamp):
 @pytest.fixture
 def operator_case(tmp_path, monkeypatch, request):
     params = getattr(request, "param", (6601, 6602, "old-agent", 0))
-    issue, pr_number, old_agent, heartbeat_count = ((params, 6602, "old-agent", 0) if isinstance(params, int) else params)
+    if isinstance(params, int):
+        params = (params, 6602, "old-agent", 0)
+    issue, pr_number, old_agent, heartbeat_count = params[:4]
+    overlapping_main = len(params) == 5 and params[4] == "overlapping-main"
     old_owner = (f"{old_agent}-20261102" if heartbeat_count == 11 else
                  old_agent.removeprefix("openhands-") if heartbeat_count else "old-session")
     repo = tmp_path / "agentic-pkm-mvp"
@@ -70,7 +73,8 @@ def operator_case(tmp_path, monkeypatch, request):
     (repo / "tests/properties").mkdir(parents=True)
     (repo / "tests/test_fixture.py").write_text("def test_fixture(): pass\n")
     for name in ("_machinery.py", "test_guard_at_seam.py"):
-        (repo / "tests/properties" / name).write_text("base\n")
+        content = ''.join(f'base line {i}\n' for i in range(30)) if overlapping_main else 'base\n'
+        (repo / "tests/properties" / name).write_text(content)
     _git(repo, "add", "file.txt", "tests")
     _git(repo, "commit", "-m", "base")
     base = _git(repo, "rev-parse", "HEAD")
@@ -1893,7 +1897,7 @@ def test_guarded_claim_refuses_database_swap_during_sqlite_open(operator_case, t
     assert swapped and displaced.read_bytes() == before and foreign.read_bytes() == before
     assert database.read_bytes() == before and events.read_bytes() == before_events
 
-def _make_dirty_6560(case, tmp_path, monkeypatch):
+def _make_dirty_6560(case, tmp_path, monkeypatch, *, overlapping_main=False):
     from app.builderops import legacy_codex_6560_guard as guard
     monkeypatch.setattr(guard, "WORKTREE", str(case["worktree"]))
     monkeypatch.setattr(guard, "PR", case["pr"])
@@ -1908,7 +1912,12 @@ def _make_dirty_6560(case, tmp_path, monkeypatch):
     names = ("tests/properties/_machinery.py", "tests/properties/test_guard_at_seam.py")
     blobs = {name: _git(root, "rev-parse", f"HEAD:{name}") for name in names}
     for name in names:
-        (root / name).write_text(f"dirty {name}\n")
+        if overlapping_main:
+            lines = (root / name).read_text().splitlines(keepends=True)
+            lines[2] = f"dirty {name}\n"
+            (root / name).write_text(''.join(lines))
+        else:
+            (root / name).write_text(f"dirty {name}\n")
     patch = subprocess.check_output(["git", "-C", str(root), "diff", "--binary"])
     backup = tmp_path / "preserved.patch"
     backup.write_bytes(patch)
@@ -2014,6 +2023,234 @@ def test_6560_cli_recovers_exact_effect_without_replay(operator_case, tmp_path, 
         assert result['state'] == 'pinned' and result['ack_comment_id'] == 2
         if fault == 'lost_claim':
             assert result['claim_exit'] == 1
+
+
+@pytest.mark.parametrize('operator_case', [(6560, 6565, 'codex-issue-6560', 11, 'overlapping-main')], indirect=True)
+@pytest.mark.parametrize('unrelated_staged', [False, True])
+def test_6560_first_commit_uses_real_shell_gate_before_main_integration(operator_case, tmp_path, monkeypatch,
+                                                                            unrelated_staged):
+    """Exercise the actual shell gate and Git; only host/GitHub ports are simulated."""
+    from app.builderops.legacy_patch_tree import verify_first_patch_commit
+
+    case = operator_case
+    if unrelated_staged:
+        (case['worktree'] / 'file.txt').write_text('preserved staged work\n')
+        _git(case['worktree'], 'add', 'file.txt')
+    _make_dirty_6560(case, tmp_path, monkeypatch, overlapping_main=True)
+    result = recovery.execute_operator_pickup(**_args(case))
+    assert result['state'] == 'pinned'
+    worktree = case['worktree']
+    parent = _git(worktree, 'rev-parse', 'HEAD')
+    ordinary_index_path = Path(_git(worktree, 'rev-parse', '--path-format=absolute', '--git-path', 'index'))
+    original_index_sha256 = hashlib.sha256(ordinary_index_path.read_bytes()).hexdigest()
+    names = sorted(case['receipt']['dirty_candidate']['index_blobs'])
+    selected = {name: (worktree / name).read_bytes() for name in names}
+    ordinary_before = {name: _git(worktree, 'rev-parse', f':{name}') for name in names}
+    unrelated_blob = _git(worktree, 'rev-parse', ':file.txt')
+    unrelated_bytes = (worktree / 'file.txt').read_bytes()
+
+    primary = tmp_path / 'agentic-pkm-mvp'
+    remote = tmp_path / 'remote.git'
+    _git(primary, 'init', '--bare', str(remote))
+    _git(primary, 'remote', 'add', 'origin', str(remote))
+    main_file = primary / 'tests/properties/_machinery.py'
+    main_lines = main_file.read_text().splitlines(keepends=True)
+    main_lines[27] = 'main change in the selected file\n'
+    main_file.write_text(''.join(main_lines))
+    _git(primary, 'add', '--', 'tests/properties/_machinery.py')
+    _git(primary, 'commit', '-m', 'advance main')
+    _git(primary, 'push', '-u', 'origin', 'main')
+    main_head = _git(primary, 'rev-parse', 'main')
+
+    scenario = {
+        'worktree': str(worktree), 'common': str(primary / '.git'), 'home': str(tmp_path),
+        'db': str(case['store'].db_path), 'comments': case['comments'], 'pr': case['pr_data'],
+        'issue': case['issue_data'], 'generation': case['old_record']['generation'],
+        'owner': case['old_record']['owner'], 'holder': case['receipt']['predecessor']['holder'],
+        'lease': case['old_lease'].lease_id, 'head': parent,
+        'successor_lease': result['lease_id'], 'task_id': result['task_id'],
+        'pending_id': case['comment_id'], 'ack_id': result['ack_comment_id'],
+        'boot': int(datetime.fromisoformat(case['receipt']['writer']['boot']).timestamp()),
+    }
+    scenario_file = tmp_path / 'scenario.json'
+    scenario_file.write_text(json.dumps(scenario))
+    site = tmp_path / 'python-site'
+    site.mkdir()
+    (site / 'sitecustomize.py').write_text('''\
+import json, os, sys
+from pathlib import Path
+from types import SimpleNamespace
+from app.builderops import legacy_codex_6560_guard as guard, legacy_git_config as config
+from app.builderops import legacy_owner_recovery as recovery, openhands_pr_cycle as cycle
+from scripts import agent_worktree
+s = json.loads(Path(os.environ["SYNTHETIC_6560_SCENARIO"]).read_text())
+if os.environ.get("SYNTHETIC_6560_CLOSE_DURING_PREFLIGHT") and sys.argv[0].endswith("git_hygiene_preflight.py"):
+    s["issue"]["state"] = "closed"
+    Path(os.environ["SYNTHETIC_6560_SCENARIO"]).write_text(json.dumps(s))
+config.QUALIFIED_COMMON = Path(s["common"])
+config._qualified_home = lambda: Path(s["home"])
+config.check_host_config = lambda: None
+guard.WORKTREE = s["worktree"]
+guard.GENERATION = s["generation"]
+guard.OWNER = s["owner"]
+guard.HOLDER = s["holder"]
+guard.LEASE = s["lease"]
+guard.PR_HEAD = s["head"]
+guard._host_readback = lambda: (s["boot"], "", "", "")
+if os.environ.get("SYNTHETIC_6560_LATE_COMMENT") in {"pending", "ack", "duplicate"}:
+    old_guard_check = guard.check
+    guard_calls = []
+    def late_comment_guard(**kwargs):
+        result = old_guard_check(**kwargs)
+        guard_calls.append(1)
+        if len(guard_calls) == 2:
+            kind = os.environ["SYNTHETIC_6560_LATE_COMMENT"]
+            if kind == "duplicate":
+                duplicate = dict(s["comments"][str(s["ack_id"])])
+                duplicate["id"] = 999999
+                s["comments"]["999999"] = duplicate
+            else:
+                key = "pending_id" if kind == "pending" else "ack_id"
+                s["comments"][str(s[key])]["updated_at"] = "2001-01-01T00:00:00Z"
+            Path(os.environ["SYNTHETIC_6560_SCENARIO"]).with_name("late-" + kind).write_text("injected")
+        return result
+    guard.check = late_comment_guard
+recovery._operator_dispatcher_paths = lambda **kw: SimpleNamespace(db_path=Path(s["db"]))
+agent_worktree._read_github_transfer_comment = lambda ident, **kw: s["comments"][str(ident)]
+cycle.closure._closing_issue_references = lambda *args, **kw: [6560]
+def github(args, *, cwd):
+    if args == ["user", "--jq", ".login"]: return "RasmusTho\\n"
+    if args == ["repos/RasmusTho/agentic-pkm-mvp/issues/6560"]: return json.dumps(s["issue"])
+    if "--slurp" in args and any("/issues/6560/comments" in x for x in args):
+        return json.dumps([list(s["comments"].values())])
+    if "--slurp" in args and any("/issues/6565/comments" in x for x in args): return json.dumps([[]])
+    if "--slurp" in args: return json.dumps([[s["pr"]]])
+    if any("/pulls/6565" in x for x in args): return json.dumps(s["pr"])
+    if any("/git/ref/heads/" in x for x in args):
+        return json.dumps({"ref": "refs/heads/codex/example", "object": {"sha": s["head"]}})
+    return json.dumps({"full_name": "RasmusTho/agentic-pkm-mvp", "default_branch": "main"})
+recovery._github_read = github
+if os.environ.get("SYNTHETIC_6560_LATE_COMMENT") == "index_ack":
+    from app.builderops import legacy_patch_tree
+    original_index_check = legacy_patch_tree.verify_first_patch_index
+    def late_ack_after_index(**kwargs):
+        result = original_index_check(**kwargs)
+        s["comments"][str(s["ack_id"])]["updated_at"] = "2001-01-01T00:00:00Z"
+        Path(os.environ["SYNTHETIC_6560_SCENARIO"]).with_name("late-index_ack").write_text("injected")
+        return result
+    legacy_patch_tree.verify_first_patch_index = late_ack_after_index
+if os.environ.get("SYNTHETIC_6560_EXPIRE_AFTER_INDEX"):
+    from app.builderops import legacy_patch_tree
+    original_index_check = legacy_patch_tree.verify_first_patch_index
+    def expire_after_index(**kwargs):
+        import sqlite3
+        result = original_index_check(**kwargs)
+        with sqlite3.connect(s["db"]) as conn:
+            conn.execute("UPDATE dispatcher_leases SET expires_at=? WHERE lease_id=?", ("2000-01-01T00:00:00+00:00", s["successor_lease"]))
+            conn.execute("UPDATE dispatcher_tasks SET lease_expires_at=? WHERE task_id=?", ("2000-01-01T00:00:00+00:00", s["task_id"]))
+        return result
+    legacy_patch_tree.verify_first_patch_index = expire_after_index
+''')
+    source = Path(__file__).resolve().parents[2]
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    env.update({'PYTHONPATH': f'{site}{os.pathsep}{source}', 'SYNTHETIC_6560_SCENARIO': str(scenario_file),
+                'CODEX_SESSION_ID': case['session']})
+    script = source / 'scripts/agent_workspace_preflight.sh'
+    common_args = ['--cwd', str(worktree), '--expected-branch', 'codex/example',
+                   '--expected-worktree', str(worktree), '--allow-dirty']
+    special = ['--legacy-6560-agent', case['agent'], '--legacy-6560-session', case['session'],
+               '--legacy-6560-head', parent]
+
+    def gate(*args, extra_env=None):
+        return subprocess.run([str(script), *common_args, *args], env={**env, **(extra_env or {})},
+                              capture_output=True, text=True)
+
+    assert gate().returncode != 0  # The normal gate refuses the stale main.
+    assert gate('--base-branch', '', '--legacy-6560-first-commit', 'stage', *special).returncode != 0
+    refused = gate('--legacy-6560-first-commit', 'stage', '--legacy-6560-agent', 'wrong-agent', *special[2:])
+    assert refused.returncode != 0
+    drift = gate('--legacy-6560-first-commit', 'stage', *special,
+                 extra_env={'SYNTHETIC_6560_CLOSE_DURING_PREFLIGHT': '1'})
+    assert drift.returncode != 0 and _git(worktree, 'rev-parse', 'HEAD') == parent
+    assert json.loads(scenario_file.read_text())['issue']['state'] == 'closed'
+    scenario_file.write_text(json.dumps(scenario))
+    stage = gate('--legacy-6560-first-commit', 'stage', *special)
+    assert stage.returncode == 0, stage.stderr + stage.stdout
+    if not unrelated_staged:
+        for kind in ('pending', 'ack', 'duplicate'):
+            late = gate('--legacy-6560-first-commit', 'stage', *special,
+                        extra_env={'SYNTHETIC_6560_LATE_COMMENT': kind})
+            assert scenario_file.with_name('late-' + kind).exists()
+            assert late.returncode != 0, late.stderr + late.stdout
+
+    index = tmp_path / 'first.index'
+    isolated_env = {**env, 'GIT_INDEX_FILE': str(index)}
+    for args in (('read-tree', 'HEAD'), ('add', '--', *names)):
+        subprocess.run(['git', '-C', str(worktree), *args], env=isolated_env, check=True, capture_output=True)
+    (worktree / 'file.txt').write_text('unrelated temporary change\n')
+    subprocess.run(['git', '-C', str(worktree), 'add', '--', 'file.txt'],
+                   env=isolated_env, check=True, capture_output=True)
+    assert gate('--legacy-6560-first-commit', 'commit', *special,
+                '--legacy-6560-index', str(index)).returncode != 0
+    (worktree / 'file.txt').write_bytes(unrelated_bytes)
+    for args in (('read-tree', 'HEAD'), ('add', '--', *names)):
+        subprocess.run(['git', '-C', str(worktree), *args], env=isolated_env, check=True, capture_output=True)
+    if not unrelated_staged:
+        late_index = gate('--legacy-6560-first-commit', 'commit', *special, '--legacy-6560-index', str(index),
+                          extra_env={'SYNTHETIC_6560_LATE_COMMENT': 'index_ack'})
+        assert scenario_file.with_name('late-index_ack').exists()
+        assert late_index.returncode != 0, late_index.stderr + late_index.stdout
+    with case['store']._connect() as connection:
+        lease_expiry = connection.execute('SELECT expires_at FROM dispatcher_leases WHERE lease_id = ?',
+                                          (result['lease_id'],)).fetchone()[0]
+        task_expiry = connection.execute('SELECT lease_expires_at FROM dispatcher_tasks WHERE task_id = ?',
+                                         (result['task_id'],)).fetchone()[0]
+    expired = gate('--legacy-6560-first-commit', 'commit', *special, '--legacy-6560-index', str(index),
+                   extra_env={'SYNTHETIC_6560_EXPIRE_AFTER_INDEX': '1'})
+    assert expired.returncode != 0 and _git(worktree, 'rev-parse', 'HEAD') == parent
+    with case['store']._connect() as connection:
+        assert connection.execute('SELECT expires_at FROM dispatcher_leases WHERE lease_id = ?',
+                                  (result['lease_id'],)).fetchone()[0] == '2000-01-01T00:00:00+00:00', expired.stderr + expired.stdout
+        connection.execute('UPDATE dispatcher_leases SET expires_at = ? WHERE lease_id = ?',
+                           (lease_expiry, result['lease_id']))
+        connection.execute('UPDATE dispatcher_tasks SET lease_expires_at = ? WHERE task_id = ?',
+                           (task_expiry, result['task_id']))
+        connection.commit()
+    commit_gate = gate('--legacy-6560-first-commit', 'commit', *special,
+                       '--legacy-6560-index', str(index))
+    assert commit_gate.returncode == 0, commit_gate.stderr + commit_gate.stdout
+    assert hashlib.sha256(ordinary_index_path.read_bytes()).hexdigest() == original_index_sha256
+    subprocess.run(['git', '-C', str(worktree), 'commit', '-m', 'preserve selected patch'],
+                   env=isolated_env, check=True, capture_output=True)
+    first = _git(worktree, 'rev-parse', 'HEAD')
+    verify_first_patch_commit(cwd=worktree, worktree=worktree, parent=parent, commit=first,
+        selected=selected, baseline_oids=case['receipt']['dirty_candidate']['index_blobs'])
+    assert ordinary_before == {name: _git(worktree, 'rev-parse', f':{name}') for name in names}
+    _git(worktree, 'reset', '-q', 'HEAD', '--', *names)
+    assert _git(worktree, 'rev-parse', ':file.txt') == unrelated_blob
+    assert gate().returncode != 0  # A preserved first commit is not push authority.
+    if unrelated_staged:
+        assert _git(worktree, 'diff', '--cached', '--name-only') == 'file.txt'
+        return  # Preserve unrelated staged work; integration needs its own reconciliation.
+
+    _git(worktree, 'merge', '--no-commit', '--no-ff', 'origin/main')
+    integration = ['--integration-merge-target', main_head, '--integration-step']
+    for step in ('stage', 'commit'):
+        checked = gate(*integration, step)
+        assert checked.returncode == 0, checked.stderr + checked.stdout
+    _git(worktree, 'commit', '-m', 'integrate main')
+    assert gate().returncode == 0
+    merged = (worktree / 'tests/properties/_machinery.py').read_text()
+    assert 'dirty tests/properties/_machinery.py\n' in merged
+    assert 'main change in the selected file\n' in merged
+    integrated_head = _git(worktree, 'rev-parse', 'HEAD')
+    publication = subprocess.run(
+        [sys.executable, str(source / 'scripts/legacy_6560_publication_gate.py'),
+         '--worktree', str(worktree), '--agent', case['agent'], '--session', case['session'],
+         '--head', integrated_head, '--expected-remote-head', parent, '--effect', 'push'],
+        cwd=worktree, env=env, capture_output=True, text=True,
+    )
+    assert publication.returncode == 0, publication.stderr + publication.stdout
 
 
 @pytest.mark.parametrize("operator_case", [6560, (6560, 6565, "codex-issue-6560", 11)], indirect=True)

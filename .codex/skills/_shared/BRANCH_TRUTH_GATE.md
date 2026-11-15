@@ -96,6 +96,45 @@ an outdated merge target, an octopus merge, or shared-root work, including with
 resolution backup and normal merge recovery; do not edit Git metadata, change
 the captured target to match a refusal, or copy scripts into the pending merge.
 
+For the separately qualified dirty #6560 / PR #6565 recovery only, the pinned
+candidate predates current `main` and its first descendant must preserve exactly
+the two acknowledged dirty files. The named first-commit gate below checks the
+authenticated pin, actual successor/lease, original parent and current PR,
+selected material and ordinary index. The commit step also checks the complete
+delta in the separately prepared index. It is a point-in-time check under the
+coordinated no-new-starts/config-changes condition, not a filesystem lock.
+
+```bash
+<qualified-host>/scripts/agent_workspace_preflight.sh --cwd <original-6560-worktree> \
+  --expected-branch <acknowledged-branch> --expected-worktree <original-6560-worktree> --allow-dirty \
+  --legacy-6560-first-commit stage --legacy-6560-agent <successor-agent> \
+  --legacy-6560-session <actual-session> --legacy-6560-head <acknowledged-parent> || exit 1
+# Use a new absolute index path in a protected directory outside the worktree.
+GIT_INDEX_FILE=<absolute-isolated-index> git -C <original-6560-worktree> read-tree <acknowledged-parent> || exit 1
+GIT_INDEX_FILE=<absolute-isolated-index> git -C <original-6560-worktree> add -- \
+  tests/properties/_machinery.py tests/properties/test_guard_at_seam.py || exit 1
+<qualified-host>/scripts/agent_workspace_preflight.sh --cwd <original-6560-worktree> \
+  --expected-branch <acknowledged-branch> --expected-worktree <original-6560-worktree> --allow-dirty \
+  --legacy-6560-first-commit commit --legacy-6560-agent <successor-agent> \
+  --legacy-6560-session <actual-session> --legacy-6560-head <acknowledged-parent> \
+  --legacy-6560-index <absolute-isolated-index> || exit 1
+GIT_INDEX_FILE=<absolute-isolated-index> git -C <original-6560-worktree> commit -m '<reviewed-message>' || exit 1
+# Verify the resulting parent and exact two-file tree before reconciliation.
+git -C <original-6560-worktree> reset -q HEAD -- \
+  tests/properties/_machinery.py tests/properties/test_guard_at_seam.py || exit 1
+```
+
+Set `GIT_INDEX_FILE` only on those Git invocations, not in the proof's ambient
+environment. Preserve the pinned ordinary index until the first commit; even a
+Git status read can otherwise refresh its stat data. The named preflight disables
+that optional refresh for its own status probe. Re-read unrelated staged blob
+IDs after the selected-entry reconciliation.
+
+This exception authorizes only those pre-staging and pre-commit checks. It does
+not authorize an empty base override for another operation or a push. Integrate
+fresh `origin/main` through the ordinary integration gate after the preserved
+first commit, and run the ordinary pre-push gate without this exception.
+
 **Pre-push (mandatory before `git push`)** [branch-truth-gate]:
 
 Re-run ordinary preflight without either integration flag — the commit you just made could be on the wrong branch if the workspace

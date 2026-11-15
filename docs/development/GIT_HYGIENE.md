@@ -29,6 +29,10 @@ stable, user-owned, non-group-writable regular file yields exactly one nonempty,
 `codex.localEnvironmentConfigPath` entry. Other worktree configuration remains unsupported. This
 is a Git input qualification under the coordinated no-config-changes assumption, not a lock or
 an attestation of the metadata's consumer.
+The named #6560 first-commit preflight in `_shared/BRANCH_TRUTH_GATE.md` is limited to the
+acknowledged original parent and two-file material. Its stage and commit steps recheck the pinned
+operator authority; the commit step also verifies the complete isolated-index delta. It does not
+authorize a stale-base push, and the ordinary integration and pre-push gates still apply.
 
 The separately qualified #6560 operator path may prepare a dirty candidate only for its two
 identified files. Its registration readback binds their original index blobs, working-file hashes,

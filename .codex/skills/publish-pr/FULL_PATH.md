@@ -115,10 +115,12 @@ python3 -m scripts.legacy_6560_publication_gate \
 ```
 
 The first candidate commit must contain exactly the two acknowledged dirty files and their preserved
-bytes; use an isolated temporary index for that commit so unrelated existing staging is preserved.
+bytes. Use the named #6560 first-commit stage and commit gates in
+`_shared/BRANCH_TRUTH_GATE.md`, and an isolated temporary index so unrelated staging is preserved.
 After the commit, reconcile only those two selected entries in the ordinary index to the new HEAD,
 then verify the previously staged unrelated entries still have their exact prior blob IDs. Do not
-reset or otherwise rewrite the unrelated index entries.
+reset or otherwise rewrite the unrelated index entries. Integrate fresh `origin/main` through the
+ordinary integration gate before the ordinary pre-push gate and the scoped publication proof.
 The normal `publication.py` and OpenHands draft adapters refuse this scoped recovery. This procedure
 cannot prevent a raw, ungoverned Git push or a manually initiated Codex session.
 

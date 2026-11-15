@@ -17,6 +17,9 @@ import sys
 import time
 from typing import Any
 
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from app.builderops import legacy_codex_6560_guard as guard
 from app.builderops import legacy_git_config, legacy_owner_recovery as recovery
 from app.builderops import openhands_pr_cycle as cycle
@@ -133,13 +136,21 @@ def _pr_binding(*, cwd: Path) -> dict[str, Any]:
 def check(*, cwd: Path, worktree: Path, session: str, agent: str, head: str,
           expected_remote_head: str, effect: str, just_pushed_from: str | None = None,
           prior_body_file: Path | None = None, prior_intent_comment_id: int | None = None,
-          next_body_file: Path | None = None, next_intent_comment_id: int | None = None) -> dict[str, Any]:
+          next_body_file: Path | None = None, next_intent_comment_id: int | None = None,
+          first_commit_index: Path | None = None) -> dict[str, Any]:
     """Bind current candidate, operator pin, dispatcher claim and exact PR."""
     try:
-        if (effect not in {'push', 'patch', 'verify'} or str(worktree) != guard.WORKTREE
+        first_commit = effect in {'first-commit-stage', 'first-commit-commit'}
+        if (effect not in {'push', 'patch', 'verify', 'first-commit-stage', 'first-commit-commit'}
+                or str(worktree) != guard.WORKTREE
                 or not session or session != os.environ.get("CODEX_SESSION_ID") or not agent
                 or not re.fullmatch(r"[0-9a-f]{40}", head)
-                or not re.fullmatch(r"[0-9a-f]{40}", expected_remote_head)):
+                or not re.fullmatch(r"[0-9a-f]{40}", expected_remote_head)
+                or (effect == 'first-commit-commit' and not isinstance(first_commit_index, Path))
+                or (effect != 'first-commit-commit' and first_commit_index is not None)
+                or (first_commit and any(value is not None for value in
+                    (just_pushed_from, prior_body_file, prior_intent_comment_id,
+                     next_body_file, next_intent_comment_id)))):
             raise PublicationProofError('publication target or head is outside #6560 scope')
         legacy_git_config.check_host_config()
         legacy_git_config.check(cwd=cwd, worktree=worktree)
@@ -213,6 +224,9 @@ def check(*, cwd: Path, worktree: Path, session: str, agent: str, head: str,
             raise PublicationProofError('GitHub closing issue references changed')
         original_body = live['body_sha256'] == pending['publication']['body_sha256']
         intent_comments = []
+        if first_commit and (not original_body or head != pending['candidate']['head']
+                             or head != pending['publication']['head'] or live['head'] != head):
+            raise PublicationProofError('first commit does not bind the original candidate and PR head')
         if effect == 'verify' and (original_body or head != live['head']):
             raise PublicationProofError('current successor body or head is not published')
         if original_body:
@@ -263,12 +277,13 @@ def check(*, cwd: Path, worktree: Path, session: str, agent: str, head: str,
             if (origin.get('mode') != 'dispatcher-backed' or origin.get('path') != str(worktree)
                     or origin.get('agent') != agent or origin.get('lease_id') != lease):
                 raise PublicationProofError('new PATCH body is not bound to the successor')
-        recovery._git_read(worktree, '--no-replace-objects', 'merge-base', '--is-ancestor',
-                           pending['publication']['head'], candidate['head'])
-        recovery._git_read(worktree, '--no-replace-objects', 'merge-base', '--is-ancestor', live['head'], head)
-        if live['head'] != pending['publication']['head']:
-            cycle._verify_dirty_first_patch(cwd=cwd, worktree=worktree, candidate=candidate, head=live['head'])
-        cycle._verify_dirty_first_patch(cwd=cwd, worktree=worktree, candidate=candidate, head=head)
+        if not first_commit:
+            recovery._git_read(worktree, '--no-replace-objects', 'merge-base', '--is-ancestor',
+                               pending['publication']['head'], candidate['head'])
+            recovery._git_read(worktree, '--no-replace-objects', 'merge-base', '--is-ancestor', live['head'], head)
+            if live['head'] != pending['publication']['head']:
+                cycle._verify_dirty_first_patch(cwd=cwd, worktree=worktree, candidate=candidate, head=live['head'])
+            cycle._verify_dirty_first_patch(cwd=cwd, worktree=worktree, candidate=candidate, head=head)
         unique_ack = recovery._read_unique_operator_ack(cwd=cwd, issue=6560, pr=guard.PR,
                                                         pending=pending, expected_ack=ack)
         _, ack_at, ack_digest = agent_worktree._transfer_comment(
@@ -317,8 +332,53 @@ def check(*, cwd: Path, worktree: Path, session: str, agent: str, head: str,
                 or post_claim_record.get('expires_at', 0) <= time.time()):
             raise PublicationProofError('registration changed or expired during final claim read')
         agent_worktree.assert_operator_registration_pinned(post_claim_record)
+        index_digest = None
+        if first_commit:
+            from app.builderops.legacy_patch_tree import verify_first_patch_index
+            from app.builderops.legacy_selected_files import read_selected
+
+            guard.check(issue=6560, pr=guard.PR, worktree=worktree, session=session, receipt=pending)
+            if recovery._read_operator_candidate(cwd=cwd, worktree=worktree, receipt=pending) != pending['candidate']:
+                raise PublicationProofError('original candidate or dirty material changed before first commit')
+            if first_commit_index is not None:
+                material = candidate['dirty_material']
+                selected = read_selected(worktree, material['file_sha256'])
+                ordinary_index = Path(recovery._git_read(worktree, 'rev-parse', '--path-format=absolute',
+                                                         '--git-path', 'index').decode().strip())
+                index_digest = verify_first_patch_index(worktree=worktree, index=first_commit_index,
+                    ordinary_index=ordinary_index, parent=head, selected=selected,
+                    baseline_oids=material['index_blobs'])
+            if (recovery._git_read(worktree, 'rev-parse', '--verify', 'HEAD^{commit}').decode().strip() != head
+                    or recovery.read_live_publication(cwd=cwd, pr=guard.PR, branch=branch) != live
+                    or _pr_binding(cwd=cwd) != pr_binding):
+                raise PublicationProofError('candidate or PR changed before first commit')
+            late_pending = agent_worktree._read_github_transfer_comment(proof['pending_comment_id'], cwd=cwd)
+            late_receipt, _, late_pending_digest = agent_worktree._transfer_comment(
+                late_pending, issue=6560, pr=guard.PR, receipt_key='operator_reconciliation.v1')
+            if (late_receipt != pending or late_pending_digest != proof['pending_digest']
+                    or any(late_pending.get(key) != comments[0].get(key)
+                           for key in ('id', 'body', 'created_at', 'updated_at'))):
+                raise PublicationProofError('pinned pending comment changed before first commit')
+            late_ack = recovery._read_unique_operator_ack(cwd=cwd, issue=6560, pr=guard.PR,
+                                                          pending=pending, expected_ack=ack)
+            _, late_ack_at, late_ack_digest = agent_worktree._transfer_comment(
+                late_ack, issue=6560, pr=guard.PR, receipt_key='operator_reconciliation.v1')
+            if (late_ack_at != proof['ack_at'] or late_ack_digest != proof['ack_digest']
+                    or any(late_ack.get(key) != comments[1].get(key)
+                           for key in ('id', 'body', 'created_at', 'updated_at'))):
+                raise PublicationProofError('pinned ACK changed before first commit')
+            recovery._verify_current_issue(cwd=cwd, issue=6560, worktree=worktree)
+            if recovery._successor_claim_readback(cwd=cwd, task_id=predecessor['task_id'], issue=6560,
+                    agent=agent, session=session, claim_id=claims[0]['payload']['claim_id'],
+                    predecessor=predecessor, expected_identity=dispatcher_identity) != lease:
+                raise PublicationProofError('successor claim changed before first commit')
+            final_rows = recovery._locked_raw_branch_snapshot(registry, branch=branch, worktree=worktree,
+                                                                allow_prepared=True)
+            if final_rows != records or final_rows[str(worktree)].get('expires_at', 0) <= time.time():
+                raise PublicationProofError('registration changed before first commit')
         return {'issue': 6560, 'pr': guard.PR, 'branch': branch, 'head': head, 'effect': effect,
                 'remote_head': expected_remote_head, 'epoch': proof['epoch'], 'lease_id': lease,
+                'first_commit_index_sha256': index_digest,
                 'attempt_source': 'operator must establish separately'}
     except PublicationProofError:
         raise
@@ -335,7 +395,9 @@ def main() -> int:
     parser.add_argument('--agent', required=True)
     parser.add_argument('--head', required=True)
     parser.add_argument('--expected-remote-head', required=True)
-    parser.add_argument('--effect', choices=('push', 'patch', 'verify'), required=True)
+    parser.add_argument('--effect', choices=('push', 'patch', 'verify', 'first-commit-stage',
+                                             'first-commit-commit'), required=True)
+    parser.add_argument('--first-commit-index', type=Path, help='separately prepared #6560 index')
     parser.add_argument('--just-pushed-from', help='previous exact PR head after an immediately verified push')
     parser.add_argument('--prior-body-file', type=Path, help='existing reviewed body file from before the update')
     parser.add_argument('--prior-intent-comment-id', type=int, help='authenticated intent comment for the current successor body')
@@ -347,7 +409,7 @@ def main() -> int:
                       head=args.head, expected_remote_head=args.expected_remote_head, effect=args.effect,
                       just_pushed_from=args.just_pushed_from, prior_body_file=args.prior_body_file,
                       prior_intent_comment_id=args.prior_intent_comment_id, next_body_file=args.next_body_file,
-                      next_intent_comment_id=args.next_intent_comment_id)
+                      next_intent_comment_id=args.next_intent_comment_id, first_commit_index=args.first_commit_index)
     except PublicationProofError as exc:
         print(f'publication proof refused: {exc}', file=sys.stderr)
         return 1

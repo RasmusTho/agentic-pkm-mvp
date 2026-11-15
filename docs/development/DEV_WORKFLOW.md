@@ -1639,6 +1639,9 @@ The identified historical publication commands must use their full execution IDs
 statuses and the current PR/ref may be observed without knowing the exact historical push outputs
 or edited body bytes: those two fields remain `unknown`, not asserted equal to the current PR.
 The Issue, ACK, registry and dispatcher are point-in-time readbacks, not a distributed atomic lock.
+The named #6560 first-commit stage and commit checks in `_shared/BRANCH_TRUTH_GATE.md` qualify the
+acknowledged two-file index against its original parent before integrating current main. They do not
+authorize a stale-base push or replace the ordinary integration and pre-push checks.
 Follow the #6560 full-path publication proof in `publish-pr/FULL_PATH.md` for each subsequent PR effect.
 
 For the separately qualified clean Codex recovery #6561 / #6562, the same draft producer emits an

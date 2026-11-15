@@ -56,3 +56,44 @@ def test_real_git_direct_successor_rejects_extra_tree_change(tmp_path, monkeypat
     git("commit", "-qm", "extra")
     with pytest.raises(PatchTreeRefused, match="direct single-parent"):
         verify_first_patch_commit(**{**kwargs, "commit": git("rev-parse", "HEAD")})
+
+
+def test_temporary_index_must_contain_exact_two_file_delta(tmp_path) -> None:
+    import os
+    import subprocess
+    from app.builderops.legacy_patch_tree import verify_first_patch_index
+
+    root = tmp_path / 'checkout'
+    root.mkdir()
+    index = tmp_path / 'selected.index'
+
+    def git(*args, isolated=False):
+        env = os.environ.copy()
+        if isolated:
+            env['GIT_INDEX_FILE'] = str(index)
+        return subprocess.check_output(['/usr/bin/git', '-C', str(root), *args], env=env).decode().strip()
+
+    git('init', '-q')
+    git('config', 'user.name', 'fixture')
+    git('config', 'user.email', 'fixture@example.invalid')
+    for name in ('a', 'b', 'other'):
+        (root / name).write_text('old ' + name)
+    git('add', 'a', 'b', 'other')
+    git('commit', '-qm', 'base')
+    parent = git('rev-parse', 'HEAD')
+    old = {name: git('rev-parse', f'HEAD:{name}') for name in ('a', 'b')}
+    selected = {'a': b'new a', 'b': b'new b'}
+    for name, data in selected.items():
+        (root / name).write_bytes(data)
+    git('read-tree', 'HEAD', isolated=True)
+    git('add', '--', 'a', 'b', isolated=True)
+    ordinary = root / '.git' / 'index'
+    args = dict(worktree=root, index=index, ordinary_index=ordinary, parent=parent,
+                selected=selected, baseline_oids=old)
+    assert len(verify_first_patch_index(**args)) == 64
+    (root / 'other').write_text('extra')
+    git('add', '--', 'other', isolated=True)
+    with pytest.raises(PatchTreeRefused):
+        verify_first_patch_index(**args)
+    with pytest.raises(PatchTreeRefused):
+        verify_first_patch_index(**{**args, 'index': ordinary})
