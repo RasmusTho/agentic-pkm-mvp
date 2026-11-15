@@ -812,12 +812,48 @@ def _predecessor_pickup_reference(comments: Sequence[Any], proof: Any, *, issue:
     return value
 
 
+def _verify_dirty_first_patch(*, cwd: Path, worktree: Path, candidate: Mapping[str, Any], head: str) -> None:
+    """Bind the first descendant commit to the preserved two-file material."""
+    from app.builderops import legacy_git_config
+    from app.builderops.legacy_patch_tree import PatchTreeRefused, verify_first_patch_commit
+
+    material = candidate.get("dirty_material")
+    if (not isinstance(material, dict) or not agent_worktree._valid_dirty_material(material) or candidate.get("clean") is not False
+            or not isinstance(candidate.get("head"), str)):
+        raise CycleError("dirty candidate material is invalid")
+    try:
+        # The operator must keep config unchanged across the whole read.
+        legacy_git_config.check_host_config()
+        legacy_git_config.check(cwd=cwd, worktree=worktree)
+        read = legacy_owner_recovery._git_read
+        parent = candidate["head"]
+        commits = read(worktree, "--no-replace-objects", "rev-list", "--first-parent", "--reverse", f"{parent}..{head}").decode().splitlines()
+        if not commits:
+            raise CycleError("dirty candidate has no first patch commit")
+        first = commits[0]
+        selected = {name: read(worktree, "--no-replace-objects", "cat-file", "blob", f"{first}:{name}")
+                    for name in material["file_sha256"]}
+        if any(hashlib.sha256(data).hexdigest() != material["file_sha256"][name]
+               for name, data in selected.items()):
+            raise CycleError("first patch commit does not contain preserved bytes")
+        verify_first_patch_commit(cwd=cwd, worktree=worktree, parent=parent, commit=first,
+                                  selected=selected, baseline_oids=material["index_blobs"])
+    except (PatchTreeRefused, legacy_git_config.ConfigError, legacy_owner_recovery.RecoveryEvidenceError,
+            OSError, UnicodeError, KeyError, TypeError) as exc:
+        raise CycleError("first patch commit could not be verified") from exc
+
+
 def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str, Any],
                       origin: Mapping[str, str], registration: Mapping[str, Any],
                       records: Mapping[str, Mapping[str, Any]],
                       comments: Sequence[Any], issue_comments: Sequence[Any], issue: int, pr_number: int,
-                      branch: str, head: str, files: list[str], entry: Mapping[str, Any]) -> None:
+                      branch: str, head: str, files: list[str], entry: Mapping[str, Any],
+                      native_6561_check: Callable[[], None] | None = None) -> None:
     """Verify the initial operator recovery without asserting predecessor consent."""
+    if issue == 6561:
+        if native_6561_check is None:
+            raise CycleError("#6561 executor lineage is unsupported; native source check required")
+        native_6561_check()
     proof = registration.get("operator_registration")
     if not isinstance(proof, Mapping) or proof.get("state") != "pinned" or proof.get("issue") != issue:
         raise CycleError("operator registration is missing or unpinned")
@@ -935,7 +971,14 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
         if match and match["issue"] == str(issue) and closure._parse_timestamp(comment["created_at"], "fallback pickup") + timedelta(seconds=1) > old_at:
             raise CycleError("operator history contains a conflicting fallback pickup")
     current_base = entry.get("base_sha")
-    if (not isinstance(candidate, dict) or candidate.get("branch") != branch or candidate.get("clean") is not True
+    dirty_candidate = isinstance(candidate, dict) and "dirty_material" in candidate
+    if (not isinstance(candidate, dict) or candidate.get("branch") != branch
+            or candidate.get("clean") is not (not dirty_candidate)
+            or (dirty_candidate and (issue != 6560 or not agent_worktree._valid_dirty_material(candidate.get("dirty_material"))
+                or candidate["dirty_material"].get("tree") != pending["candidate"].get("tree")
+                or not isinstance(pending.get("dirty_candidate"), dict)
+                or any(candidate["dirty_material"].get(k) != pending.get("dirty_candidate", {}).get(k)
+                       for k in ("index_blobs", "file_sha256", "backup", "patch_sha256"))))
             or not isinstance(candidate.get("base_sha"), str) or not closure.SHA_RE.fullmatch(candidate["base_sha"])
             or not isinstance(candidate.get("head"), str) or not closure.SHA_RE.fullmatch(candidate["head"])
             or candidate.get("head") != pending["candidate"].get("head")
@@ -946,9 +989,23 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
             or not pending_at + 1 <= candidate["observed_at"] <= proof["registration_read_at"]):
         raise CycleError("operator candidate proof is invalid")
     try:
-        live = legacy_owner_recovery.read_clean_candidate(cwd=Path(str(entry["lifecycle_repo"])),
-                                                           worktree=Path(str(registration["path"])))
         worktree = Path(str(registration["path"]))
+        if dirty_candidate:
+            from app.builderops import legacy_git_config
+            # Same operator config-quiescence requirement as the clean route.
+            try:
+                legacy_git_config.check_host_config()
+                legacy_git_config.check(cwd=Path(str(entry["lifecycle_repo"])), worktree=worktree)
+            except legacy_git_config.ConfigError as exc:
+                raise CycleError("operator candidate Git configuration is unsupported") from exc
+            actual_path, actual_branch = agent_worktree._worktree_identity(Path(str(entry["lifecycle_repo"])), worktree)
+            generation = agent_worktree._worktree_generation(Path(str(entry["lifecycle_repo"])), worktree, create=False)
+            live = {"path": str(actual_path), "branch": actual_branch, "generation": generation,
+                    "head": legacy_owner_recovery._git_read(worktree, "rev-parse", "--verify", "HEAD^{commit}").decode().strip()}
+            _verify_dirty_first_patch(cwd=Path(str(entry["lifecycle_repo"])), worktree=worktree,
+                                      candidate=candidate, head=head)
+        else:
+            live = legacy_owner_recovery.read_clean_candidate(cwd=Path(str(entry["lifecycle_repo"])), worktree=worktree)
         read = legacy_owner_recovery._git_read
         read(worktree, "merge-base", "--is-ancestor", candidate["head"], head)
         old_tree = read(worktree, "rev-parse", "--verify", f"{candidate['head']}^{{tree}}").decode().strip()
@@ -959,11 +1016,15 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
     except (KeyError, OSError, RuntimeError, UnicodeDecodeError, legacy_owner_recovery.RecoveryEvidenceError) as exc:
         raise CycleError("operator candidate readback is unavailable") from exc
     observed = pending["candidate"]
-    if (any(live.get(k) != observed.get(k) for k in ("path", "branch", "generation", "status_digest"))
+    if (any(live.get(k) != observed.get(k) for k in (("path", "branch", "generation") if dirty_candidate
+                                                      else ("path", "branch", "generation", "status_digest")))
             or live.get("head") != head or old_tree != observed.get("tree")
             or sorted(p for p in old_files if p) != candidate.get("changed_files")
             or sorted(p for p in current_files if p) != files):
         raise CycleError("operator candidate changed")
+    if issue == 6561:
+        assert native_6561_check is not None
+        native_6561_check()
 
 
 def _dispatcher_migration_lineage(events: Sequence[Mapping[str, Any]], owner: Mapping[str, Any], *,
@@ -2025,7 +2086,8 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
         delta = git(["-C", worktree, "diff", "--no-ext-diff", "--no-textconv", old_head, pr["head_sha"]], source)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         raise CycleError("transfer-to-current review delta is unavailable") from exc
-    if (dirty or live_head != pr["head_sha"] or len(delta.encode()) > 2_000_000
+    dirty_material = operator_recovery and isinstance(proof.get("candidate_readback"), dict) and "dirty_material" in proof["candidate_readback"]
+    if ((dirty and not dirty_material) or live_head != pr["head_sha"] or len(delta.encode()) > 2_000_000
             or "Binary files " in delta or "GIT binary patch" in delta):
         raise CycleError("transfer-to-current review delta is incomplete or candidate is dirty")
     material = {"transfer_head": old_head, "current_head": pr["head_sha"], "diff": delta}

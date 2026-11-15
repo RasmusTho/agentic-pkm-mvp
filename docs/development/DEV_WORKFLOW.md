@@ -1584,9 +1584,13 @@ restart configuration and observe that no identified post-reboot writer or deleg
 Coordinate no new direct starts or Git configuration changes during the transition. Before the
 wrapper's first Git command, the host checks its qualified Git binary and existing global, common
 and linked-worktree configuration without following config includes; unsupported includes, filters,
-helpers or worktree config are refused. The qualified GitHub credential helper remains unchanged.
+helpers or worktree config are refused. A qualified worktree config may contain only one nonempty,
+single-line `codex.localEnvironmentConfigPath` metadata entry. Its regular file must belong to the
+current user, not be group- or world-writable, and retain its identity and metadata while read.
+This permits the observed Git metadata; it does not attest what Codex may do with its value. The
+qualified GitHub credential helper remains unchanged.
 This is a coordinated host check, not a fence against uncoordinated file writers. Other legacy runs
-or unknown active work are not covered and must remain unresolved.
+except the separately scoped #6560 and #6561 procedures below, and any unknown active work, remain unresolved.
 
 Use the pickup wrapper with `--takeover-stale`, the explicit target worktree,
 `--operator-comment-id`, `--operator-pr`, `--operator-workspace-root` and
@@ -1617,6 +1621,46 @@ the native successor proof. The supplied model workspace root must reflect actua
 screen does not establish that a controller or its shared authority is protected from model access.
 The original candidate and claim remain historical provenance. A reviewed descendant can proceed
 only through the ordinary current-head scope, review, CI, native or executor merge and closure gates.
+
+For the separately qualified dirty Codex recovery #6560 and its existing PR #6565, provide an
+explicit JSON file containing exactly `index_blobs`, `file_sha256`, `patch_sha256` and absolute
+`backup` for the two designated tracked files. The blob and content maps use the same two paths;
+the backup is independently preserved and hash-verified. Use the same read-only draft command above
+with `--issue 6560 --pr 6565 --dirty-material-json <absolute-contract.json>` to produce an
+intentionally incomplete candidate-bound receipt. It does not make a claim or attest the operator's
+unknown fields. On isolated fixtures this producer is exercised through pickup, acknowledgment and
+publication proof. The operator must independently establish and cite the identified app child and
+delegate projections, SQLite parent links, available journal and publication attempts, rejected
+postboot resume, host boot, scoped process and restart observations, and current PR/ref. Missing or
+unreconciled identified work stays unknown, including a postboot interrupted tool; failed or
+interrupted historical delegates are not relabeled completed. The operator must explicitly
+coordinate no new manual starts and no Git configuration changes during the transition. This is a
+bounded, source-backed observation; it does not mechanically prevent app starts or arbitrary writers.
+The identified historical publication commands must use their full execution IDs. Their terminal
+statuses and the current PR/ref may be observed without knowing the exact historical push outputs
+or edited body bytes: those two fields remain `unknown`, not asserted equal to the current PR.
+The Issue, ACK, registry and dispatcher are point-in-time readbacks, not a distributed atomic lock.
+The named #6560 first-commit stage and commit checks in `_shared/BRANCH_TRUTH_GATE.md` qualify the
+acknowledged two-file index against its original parent before integrating current main. They do not
+authorize a stale-base push or replace the ordinary integration and pre-push checks.
+Follow the #6560 full-path publication proof in `publish-pr/FULL_PATH.md` for each subsequent PR effect.
+
+For the separately qualified clean Codex recovery #6561 / #6562, the same draft producer emits an
+incomplete `writer.codex_custody` section. The operator must fill it from the named child and parent
+journals, a read-only consistent Codex state snapshot of the named session relations, host boot,
+identified processes and restart configuration, and the reconciled current PR and historical
+terminal commands. The 2026-11-15 inventory occurred after boot: it is not a rejected start and
+was not stopped by the preceding reboot. Its eight registered commands must have terminal zero
+results and the identified PIDs must be absent. Record the parent journal prefix length and hash,
+observation times, exact source and relation list, and coordinated no-new-manual-start window.
+The earlier push output, earlier body, historical PPIDs and unrecorded effects remain unknown.
+The narrow host reader rechecks only the named registered target relations in fresh read-only SQLite
+snapshots; it does not prove all processes, unregistered children, future activity, or a lock. A
+missing or contradictory source refuses the transition. The guard runs before claim, prepare, ACK,
+pin and resume, alongside the existing claim, registration and publication checks. Use only the
+interactive native continuation; an observed earlier executor or in-flight action must retain that
+executor's own authority and recovery gates. Follow `publish-pr/FULL_PATH.md` for PR effects and
+`verification-and-closure/FULL_PATH.md` for the current-head native proof.
 
 - Preflight before claim/integration:
   - `scripts/agent_workspace_preflight.sh --expected-branch "$(git branch --show-current)" --expected-worktree "$(git rev-parse --show-toplevel)"`

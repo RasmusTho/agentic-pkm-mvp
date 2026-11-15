@@ -165,6 +165,23 @@ switch routes or start a new merge without proof accepted by that executor's aut
 gates; an unknown or earlier effect follows its existing readback and recovery protocol. This
 instruction is not a claim that the executor mechanically detects operator recoveries.
 
+For the separately scoped #6561 / #6562 interactive native route, the same
+`verify_operator_successor.py` proof also re-reads the identified child and parent journals,
+registered target relations and host sources against the pinned operator comment. The old current
+PR head and body are historical bindings; the normal native proof independently checks the live
+successor body, descendant head and exact lineage. Unavailable or changed target sources fail closed.
+This does not attest unregistered work or extend executor authority.
+
+For the separately scoped dirty #6560 / #6565 route, also run
+`python3 -m scripts.legacy_6560_publication_gate --effect verify` with the current local and remote
+head, successor identity, and the actual live body's `--prior-body-file` and
+`--prior-intent-comment-id`; supply the remaining arguments described in
+`publish-pr/FULL_PATH.md :: #6560 existing PR proof`. Independently establish the specific PATCH
+attempt from its ordered command source as that procedure requires. A zero exit verifies only the
+readbacks and account-attributed body intent; unavailable attempt evidence remains UNKNOWN and blocks
+merge. Re-run after body, head, identity, or authority drift. This is in addition to, not a replacement
+for, the native or executor verification route above.
+
 Compare evidence by the head or observed-time binding it declares. Newer blocking review evidence
 supersedes an older green receipt, publish recommendation, or closure verdict even when the candidate
 SHA itself did not change. Conflicting lifecycle owners or writable worktrees, an omitted or

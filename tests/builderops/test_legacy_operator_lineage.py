@@ -950,3 +950,48 @@ def test_pinned_native_refuses_conflicting_authenticated_ack(recovery):
     data['comments'].append(duplicate)
     with pytest.raises(cycle.CycleError, match='ambiguous'):
         cycle._operator_lineage(**data)
+
+@pytest.mark.parametrize('extra_commit_path,wrong_bytes', [(False, False), (True, False), (False, True)])
+def test_dirty_first_patch_requires_exact_complete_delta(tmp_path, monkeypatch, extra_commit_path, wrong_bytes):
+    from app.builderops import legacy_git_config
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(tmp_path), *args], text=True).strip()
+    git('init', '-q')
+    git('config', 'user.name', 'Test')
+    git('config', 'user.email', 'test@example.invalid')
+    names = ('tests/properties/_machinery.py', 'tests/properties/test_guard_at_seam.py')
+    (tmp_path / 'tests/properties').mkdir(parents=True)
+    for name in names:
+        (tmp_path / name).write_text('base\n')
+    (tmp_path / 'other').write_text('base\n')
+    git('add', '.')
+    git('commit', '-qm', 'base')
+    parent = git('rev-parse', 'HEAD')
+    blobs = {name: git('rev-parse', f'HEAD:{name}') for name in names}
+    for name in names:
+        (tmp_path / name).write_text(f'preserved {name}\n')
+    hashes = {name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest() for name in names}
+    if wrong_bytes:
+        (tmp_path / names[0]).write_text('different\n')
+    git('add', *names)
+    if extra_commit_path:
+        (tmp_path / 'other').write_text('staged extra\n')
+        git('add', 'other')
+    git('commit', '-qm', 'first patch')
+    head = git('rev-parse', 'HEAD')
+    # Preserved unrelated staging after the first commit is not discarded or treated as committed.
+    (tmp_path / 'other').write_text('later staged material\n')
+    git('add', 'other')
+    material = {'tree': git('rev-parse', f'{parent}^{{tree}}'), 'index_sha256': 'a' * 64,
+                'index_blobs': blobs, 'file_sha256': hashes, 'patch_sha256': 'b' * 64,
+                'backup': str(tmp_path / 'backup')}
+    candidate = {'head': parent, 'clean': False, 'dirty_material': material}
+    monkeypatch.setattr(legacy_git_config, 'check_host_config', lambda: None)
+    monkeypatch.setattr(legacy_git_config, 'check', lambda **kwargs: None)
+    monkeypatch.setattr(cycle.legacy_owner_recovery, '_git_read', REAL_GIT_READ)
+    if extra_commit_path or wrong_bytes:
+        with pytest.raises(cycle.CycleError):
+            cycle._verify_dirty_first_patch(cwd=tmp_path, worktree=tmp_path, candidate=candidate, head=head)
+    else:
+        cycle._verify_dirty_first_patch(cwd=tmp_path, worktree=tmp_path, candidate=candidate, head=head)
+        assert git('diff', '--cached', '--name-only') == 'other'

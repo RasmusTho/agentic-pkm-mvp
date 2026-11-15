@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 import uuid
-from typing import Any
+from typing import Any, ContextManager
 
 from scripts import agent_worktree
 from app.builderops import legacy_git_config
@@ -168,6 +168,18 @@ def read_expired_registration(*, cwd: Path, candidate: Mapping[str, Any]) -> dic
             "branch_history_digest": branch_history_digest}
 
 
+def _check_6561_linked_pr(task: Mapping[str, Any], issue: int) -> None:
+    """Refuse a contradictory PR projection for the scoped #6561 recovery."""
+    if issue == 6561:
+        from app.builderops import legacy_codex_6561_guard
+
+        if "linked_pr" not in task:
+            raise RecoveryEvidenceError("#6561 dispatcher PR projection is unavailable; retain state")
+        linked_pr = task["linked_pr"]
+        if linked_pr is not None and str(linked_pr) != str(legacy_codex_6561_guard.PR):
+            raise RecoveryEvidenceError("#6561 dispatcher task is linked to a different PR; retain state")
+
+
 def read_live_predecessor(*, cwd: Path, issue: int,
                           expected_identity: tuple[int, int] | None = None) -> dict[str, Any]:
     """Read one expired dispatcher predecessor and its claim in one snapshot.
@@ -182,6 +194,7 @@ def read_live_predecessor(*, cwd: Path, issue: int,
     if (not isinstance(task, dict) or not isinstance(lease, dict) or not isinstance(events, list)
             or any(not isinstance(event, dict) for event in events)):
         raise RecoveryEvidenceError("dispatcher predecessor is incomplete")
+    _check_6561_linked_pr(task, issue)
     if (task.get("task_id") != task_id or task.get("repo") != "RasmusTho/agentic-pkm-mvp"
             or task.get("issue_number") != issue or task.get("status") not in {"ready", "claimed"}
             or not isinstance(lease.get("lease_id"), str) or not lease["lease_id"]
@@ -271,6 +284,40 @@ def read_clean_candidate(*, cwd: Path, worktree: Path) -> dict[str, Any]:
         raise RecoveryEvidenceError("candidate identity is invalid")
     return {"path": str(worktree), "branch": branch, "head": head, "tree": tree, "generation": generation,
             "status_digest": hashlib.sha256(status).hexdigest()}
+
+
+def _read_operator_candidate(*, cwd: Path, worktree: Path, receipt: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the selected #6560 material; no whole-worktree cleanliness is asserted."""
+    if "dirty_candidate" not in receipt:
+        return read_clean_candidate(cwd=cwd, worktree=worktree)
+    try:
+        legacy_git_config.check_host_config()
+        legacy_git_config.check(cwd=cwd, worktree=worktree)
+        if not worktree.is_absolute() or worktree != worktree.resolve():
+            raise RecoveryEvidenceError("candidate worktree path is invalid")
+        def observe() -> dict[str, Any]:
+            root, branch = agent_worktree._worktree_identity(cwd, worktree)
+            head = _git_read(worktree, "rev-parse", "--verify", "HEAD^{commit}").decode().strip()
+            tree = _git_read(worktree, "rev-parse", "--verify", "HEAD^{tree}").decode().strip()
+            generation = agent_worktree._worktree_generation(cwd, worktree, create=False)
+            if root != worktree or _git_read(worktree, "rev-parse", "--show-toplevel").decode().strip() != str(worktree):
+                raise RecoveryEvidenceError("candidate worktree identity changed")
+            candidate = {"path": str(root), "branch": branch, "head": head, "tree": tree, "generation": generation}
+            # The status digest identifies only the explicit material, not unknown or ignored paths.
+            local_receipt = dict(receipt)
+            local_receipt["candidate"] = candidate
+            readback = agent_worktree._operator_candidate(cwd, worktree=worktree, receipt=local_receipt,
+                         base_sha=str(receipt.get("base", "")), observed_at=0)
+            material = readback["dirty_material"]
+            candidate["status_digest"] = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
+            return candidate
+        first = observe()
+        if observe() != first:
+            raise RecoveryEvidenceError("candidate changed during readback")
+        return first
+    except (agent_worktree.WorktreeLifecycleError, legacy_git_config.ConfigError,
+            OSError, RuntimeError, UnicodeError, KeyError, TypeError, ValueError) as exc:
+        raise RecoveryEvidenceError("dirty candidate readback unavailable") from exc
 
 
 def _github_read(args: list[str], *, cwd: Path) -> str:
@@ -496,7 +543,7 @@ def preflight_operator_pickup(
         raise
     except (ValueError, KeyError, TypeError, closure.ClosureError, openhands_pr_cycle.CycleError) as exc:
         raise RecoveryEvidenceError("legacy claimant history is unavailable or ambiguous") from exc
-    candidate = read_clean_candidate(cwd=cwd, worktree=worktree)
+    candidate = _read_operator_candidate(cwd=cwd, worktree=worktree, receipt=receipt)
     registration = read_expired_registration(cwd=cwd, candidate=candidate)
     publication_live = read_live_publication(cwd=cwd, pr=pr, branch=candidate["branch"])
     _verify_pr_origin(cwd=cwd, issue=issue, pr=pr, worktree=worktree, candidate=candidate,
@@ -552,6 +599,7 @@ def _successor_claim_readback(*, cwd: Path, task_id: str, issue: int, agent: str
     if (not isinstance(task, dict) or not isinstance(lease, dict) or not isinstance(events, list)
             or any(not isinstance(event, dict) for event in events)):
         raise RecoveryEvidenceError("successor claim readback is incomplete; retain claim")
+    _check_6561_linked_pr(task, issue)
     lease_id = lease.get("lease_id")
     matches = [event for event in events if isinstance(event, dict) and event.get("event_type") == "task.claimed"
                and event.get("lease_id") == lease_id and event.get("actor") == agent]
@@ -666,6 +714,9 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
     def before_intent_write(payload: dict[str, Any]) -> None:
         before_pin(prepared["successor_registration"]["epoch"], registry_reader=lambda _path: payload)
         _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
+        if issue in (6560, 6561):
+            before_pin(prepared["successor_registration"]["epoch"], registry_reader=lambda _path: payload,
+                       ack_check=lambda: _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt))
     try:
         intent = agent_worktree.begin_operator_ack(cwd, worktree=worktree, owner=session, issue=issue,
                     pr=pr, pending_comment=pending_comment, workspace_root=workspace_root,
@@ -691,6 +742,9 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
                 or proof.get("epoch") != prepared["successor_registration"]["epoch"]
                 or proof.get("ack_intent") != intent):
             raise RecoveryEvidenceError("operator ACK intent or branch history changed; retain state")
+        if issue in (6560, 6561):
+            before_pin(prepared["successor_registration"]["epoch"], registry_reader=reader,
+                       ack_check=lambda: _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt))
         try:
             posted = subprocess.run(["gh", "api", "--hostname", "github.com", "--method", "POST",
                                      f"repos/RasmusTho/agentic-pkm-mvp/issues/{issue}/comments", "--input", "-"],
@@ -722,6 +776,13 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
             latest = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt, expected_ack=prepared)
             if tuple(latest.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
                 raise RecoveryEvidenceError("ACK changed before pin; retain state")
+            if issue in (6560, 6561):
+                def check_ack() -> None:
+                    last = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt, expected_ack=prepared)
+                    if tuple(last.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
+                        raise RecoveryEvidenceError("ACK changed before pin; retain state")
+                before_pin(prepared["successor_registration"]["epoch"], registry_reader=lambda _path: payload,
+                           ack_check=check_ack)
         pinned = agent_worktree.pin_operator_registration(cwd, worktree=worktree, owner=session, issue=issue,
                     pr=pr, pending_comment=pending_comment, ack_comment=fresh, workspace_root=workspace_root,
                     before_write=before_pin_write)
@@ -739,7 +800,7 @@ def _before_operator_prepare(*, payload: dict[str, Any], cwd: Path, issue: int, 
     comment_id = pending_comment["id"]
     if agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd) != pending_comment:
         raise RecoveryEvidenceError("operator decision changed before prepare; retain claim")
-    candidate = read_clean_candidate(cwd=cwd, worktree=worktree)
+    candidate = _read_operator_candidate(cwd=cwd, worktree=worktree, receipt=receipt)
     if candidate != receipt.get("candidate"):
         raise RecoveryEvidenceError("candidate changed before prepare; retain claim")
     registry = agent_worktree._default_registry_path(cwd)
@@ -764,6 +825,13 @@ def _before_operator_prepare(*, payload: dict[str, Any], cwd: Path, issue: int, 
         raise RecoveryEvidenceError("successor lease changed before prepare; retain claim")
     _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
     check_run()
+    if issue in (6560, 6561):
+        _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
+        final_lease = _successor_claim_readback(cwd=cwd, task_id=predecessor["task_id"], issue=issue,
+                        agent=agent, session=session, claim_id=claim_id, predecessor=predecessor,
+                        expected_identity=dispatcher_identity)
+        if final_lease != lease_id:
+            raise RecoveryEvidenceError("successor lease changed before prepare; retain claim")
 
 
 def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, agent: str, session: str,
@@ -820,7 +888,7 @@ def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, 
         _, _, current_digest = agent_worktree._transfer_comment(current_comment, issue=issue, pr=pr,
                                             receipt_key="operator_reconciliation.v1")
         if (current_digest != preflight["pending_digest"]
-                or read_clean_candidate(cwd=cwd, worktree=worktree) != candidate
+                or _read_operator_candidate(cwd=cwd, worktree=worktree, receipt=receipt) != candidate
                 or read_live_predecessor(cwd=cwd, issue=issue, expected_identity=preflight["dispatcher_identity"]) != prior
                 or read_live_publication(cwd=cwd, pr=pr, branch=candidate["branch"]) != preflight["publication"]):
             raise RecoveryEvidenceError("claim effect inputs changed while waiting for registry lock")
@@ -829,6 +897,9 @@ def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, 
         _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
         check_run()
         screen_inventory()
+        if issue == 6561 and read_live_predecessor(
+                cwd=cwd, issue=issue, expected_identity=preflight["dispatcher_identity"]) != prior:
+            raise RecoveryEvidenceError("#6561 predecessor changed before claim")
         if (reader(registry_path).get("worktrees") != records
                 or _dispatcher_db_identity(paths.db_path) != preflight["dispatcher_identity"]):
             raise RecoveryEvidenceError("claim effect identity changed before execution")
@@ -903,7 +974,7 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
         raise RecoveryEvidenceError("operator successor or worktree changed")
     if _github_read(["user", "--jq", ".login"], cwd=cwd).strip() != "RasmusTho":
         raise RecoveryEvidenceError("operator account is not the authenticated repository owner")
-    candidate = read_clean_candidate(cwd=cwd, worktree=worktree)
+    candidate = _read_operator_candidate(cwd=cwd, worktree=worktree, receipt=pending)
     live_pr = read_live_publication(cwd=cwd, pr=pr, branch=candidate["branch"])
     _verify_pr_origin(cwd=cwd, issue=issue, pr=pr, worktree=worktree, candidate=candidate,
                       predecessor=pending["predecessor"], publication=live_pr)
@@ -1022,6 +1093,12 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
             latest = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=pending, expected_ack=expected_ack)
             if tuple(latest.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
                 raise RecoveryEvidenceError("ACK changed before pin; retain state")
+            if issue in (6560, 6561):
+                def check_ack() -> None:
+                    last = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=pending, expected_ack=expected_ack)
+                    if tuple(last.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
+                        raise RecoveryEvidenceError("ACK changed before pin; retain state")
+                before_pin(proof["epoch"], registry_reader=lambda _path: payload, ack_check=check_ack)
         pinned = agent_worktree.pin_operator_registration(cwd, worktree=worktree, owner=session, issue=issue,
                    pr=pr, pending_comment=pending_comment, ack_comment=fresh, workspace_root=workspace_root,
                    before_write=before_pin_write)
@@ -1038,7 +1115,8 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
 def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: int, pr: int,
                    worktree: Path, agent: str, session: str, comment_id: int,
                    workspace_root: Path) -> dict[str, Any]:
-    from app.builderops import legacy_run_fence
+    from app.builderops import legacy_codex_6560_guard, legacy_codex_6561_guard, legacy_run_fence
+    from contextlib import nullcontext
 
     try:
         agent_worktree._screen_transfer_workspace(cwd, worktree, workspace_root)
@@ -1050,18 +1128,53 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
     except legacy_git_config.ConfigError as exc:
         raise RecoveryEvidenceError("candidate Git configuration is unsupported") from exc
     try:
-        with legacy_run_fence.hold(state_root=run_state_root, issue=issue, worktree=worktree):
+        expected_digest = None
+        def check_run() -> None:
+            nonlocal expected_digest
+            if issue not in (6560, 6561):
+                legacy_run_fence.check_locked(state_root=run_state_root, issue=issue, worktree=worktree)
+                return
+            comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
+            pending, created_at, digest = agent_worktree._transfer_comment(
+                comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
+            if expected_digest is not None and digest != expected_digest:
+                raise RecoveryEvidenceError("Codex operator decision changed; retain state")
+            try:
+                if issue == 6560:
+                    custody = pending.get("codex_custody")
+                    if not isinstance(custody, dict) or _timestamp(custody.get("observed_at")) > created_at:
+                        raise RecoveryEvidenceError("Codex observation is missing or newer than operator decision")
+                    legacy_codex_6560_guard.check(issue=issue, pr=pr, worktree=worktree, session=session, receipt=pending)
+                else:
+                    checked = legacy_codex_6561_guard.check(cwd=cwd, issue=issue, pr=pr, worktree=worktree,
+                                                            session=session, comment_id=comment_id)
+                    if checked.get("operator_digest") != digest:
+                        raise RecoveryEvidenceError("Codex operator decision changed during observation")
+            except (legacy_codex_6560_guard.CodexGuardError, legacy_codex_6561_guard.GuardRefused) as exc:
+                raise RecoveryEvidenceError(f"{exc}; retain claim and prepared registration") from exc
+            expected_digest = digest
+        fence: ContextManager[None]
+        if issue in (6560, 6561):
+            guard = legacy_codex_6560_guard if issue == 6560 else legacy_codex_6561_guard
+            if pr != guard.PR or str(worktree) != guard.WORKTREE:
+                raise RecoveryEvidenceError("Codex guard target is outside qualified scope")
+            check_run()
+            fence = nullcontext()
+        else:
+            fence = legacy_run_fence.hold(state_root=run_state_root, issue=issue, worktree=worktree)
+        with fence:
             dispatcher_identity = _dispatcher_db_identity(_operator_dispatcher_paths(cwd=cwd).db_path)
             _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
 
             def before_pin(epoch: str, expected_state: str = "prepared",
                            expected_row: dict[str, Any] | None = None,
-                           registry_reader: Callable[[Path], dict[str, Any]] | None = None) -> str:
+                           registry_reader: Callable[[Path], dict[str, Any]] | None = None,
+                           ack_check: Callable[[], None] | None = None) -> str:
                 registry = agent_worktree._default_registry_path(cwd)
                 if registry_reader is None:
                     with agent_worktree._locked_existing_registry(registry) as reader:
-                        return before_pin(epoch, expected_state, expected_row, registry_reader=reader)
-                pending_branch = read_clean_candidate(cwd=cwd, worktree=worktree)["branch"]
+                        return before_pin(epoch, expected_state, expected_row, registry_reader=reader, ack_check=ack_check)
+                _, pending_branch = agent_worktree._worktree_identity(cwd, worktree)
                 _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
                 row = _raw_branch_under_lock(registry, branch=pending_branch, worktree=worktree,
                     allow_prepared=True, registry_reader=registry_reader).get(str(worktree))
@@ -1069,6 +1182,9 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
                 if (not isinstance(row, dict) or not isinstance(proof, dict) or row.get("owner") != session
                         or proof.get("state") != expected_state or proof.get("epoch") != epoch
                         or row.get("registration_epoch") != epoch
+                        or (issue in (6560, 6561) and (row.get("status") != "active"
+                            or not agent_worktree._valid_authority_timestamp(row.get("expires_at"))
+                            or row["expires_at"] <= time.time()))
                         or (expected_row is not None and row != expected_row)):
                     raise RecoveryEvidenceError("successor registration changed; retain claim")
                 comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
@@ -1077,7 +1193,7 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
                 if proof.get("pending_comment_id") != comment_id or proof.get("pending_digest") != pending_digest:
                     raise RecoveryEvidenceError("operator decision changed; retain prepared registration")
                 predecessor = pending["predecessor"]
-                current_candidate = read_clean_candidate(cwd=cwd, worktree=worktree)
+                current_candidate = _read_operator_candidate(cwd=cwd, worktree=worktree, receipt=pending)
                 current_publication = read_live_publication(cwd=cwd, pr=pr, branch=current_candidate["branch"])
                 recorded_publication = pending.get("publication")
                 if not isinstance(recorded_publication, dict):
@@ -1101,16 +1217,25 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
                 lease = _successor_claim_readback(cwd=cwd, task_id=task_id, issue=issue, agent=agent,
                     session=session, claim_id=claims[0]["payload"]["claim_id"], predecessor=predecessor,
                     expected_identity=dispatcher_identity)
-                legacy_run_fence.check_locked(state_root=run_state_root, issue=issue, worktree=worktree)
+                check_run()
+                if issue in (6560, 6561):
+                    _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
+                    if ack_check is not None:
+                        ack_check()
+                        _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
+                    final_lease = _successor_claim_readback(cwd=cwd, task_id=task_id, issue=issue, agent=agent,
+                        session=session, claim_id=claims[0]["payload"]["claim_id"], predecessor=predecessor,
+                        expected_identity=dispatcher_identity)
+                    if final_lease != lease or row["expires_at"] <= time.time():
+                        raise RecoveryEvidenceError("successor claim or registration changed; retain claim")
                 return lease
 
             result = operation(cwd=cwd, issue=issue, pr=pr, worktree=worktree, agent=agent,
                                session=session, comment_id=comment_id, workspace_root=workspace_root,
                                before_pin=before_pin, dispatcher_identity=dispatcher_identity,
-                               check_run=lambda: legacy_run_fence.check_locked(
-                                   state_root=run_state_root, issue=issue, worktree=worktree))
+                               check_run=check_run)
             epoch = result.get("registration_epoch")
-            branch = read_clean_candidate(cwd=cwd, worktree=worktree)["branch"]
+            _, branch = agent_worktree._worktree_identity(cwd, worktree)
             row = _locked_raw_branch_snapshot(agent_worktree._default_registry_path(cwd),
                                                branch=branch, worktree=worktree, allow_prepared=True).get(str(worktree))
             proof = row.get("operator_registration") if isinstance(row, dict) else None
@@ -1137,7 +1262,8 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
             if lease != result.get("lease_id"):
                 raise RecoveryEvidenceError("pinned successor claim changed; retain state")
             return result
-    except (legacy_run_fence.RunFenceError, agent_worktree.WorktreeLifecycleError) as exc:
+    except (legacy_run_fence.RunFenceError, legacy_codex_6560_guard.CodexGuardError,
+            agent_worktree.WorktreeLifecycleError) as exc:
         raise RecoveryEvidenceError(str(exc)) from exc
 
 
@@ -1170,12 +1296,11 @@ def validate_operator_reconciliation(
 ) -> tuple[dict[str, Any], float, str]:
     """Compare an account-authenticated comment to caller-provided values.
 
-    No current transfer pin accepts this operator type. The digest does not
-    authorize any effect, and the caller must re-read and verify each source
-    immediately before mutation. Account authentication does not establish
-    that a human personally wrote the comment or that a session is live. This
-    first comparison supports the post-execution reboot case only; other
-    legitimate stop evidence requires a separate verified path. An operator
+    The digest does not authorize any effect, and the caller must re-read and
+    verify each source immediately before mutation. Account authentication does
+    not establish that a human personally wrote the comment or that a session is
+    live. General timing requires a post-execution reboot; #6561's separately
+    scoped postboot inventory requires its own live source guard. An operator
     receipt must never masquerade as predecessor consent.
     """
     if github_login != "RasmusTho":
@@ -1194,8 +1319,12 @@ def validate_operator_reconciliation(
                     "candidate", "writer", "publication"}
     transfer_fields = {"branch", "writable_worktree", "predecessor_registration", "branch_history_digest",
                        "base", "unpublished_candidate_head", "changed_files"}
-    if set(operator) not in (basic_fields, basic_fields | transfer_fields,
-                             basic_fields | transfer_fields | {"successor_acknowledgment"}):
+    allowed_fields: tuple[set[str], ...] = (basic_fields, basic_fields | transfer_fields,
+                      basic_fields | transfer_fields | {"successor_acknowledgment"})
+    if "dirty_candidate" in operator and issue == 6560:
+        allowed_fields += (basic_fields | transfer_fields | {"dirty_candidate", "codex_custody"},
+                           basic_fields | transfer_fields | {"dirty_candidate", "codex_custody", "successor_acknowledgment"})
+    if set(operator) not in allowed_fields:
         raise RecoveryEvidenceError("operator receipt has unexpected or missing fields")
     if operator.get("issue") != issue or operator.get("account") != github_login:
         raise RecoveryEvidenceError("operator receipt targets another issue or account")
@@ -1265,7 +1394,17 @@ def validate_operator_reconciliation(
             or not re.fullmatch(r"[0-9a-f]{64}", str(publication.get("body_sha256", "")))
             or not re.fullmatch(r"[0-9a-f]{40,64}", str(publication.get("head", "")))):
         raise RecoveryEvidenceError("publication is not bound to an observed PR head")
-    if (not _timestamp(writer.get("last_activity")) < _timestamp(writer.get("boot")) <= created_at
+    if issue == 6561:
+        from app.builderops import legacy_codex_6561_guard
+        custody = writer.get("codex_custody")
+        timing_valid = (pr == legacy_codex_6561_guard.PR and candidate.get("path") == legacy_codex_6561_guard.WORKTREE
+                        and candidate.get("branch") == legacy_codex_6561_guard.BRANCH and isinstance(custody, dict)
+                        and _timestamp(writer.get("boot")) == legacy_codex_6561_guard.BOOT.timestamp()
+                        and _timestamp(writer.get("boot")) < legacy_codex_6561_guard.INVENTORY_START.timestamp()
+                        <= _timestamp(writer.get("last_activity")) <= _timestamp(custody.get("observed_at")) <= created_at)
+    else:
+        timing_valid = _timestamp(writer.get("last_activity")) < _timestamp(writer.get("boot")) <= created_at
+    if (not timing_valid
             or _timestamp(predecessor.get("expires_at")) > created_at
             or _timestamp(registration.get("registered_at")) >= _timestamp(registration.get("expires_at"))
             or _timestamp(registration.get("expires_at")) > created_at):
