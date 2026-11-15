@@ -24,6 +24,22 @@ the claim and acknowledgment transition. The supported host and run scope, proce
 limits, and resume procedure are specified in [Multi-Agent Workspace Guardrails](DEV_WORKFLOW.md#multi-agent-workspace-guardrails).
 Before a claim, the operator path screens the registered and live checkout inventory against the
 declared model workspace using the same boundary as the native successor proof.
+Its Git configuration screen accepts a linked worktree config only when a no-follow read of a
+stable, user-owned, non-group-writable regular file yields exactly one nonempty, single-line
+`codex.localEnvironmentConfigPath` entry. Other worktree configuration remains unsupported. This
+is a Git input qualification under the coordinated no-config-changes assumption, not a lock or
+an attestation of the metadata's consumer.
+The named #6560 first-commit preflight in `_shared/BRANCH_TRUTH_GATE.md` is limited to the
+acknowledged original parent and two-file material. Its stage and commit steps recheck the pinned
+operator authority; the commit step also verifies the complete isolated-index delta. It does not
+authorize a stale-base push, and the ordinary integration and pre-push gates still apply.
+
+The separately qualified #6560 operator path may prepare a dirty candidate only for its two
+identified files. Its registration readback binds their original index blobs, working-file hashes,
+patch hash, index hash, candidate tree and an independently preserved absolute backup. The
+prepared row remains unadmitted until the existing acknowledgment and pin checks succeed; other
+dirty candidates do not inherit this exception. The operator must still reconcile the source and
+publication outcomes described in [DEV_WORKFLOW](DEV_WORKFLOW.md#multi-agent-workspace-guardrails).
 
 The disposable integration oracle supplies byte input through a temporary regular
 file, including the complete NUL-separated attribute path set. This avoids pipe

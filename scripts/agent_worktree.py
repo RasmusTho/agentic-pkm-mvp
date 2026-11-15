@@ -879,8 +879,12 @@ def assert_operator_registration_pinned(record: Mapping[str, Any]) -> None:
             or record["prior_owner"].get("released_at") is not None
             or any(record["prior_owner"].get(k) != predecessor.get(k)
                    for k in ("path", "branch", "generation", "owner", "registered_at"))
-            or set(candidate) != {"branch", "base", "base_sha", "head", "changed_files", "clean", "observed_at"}
-            or candidate.get("branch") != record.get("branch") or candidate.get("clean") is not True
+            or set(candidate) not in ({"branch", "base", "base_sha", "head", "changed_files", "clean", "observed_at"},
+                                      {"branch", "base", "base_sha", "head", "changed_files", "clean", "observed_at", "dirty_material"})
+            or candidate.get("branch") != record.get("branch")
+            or candidate.get("clean") is not ("dirty_material" not in candidate)
+            or ("dirty_material" in candidate and (proof["issue"] != 6560
+                or not _valid_dirty_material(candidate["dirty_material"])))
             or not isinstance(candidate.get("base"), str)
             or any(not isinstance(candidate.get(k), str) or not re.fullmatch(r"[0-9a-f]{40,64}", candidate[k])
                    for k in ("base_sha", "head"))
@@ -1409,7 +1413,12 @@ def _lifecycle_update_snapshot(
     requested = _canonical(worktree)
     lock = _locked_existing_registry(registry_path) if operator else _registry_lock(registry_path)
     with lock as read_registry:
-        payload = read_registry(registry_path) if operator else _read_registry(registry_path)
+        if operator:
+            if read_registry is None:
+                raise WorktreeLifecycleError("operator registry reader is unavailable")
+            payload = read_registry(registry_path)
+        else:
+            payload = _read_registry(registry_path)
         value = payload["worktrees"].get(str(requested))
         record = dict(value) if isinstance(value, dict) else None
         if (
@@ -1685,8 +1694,67 @@ def pin_transfer_registration(cwd: Path, *, worktree: Path, owner: str, issue: i
         return dict(pinned)
 
 
+def _valid_dirty_material(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {"tree", "index_sha256", "index_blobs", "file_sha256", "patch_sha256", "backup"}:
+        return False
+    blobs, files = value.get("index_blobs"), value.get("file_sha256")
+    return (isinstance(blobs, dict) and isinstance(files, dict) and len(blobs) == 2
+            and set(blobs) == set(files) == {"tests/properties/_machinery.py", "tests/properties/test_guard_at_seam.py"}
+            and all(isinstance(k, str) and k for k in blobs)
+            and all(isinstance(v, str) and re.fullmatch(r"[0-9a-f]{40}", v) for v in blobs.values())
+            and all(isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v) for v in files.values())
+            and all(isinstance(value.get(k), str) and re.fullmatch(r"[0-9a-f]{64}", value[k])
+                    for k in ("index_sha256", "patch_sha256"))
+            and isinstance(value.get("tree"), str) and bool(re.fullmatch(r"[0-9a-f]{40}", value["tree"]))
+            and isinstance(value.get("backup"), str) and Path(value["backup"]).is_absolute())
+
+
+def _dirty_operator_candidate(cwd: Path, *, worktree: Path, receipt: dict[str, Any],
+                              base_sha: str, observed_at: float, verify_base_ref: bool) -> dict[str, Any]:
+    from app.builderops.legacy_patch_material import verify_material
+
+    spec = receipt.get("dirty_candidate")
+    if (receipt.get("issue") != 6560 or not isinstance(spec, dict)
+            or set(spec) != {"index_blobs", "file_sha256", "patch_sha256", "backup"}
+            or not isinstance(spec.get("index_blobs"), dict)
+            or set(spec["index_blobs"]) != {"tests/properties/_machinery.py", "tests/properties/test_guard_at_seam.py"}
+            or receipt.get("base") not in ("main", base_sha) or not re.fullmatch(r"[0-9a-f]{40}", base_sha)):
+        raise WorktreeLifecycleError("dirty operator candidate contract is invalid")
+    try:
+        git = git_hygiene.run_git
+        head = git(["-C", str(worktree), "rev-parse", "--verify", "HEAD^{commit}"], cwd)
+        tree = git(["-C", str(worktree), "rev-parse", "--verify", "HEAD^{tree}"], cwd)
+        base = git(["-C", str(worktree), "rev-parse", "--verify", f"{receipt['base'] if verify_base_ref else base_sha}^{{commit}}"], cwd)
+        changed = git(["-C", str(worktree), "diff", "--name-only", "--find-renames", "-z", f"{base_sha}...{head}"], cwd)
+        index_path = Path(git(["-C", str(worktree), "rev-parse", "--path-format=absolute", "--git-path", "index"], cwd))
+        blobs = spec["index_blobs"]
+        if not isinstance(blobs, dict) or len(blobs) != 2:
+            raise ValueError("expected exactly two selected paths")
+        baseline = {}
+        for name, oid in blobs.items():
+            actual = git(["-C", str(worktree), "rev-parse", "--verify", f"HEAD:{name}"], cwd)
+            if actual != oid:
+                raise ValueError("selected blob differs from HEAD")
+            baseline[name] = subprocess.check_output(["git", "-C", str(worktree), "cat-file", "blob", oid])
+        material = verify_material(root=worktree, index=index_path, backup=Path(spec["backup"]),
+                                   baseline=baseline, baseline_oids=blobs,
+                                   selected_sha256=spec["file_sha256"], patch_sha256=spec["patch_sha256"])
+        material.update({"tree": tree, "index_blobs": blobs, "backup": spec["backup"]})
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, KeyError) as exc:
+        raise WorktreeLifecycleError("dirty operator candidate material refused") from exc
+    files = sorted(p for p in changed.split("\0") if p)
+    if (not _valid_dirty_material(material) or base != base_sha or head != receipt.get("unpublished_candidate_head")
+            or files != receipt.get("changed_files") or tree != receipt.get("candidate", {}).get("tree")):
+        raise WorktreeLifecycleError("dirty operator candidate differs from receipt")
+    return {"branch": receipt["branch"], "base": receipt["base"], "base_sha": base_sha, "head": head,
+            "changed_files": files, "clean": False, "observed_at": observed_at, "dirty_material": material}
+
+
 def _operator_candidate(cwd: Path, *, worktree: Path, receipt: dict[str, Any],
                         base_sha: str, observed_at: float, verify_base_ref: bool = True) -> dict[str, Any]:
+    if "dirty_candidate" in receipt:
+        return _dirty_operator_candidate(cwd, worktree=worktree, receipt=receipt, base_sha=base_sha,
+                                         observed_at=observed_at, verify_base_ref=verify_base_ref)
     # Do not let status hide assume-unchanged or skip-worktree entries.
     try:
         flags = git_hygiene.run_git(["-C", str(worktree), "ls-files", "-v", "-z"], cwd)
@@ -1739,7 +1807,8 @@ def prepare_operator_registration(cwd: Path, *, worktree: Path, owner: str, issu
     if (not isinstance(observed, dict) or not isinstance(registration, dict)
             or observed.get("path") != str(canonical) or observed.get("branch") != branch
             or observed.get("generation") != generation or observed.get("head") != receipt.get("unpublished_candidate_head")
-            or observed.get("tree") != tree or observed.get("status_digest") != hashlib.sha256(b"").hexdigest()
+            or observed.get("tree") != tree
+            or ("dirty_candidate" not in receipt and observed.get("status_digest") != hashlib.sha256(b"").hexdigest())
             or registration.get("history_digest") != predecessor_digest
             or any(registration.get(k) != predecessor.get(k) for k in ("path", "branch", "generation", "owner"))):
         raise WorktreeLifecycleError("operator observation differs from predecessor or candidate")
@@ -1919,7 +1988,12 @@ def register_worktree(
     requested = _canonical(worktree)
     initial_lock = _locked_existing_registry(path) if _operator_pending is not None else _registry_lock(path)
     with initial_lock as initial_reader:
-        initial_payload = initial_reader(path) if _operator_pending is not None else _read_registry(path)
+        if _operator_pending is not None:
+            if initial_reader is None:
+                raise WorktreeLifecycleError("operator registry reader is unavailable")
+            initial_payload = initial_reader(path)
+        else:
+            initial_payload = _read_registry(path)
         _assert_no_missing_preserved_path_alias(
             initial_payload["worktrees"], requested
         )

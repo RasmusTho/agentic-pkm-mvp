@@ -46,6 +46,42 @@ Codex is the only active Builder worker carrier. The executable instruction and 
 `AGENTS.md` → `.codex/skills/README.md :: Skill routing` → the selected `.codex/skills/**`
 workflow and active `.codex/agents/**` role adapter.
 
+For local observation and control of an existing OpenHands conversation, the owner can launch the
+official Agent Canvas static server with `scripts/openhands_canvas.py`. This is a local interface,
+not qualification of OpenHands as a Builder carrier. It requires Node.js, an installed
+`@openhands/agent-canvas` package with its built frontend, an already-running compatible loopback
+agent-server, and that server's session key in an owner-only regular file.
+The state directory must be owner-only; it is created if its parent exists. For example:
+
+```bash
+python3 scripts/openhands_canvas.py start --package-dir /path/to/node_modules/@openhands/agent-canvas \
+  --backend http://127.0.0.1:8000 --key-file /private/path/session-key \
+  --state-dir /private/path/canvas-state --port 3001
+python3 scripts/openhands_canvas.py status --state-dir /private/path/canvas-state
+python3 scripts/openhands_canvas.py stop --state-dir /private/path/canvas-state
+```
+
+Start prints the Canvas loopback URL; `--open` also opens it in the browser. The backend URL must
+use a numeric loopback address, HTTP, and an explicit port. The Canvas listener is restricted to
+`127.0.0.1`. Its official reverse proxy may send forwarded headers; the backend must not grant them
+authentication or identity authority. The session key authenticates the backend, is passed to the
+static server through its environment, and is not saved in launcher state or logs. Before start
+succeeds, the launcher checks the key against the backend's `/api/conversations/search` endpoint
+and confirms that an unauthenticated request is rejected. The private state stores a key fingerprint
+so a repeated start refuses a changed key; stop and start to apply it.
+Canvas runs with its upstream `--auth-required` option: the owner enters the session key in the
+browser's Canvas prompt, which may retain it in browser storage. Enter the same key supplied in the
+private file. The served page does not embed the key. Stop asks a private local supervisor to
+terminate only its own unreaped Canvas child; it
+does not stop the backend. If the supervisor is unavailable or identity does not match, the launcher
+retains state and refuses to guess or signal a PID.
+If startup is interrupted before the process identity is recorded, status reports an unknown
+outcome and start and stop refuse. The owner must reconcile the recorded marker and server process;
+after confirming no such Canvas process remains, remove `server.json` from the state directory before
+starting again. State from the older unsupervised launcher is also refused; the owner must reconcile
+that process and remove its state before starting the supervised version. A previously running older
+Canvas can still expose the key in its local page until the owner stops it.
+
 The repository also contains a dormant Claude native CLI implementation for the protected
 one-Issue path. A versioned approval binds its target, executable and isolation profile; the
 existing host-owned verifier port has no default implementation. Without a separately installed

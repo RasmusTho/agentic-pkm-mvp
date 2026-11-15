@@ -57,10 +57,11 @@ def _readonly_lifecycle(*, cwd: Path, worktree: Path, workspace_root: Path,
                 permitted_probe_paths={str(worktree)}, registry_reader=read_registry)
             active = [dict(row) for row in authority.values()
                       if row.get("branch") == branch and row.get("status") == "active"]
-            if (len(active) != 1 or active[0].get("path") != str(worktree)
-                    or active[0].get("owner") != session
-                    or not isinstance(active[0].get("expires_at"), (int, float))
-                    or active[0]["expires_at"] <= time.time()
+            if len(active) != 1:
+                raise cycle.CycleError("current lifecycle successor is unavailable")
+            expiry = active[0].get("expires_at")
+            if (active[0].get("path") != str(worktree) or active[0].get("owner") != session
+                    or not isinstance(expiry, (int, float)) or expiry <= time.time()
                     or not agent_worktree._valid_generation(active[0].get("registration_epoch"))):
                 raise cycle.CycleError("current lifecycle successor is unavailable")
             if while_locked is not None:
@@ -127,9 +128,26 @@ def verify(*, issue: int, pr: int, worktree: Path, workspace_root: Path,
     files = cycle._api_pages(executor, cwd, f"/pulls/{pr}/files")
     if not files or any(not isinstance(x, dict) or not isinstance(x.get("filename"), str) for x in files):
         raise cycle.CycleError("candidate changed-file readback is unavailable")
+    def check_6561_runtime() -> None:
+        from app.builderops import legacy_codex_6561_guard as guard
+        proof = registration.get("operator_registration")
+        if not isinstance(proof, dict):
+            raise cycle.CycleError("#6561 pinned operator proof is unavailable")
+        comment_id = proof.get("pending_comment_id")
+        if type(comment_id) is not int or comment_id < 1:
+            raise cycle.CycleError("#6561 pinned operator comment is unavailable")
+        try:
+            checked = guard.check_runtime(cwd=cwd, issue=issue, pr=pr, worktree=worktree, session=session,
+                                          comment_id=comment_id)
+        except guard.GuardRefused as exc:
+            raise cycle.CycleError(str(exc)) from exc
+        if checked.get("operator_digest") != proof.get("pending_digest"):
+            raise cycle.CycleError("#6561 operator source does not match the pin")
+
     cycle._operator_lineage(events=events, owner=owner, origin=origin, registration=registration, records=records,
         comments=[*issue_comments, *pr_comments], issue_comments=issue_comments, issue=issue, pr_number=pr,
-        branch=head["ref"], head=head["sha"], files=sorted(x["filename"] for x in files), entry=entry)
+        branch=head["ref"], head=head["sha"], files=sorted(x["filename"] for x in files), entry=entry,
+        native_6561_check=check_6561_runtime if issue == 6561 else None)
     if cycle.closure._pr(executor, cwd, repo, pr) != live:
         raise cycle.CycleError("PR changed during operator proof")
     recovery._verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)

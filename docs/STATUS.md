@@ -204,16 +204,19 @@ external-effect ports; no running-controller or activation result is implied.
 **Scoped legacy Builder recovery repository candidate (2026-11-15).** Issue #6637 adds an
 operator-led path for the two recorded stopped OpenHands runs #6601 and #6597, preserving their
 predecessor claims and existing PR identities while admitting a verified successor. This is a
-bounded repository capability; it does not establish that either real transfer has occurred,
-qualify the whole #6600 factory, activate a service, or cover dirty candidates. The supported
+bounded repository capability. Coordinated native successors transferred #6601 and #6597 with
+separate authenticated acknowledgments ([#6601](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6601#issuecomment-6900957351),
+[#6597](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6597#issuecomment-6901207434));
+their existing PRs #6602 and #6603 subsequently merged. These observations do not qualify the
+whole #6600 factory, activate a service, or cover dirty candidates. The supported
 host, evidence and limits are in [Multi-Agent Workspace Guardrails](development/DEV_WORKFLOW.md#multi-agent-workspace-guardrails).
-The follow-up candidate refreshes Issue authority before the claim and successor authority after
+The follow-up source merged in #6645 refreshes Issue authority before the claim and successor authority after
 lineage reads; its GitHub and dispatcher checks are not an atomic cross-system transaction.
 It also refuses the native proof's workspace overlaps before claiming. A source-backed protected
 controller boundary for the recorded host remains unverified.
 Last reviewed: 2026-11-15 UTC. Last verified against: `app/builderops/legacy_owner_recovery.py`,
-`app/builderops/legacy_run_fence.py`, and the focused synthetic recovery tests; real transfers and
-live environment acceptance remain unverified.
+`app/builderops/legacy_run_fence.py`, the focused synthetic recovery tests, and the two authenticated
+transfer acknowledgments and merged PRs; live environment acceptance remains unverified.
 
 The August 22 baseline formerly here and the dated October 5 observations above are historical.
 Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those

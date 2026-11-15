@@ -18,7 +18,7 @@ def _comment(body, ident, at):
     timestamp = datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {"id": ident, "user": {"login": "RasmusTho"}, "author_association": "OWNER",
             "created_at": timestamp, "updated_at": timestamp,
-            "issue_url": "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/6636",
+            "issue_url": f"https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/{body['issue']}",
             "body": json.dumps({"operator_reconciliation.v1": body})}
 
 
@@ -30,7 +30,10 @@ def fixture(tmp_path):
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "test")
     (repo / "file").write_text("data\n")
-    _git(repo, "add", "file")
+    (repo / "tests/properties").mkdir(parents=True)
+    for name in ("_machinery.py", "test_guard_at_seam.py"):
+        (repo / "tests/properties" / name).write_text("other\n")
+    _git(repo, "add", "file", "tests/properties")
     _git(repo, "commit", "-m", "init")
     checkout = tmp_path / "checkout"
     _git(repo, "worktree", "add", "-b", "codex/example", str(checkout))
@@ -52,14 +55,14 @@ def fixture(tmp_path):
 
 def _prepare(f):
     repo, _, history, receipt, head, workspace = f
-    return worktrees.prepare_operator_registration(repo, worktree=repo, owner="new", issue=6636,
+    return worktrees.prepare_operator_registration(repo, worktree=repo, owner="new", issue=receipt["issue"],
              pending_comment=_comment(receipt, 1, 9500), base_sha=head, workspace_root=workspace,
              expected_branch_history_digest=history, now=9600)
 
 
 def _begin(f, *, at=9601):
     repo, _, _, receipt, _, workspace = f
-    return worktrees.begin_operator_ack(repo, worktree=repo, owner="new", issue=6636,
+    return worktrees.begin_operator_ack(repo, worktree=repo, owner="new", issue=receipt["issue"],
              pending_comment=_comment(receipt, 1, 9500), workspace_root=workspace, now=at)
 
 
@@ -71,7 +74,7 @@ def _pin(f, readbacks, *, at=9702):
         intent = _begin(f)
     acknowledgment = {**copy.deepcopy(readbacks), "ack_attempt_id": intent["attempt_id"]}
     ack = {**copy.deepcopy(receipt), "successor_acknowledgment": acknowledgment}
-    return worktrees.pin_operator_registration(repo, worktree=repo, owner="new", issue=6636,
+    return worktrees.pin_operator_registration(repo, worktree=repo, owner="new", issue=receipt["issue"],
              pending_comment=_comment(receipt, 1, 9500), ack_comment=_comment(ack, 2, 9700),
              workspace_root=workspace, now=at)
 
@@ -194,7 +197,7 @@ def test_ack_intent_survives_interruption_and_refuses_second_post(fixture):
     assert "ack_intent" not in row["operator_registration"]
     ack = {**copy.deepcopy(f[3]), "successor_acknowledgment": {**readbacks, "ack_attempt_id": "a" * 32}}
     with pytest.raises(worktrees.WorktreeLifecycleError):
-        worktrees.pin_operator_registration(f[0], worktree=f[0], owner="new", issue=6636,
+        worktrees.pin_operator_registration(f[0], worktree=f[0], owner="new", issue=f[3]["issue"],
              pending_comment=_comment(f[3], 1, 9500), ack_comment=_comment(ack, 2, 9700),
              workspace_root=f[5], now=9702)
     intent = _begin(f)
@@ -226,7 +229,7 @@ def test_ack_requires_exact_attempt_id(fixture):
     ack = {**copy.deepcopy(f[3]), "successor_acknowledgment": {**readbacks, "ack_attempt_id": "f" * 32}}
     assert intent["attempt_id"] != "f" * 32
     with pytest.raises(worktrees.WorktreeLifecycleError):
-        worktrees.pin_operator_registration(f[0], worktree=f[0], owner="new", issue=6636,
+        worktrees.pin_operator_registration(f[0], worktree=f[0], owner="new", issue=f[3]["issue"],
              pending_comment=_comment(f[3], 1, 9500), ack_comment=_comment(ack, 2, 9700),
              workspace_root=f[5], now=9702)
 
@@ -239,3 +242,50 @@ def test_ack_intent_rechecks_candidate_after_prepare(fixture):
         _begin(f)
     row = worktrees._locked_lifecycle_snapshot(f[1])[str(f[0])]
     assert "ack_intent" not in row["operator_registration"]
+
+
+def _dirty_receipt(f, tmp_path):
+    repo, _, _, receipt, _, _ = f
+    receipt["issue"] = 6560
+    blobs = {name: _git(repo, "rev-parse", f"HEAD:{name}") for name in ("tests/properties/_machinery.py", "tests/properties/test_guard_at_seam.py")}
+    for name in blobs:
+        (repo / name).write_text(f"changed {name}\n")
+    patch = subprocess.check_output(["git", "-C", str(repo), "diff", "--binary"])
+    backup = tmp_path / "backup.patch"
+    backup.write_bytes(patch)
+    receipt["dirty_candidate"] = {"index_blobs": blobs,
+        "file_sha256": {name: hashlib.sha256((repo / name).read_bytes()).hexdigest() for name in blobs},
+        "patch_sha256": hashlib.sha256(patch).hexdigest(), "backup": str(backup)}
+    return backup
+
+
+def test_dirty_operator_material_is_rechecked_at_ack_and_pin(fixture, tmp_path):
+    f = fixture
+    backup = _dirty_receipt(f, tmp_path)
+    readbacks = _prepare(f)
+    assert readbacks["candidate_readback"]["clean"] is False
+    assert readbacks["candidate_readback"]["dirty_material"]["tree"] == f[3]["candidate"]["tree"]
+    original = (f[0] / "tests/properties/_machinery.py").read_bytes()
+    (f[0] / "tests/properties/_machinery.py").write_text("tampered")
+    with pytest.raises(worktrees.WorktreeLifecycleError):
+        _begin(f)
+    (f[0] / "tests/properties/_machinery.py").write_bytes(original)
+    _begin(f)
+    saved = backup.read_bytes()
+    backup.write_bytes(saved + b"tampered")
+    with pytest.raises(worktrees.WorktreeLifecycleError):
+        _pin(f, readbacks)
+    backup.write_bytes(saved)
+    assert _pin(f, readbacks)["state"] == "pinned"
+
+
+def test_dirty_operator_rejects_index_change_and_extra_path(fixture, tmp_path):
+    f = fixture
+    _dirty_receipt(f, tmp_path)
+    f[3]["dirty_candidate"]["file_sha256"]["extra"] = "0" * 64
+    with pytest.raises(worktrees.WorktreeLifecycleError):
+        _prepare(f)
+    del f[3]["dirty_candidate"]["file_sha256"]["extra"]
+    _git(f[0], "add", "tests/properties/_machinery.py")
+    with pytest.raises(worktrees.WorktreeLifecycleError):
+        _prepare(f)
