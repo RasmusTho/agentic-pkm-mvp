@@ -29,6 +29,41 @@ def test_obsidian_required_true_when_strict(monkeypatch) -> None:
     assert health_module._obsidian_required() is True
 
 
+def test_fs_primary_does_not_probe_inactive_obsidian(monkeypatch) -> None:
+    monkeypatch.setenv("KNOWLEDGE_PRIMARY_ADAPTER", "fs_vault")
+    monkeypatch.setenv("KNOWLEDGE_FALLBACK_ADAPTER", "obsidian_cli")
+    monkeypatch.setenv("KNOWLEDGE_STRICT_STARTUP", "1")
+    monkeypatch.setenv("KNOWLEDGE_ALLOW_FALLBACK", "0")
+
+    def fail_if_probed(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("inactive Obsidian adapter must not be probed")
+
+    monkeypatch.setattr(health_module, "obsidian_dependency_status", fail_if_probed)
+    result = health_module._check_obsidian_dependencies()
+
+    assert result["ok"] is True
+    assert result["data"]["primary_adapter"] == "fs_vault"
+    assert result["data"]["skipped"] is True
+    assert health_module._obsidian_required() is False
+
+
+def test_required_cli_dependency_still_fails_closed(monkeypatch) -> None:
+    monkeypatch.setenv("KNOWLEDGE_PRIMARY_ADAPTER", "obsidian_cli")
+    monkeypatch.setenv("KNOWLEDGE_FALLBACK_ADAPTER", "fs_vault")
+    monkeypatch.setenv("KNOWLEDGE_STRICT_STARTUP", "1")
+    monkeypatch.setenv("KNOWLEDGE_ALLOW_FALLBACK", "0")
+
+    class _Status:
+        ok = False
+        details = {"reason": "obsidian missing"}
+
+    monkeypatch.setattr(health_module, "obsidian_dependency_status", lambda **_: _Status())
+    result = health_module._check_obsidian_dependencies()
+
+    assert result["ok"] is False
+    assert health_module._obsidian_required() is True
+
+
 def test_get_obsidian_installer_version_prefers_env(monkeypatch) -> None:
     monkeypatch.setenv("OBSIDIAN_INSTALLER_VERSION", "1.12.4")
     assert health_module._get_obsidian_installer_version() == "1.12.4"

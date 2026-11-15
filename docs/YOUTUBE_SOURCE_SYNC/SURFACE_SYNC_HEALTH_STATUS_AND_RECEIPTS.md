@@ -39,7 +39,11 @@ through the existing health/status/receipt substrates, never a parallel channel.
    an available empty input remains distinct. All secret-free (INV-YSS-5).
 4. **Health-contract feed:** dead-letter counts and queue-age signals ride the existing
    outbox/dead-letter fields the `HealthContract` already evaluates — no new health channel;
-   `/healthz` semantics unchanged.
+   `/healthz` semantics unchanged. The global projection honors the contract's
+   `dead_letter_status` rather than treating a historical count alone as a current failure.
+   When the accepted sync gates are intentionally paused, an authenticated paused-only CLI
+   result remains `status: paused` but is informationally healthy; any additional auth, runner,
+   queue, quota, or source-error reason remains degraded.
 
 ## Concretely
 
