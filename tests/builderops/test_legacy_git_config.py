@@ -119,6 +119,138 @@ def test_worktree_config_extension_only_with_both_files_absent(checkout):
         config.unlink()
 
 
+def test_worktree_metadata_accepts_one_entry_in_each_qualified_checkout(checkout):
+    root, other, common, linked = checkout
+    (common / 'config').write_text('[extensions]\n worktreeConfig = true\n')
+    for directory in (common, linked):
+        (directory / 'config.worktree').write_text(
+            '[codex]\n localEnvironmentConfigPath = synthetic-metadata.json\n'
+        )
+    check(cwd=root, worktree=other)
+
+
+@pytest.mark.parametrize('extra', [
+    '[include]\n path = /ignored/secret\n',
+    '[includeIf "gitdir:foo"]\n path = /ignored/secret\n',
+    '[core]\n hooksPath = /ignored/hook\n',
+    '[filter "bad"]\n process = touch /ignored/marker\n',
+    '[http "https://github.com/"]\n extraHeader = Authorization: redacted\n',
+    '[core]\n bare = false\n',
+    '[codex]\n localEnvironmentConfigPath = duplicate\n',
+])
+def test_worktree_metadata_refuses_extra_or_duplicate_entries(checkout, extra, capsys):
+    root, other, common, linked = checkout
+    (common / 'config').write_text('[extensions]\n worktreeConfig = true\n')
+    (linked / 'config.worktree').write_text(
+        '[codex]\n localEnvironmentConfigPath = private-value\n' + extra
+    )
+    with pytest.raises(ConfigError) as error:
+        check(cwd=root, worktree=other)
+    assert 'private-value' not in str(error.value)
+    assert 'private-value' not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('content', [
+    '[codex]\n localEnvironmentConfigPath =\n',
+    '[codex]\n localEnvironmentConfigPath = "first\\nsecond"\n',
+    '[include]\n path = /ignored/secret\n',
+    '[codex\n localEnvironmentConfigPath = bad\n',
+])
+def test_worktree_metadata_refuses_invalid_or_unsafe_single_entry(checkout, content):
+    root, other, common, linked = checkout
+    (common / 'config').write_text('[extensions]\n worktreeConfig = true\n')
+    (linked / 'config.worktree').write_text(content)
+    with pytest.raises(ConfigError):
+        check(cwd=root, worktree=other)
+
+
+def test_worktree_metadata_requires_regular_owned_nonwritable_file(checkout, tmp_path, monkeypatch):
+    from app.builderops import legacy_git_config
+
+    root, other, common, linked = checkout
+    (common / 'config').write_text('[extensions]\n worktreeConfig = true\n')
+    config = linked / 'config.worktree'
+    config.write_text('[codex]\n localEnvironmentConfigPath = synthetic\n')
+    config.chmod(0o666)
+    with pytest.raises(ConfigError):
+        check(cwd=root, worktree=other)
+    config.chmod(0o644)
+    uid = legacy_git_config.os.getuid()
+    with monkeypatch.context() as patch:
+        patch.setattr(legacy_git_config.os, 'getuid', lambda: uid + 1)
+        with pytest.raises(ConfigError):
+            check(cwd=root, worktree=other)
+    config.unlink()
+    config.symlink_to(tmp_path / 'missing')
+    with pytest.raises(ConfigError):
+        check(cwd=root, worktree=other)
+
+
+def test_worktree_metadata_refuses_replacement_during_read(checkout, monkeypatch):
+    from app.builderops import legacy_git_config
+
+    root, other, common, linked = checkout
+    (common / 'config').write_text('[extensions]\n worktreeConfig = true\n')
+    config = linked / 'config.worktree'
+    config.write_text('[codex]\n localEnvironmentConfigPath = synthetic\n')
+    config_identity = (config.stat().st_dev, config.stat().st_ino)
+    original_read = legacy_git_config.os.read
+    replaced = False
+
+    def replace_during_read(fd, size):
+        nonlocal replaced
+        data = original_read(fd, size)
+        info = legacy_git_config.os.fstat(fd)
+        if data and not replaced and (info.st_dev, info.st_ino) == config_identity:
+            replacement = linked / 'replacement'
+            replacement.write_text('[codex]\n localEnvironmentConfigPath = synthetic\n')
+            replacement.replace(config)
+            replaced = True
+        return data
+
+    monkeypatch.setattr(legacy_git_config.os, 'read', replace_during_read)
+    with pytest.raises(ConfigError, match='changed during read'):
+        check(cwd=root, worktree=other)
+
+
+def test_candidate_entrypoint_refuses_unsafe_worktree_config_before_git(checkout, monkeypatch):
+    from app.builderops import legacy_git_config, legacy_owner_recovery
+
+    root, other, common, linked = checkout
+    (common / 'config').write_text('[extensions]\n worktreeConfig = true\n')
+    (linked / 'config.worktree').write_text(
+        '[codex]\n localEnvironmentConfigPath = synthetic\n[core]\n hooksPath = /ignored/hook\n'
+    )
+    monkeypatch.setattr(legacy_git_config, 'check_host_config', lambda: None)
+    monkeypatch.setattr(legacy_owner_recovery, '_git_read',
+                        lambda *_args, **_kwargs: pytest.fail('candidate Git ran before config refusal'))
+    with pytest.raises(legacy_owner_recovery.RecoveryEvidenceError, match='configuration'):
+        legacy_owner_recovery.read_clean_candidate(cwd=root, worktree=other)
+
+
+def test_real_git_worktree_config_keeps_metadata_inert(tmp_path, monkeypatch):
+    import subprocess
+
+    root = tmp_path / 'agentic-pkm-mvp'
+    other = tmp_path / 'candidate'
+
+    def git(*args):
+        return subprocess.run(['git', *args], check=True, capture_output=True, text=True)
+
+    git('init', '-q', '-b', 'main', str(root))
+    git('-C', str(root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+        '-c', 'core.hooksPath=/dev/null', 'commit', '--allow-empty', '-qm', 'initial')
+    git('-C', str(root), 'worktree', 'add', '--detach', str(other))
+    git('-C', str(root), 'config', '--local', 'extensions.worktreeConfig', 'true')
+    git('-C', str(other), 'config', '--worktree', 'codex.localEnvironmentConfigPath', 'synthetic.json')
+    assert git('-C', str(other), 'config', '--worktree', '--get',
+               'codex.localEnvironmentConfigPath').stdout.strip() == 'synthetic.json'
+    monkeypatch.setattr('app.builderops.legacy_git_config.QUALIFIED_COMMON', (root / '.git').resolve())
+    monkeypatch.setattr('app.builderops.legacy_git_config._qualified_home', lambda: tmp_path)
+    check(cwd=root.resolve(), worktree=other.resolve())
+    assert git('-C', str(other), 'status', '--porcelain').stdout == ''
+
+
 def test_invalid_workspace_stops_actual_pickup_before_config_git_or_claim(tmp_path, monkeypatch):
     from app.builderops import legacy_git_config, legacy_owner_recovery
 

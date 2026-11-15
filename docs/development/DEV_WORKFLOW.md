@@ -1583,7 +1583,11 @@ restart configuration and observe that no identified post-reboot writer or deleg
 Coordinate no new direct starts or Git configuration changes during the transition. Before the
 wrapper's first Git command, the host checks its qualified Git binary and existing global, common
 and linked-worktree configuration without following config includes; unsupported includes, filters,
-helpers or worktree config are refused. The qualified GitHub credential helper remains unchanged.
+helpers or worktree config are refused. A qualified worktree config may contain only one nonempty,
+single-line `codex.localEnvironmentConfigPath` metadata entry. Its regular file must belong to the
+current user, not be group- or world-writable, and retain its identity and metadata while read.
+This permits the observed Git metadata; it does not attest what Codex may do with its value. The
+qualified GitHub credential helper remains unchanged.
 This is a coordinated host check, not a fence against uncoordinated file writers. Other legacy runs
 except the separately scoped #6560 and #6561 procedures below, and any unknown active work, remain unresolved.
 

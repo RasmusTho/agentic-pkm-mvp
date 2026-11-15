@@ -24,6 +24,11 @@ the claim and acknowledgment transition. The supported host and run scope, proce
 limits, and resume procedure are specified in [Multi-Agent Workspace Guardrails](DEV_WORKFLOW.md#multi-agent-workspace-guardrails).
 Before a claim, the operator path screens the registered and live checkout inventory against the
 declared model workspace using the same boundary as the native successor proof.
+Its Git configuration screen accepts a linked worktree config only when a no-follow read of a
+stable, user-owned, non-group-writable regular file yields exactly one nonempty, single-line
+`codex.localEnvironmentConfigPath` entry. Other worktree configuration remains unsupported. This
+is a Git input qualification under the coordinated no-config-changes assumption, not a lock or
+an attestation of the metadata's consumer.
 
 The separately qualified #6560 operator path may prepare a dirty candidate only for its two
 identified files. Its registration readback binds their original index blobs, working-file hashes,

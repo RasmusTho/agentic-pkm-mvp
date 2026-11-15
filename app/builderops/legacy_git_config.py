@@ -23,7 +23,7 @@ class ConfigError(ValueError):
     """Git configuration cannot safely be used for legacy pickup."""
 
 
-def _read(path: Path, *, optional: bool = False) -> bytes | None:
+def _read(path: Path, *, optional: bool = False, worktree_metadata: bool = False) -> bytes | None:
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
@@ -34,7 +34,8 @@ def _read(path: Path, *, optional: bool = False) -> bytes | None:
         raise ConfigError('Git configuration is unavailable') from None
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 1_000_000:
+        if (not stat.S_ISREG(info.st_mode) or info.st_size > 1_000_000
+                or (worktree_metadata and (info.st_uid != os.getuid() or info.st_mode & 0o022))):
             raise ConfigError('Git configuration is unsupported')
         chunks: list[bytes] = []
         size = 0
@@ -46,6 +47,17 @@ def _read(path: Path, *, optional: bool = False) -> bytes | None:
             size += len(chunk)
             if size > 1_000_000:
                 raise ConfigError('Git configuration is unsupported')
+        if worktree_metadata:
+            try:
+                after = os.fstat(fd)
+                named = os.lstat(path)
+            except OSError:
+                raise ConfigError('worktree configuration is unavailable') from None
+            fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+            if (not stat.S_ISREG(named.st_mode)
+                    or any(getattr(info, field) != getattr(after, field)
+                           or getattr(after, field) != getattr(named, field) for field in fields)):
+                raise ConfigError('worktree configuration changed during read')
         return b''.join(chunks)
     finally:
         os.close(fd)
@@ -104,7 +116,7 @@ def _qualified_credential_helper(key: bytes, value: bytes) -> bool:
 
 
 def _screen(data: bytes, *, global_config: bool = False,
-            absent_worktree_configs: bool = False) -> None:
+            qualified_worktree_configs: bool = False, worktree_metadata_only: bool = False) -> None:
     # Git parses bounded bytes on stdin in a neutral directory; never emit values.
     with tempfile.TemporaryDirectory(prefix='legacy-config-') as temp:
         try:
@@ -115,7 +127,19 @@ def _screen(data: bytes, *, global_config: bool = False,
             raise ConfigError('Git configuration cannot be checked') from None
         if result.returncode or len(result.stdout) > 2_000_000:
             raise ConfigError('Git configuration cannot be checked')
-        for entry in result.stdout.split(b'\0'):
+        fields = result.stdout.split(b'\0')
+        if fields[-1] or any(not entry for entry in fields[:-1]):
+            raise ConfigError('Git configuration cannot be checked')
+        entries = fields[:-1]
+        if worktree_metadata_only:
+            if len(entries) != 1:
+                raise ConfigError('worktree configuration is unsupported')
+            key, separator, value = entries[0].partition(b'\n')
+            if (key.lower() != b'codex.localenvironmentconfigpath' or not separator or not value
+                    or b'\r' in value or b'\n' in value):
+                raise ConfigError('worktree configuration is unsupported')
+            return
+        for entry in entries:
             if not entry:
                 continue
             key, _, value = entry.partition(b'\n')
@@ -134,7 +158,7 @@ def _screen(data: bytes, *, global_config: bool = False,
                     or key.endswith((b'.helper', b'.command', b'.process', b'.clean', b'.smudge', b'.program', b'.driver'))
                     or (key == b'extensions.worktreeconfig' and
                         (value.lower() not in (b'', b'true', b'yes', b'on', b'1', b'false', b'no', b'off', b'0')
-                         or (not absent_worktree_configs
+                         or (not qualified_worktree_configs
                              and value.lower() not in (b'false', b'no', b'off', b'0'))))):
                 raise ConfigError('Git configuration contains unsupported directives')
 
@@ -174,12 +198,13 @@ def check(*, cwd: Path, worktree: Path) -> None:
         for directory in {source, candidate}:
             if _common(directory) != common:
                 raise ConfigError('Git checkout common directories differ')
-            if _read(directory / 'config.worktree', optional=True) is not None:
-                raise ConfigError('worktree configuration is unsupported')
+            worktree_data = _read(directory / 'config.worktree', optional=True, worktree_metadata=True)
+            if worktree_data is not None:
+                _screen(worktree_data, worktree_metadata_only=True)
         data = _read(common / 'config')
         if data is None:
             raise ConfigError('Git configuration is unavailable')
-        _screen(data, absent_worktree_configs=True)
+        _screen(data, qualified_worktree_configs=True)
     except OSError:
         raise ConfigError('Git configuration is unavailable') from None
 
