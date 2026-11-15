@@ -349,6 +349,7 @@ def _read_task_events(*, cwd: Path, task_id: str) -> list[dict[str, Any]]:
 
 def preflight_operator_pickup(
     *, cwd: Path, issue: int, pr: int, worktree: Path, agent: str, session: str, comment_id: int,
+    workspace_root: Path,
 ) -> dict[str, Any]:
     """Read the scoped operator decision and current sources before a claim.
 
@@ -360,6 +361,10 @@ def preflight_operator_pickup(
             or not isinstance(agent, str) or not agent or agent.strip() != agent
             or type(comment_id) is not int or comment_id <= 0):
         raise RecoveryEvidenceError("current Builder successor session is unavailable")
+    try:
+        agent_worktree._screen_transfer_workspace(cwd, worktree, workspace_root)
+    except agent_worktree.WorktreeLifecycleError as exc:
+        raise RecoveryEvidenceError("operator workspace boundary is invalid") from exc
     try:
         comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
         receipt, pending_at, _ = agent_worktree._transfer_comment(
@@ -597,7 +602,8 @@ def execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
     or blindly retried. The caller must still apply all delivery consumers.
     """
     preflight = preflight_operator_pickup(cwd=cwd, issue=issue, pr=pr, worktree=worktree,
-                                         agent=agent, session=session, comment_id=comment_id)
+                                         agent=agent, session=session, comment_id=comment_id,
+                                         workspace_root=workspace_root)
     prior, registration, candidate = preflight["predecessor"], preflight["registration"], preflight["candidate"]
     receipt, pending_comment = preflight["receipt"], preflight["pending_comment"]
     delay = max(0.0, preflight["pending_created_at"] + 1.05 - time.time())
@@ -649,6 +655,10 @@ def resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, ag
     """Reconcile an existing claim and exact ACK without repeating a write."""
     if not session or session != os.environ.get("CODEX_SESSION_ID"):
         raise RecoveryEvidenceError("current Builder successor session is unavailable")
+    try:
+        agent_worktree._screen_transfer_workspace(cwd, worktree, workspace_root)
+    except agent_worktree.WorktreeLifecycleError as exc:
+        raise RecoveryEvidenceError("operator workspace boundary is invalid") from exc
     try:
         pending_comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
         pending, pending_at, pending_digest = agent_worktree._transfer_comment(

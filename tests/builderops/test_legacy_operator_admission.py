@@ -82,7 +82,7 @@ def test_operator_wrapper_delegates_after_issue_readback_without_normal_pickup(t
     resume_flag = ["--operator-resume"] if action == "resume" else []
     result = harness._run(worktree, env, *resume_flag, "--takeover-stale", "--target-worktree", str(worktree),
                           "--operator-comment-id", "12", "--operator-pr", "34",
-                          "--operator-workspace-root", str(tmp_path))
+                          "--operator-workspace-root", str(tmp_path / "model"))
     assert result.returncode == 0, result.stdout + result.stderr
     log = Path(env["COMMAND_LOG"]).read_text()
     assert "gh api repos/RasmusTho/agentic-pkm-mvp/issues/3301" in log
@@ -171,3 +171,35 @@ def test_wrapper_arguments_drive_real_host_cli_and_resume_existing_ack(tmp_path,
     receipt = [line for line in output if line.startswith("pickup-claim-complete ")]
     assert len(receipt) == 1 and f"issue=6601 branch=codex/example worktree={case['worktree']} " in receipt[0]
     assert "coordination_mode=dispatcher-backed" in receipt[0]
+
+
+@pytest.mark.parametrize("case", ["relative", "root", "target", "target_symlink", "script", "missing_target"])
+def test_operator_workspace_refused_before_git_or_external_reads(tmp_path, case):
+    import os
+    import subprocess
+
+    script = Path(__file__).resolve().parents[2] / "scripts/issue_pickup_claim.sh"
+    target = tmp_path / "workspace" / "checkout"
+    target.mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(target.parent, target_is_directory=True)
+    roots = {"relative": "relative/model", "root": "/", "target": str(target.parent),
+             "target_symlink": str(alias), "script": str(script.parent.parent),
+             "missing_target": str(tmp_path / "safe")}
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls"
+    for name in ("git", "gh"):
+        executable = bin_dir / name
+        executable.write_text('#!/bin/sh\nprintf "%s\\n" "invoked" >> "$CALL_LOG"\nexit 1\n')
+        executable.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:/usr/bin:/bin", "CALL_LOG": str(log),
+           "JSON_PYTHON": sys.executable}
+    args = ["bash", str(script), "--issue", "3301", "--takeover-stale", "--operator-comment-id", "1",
+            "--operator-pr", "2", "--operator-workspace-root", roots[case]]
+    if case != "missing_target":
+        args += ["--target-worktree", str(target)]
+    result = subprocess.run(args, cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+    assert "operator pickup" in result.stderr
+    assert not log.exists()

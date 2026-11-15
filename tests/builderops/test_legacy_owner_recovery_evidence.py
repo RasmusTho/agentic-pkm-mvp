@@ -117,7 +117,7 @@ def test_operator_preflight_reads_current_sources_and_refuses_claim_drift(eviden
     monkeypatch.setattr(recovery, "_verify_pr_origin", lambda **_kwargs: None)
 
     args = dict(cwd=tmp_path, issue=6601, pr=6602, worktree=Path(prior["path"]),
-                agent="new-agent", session="new-session", comment_id=123)
+                agent="new-agent", session="new-session", comment_id=123, workspace_root=tmp_path / "model")
     assert preflight_operator_pickup(**args)["predecessor"]["session"] is None
     monkeypatch.setattr(recovery, "read_live_predecessor", lambda **_kwargs: {**observed["predecessor"], "lease_id": "changed"})
     with pytest.raises(RecoveryEvidenceError, match="legacy claimant history is not eligible"):

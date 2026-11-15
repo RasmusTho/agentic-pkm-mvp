@@ -123,6 +123,32 @@ if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
     exit 2
   fi
 fi
+if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+  if [[ "$TARGET_WORKTREE_EXPLICIT" -ne 1 || -z "$TARGET_WORKTREE" ]]; then
+    echo "operator pickup requires an explicit target worktree" >&2
+    exit 2
+  fi
+  if ! OPERATOR_WORKSPACE_ROOT="$OPERATOR_WORKSPACE_ROOT" \
+    OPERATOR_TARGET_WORKTREE="$TARGET_WORKTREE" OPERATOR_SCRIPT_ROOT="$SCRIPT_REPO_ROOT" \
+    "$JSON_PYTHON_BIN" - <<'PY_CHECK'
+import os
+from pathlib import Path
+
+root = Path(os.environ["OPERATOR_WORKSPACE_ROOT"])
+if not root.is_absolute():
+    raise SystemExit("operator workspace root must be absolute")
+root = root.expanduser().resolve(strict=False)
+if root == Path("/"):
+    raise SystemExit("operator workspace root cannot be /")
+for name in ("OPERATOR_SCRIPT_ROOT", "OPERATOR_TARGET_WORKTREE"):
+    if Path(os.environ[name]).expanduser().resolve(strict=False).is_relative_to(root):
+        raise SystemExit("operator checkout must be outside model workspaces")
+PY_CHECK
+  then
+    echo "operator pickup refused: workspace root is invalid or overlaps a checkout" >&2
+    exit 1
+  fi
+fi
 if ! [[ "$TTL_MINUTES" =~ ^[1-9][0-9]*$ ]]; then
   echo "--ttl-minutes must be a positive integer" >&2
   exit 2

@@ -186,6 +186,24 @@ def test_recovery_refuses_authority_or_candidate_drift(operator_case, drift):
     assert 2 not in case["comments"]
 
 
+@pytest.mark.parametrize("kind", ["root", "relative", "overlap"])
+def test_operator_rejects_workspace_before_read_or_claim(operator_case, monkeypatch, kind):
+    case = operator_case
+    args = _args(case)
+    args["workspace_root"] = Path("/") if kind == "root" else (
+        Path("relative") if kind == "relative" else case["worktree"])
+
+    def unexpected_read(*_args, **_kwargs):
+        pytest.fail("workspace boundary was checked after a host read")
+
+    monkeypatch.setattr(recovery, "_github_read", unexpected_read)
+    monkeypatch.setattr(recovery, "read_live_predecessor", unexpected_read)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="workspace boundary"):
+        recovery.execute_operator_pickup(**args)
+    assert case["store"].get_task(case["receipt"]["predecessor"]["task_id"]).lease_id == case["old_lease"].lease_id
+    assert 2 not in case["comments"]
+
+
 @pytest.mark.parametrize("unknown", ["execution", "delegations", "restart", "publication"])
 def test_unknown_writer_or_publication_blocks_recovery(operator_case, unknown):
     case = operator_case
@@ -381,7 +399,7 @@ def test_operator_preflight_allows_unpublished_descendant(operator_case):
     receipt["candidate"] = recovery.read_clean_candidate(cwd=case["cwd"], worktree=case["worktree"])
     receipt["unpublished_candidate_head"] = receipt["candidate"]["head"]
     case["comments"][1] = _comment(receipt, 1, time.time() - 5)
-    observed = recovery.preflight_operator_pickup(**{k: v for k, v in _args(case).items() if k != "workspace_root"})
+    observed = recovery.preflight_operator_pickup(**_args(case))
     assert observed["candidate"]["head"] != observed["publication"]["head"]
 
 
