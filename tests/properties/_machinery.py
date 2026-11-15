@@ -906,6 +906,12 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "write_note_relative(create_once=True); its shared create-once seam "
         "asserts WriteGuard before path resolution or I/O."
     ),
+    ("app/ops/native_operations_fixture.py", "prepare_fixture", 1): (
+        "guarded_by_port: fixed preparation passes its live health/local-write-ceiling "
+        "guard to canonical create-once publication, which asserts it before I/O; "
+        "the caller also issues/validates the existing GOV token and records the "
+        "actual mutation outcome (#6560)."
+    ),
     ("app/ops/native_web_fixture.py", "bootstrap_fixture", 1): (
         "guarded_by_port: bootstrap_fixture writes the synthetic primary source "
         "through write_note_relative without a caller-side WriteGuard assertion; "
@@ -972,6 +978,10 @@ WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
     ),
     ("app/ops/native_journaling_acceptance.py", "bootstrap", 1): (
         "create_once: the existing #6050 synthetic source preserves any existing fixture target."
+    ),
+    ("app/ops/native_operations_fixture.py", "prepare_fixture", 1): (
+        "create_once: fixed operation-owned synthetic seeds preserve a concurrent winner; "
+        "actual conflicts stop with failed GOV receipts and unknown effects cannot replay."
     ),
     ("app/ops/native_web_fixture.py", "bootstrap_fixture", 1): (
         "create_once: the synthetic primary source preserves an existing fixture target."
