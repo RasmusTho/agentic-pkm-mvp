@@ -118,7 +118,7 @@ class Port:
         return CommandResult(a, code, out, '')
 
 
-def prepare(tmp_path, monkeypatch, *, real_authority=False, parent_scope=False):
+def prepare(tmp_path, monkeypatch, *, real_authority=False, parent_scope=False, automatic_path=None):
     host = (tmp_path / 'host').resolve()
     host.mkdir()
     body = BODY
@@ -214,7 +214,22 @@ def prepare(tmp_path, monkeypatch, *, real_authority=False, parent_scope=False):
                           takeover={'status': 'consumed', 'stop_id': mapping['stop_id'], 'generation': 1})
     monkeypatch.setattr(ew, '_takeover_locked', takeover)
     monkeypatch.setattr(ew, '_start_openhands_worker_locked', launch)
-    assert cycle.advance(layout, config, fetch=collector, http=server)['results'][1]['action'] == 'repair-author'
+    admissions = config
+    if automatic_path is not None:
+        assert real_authority
+        (host / 'tests').mkdir()
+        (host / 'tests/example.py').write_text('def test_example():\n    assert True\n')
+        settings = {key: config[0][key] for key in ('claimant', 'session', 'engine', 'model', 'test_venv')}
+        settings['lifecycle_repo'] = str(host)
+        # Selection hint for the same registration; the native reader remains real.
+        monkeypatch.setattr(cycle.agent_worktree, 'load_lifecycle_records', lambda root:
+                            {str(host): {**registration, 'status': 'active'}})
+        automatic_path.write_text(json.dumps({'automatic_native': settings, 'admissions': []}))
+        automatic_path.chmod(0o600)
+        admissions = automatic_path
+    assert cycle.advance(layout, admissions, fetch=collector, http=server)['results'][1]['action'] == 'repair-author'
+    if automatic_path is not None:
+        config[:] = json.loads(automatic_path.read_text())['admissions']
     author = cycle._mapping(layout, 'reviewer')['conversation']
     server.conversations[author['id']]['execution_status'] = 'finished'
     monkeypatch.setattr(cycle, 'native_execution_proof', lambda layout, worker, op, admission, **kw: {
@@ -232,7 +247,12 @@ def prepare(tmp_path, monkeypatch, *, real_authority=False, parent_scope=False):
     monkeypatch.setattr(ew, 'stop_worker', author_stop)
     monkeypatch.setattr(cycle, 'SubprocessExecutor', lambda **kwargs: port)
     config[0]['repair_publication'] = {'candidate_head': NEW}
-    bound = cycle.advance(layout, config, fetch=collector, http=server)['results'][1]
+    if automatic_path is not None:
+        with cycle._single_advancement(layout):
+            value = json.loads(automatic_path.read_text())
+            value['admissions'] = config
+            automatic_path.write_text(json.dumps(value))
+    bound = cycle.advance(layout, admissions, fetch=collector, http=server)['results'][1]
     assert bound['action'] == 'awaiting-candidate-review', bound
     pr = {'number': 10, 'head_sha': HEAD, 'body': body, 'title': TITLE, 'draft': False,
           'restrictions': [], 'governing_issue': {'body': governing_body, 'state': 'open'}}

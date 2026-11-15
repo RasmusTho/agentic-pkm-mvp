@@ -77,6 +77,54 @@ def repaired_review(tmp_path, capsys, monkeypatch):
     return data, fetch, identity, server, home
 
 
+def _private_test_venv(path):
+    # The real controller guard requires private fixture output regardless of CI's umask.
+    previous_umask = os.umask(0o077)
+    try:
+        venv_module.EnvBuilder(system_site_packages=True, symlinks=False).create(path)
+    finally:
+        os.umask(previous_umask)
+
+
+def test_private_test_venv_modes_and_real_guard_under_permissive_umask(tmp_path):
+    layout = ew.Layout(tmp_path / 'workers', 6615)
+    private = tmp_path / 'private-venv'
+    inherited = tmp_path / 'inherited-venv'
+    previous_umask = os.umask(0o002)
+    try:
+        _private_test_venv(private)
+        assert os.umask(0o002) == 0o002
+        assert cycle._test_venv_source(layout, str(private)) == private
+        assert private.stat().st_mode & 0o777 == 0o700
+        assert (private / 'pyvenv.cfg').stat().st_mode & 0o777 == 0o600
+        # Both negatives reach the unmodified production guard on owned real venvs.
+        venv_module.EnvBuilder(system_site_packages=True, symlinks=False).create(inherited)
+        assert inherited.stat().st_mode & 0o777 == 0o775
+        assert (inherited / 'pyvenv.cfg').stat().st_mode & 0o777 == 0o664
+        with pytest.raises(cycle.CycleError, match='ownership or mode is unsafe'):
+            cycle._test_venv_source(layout, str(inherited))
+        (private / 'pyvenv.cfg').chmod(0o664)
+        with pytest.raises(cycle.CycleError, match='ownership or mode is unsafe'):
+            cycle._test_venv_source(layout, str(private))
+    finally:
+        os.umask(previous_umask)
+
+
+def test_private_test_venv_restores_umask_after_creation_failure(tmp_path, monkeypatch):
+    def failed_creation(self, path):
+        assert os.umask(0o077) == 0o077
+        raise OSError('synthetic venv creation failure')
+
+    monkeypatch.setattr(venv_module.EnvBuilder, 'create', failed_creation)
+    previous_umask = os.umask(0o002)
+    try:
+        with pytest.raises(OSError, match='synthetic venv creation failure'):
+            _private_test_venv(tmp_path / 'failed-venv')
+        assert os.umask(0o002) == 0o002
+    finally:
+        os.umask(previous_umask)
+
+
 def verify_fixture(tmp_path, capsys, monkeypatch, *, fail=False, lose=False, lose_output=False, repaired=False,
                    missing_api=False, test_source=None, sol=False):
     source = test_source or ('def test_example(): assert False\n' if fail else 'def test_example(): pass\n')
@@ -88,7 +136,7 @@ def verify_fixture(tmp_path, capsys, monkeypatch, *, fail=False, lose=False, los
     venv = tmp_path / 'approved-venv'
     # Copy the executing runtime: CI's toolcache path is not present in the worker image.
     # This is an owned fixture, not an escape from the production interpreter allowlist.
-    venv_module.EnvBuilder(system_site_packages=True, symlinks=False).create(venv)
+    _private_test_venv(venv)
     entry['test_venv'] = str(venv)
     events = []
     calls = []

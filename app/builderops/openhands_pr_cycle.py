@@ -5509,6 +5509,36 @@ def _advance_bound_publication(layout: workspace.Layout, path: Path | None, pr: 
             "head_sha": new, "reason": "admission refreshed; obtain fresh new-head review, Verify and CI"}
 
 
+def _pending_repair_candidates(state: Mapping[str, Any], number: int,
+                               entry: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Discover original operations by PR, even when their admission was lost or replaced.
+
+    Only the bound publisher's terminal readback settles a candidate. An old-head
+    row still needs its confirmed refresh; otherwise ordinary admission can resume.
+    """
+    pending = []
+    for row in state["compact_receipts"]:
+        if not isinstance(row, dict) or row.get("kind") != "pr_cycle" or row.get("number") != number:
+            continue
+        candidate, attempt = row.get("repair_candidate"), row.get("repair_publication")
+        if not isinstance(candidate, dict) and attempt is None:
+            continue
+        if isinstance(candidate, dict) and isinstance(attempt, dict):
+            head = candidate.get("candidate_head")
+            bound = attempt.get("candidate")
+            original = attempt.get("previous_candidate")
+            if (attempt.get("state") == "native_published" and isinstance(head, str)
+                    and re.fullmatch(r"[0-9a-f]{40}", head) and attempt.get("published_head") == head
+                    and attempt.get("pr_number") == number and isinstance(bound, dict)
+                    and bound.get("head") == head and bound.get("identity") == row.get("identity")
+                    and isinstance(original, dict) and original.get("head") == candidate.get("old_head")
+                    and bound.get("repair_operation") == candidate.get("operation_id") == row.get("repair_operation")
+                    and (entry is None or entry.get("head_sha") != candidate.get("old_head"))):
+                continue
+        pending.append(row)
+    return pending
+
+
 def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *,
             fetch: observation.Fetch = github_fetch, http: Callable[..., tuple[int, Any]] = workspace._http,
             codex_home: Path | None = None,
@@ -5542,16 +5572,14 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
                     continue
                 try:
                     previous = generated.get(auto_number)
-                    if previous is None and any(isinstance(r, dict) and r.get("kind") == "pr_cycle"
-                            and r.get("number") == auto_number and r.get("repair_publication") is not None
-                            for r in state["compact_receipts"]):
-                        raise CycleError("existing publication requires its persisted admission; restore through resume-work")
-                    candidates = [r for r in state["compact_receipts"] if isinstance(r, dict)
-                                  and r.get("kind") == "pr_cycle" and r.get("number") == auto_number
-                                  and isinstance(r.get("repair_candidate"), dict) and previous is not None
-                                  and r["repair_candidate"].get("old_head") == previous["head_sha"]]
+                    candidates = _pending_repair_candidates(state, auto_number, previous)
                     if candidates:
-                        if previous is None or previous["_automatic_native"] != automatic:
+                        if previous is None:
+                            raise CycleError("existing candidate/publication requires its persisted admission; restore through resume-work")
+                        if (len(candidates) != 1 or not isinstance(candidates[0].get("repair_candidate"), dict)
+                                or previous["head_sha"] != candidates[0]["repair_candidate"].get("old_head")):
+                            raise CycleError("existing candidate/publication requires its original admission; restore through resume-work")
+                        if previous["_automatic_native"] != automatic:
                             raise CycleError("automatic scope changed during candidate reconciliation")
                         # Preserve the old-head entry until the existing candidate/publication
                         # path reconciles and refreshes it. A newly observed head is not a receipt.
@@ -5619,17 +5647,17 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
                    for item in obligations):
                 continue
             entry = admitted.get(number)
-            pending_publications = [row for row in state["compact_receipts"]
-                                    if isinstance(row, dict) and row.get("kind") == "pr_cycle"
-                                    and row.get("number") == number and isinstance(row.get("repair_candidate"), dict)
-                                    and entry is not None
-                                    and row["repair_candidate"].get("old_head") == entry.get("head_sha")]
+            pending_publications = _pending_repair_candidates(state, number, entry)
             if pending_publications:
-                entry = cast(dict[str, Any], entry)
                 try:
                     if len(pending_publications) != 1 or obligations:
                         raise CycleError("publication or merge reconciliation is ambiguous")
                     saved = dict(pending_publications[0])
+                    if entry is None:
+                        raise CycleError("existing candidate/publication requires its persisted admission; restore through resume-work")
+                    if (not isinstance(saved.get("repair_candidate"), dict)
+                            or saved["repair_candidate"].get("old_head") != entry.get("head_sha")):
+                        raise CycleError("existing candidate/publication requires its original admission; restore through resume-work")
                     requested = entry.get("repair_publication")
                     explicit = (isinstance(requested, Mapping) and isinstance(requested.get("evidence_file"), str)
                                 and isinstance(requested.get("paths"), list))

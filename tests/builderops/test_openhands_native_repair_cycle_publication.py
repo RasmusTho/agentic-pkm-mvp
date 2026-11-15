@@ -84,11 +84,16 @@ def test_advance_waits_for_current_evidence(tmp_path, monkeypatch, fault):
     assert not any(c[:2] == ('git', 'push') for c in data[4].calls)
 
 
-def test_unknown_publication_does_not_stop_peer_review(tmp_path, monkeypatch):
+@pytest.mark.parametrize('missing_candidate_admission', [False, True])
+def test_unknown_publication_does_not_stop_peer_review(tmp_path, monkeypatch, missing_candidate_admission):
     from app.builderops import epic_workspace as ew
     from tests.builderops.test_epic_workspace_isolation import FakeEngine
 
-    data, path = prepared(tmp_path, monkeypatch)
+    if missing_candidate_admission:
+        data, path = _automatic_bound_candidate(tmp_path, monkeypatch)
+        tick(data, path)
+    else:
+        data, path = prepared(tmp_path, monkeypatch)
     layout, port, server, original_fetch = data[0], data[4], data[7], data[8]
     port.fail_push = True
     worker, cid = 'peer', 'f' * 64
@@ -106,7 +111,9 @@ def test_unknown_publication_does_not_stop_peer_review(tmp_path, monkeypatch):
     monkeypatch.setattr(cycle, '_worker_runner', engine)
     config = json.loads(path.read_text())
     peer = {**config['admissions'][0], 'number': 11, 'worker': worker}
-    peer.pop('repair_publication')
+    peer.pop('repair_publication', None)
+    for key in ('_automatic_native', '_automatic_context', '_automatic_owner_binding'):
+        peer.pop(key, None)
     peer_host = tmp_path / 'peer-owner'
     peer_host.mkdir()
     peer.update(claimant='peer-owner', session='peer-builder-session', lease_id='peer-lease',
@@ -135,6 +142,8 @@ def test_unknown_publication_does_not_stop_peer_review(tmp_path, monkeypatch):
     monkeypatch.setattr(cycle.closure, '_pr', lambda executor, cwd, repo, number:
                         {'head': {'sha': HEAD, 'ref': 'codex/peer'}} if number == 11 else original_pr(executor, cwd, repo, number))
     config['admissions'].append(peer)
+    if missing_candidate_admission:
+        config['admissions'] = [peer]
     path.write_text(json.dumps(config))
     def collector(route, timeout):
         if '/pulls?state=open' in route:
@@ -156,7 +165,7 @@ def test_unknown_publication_does_not_stop_peer_review(tmp_path, monkeypatch):
     assert 11 in actions, first
     assert actions[11]['action'] == 'independent-review', actions[11]
     assert any(call[0] == 'POST' and call[3]['tags']['worker'] == worker for call in server.calls)
-    assert len([c for c in port.calls if c[:2] == ('git', 'push')]) == 1
+    assert len([c for c in port.calls if c[:2] == ('git', 'push')]) == (0 if missing_candidate_admission else 1)
 
 
 def test_applied_readback_precedes_fresh_evidence_check(tmp_path, monkeypatch):
@@ -212,19 +221,81 @@ def test_automatic_admission_reconciles_original_publication_before_new_head(tmp
 
 def _automatic_bound_candidate(tmp_path, monkeypatch):
     """Real automatic producer/native reader/publisher; reuse the existing synthetic authority ports."""
-    data, path = prepared(tmp_path, monkeypatch)
-    registration = data[6]['worktree_owner']
-    source = cycle.Path(registration['path'])
-    (source / 'tests').mkdir()
-    (source / 'tests/example.py').write_text('def test_example():\n    assert True\n')
-    settings = {key: data[1][0][key] for key in ('claimant', 'session', 'engine', 'model', 'test_venv')}
-    settings['lifecycle_repo'] = str(source)
-    # The fixture already supplies native worktree authority as a port. This is the same
-    # registration's selection hint, not a replacement for native_authority or its claim checks.
-    monkeypatch.setattr(cycle.agent_worktree, 'load_lifecycle_records', lambda root:
-                        {str(source): {**registration, 'status': 'active'}})
-    path.write_text(json.dumps({'automatic_native': settings, 'admissions': []}))
+    path = tmp_path / 'controller-admissions.json'
+    # Persist real automatic admission before producing the candidate. Emptying an
+    # existing candidate's admission would exercise loss/recovery, not first intake.
+    data = prepare(tmp_path, monkeypatch, real_authority=True, automatic_path=path)
+    data[1][0]['repair_publication'].update(paths=['feature.txt'], evidence_file=str(data[5]))
     return data, path
+
+
+@pytest.mark.parametrize('row_state', ['retained', 'missing', 'replaced'])
+@pytest.mark.parametrize('observed_head', [HEAD, NEW], ids=['same-head', 'changed-head'])
+def test_unpublished_candidate_fences_admission_before_rederivation(tmp_path, monkeypatch, row_state, observed_head):
+    data, path = _automatic_bound_candidate(tmp_path, monkeypatch)
+    tick(data, path)
+    before = cycle.workspace._load_state(data[0])
+    original = [r for r in before['compact_receipts'] if r.get('kind') == 'pr_cycle']
+    assert len(original) == 1 and original[0]['repair_candidate']['old_head'] == HEAD
+    assert original[0].get('repair_publication') is None
+    config = json.loads(path.read_text())
+    original_row = dict(config['admissions'][0])
+    if row_state == 'missing':
+        config['admissions'] = []
+    elif row_state == 'replaced':
+        config['admissions'][0]['head_sha'] = NEW
+    path.write_text(json.dumps(config))
+    expected_config = path.read_bytes()
+    data[4].remote = observed_head
+    result = tick(data, path)
+    after = cycle.workspace._load_state(data[0])
+    assert path.read_bytes() == expected_config, result
+    cycles = [r for r in after['compact_receipts'] if r.get('kind') == 'pr_cycle']
+    assert len(cycles) == 1 and cycles[0]['identity'] == original[0]['identity']
+    assert cycles[0]['repair_candidate'] == original[0]['repair_candidate']
+    if row_state != 'retained' or observed_head != HEAD:
+        assert result['results'][-1]['action'] == 'wait', result
+        assert after['dispatch_decisions'] == before['dispatch_decisions']
+    assert not any(c[:2] == ('git', 'push') for c in data[4].calls)
+    # Restore only the original controller record; no regenerated authority is used.
+    if row_state != 'retained':
+        config['admissions'] = [original_row]
+        path.write_text(json.dumps(config))
+        data[4].remote = HEAD
+        resumed = tick(data, path)
+        assert admission(path) == original_row, resumed
+        assert 'persisted admission' not in resumed['results'][-1].get('reason', '')
+
+
+@pytest.mark.parametrize('publication_state', [
+    'native_published', 'update_pushed', 'check_readback_pending', 'native_published_wrong_head',
+])
+def test_only_terminal_publication_allows_missing_row_readmission(tmp_path, monkeypatch, publication_state):
+    data, path = _automatic_bound_candidate(tmp_path, monkeypatch)
+    tick(data, path)
+    config = json.loads(path.read_text())
+    config['admissions'][0]['repair_publication'] = data[1][0]['repair_publication']
+    path.write_text(json.dumps(config))
+    assert tick(data, path)['results'][-1]['action'] == 'published-awaiting-new-head-review'
+    state = cycle.workspace._load_state(data[0])
+    saved = next(r for r in state['compact_receipts'] if r.get('kind') == 'pr_cycle')
+    assert saved['repair_publication']['state'] == 'native_published'
+    assert saved['repair_publication']['published_head'] == NEW
+    if publication_state == 'native_published_wrong_head':
+        saved['repair_publication']['published_head'] = HEAD
+    else:
+        saved['repair_publication']['state'] = publication_state
+    cycle._save(data[0], saved)
+    config['admissions'] = []
+    path.write_text(json.dumps(config))
+    result = tick(data, path)
+    rows = json.loads(path.read_text())['admissions']
+    if publication_state == 'native_published':
+        assert len(rows) == 1 and rows[0]['head_sha'] == NEW, result
+        assert rows[0]['_automatic_context'] and rows[0]['_automatic_owner_binding']
+    else:
+        assert rows == [] and result['results'][-1]['action'] == 'wait', result
+    assert len([c for c in data[4].calls if c[:2] == ('git', 'push')]) == 1
 
 
 @pytest.mark.parametrize('lost_readback', [False, True])
@@ -263,16 +334,18 @@ def test_empty_automatic_config_composes_bound_publication_refresh_and_restart(t
     assert len([c for c in data[4].calls if c[:2] == ('git', 'push')]) == 1
 
 
-def test_missing_automatic_row_holds_unsettled_publication_instead_of_readmitting(tmp_path, monkeypatch):
+@pytest.mark.parametrize('applied', [False, True], ids=['same-head', 'changed-head'])
+def test_missing_automatic_row_holds_unsettled_publication_instead_of_readmitting(tmp_path, monkeypatch, applied):
     data, path = _automatic_bound_candidate(tmp_path, monkeypatch)
     tick(data, path)
     config = json.loads(path.read_text())
     assert len(config['admissions']) == 1
     config['admissions'][0]['repair_publication'] = data[1][0]['repair_publication']
     path.write_text(json.dumps(config))
-    data[4].fail_history_once = True
+    data[4].fail_history_once = applied
+    data[4].fail_push = not applied
     assert tick(data, path)['results'][-1]['action'] == 'wait'
-    assert data[4].remote == NEW and admission(path)['head_sha'] == HEAD
+    assert data[4].remote == (NEW if applied else HEAD) and admission(path)['head_sha'] == HEAD
     # Lost controller configuration is not a fresh admission opportunity.
     original = path.read_text()
     config['admissions'] = []
@@ -284,8 +357,8 @@ def test_missing_automatic_row_holds_unsettled_publication_instead_of_readmittin
     assert len([c for c in data[4].calls if c[:2] == ('git', 'push')]) == 1
     # Restoring the existing controller record resumes the same effect, without a new push.
     path.write_text(original)
-    assert tick(data, path)['results'][-1]['action'] == 'published-awaiting-new-head-review'
-    assert admission(path)['head_sha'] == NEW
+    assert tick(data, path)['results'][-1]['action'] == ('published-awaiting-new-head-review' if applied else 'wait')
+    assert admission(path)['head_sha'] == (NEW if applied else HEAD)
     assert len([c for c in data[4].calls if c[:2] == ('git', 'push')]) == 1
 
 
