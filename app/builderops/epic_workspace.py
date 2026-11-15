@@ -63,7 +63,7 @@ OPENHANDS_PORT_RANGE = range(18700, 18800)
 CODEX_HOME_TARGET = "/run/codex-home"
 # Engine/model policy for epic workers (#6615 owner revisions 2026-11-12/12b).
 ENGINE_DEFAULT_MODELS = {"claude-code": "claude-sonnet-5-5", "codex": "gpt-6.1-terra"}
-_ENGINE_MODEL = {"claude-code": re.compile(r"^claude-[a-z0-9.-]{1,60}$"), "codex": re.compile(r"^gpt-6\.1-terra$")}
+_ENGINE_MODEL = {"claude-code": re.compile(r"^claude-[a-z0-9.-]{1,60}$"), "codex": re.compile(r"^gpt-6\.1-(?:terra|sol)$")}
 
 _WORKER_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
@@ -3481,6 +3481,58 @@ def resolve_engine(engine: str, model: str | None) -> tuple[str, str]:
     return engine, chosen
 
 
+def resolve_effort(engine: str, model: str, effort: str | None) -> str | None:
+    """Validate explicit per-conversation effort, preserving historical omitted settings."""
+    if effort is None:
+        if model == "gpt-6.1-sol":
+            raise LaunchRefused("gpt-6.1-sol requires explicit high effort")
+        return None
+    if engine != "codex" or effort not in ("high", "xhigh", "max", "ultra"):
+        raise LaunchRefused("unsupported explicit effort")
+    if model == "gpt-6.1-sol" and effort != "high":
+        raise LaunchRefused("gpt-6.1-sol requires explicit high effort")
+    return effort
+
+
+def verify_codex_subscription(mapping: Mapping[str, Any], runner: Runner = subprocess.run) -> None:
+    """Read the live container route and login without returning credential material."""
+    cid, image = mapping.get("container_id"), mapping.get("image")
+    credentials = mapping.get("credentials")
+    if (not isinstance(cid, str) or not re.fullmatch(r"[0-9a-f]{64}", cid)
+            or not isinstance(image, str) or not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image)
+            or not isinstance(credentials, Mapping) or credentials.get("codex") != "chatgpt-login-dir"):
+        raise LaunchRefused("native subscription configuration unavailable")
+    try:
+        def read(argv: list[str]) -> subprocess.CompletedProcess:
+            return runner(argv, capture_output=True, text=True, check=False, timeout=30)
+        container = read(["docker", "inspect", cid])
+        pinned = read(["docker", "image", "inspect", image])
+        row = json.loads(container.stdout)[0]
+        pinned_row = json.loads(pinned.stdout)[0]
+        env = row["Config"].get("Env", [])
+        forbidden = {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE",
+                     "CHATGPT_BASE_URL", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
+                     "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"}
+        if (container.returncode or pinned.returncode or row["Id"] != cid or row["Image"] != pinned_row["Id"]
+                or row["Config"]["Image"] != image or not isinstance(env, list)
+                or any(isinstance(x, str) and x.split("=", 1)[0] in forbidden for x in env)):
+            raise LaunchRefused("native subscription container not verified")
+        cli = "/acp-node/lib/node_modules/@agentclientprotocol/codex-acp/node_modules/@openai/codex/bin/codex.js"
+        login = read(["docker", "exec", cid, "/acp-node/bin/node", cli, "login", "status"])
+        if login.returncode or "logged in using chatgpt" not in (login.stdout + login.stderr).casefold():
+            raise LaunchRefused("native subscription login not verified")
+        check = ("import pathlib,tomllib; p=pathlib.Path('/run/codex-home/config.toml'); "
+                 "c=tomllib.loads(p.read_text()) if p.exists() else {}; "
+                 "assert c.get('model_provider') in (None,'openai'); assert c.get('openai_base_url') is None; "
+                 "assert c.get('chatgpt_base_url') in (None,'https://chatgpt.com/backend-api/'); "
+                 "assert not c.get('model_providers') and not c.get('profiles'); print('route-ok')")
+        route = read(["docker", "exec", cid, "python", "-c", check])
+        if route.returncode or route.stdout.strip() != "route-ok":
+            raise LaunchRefused("native subscription route not verified")
+    except (OSError, ValueError, KeyError, IndexError, TypeError, subprocess.TimeoutExpired) as exc:
+        raise LaunchRefused("native subscription readback unavailable") from exc
+
+
 CONVERSATION_ENDED = "ended_with_container"
 
 
@@ -3556,6 +3608,7 @@ def _start_conversation_locked(
     engine: str,
     model: str | None,
     prompt: str,
+    effort: str | None = None,
     operation_id: str | None = None,
     expected_owner_binding: Mapping[str, Any] | None = None,
     http: Callable[..., tuple[int, Any]] = _http,
@@ -3572,6 +3625,7 @@ def _start_conversation_locked(
     import uuid
 
     engine, model = resolve_engine(engine, model)
+    effort = resolve_effort(engine, model, effort)
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     expected = _worker_mapping(state, worker)
@@ -3582,6 +3636,8 @@ def _start_conversation_locked(
         raise EpicWorkspaceError(str(exc)) from exc
     conversation_id = str(uuid.uuid4())
     record: dict[str, Any] = {"id": conversation_id, "engine": engine, "model": model, "status": "creating", "at": _now()}
+    if effort is not None:
+        record["effort"] = effort
     if expected_owner_binding is not None:
         record["owner_binding"] = dict(expected_owner_binding)
     if operation_id is not None:
@@ -3610,6 +3666,8 @@ def _start_conversation_locked(
         "tags": {"epic": str(layout.epic), "issue": str(issue), "worker": worker},
         "initial_message": {"role": "user", "content": [{"type": "text", "text": prompt}]},
     }
+    if effort is not None:
+        payload["agent_settings"]["acp_effort"] = effort
     try:
         with _endpoint_session(layout, worker, issue, mapping, runner) as (port, key):
             if key != initial_key:
@@ -3637,10 +3695,10 @@ def _start_conversation_locked(
 @_serialized_worker
 def start_conversation(
     layout: Layout, worker: str, *, engine: str, model: str | None, prompt: str,
-    operation_id: str | None = None, http: Callable[..., tuple[int, Any]] = _http,
+    operation_id: str | None = None, effort: str | None = None, http: Callable[..., tuple[int, Any]] = _http,
     runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
-    return _start_conversation_locked(layout, worker, engine=engine, model=model, prompt=prompt,
+    return _start_conversation_locked(layout, worker, engine=engine, model=model, prompt=prompt, effort=effort,
                                       operation_id=operation_id, http=http, runner=runner)
 
 
@@ -3868,7 +3926,8 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
         "execution_status": info.get("execution_status") if isinstance(info, Mapping) else None,
         "agent_settings": ({"agent_kind": "acp" if info["agent"].get("kind") == "ACPAgent" else None,
                             "acp_server": info["agent"].get("acp_server"), "acp_model": info["agent"].get("acp_model"),
-                            "current_model_id": info.get("current_model_id")}
+                            "current_model_id": info.get("current_model_id"), "acp_effort": info["agent"].get("acp_effort"),
+                            "current_effort": info.get("current_effort")}
                            if isinstance(info.get("agent"), Mapping) else None),
         "event_kinds": [e.get("kind") for e in items if isinstance(e, Mapping)][-limit:],
         # Only identity/kind crosses into the coordinator; never copy message or tool content.
@@ -3928,6 +3987,7 @@ def _parser() -> argparse.ArgumentParser:
     cs.add_argument("--worker", required=True)
     cs.add_argument("--engine", default="claude-code", choices=sorted(ENGINE_DEFAULT_MODELS))
     cs.add_argument("--model")
+    cs.add_argument("--effort")
     cs.add_argument("--prompt-file", help="task text; required unless --continuation")
     cs.add_argument("--continuation", action="store_true", help="prefix the prompt with the brief rebuilt from run-state")
     ct = sub.add_parser("conversation-status")
@@ -4021,7 +4081,7 @@ def main(
             if args.prompt_file:
                 parts.append(Path(args.prompt_file).read_text(encoding="utf-8"))
             prompt = "\n\n".join(parts)
-            out = start_conversation(layout, args.worker, engine=args.engine, model=args.model, prompt=prompt, runner=runner, **_http_kw)
+            out = start_conversation(layout, args.worker, engine=args.engine, model=args.model, effort=args.effort, prompt=prompt, runner=runner, **_http_kw)
         elif args.cmd == "conversation-status":
             out = conversation_status(layout, args.worker, runner=runner, **_http_kw)
         elif args.cmd == "conversation-reconcile":

@@ -43,11 +43,12 @@ def test_uncertain_creation_reconciles_without_another_create(monkeypatch):
             return {"workers": [{"worker": "owner-sandbox", "container": "running"}]}
         if args[0] == "conversation-status":
             reads.append(1)
-            return {"conversation": {"id": "same-retained-id", "status": "created" if len(reads) > 1 else "unknown"}, "reachable": len(reads) > 1}
+            return {"conversation": {"id": "same-retained-id", "engine": "codex", "model": "gpt-6.1-terra", "status": "created" if len(reads) > 1 else "unknown"}, "reachable": len(reads) > 1}
         return {}
 
     monkeypatch.setattr(owner, "_controller", controller)
     monkeypatch.setattr(owner, "_sandbox_profile", lambda config: None)
+    monkeypatch.setattr(owner, "_sandbox_auth", lambda config: None)
     result = owner.run_command({"sandbox_url": "https://sandbox.example"}, "sandbox start")
     assert "is running" in result
     assert calls == ["status", "conversation-status", "conversation-reconcile", "conversation-status"]
@@ -61,6 +62,7 @@ def test_unreachable_creation_never_reports_readiness(monkeypatch):
 
     monkeypatch.setattr(owner, "_controller", controller)
     monkeypatch.setattr(owner, "_sandbox_profile", lambda config: None)
+    monkeypatch.setattr(owner, "_sandbox_auth", lambda config: None)
     result = owner.run_command({}, "sandbox start")
     assert "not verified reachable" in result and "is running" not in result
 
@@ -73,3 +75,70 @@ def test_start_producer_uses_the_qualified_native_configuration(monkeypatch):
     assert "epic-worker@sha256:3c3c2472" in calls[0][2]
     assert "epicws-6615-egress-20261114" in calls[0][2]
     assert "range(18840,18848)" in calls[0][2]
+
+
+def test_existing_sandbox_does_not_relabel_or_create_for_new_selection(monkeypatch):
+    calls = []
+    def controller(config, *args):
+        calls.append(args[0])
+        if args[0] == "status":
+            return {"workers": [{"worker": "owner-sandbox", "container": "running"}]}
+        if args[0] == "conversation-status":
+            return {"reachable": True, "conversation": {"id": "old", "status": "created",
+                    "engine": "codex", "model": "gpt-6.1-terra"}}
+        return {}
+    monkeypatch.setattr(owner, "_controller", controller)
+    assert "differs" in owner.run_command({}, "sandbox start gpt-6.1-sol high")
+    assert calls == ["status", "conversation-status", "conversation-status"]
+
+
+def test_sol_selection_is_passed_before_prompt_and_requires_live_readback(monkeypatch):
+    calls = []
+    reads = 0
+    def controller(config, *args):
+        nonlocal reads
+        calls.append(args)
+        if args[0] == "status":
+            return {"workers": [{"worker": "owner-sandbox", "container": "running"}]}
+        if args[0] == "conversation-status":
+            reads += 1
+            if reads == 1:
+                return {"conversation": {"status": "ended_with_container"}}
+            return {"reachable": True, "conversation": {"id": "new", "status": "created",
+                    "engine": "codex", "model": "gpt-6.1-sol", "effort": "high"},
+                    "agent_settings": {"agent_kind": "acp", "acp_server": "codex",
+                    "acp_model": "gpt-6.1-sol", "current_model_id": "gpt-6.1-sol",
+                    "acp_effort": "high", "current_effort": "high"}}
+        return {}
+    profiles = []
+    monkeypatch.setattr(owner, "_controller", controller)
+    monkeypatch.setattr(owner, "_sandbox_profile", lambda config, model, effort: profiles.append((model, effort)))
+    monkeypatch.setattr(owner, "_sandbox_auth", lambda config: None)
+    result = owner.run_command({"readiness_prompt": "/prompt", "sandbox_url": "https://sandbox.example"},
+                               "sandbox start gpt-6.1-sol high")
+    assert "is running" in result and profiles == [("gpt-6.1-sol", "high")]
+    create = next(c for c in calls if c[0] == "conversation-start")
+    assert create[create.index("--model") + 1] == "gpt-6.1-sol"
+    assert create[create.index("--effort") + 1] == "high"
+
+
+def test_sandbox_auth_failure_is_a_refusal(monkeypatch):
+    from types import SimpleNamespace
+    import pytest
+    monkeypatch.setattr(owner.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=1))
+    with pytest.raises(owner.OwnerAccessError, match="authentication is not verified"):
+        owner._sandbox_auth({"runner": "/fake", "root": "/fake", "sandbox_epic": 6630})
+
+
+def test_sol_readiness_refuses_wrong_observed_effort(monkeypatch):
+    def controller(config, *args):
+        if args[0] == "status":
+            return {"workers": [{"worker": "owner-sandbox", "container": "running"}]}
+        return {"reachable": True, "conversation": {"id": "same", "status": "created",
+                "engine": "codex", "model": "gpt-6.1-sol", "effort": "high"},
+                "agent_settings": {"agent_kind": "acp", "acp_server": "codex",
+                    "acp_model": "gpt-6.1-sol", "current_model_id": "gpt-6.1-sol",
+                "acp_effort": "high", "current_effort": "low"}}
+    monkeypatch.setattr(owner, "_controller", controller)
+    monkeypatch.setattr(owner, "_sandbox_auth", lambda config: (_ for _ in ()).throw(AssertionError("not ready")))
+    assert "not verified" in owner.run_command({}, "sandbox start gpt-6.1-sol high")

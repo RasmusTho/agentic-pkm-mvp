@@ -130,7 +130,8 @@ def test_missing_identity_configuration_refuses():
 
 
 @pytest.mark.parametrize("state", ["ended_with_container", "creating", "unknown", "created"])
-def test_endpoint_holder_generation_and_loss(tmp_path, state):
+@pytest.mark.parametrize("model,effort", [("gpt-6.1-terra", None), ("gpt-6.1-sol", "high")])
+def test_endpoint_holder_generation_and_loss(tmp_path, state, model, effort):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is required")
@@ -145,6 +146,16 @@ from pathlib import Path
 class Layout:
  def __init__(self,root,epic):self.root=root
 def _load_state(l):return json.loads((l.root/'state.json').read_text())
+def resolve_engine(engine,model):
+ if engine!='codex' or model not in ('gpt-6.1-terra','gpt-6.1-sol'):raise ValueError('model')
+ return engine,model
+def resolve_effort(engine,model,effort):
+ if model=='gpt-6.1-sol' and effort!='high':raise ValueError('effort')
+def _conversation_bound(info,*args):return True
+def verify_codex_subscription(*args):pass
+def _http(method,port,key,path,body,timeout):
+ c=json.loads((Path(__file__).parents[2]/'state.json').read_text())['issue_mappings']['6630']['conversation']
+ return 200,{'agent':{'kind':'ACPAgent','acp_server':'codex','acp_model':c['model'],'acp_effort':c.get('effort')},'current_model_id':c['model'],'current_effort':c.get('effort')}
 @contextlib.contextmanager
 def _endpoint_session(l,*args):
  (l.root/'holder.pid').write_text(str(os.getpid()))
@@ -152,7 +163,7 @@ def _endpoint_session(l,*args):
 ''')
     (tmp_path / "state.json").write_text(json.dumps({"issue_mappings": {"6630": {
         "worker": "owner-sandbox", "conversation": {"id": "12345678-1234-1234-1234-123456789abc",
-        "engine": "codex", "model": "gpt-6.1-terra", "status": state}}}}))
+        "engine": "codex", "model": model, "effort": effort, "status": state}}}}))
     script = Path(__file__).resolve().parents[2] / "scripts/openhands_owner_gateway.mjs"
     config = {"sandbox": True, "runner": str(tmp_path), "root": str(tmp_path), "sandboxEpic": 6630}
     code = "import {endpoint} from " + json.dumps(script.as_uri()) + ";import {readFileSync} from 'node:fs';"

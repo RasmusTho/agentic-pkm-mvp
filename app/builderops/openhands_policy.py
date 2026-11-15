@@ -33,20 +33,33 @@ def _object(value: Any) -> dict[str, Any]:
     return value
 
 
-def _requested_model(value: Any) -> None:
-    if value is not None and value != MODEL:
+def _selection(model: str, effort: str | None) -> None:
+    from app.builderops.epic_workspace import resolve_engine, resolve_effort
+
+    try:
+        if not isinstance(model, str) or not model:
+            raise ValueError("missing model")
+        _, selected = resolve_engine("codex", model)
+        resolve_effort("codex", selected, effort)
+    except (RuntimeError, ValueError, TypeError, AttributeError) as exc:
+        raise PolicyRefusal("model_or_effort_not_permitted") from exc
+
+
+def _requested_model(value: Any, model: str = MODEL) -> None:
+    if value is not None and value != model:
         raise PolicyRefusal("model_not_permitted")
 
 
 def prepare_request(
     message: dict[str, Any], *, workspace: Path, threads: set[str],
-    resume_thread_id: str | None = None,
+    resume_thread_id: str | None = None, model: str = MODEL, effort: str | None = None,
 ) -> dict[str, Any]:
     """Validate and constrain a client request without mutating the input.
 
     The ACP title helper uses an ephemeral thread and a different model.  It is
     refused before thread creation, so the primary session can continue.
     """
+    _selection(model, effort)
     msg = dict(_object(message))
     method = msg.get("method")
     params = dict(_object(msg.get("params") or {}))
@@ -62,13 +75,15 @@ def prepare_request(
         if (method == "thread/resume" and params.get("threadId") not in threads
                 and (resume_thread_id is None or params.get("threadId") != resume_thread_id)):
             raise PolicyRefusal("unknown_thread")
-        _requested_model(params.get("model"))
+        _requested_model(params.get("model"), model)
+        if effort is not None and params.get("effort") not in (None, effort):
+            raise PolicyRefusal("effort_not_permitted")
         if params.get("modelProvider") not in (None, PROVIDER):
             raise PolicyRefusal("provider_not_permitted")
         cwd = params.get("cwd")
         if cwd is not None and Path(cwd).resolve() != workspace.resolve():
             raise PolicyRefusal("workspace_not_permitted")
-        params.update(model=MODEL, modelProvider=PROVIDER, permissions=PROFILE,
+        params.update(model=model, modelProvider=PROVIDER, permissions=PROFILE,
                       approvalPolicy="never", cwd=str(workspace.resolve()))
         params.pop("sandbox", None)
         # Session-supplied configuration can otherwise change model, tools or
@@ -77,7 +92,7 @@ def prepare_request(
     elif method == "turn/start":
         if params.get("threadId") not in threads:
             raise PolicyRefusal("unknown_thread")
-        _requested_model(params.get("model"))
+        _requested_model(params.get("model"), model)
         # Native child agents make model requests inside the app-server, where
         # this transport cannot independently admit each child model.  Until a
         # tested child boundary exists, use a separate guarded review session.
@@ -86,7 +101,11 @@ def prepare_request(
         cwd = params.get("cwd")
         if cwd is not None and Path(cwd).resolve() != workspace.resolve():
             raise PolicyRefusal("workspace_not_permitted")
-        params.update(model=MODEL, permissions=PROFILE, approvalPolicy="never")
+        if effort is not None:
+            if params.get("effort") not in (None, effort):
+                raise PolicyRefusal("effort_not_permitted")
+            params["effort"] = effort
+        params.update(model=model, permissions=PROFILE, approvalPolicy="never")
         params.pop("sandboxPolicy", None)
     elif method in _THREAD_METHODS:
         if params.get("threadId") not in threads:
@@ -99,14 +118,17 @@ def prepare_request(
 
 def verify_effective_config(
     config: dict[str, Any], account: dict[str, Any], *, allowed_read_roots: tuple[str, ...],
-    workspace_writable: bool = True,
+    workspace_writable: bool = True, model: str = MODEL, effort: str | None = None,
 ) -> None:
     """Refuse before thread creation if inherited tools or auth are unsafe."""
+    _selection(model, effort)
     config = _object(config)
     if _object(account).get("type") != "chatgpt":
         raise PolicyRefusal("subscription_auth_not_verified")
-    if config.get("model") != MODEL or config.get("model_provider") != PROVIDER:
+    if config.get("model") != model or config.get("model_provider") != PROVIDER:
         raise PolicyRefusal("effective_model_or_provider_mismatch")
+    if effort is not None and config.get("model_reasoning_effort") != effort:
+        raise PolicyRefusal("effective_effort_mismatch")
     if (
         config.get("chatgpt_base_url") != "https://chatgpt.com/backend-api/"
         or config.get("openai_base_url") is not None
@@ -139,10 +161,12 @@ def verify_effective_config(
         raise PolicyRefusal("effective_permissions_mismatch")
 
 
-def verify_thread_response(result: dict[str, Any], *, workspace: Path) -> str:
+def verify_thread_response(result: dict[str, Any], *, workspace: Path, model: str = MODEL,
+                           effort: str | None = None) -> str:
     """Require observed model, provider and named sandbox before any turn."""
+    _selection(model, effort)
     result = _object(result)
-    if result.get("model") != MODEL or result.get("modelProvider") != PROVIDER:
+    if result.get("model") != model or result.get("modelProvider") != PROVIDER:
         raise PolicyRefusal("effective_model_or_provider_mismatch")
     profile = result.get("activePermissionProfile")
     if not isinstance(profile, dict) or profile.get("id") != PROFILE:

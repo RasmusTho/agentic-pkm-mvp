@@ -75,7 +75,9 @@ def _startup_diagnostic(data: bytes) -> str:
 _POLICY_DIAGNOSTICS = {
     "subscription_auth_not_verified": "ChatGPT subscription authentication was not verified",
     "effective_model_or_provider_mismatch": "the effective model or provider did not match the approved profile",
-    "model_not_permitted": "the requested model was not the approved Terra model",
+    "model_not_permitted": "the requested model did not match the approved selection",
+    "effective_effort_mismatch": "the effective effort did not match the approved selection",
+    "effort_not_permitted": "the requested effort did not match the approved selection",
     "provider_not_permitted": "the requested provider was not approved",
     "provider_route_not_verified": "the approved subscription provider route was not verified",
     "effective_permissions_mismatch": "the effective read-only sandbox profile did not match",
@@ -228,13 +230,18 @@ def run_review(
     worker_session_id: str, *, timeout: float = 900, doc_targets: list[str] | None = None,
 ) -> tuple[dict[str, Any], str, str]:
     """Return a structured result, the actual response text, and a new thread ID."""
+    from app.builderops.epic_workspace import resolve_engine, resolve_effort
+
+    _, model = resolve_engine("codex", settings.get("acp_model"))
+    effort = resolve_effort("codex", model, settings.get("acp_effort"))
     roots = settings["sandbox_read_roots"]
     env = {key: os.environ[key] for key in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR") if key in os.environ}
     env.update(PYTHONPATH=str(Path(__file__).resolve().parents[2]), GIT_OPTIONAL_LOCKS="0",
                GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                OPENHANDS_FACTORY_WORKSPACE=str(workspace), OPENHANDS_CODEX_BINARY=settings["codex_binary"],
                OPENHANDS_CODEX_CONFIG_ARGS=json.dumps(_read_only_args(settings)),
-               OPENHANDS_FACTORY_READ_ROOTS=json.dumps(roots), OPENHANDS_FACTORY_READ_ONLY="1")
+               OPENHANDS_FACTORY_READ_ROOTS=json.dumps(roots), OPENHANDS_FACTORY_READ_ONLY="1",
+               OPENHANDS_FACTORY_MODEL=model, OPENHANDS_FACTORY_EFFORT=effort or "")
     try:
         process = subprocess.Popen([str(python), "-I", "-c", _TRUSTED_BOOTSTRAP,
                                     str(Path(__file__).resolve().parents[2]), "app-server"],
@@ -265,10 +272,10 @@ def run_review(
         rpc.response(1)
         rpc.send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
         rpc.send({"jsonrpc": "2.0", "id": 2, "method": "thread/start",
-                  "params": {"model": policy.MODEL, "cwd": str(workspace)}})
+                  "params": {"model": model, "cwd": str(workspace)}})
         thread_response = rpc.response(2)
         try:
-            thread = policy.verify_thread_response(thread_response, workspace=workspace)
+            thread = policy.verify_thread_response(thread_response, workspace=workspace, model=model, effort=effort)
         except policy.PolicyRefusal as exc:
             raise ReviewError("Reviewer model or sandbox identity was not verified") from exc
         if thread == worker_session_id:
@@ -281,7 +288,8 @@ def run_review(
                 "required": ["target", "result", "rationale"]}}
             schema["required"].append("doc_writebacks")
         rpc.send({"jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": {
-            "threadId": thread, "model": policy.MODEL,
+            "threadId": thread, "model": model,
+            **({"effort": effort} if effort is not None else {}),
             "input": [{"type": "text", "text": prompt}], "outputSchema": schema,
         }})
         turn_id = None

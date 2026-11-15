@@ -294,8 +294,12 @@ def _python_framework_traversal_roots(python_root: Path, *, platform: str | None
 
 def _settings(
     install: Path, state: Path, node: Path, codex: Path, repo: Path, worktree: Path,
-    test_python: Path | None = None,
+    test_python: Path | None = None, *, model: str | None = None, effort: str | None = None,
 ) -> dict[str, Any]:
+    from app.builderops.epic_workspace import resolve_engine, resolve_effort
+
+    _, chosen = resolve_engine("codex", model)
+    effort = resolve_effort("codex", chosen, effort)
     python = install / "venv/bin/python"
     acp = install / "acp/node_modules/.bin/codex-acp"
     for name, path in (("Python", python), ("ACP", acp), ("Node", node), ("Codex", codex)):
@@ -337,7 +341,7 @@ def _settings(
         raise delivery.DeliveryError(str(exc)) from exc
     entries = ",".join(f"{json.dumps(path)}=\"read\"" for path in roots)
     config = [
-        ('model', '"gpt-6.1-terra"'), ('model_provider', '"openai"'),
+        ('model', json.dumps(chosen)), ('model_provider', '"openai"'),
         ('chatgpt_base_url', '"https://chatgpt.com/backend-api/"'),
         ('approval_policy', '"never"'), ('web_search', '"disabled"'),
         ('features.apps', 'false'), ('features.multi_agent', 'false'), ('features.js_repl', 'false'),
@@ -347,6 +351,8 @@ def _settings(
         ('permissions.builder_factory.filesystem',
          '{":minimal"="read",":workspace_roots"="write",' + entries + '}'),
     ]
+    if effort is not None:
+        config.append(("model_reasoning_effort", json.dumps(effort)))
     for kind, names in _tool_names(repo, worktree).items():
         disabled = ",".join(
             f"{json.dumps(name, ensure_ascii=False)}={{enabled=false}}" for name in sorted(names)
@@ -354,6 +360,8 @@ def _settings(
         config.append((kind, "{" + disabled + "}"))
     args = [part for key, value in config for part in ("-c", f"{key}={value}")]
     return {
+        **({"acp_model": chosen} if model is not None else {}),
+        **({"acp_effort": effort} if effort is not None else {}),
         "guard_executable": str(FACTORY_ROOT / "scripts/openhands_guarded_codex"),
         "codex_binary": str(codex), "codex_config_args": args, "sandbox_read_roots": roots,
         "conversations_path": str(state / "conversations"),
@@ -554,6 +562,9 @@ def _private_read(path: Path) -> bytes:
 
 def _persisted_session(settings: dict[str, Any], state: dict[str, Any], expected_status: str) -> str:
     try:
+        if (settings.get("acp_model", "gpt-6.1-terra") != state.get("acp_model", "gpt-6.1-terra")
+                or settings.get("acp_effort") != state.get("acp_effort")):
+            raise ValueError("retained selection mismatch")
         conversation_id = uuid.UUID(state["conversation_id"])
         path = Path(settings["conversations_path"]) / conversation_id.hex / "base_state.json"
         saved = json.loads(path.read_text())
@@ -1057,7 +1068,7 @@ def _review(install: Path, directory: Path, issue: int, repo: Path, worktree_roo
                 parsed, actual_text, thread = review.run_review(
                     install / "venv/bin/python", settings, worktree, head, prompt, worker_id,
                 )
-            reviewer = "native-codex-gpt-6.1-terra-" + hashlib.sha256(thread.encode()).hexdigest()[:16]
+            reviewer = "native-codex-" + settings.get("acp_model", "gpt-6.1-terra") + "-" + hashlib.sha256(thread.encode()).hexdigest()[:16]
         except review.ReviewError as exc:
             reason = str(exc)
             actual_text = exc.response
@@ -1272,6 +1283,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--worktree-root", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, default=FACTORY_ROOT)
     parser.add_argument("--port", type=int)
+    parser.add_argument("--model")
+    parser.add_argument("--effort")
     parser.add_argument("--ui-action", choices=("start", "status", "stop"), default="start")
     parser.add_argument("--ui-port", type=int)
     parser.add_argument("--open", action="store_true", help="open Canvas when starting the UI")
@@ -1299,8 +1312,21 @@ def main(argv: list[str] | None = None) -> int:
         from app.builderops import openhands_watcher as watcher
 
         if args.command == "start":
+            from app.builderops.epic_workspace import resolve_engine, resolve_effort
+
+            if args.model == "" or (args.effort is not None and args.model is None):
+                raise delivery.DeliveryError("Explicit effort requires an explicit model")
+            try:
+                _, selected_model = resolve_engine("codex", args.model)
+                resolve_effort("codex", selected_model, args.effort)
+            except (RuntimeError, ValueError, TypeError, AttributeError) as exc:
+                raise delivery.DeliveryError("Model or effort is not permitted") from exc
             with service._locked(state_root):
-                if service._read(directory) is not None:
+                existing = service._read(directory)
+                if existing is not None:
+                    if args.model is not None and (existing.get("acp_model", "gpt-6.1-terra") != selected_model
+                                                   or existing.get("acp_effort") != args.effort):
+                        raise delivery.DeliveryError("Retained delivery selection differs; reconcile the original run")
                     result = _restart(install, directory, args.issue, repo, worktree_root)
                     if result["state"].get("auto_finish") is True:
                         watcher.launch(install, directory, args.issue, repo, worktree_root)
@@ -1313,7 +1339,8 @@ def main(argv: list[str] | None = None) -> int:
                 test_python, test_lock_sha256 = _test_environment_for_base(install, repo, base)
                 node, codex = _executable("node"), _executable("codex")
                 worktree = worktree_root / f"issue-{args.issue}-openhands"
-                settings = _settings(install, directory, node, codex, repo, worktree, test_python)
+                settings = _settings(install, directory, node, codex, repo, worktree, test_python,
+                                     model=args.model, effort=args.effort)
                 fd, filename = tempfile.mkstemp(prefix=".openhands-settings-", dir=state_root)
                 try:
                     with os.fdopen(fd, "w") as stream:

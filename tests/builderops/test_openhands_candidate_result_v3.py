@@ -10,9 +10,11 @@ from app.builderops import openhands_pr_cycle as cycle
 from tests.builderops.test_openhands_candidate_dispatch_v2 import candidate_fixture
 
 
-def prepared(tmp_path, capsys, monkeypatch, *, test_source="def test_example(): pass\n"):
+def prepared(tmp_path, capsys, monkeypatch, *, test_source="def test_example(): pass\n", sol=False):
     data, fetch, identity, server, home = candidate_fixture(tmp_path, capsys, monkeypatch, test_source=test_source)
     layout, author, publisher, engine, pr, entry, _, _, _ = data
+    if sol:
+        entry.update(model="gpt-6.1-sol", effort="high")
     assert cycle.advance(layout, [entry], fetch=fetch, http=server, codex_home=home)["results"][0]["action"] == "awaiting-candidate-review"
     started = cycle.advance(layout, [entry], fetch=fetch, http=server, codex_home=home)["results"][0]
     assert started["action"] == "candidate-review-dispatched", started
@@ -21,8 +23,8 @@ def prepared(tmp_path, capsys, monkeypatch, *, test_source="def test_example(): 
     dispatch = state["candidate_review_dispatch"]
     info = server.conversations[cid]
     info.update(execution_status="finished", agent={"kind": "ACPAgent", "acp_server": "codex",
-                "acp_model": "gpt-6.1-terra"}, current_model_id="gpt-6.1-terra",
-                current_effort="ultra", available_efforts=[{"value": "ultra"}],
+                "acp_model": entry["model"], "acp_effort": entry.get("effort")}, current_model_id=entry["model"],
+                current_effort=entry.get("effort", "ultra"), available_efforts=[{"value": entry.get("effort", "ultra")}],
                 agent_state={"acp_session_id": "native-review", "acp_session_cwd": "/workspace"})
     server.events = [{"kind": "MessageEvent", "source": "agent"}]
     criterion = cycle.closure._acceptance_criteria(pr["governing_issue"]["body"], repo_root=publisher)[0]["criterion_sha256"]
@@ -51,7 +53,7 @@ def prepared(tmp_path, capsys, monkeypatch, *, test_source="def test_example(): 
                 out = login[0]
             elif argv[-2:] == ["codex", cid]:
                 out = json.dumps({"engine": "codex", "conversation_id": cid, "session_id": "native-review",
-                                  "model": "gpt-6.1-terra", "effort": "ultra", "timestamp": "2026-11-15T00:00:00Z"})
+                                  "model": entry["model"], "effort": entry.get("effort", "ultra"), "timestamp": "2026-11-15T00:00:00Z"})
             else:
                 out = "route-ok\n"
             return subprocess.CompletedProcess(argv, 0, out, "")

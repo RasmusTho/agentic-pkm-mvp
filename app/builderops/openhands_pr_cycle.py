@@ -2481,6 +2481,7 @@ def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, 
             or not isinstance(saved.get("conversation_provenance"), dict)
             or saved["conversation_provenance"].get("reviewer") != proof.get("conversation_id")
             or (entry["engine"] == "codex" and proof.get("effort") not in ("high", "xhigh", "max", "ultra"))
+            or (entry.get("effort") is not None and proof.get("effort") != entry["effort"])
             or not isinstance(review, dict)
             or not isinstance(tests, dict) or tests.get("passed") is not True
             or tests.get("head_sha") != pr["head_sha"] or tests.get("targets") != entry["verify_targets"]):
@@ -2865,8 +2866,10 @@ def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: 
     image = mapping.get("image")
     credentials = mapping.get("credentials")
     engine, model = workspace.resolve_engine(admission["engine"], admission["model"])
+    effort = workspace.resolve_effort(engine, model, admission.get("effort"))
     if (not isinstance(record, dict) or record.get("operation_id") != operation_id
             or record.get("engine") != engine or record.get("model") != model
+            or (effort is not None and record.get("effort") != effort)
             or not isinstance(credentials, dict)
             or (engine == "codex" and credentials.get("codex") != "chatgpt-login-dir")
             or (engine == "claude-code" and credentials.get("claude") != "oauth-token-env")
@@ -2906,7 +2909,6 @@ def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: 
     config_check = (
         "import pathlib,tomllib; p=pathlib.Path('/run/codex-home/config.toml'); "
         "c=tomllib.loads(p.read_text()) if p.exists() else {}; "
-        "assert c.get('model') in (None,'gpt-6.1-terra'); "
         "assert c.get('model_provider') in (None,'openai'); "
         "assert c.get('openai_base_url') is None; "
         "assert c.get('chatgpt_base_url') in (None,'https://chatgpt.com/backend-api/'); "
@@ -2935,6 +2937,7 @@ def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: 
             or not isinstance(agent, dict) or agent.get("kind") != "ACPAgent"
             or agent.get("acp_server") != engine or agent.get("acp_model") != model
             or info.get("current_model_id") != model
+            or (effort is not None and (agent.get("acp_effort") != effort or info.get("current_effort") != effort))
             or not isinstance(info.get("current_effort"), str)
             or not isinstance(info.get("available_efforts"), list)
             or not any(isinstance(e, dict) and e.get("value") == info["current_effort"]
@@ -3047,7 +3050,7 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
                   + json.dumps(context, ensure_ascii=True, sort_keys=True, default=str) + "\n\n" + prompt)
     return workspace._start_conversation_locked(
         layout, worker, engine=admission["engine"], model=admission["model"],
-        prompt=prompt,
+        effort=admission.get("effort"), prompt=prompt,
         operation_id=operation_id,
         expected_owner_binding=expected_owner_binding,
         http=http, runner=_worker_runner)
@@ -3160,6 +3163,7 @@ def _validate_admission(value: Any) -> dict[int, dict[str, Any]]:
             raise CycleError("invalid admission identity or Verify targets")
         workspace.validate_worker_id(worker)
         engine, model = workspace.resolve_engine(row.get("engine", ""), row.get("model"))
+        workspace.resolve_effort(engine, model, row.get("effort"))
         admitted[number] = {**row, "engine": engine, "model": model}
     return admitted
 
@@ -3247,6 +3251,8 @@ def _reserve_repair(layout: workspace.Layout, saved: dict[str, Any], entry: Mapp
                                            ("lifecycle_owner", "owner", "builder_session")}
         rows[0]["repair_engine"] = entry["engine"]
         rows[0]["repair_model"] = entry["model"]
+        if entry.get("effort") is not None:
+            rows[0]["repair_effort"] = entry["effort"]
         rows[0]["repair_admission_selection"] = entry["_repair_admission_selection"]
         rows[0]["repair_handoff_binding"] = entry["_repair_handoff_binding"]
         records.append({"kind": "openhands_pr_completion", "operation_id": operation,
@@ -3289,7 +3295,7 @@ def _repair_authority_continues(saved: Any, fresh: Mapping[str, Any]) -> bool:
 def _effective_repair_entry(entry: Mapping[str, Any], mapping: Mapping[str, Any],
                             saved: Mapping[str, Any]) -> dict[str, Any]:
     """Resolve the exact review handoff equally for initial reservation and resume."""
-    selection = {key: entry[key] for key in ("engine", "model")}
+    selection = {key: entry[key] for key in ("engine", "model", "effort") if key in entry}
     handoff = mapping.get("engine_handoff")
     matches = (isinstance(handoff, Mapping) and handoff.get("status") in ("awaiting_pr_cycle", "complete")
                and saved.get("review_operation") is not None
@@ -3385,7 +3391,8 @@ def _advance_repair(layout: workspace.Layout, worker: str, pr: Mapping[str, Any]
         _assert_repair_publications_settled(mapping)
         op = _reserve_repair(layout, saved, entry, candidate, authority, mapping)
         saved = _find(layout, pr["number"], identity)
-    if entry["engine"] != saved.get("repair_engine") or entry["model"] != saved.get("repair_model"):
+    if (entry["engine"] != saved.get("repair_engine") or entry["model"] != saved.get("repair_model")
+            or entry.get("effort") != saved.get("repair_effort")):
         raise CycleError("repair engine selection changed after reservation")
     owner_binding = saved.get("repair_owner_binding")
     issue = workspace._issue_for_worker(workspace._load_state(layout), worker)
@@ -3442,7 +3449,7 @@ def _advance_repair(layout: workspace.Layout, worker: str, pr: Mapping[str, Any]
               "change claims or access host credentials. Preserve unrelated work. Report changed paths and tests.\n"
               f"Issue contract: {pr['governing_issue']['body']}\nReview: {json.dumps(report, sort_keys=True)}")
     conversation = workspace._start_conversation_locked(layout, worker, engine=entry["engine"], model=entry["model"],
-                                                         prompt=prompt, operation_id=op, http=http, runner=_worker_runner,
+                                                         effort=entry.get("effort"), prompt=prompt, operation_id=op, http=http, runner=_worker_runner,
                                                          expected_owner_binding=owner_binding)
     return {"number": pr["number"], "identity": identity, "action": "repair-author", "operation_id": op,
             "reason": f"conversation {conversation.get('id')} {conversation.get('status')}"}
@@ -3486,7 +3493,8 @@ def _consume_repair_author(layout: workspace.Layout, worker: str, pr: Mapping[st
             return {**result, "reason": f"author engine failure: {failure}; preserve and reconcile original work"}
         if status.get("execution_status") not in ("finished", "FINISHED"):
             return {**result, "reason": f"conversation {cid} {status.get('execution_status') or 'unknown'}"}
-        effective = {"engine": saved.get("repair_engine"), "model": saved.get("repair_model")}
+        effective = {"engine": saved.get("repair_engine"), "model": saved.get("repair_model"),
+                     "effort": saved.get("repair_effort")}
         # The repair advancement already owns this worker lifecycle lock.
         proof_fn = getattr(native_execution_proof, "__wrapped__", native_execution_proof)
         try:
@@ -4210,6 +4218,7 @@ def _candidate_review_snapshot(layout: workspace.Layout, pr: Mapping[str, Any], 
     engine, model = saved.get("repair_engine"), saved.get("repair_model")
     if (not isinstance(proof, Mapping) or proof.get("source") != "native-session-metadata"
             or proof.get("engine") != engine or proof.get("model") != model
+            or (saved.get("repair_effort") is not None and proof.get("effort") != saved["repair_effort"])
             or proof.get("image") != mapping.get("image")
             or not isinstance(proof.get("native_session_id"), str) or not proof["native_session_id"]
             or not isinstance(proof.get("timestamp"), str) or not proof["timestamp"]
@@ -4282,6 +4291,8 @@ def _candidate_review_snapshot(layout: workspace.Layout, pr: Mapping[str, Any], 
                "author_proof": saved.get("repair_execution_proof"), "owner": dict(owner),
                "authority_binding": saved.get("repair_authority_binding"),
                "engine": entry["engine"], "model": entry["model"], "verify_targets": entry["verify_targets"]}
+    if entry.get("effort") is not None:
+        binding["effort"] = entry["effort"]
     material["candidate_binding"] = {"base_sha": base, "old_head": pr["head_sha"], "candidate_head": head,
                                      "candidate_tree": tree, "scope_hashes": scope,
                                      "pr_body_sha256": binding["pr_body_sha256"],
@@ -4891,7 +4902,7 @@ def _advance_candidate_repair(layout: workspace.Layout, pr: Mapping[str, Any], e
             or result.get("candidate_head") != candidate.get("candidate_head")
             or result.get("candidate_tree") != candidate.get("tree")):
         raise CycleError("candidate repair findings or review binding changed")
-    if entry.get("engine") != "codex" or entry.get("model") != "gpt-6.1-terra":
+    if entry.get("engine") != "codex" or workspace.resolve_engine("codex", entry.get("model"))[1] != entry.get("model"):
         raise CycleError("candidate repair requires the admitted native Codex model")
     attempt = result.get("attempt")
     if type(attempt) is not int or attempt < 1:
@@ -4957,7 +4968,7 @@ def _advance_candidate_repair(layout: workspace.Layout, pr: Mapping[str, Any], e
                       f"Bounded findings: {json.dumps(result['bounded_repair'], sort_keys=True)}\n"
                       f"Full review: {json.dumps(review['report'], sort_keys=True)}")
             conversation = workspace._start_conversation_locked(layout, worker, engine=entry["engine"],
-                model=entry["model"], prompt=prompt, operation_id=operation,
+                model=entry["model"], effort=entry.get("effort"), prompt=prompt, operation_id=operation,
                 expected_owner_binding=saved["repair_owner_binding"], http=http, runner=_worker_runner)
         if conversation.get("status") == "created":
             return _consume_candidate_repair_author(layout, pr, entry, saved, operation, worker, http=http)
@@ -5029,7 +5040,7 @@ def _promote_candidate_repair(layout: workspace.Layout, pr: Mapping[str, Any], e
     intent["status"] = "preparing"
     saved.update(repair_worker=worker, repair_source_base_head=intent["source_base_head"],
                  repair_operation=operation, repair_engine=entry["engine"], repair_model=entry["model"],
-                 repair_execution_proof=saved["candidate_repair_execution_proof"],
+                 repair_effort=entry.get("effort"), repair_execution_proof=saved["candidate_repair_execution_proof"],
                  repair_stop_intent=saved["candidate_repair_stop_intent"], repair_stop_verified=True)
     saved["repair_result"] = {"status": "pending_trusted_publication", "identity": saved["identity"],
         "head_sha": pr["head_sha"], "operation_id": operation, "native_proof": saved["repair_execution_proof"],

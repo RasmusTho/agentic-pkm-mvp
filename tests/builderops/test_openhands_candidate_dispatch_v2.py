@@ -232,3 +232,17 @@ def test_missing_pr_observation_stops_same_active_reviewer(tmp_path, capsys, mon
     assert row["worker"] not in engine.containers
     assert cycle._find(layout, 10, identity)["candidate_review_dispatch"]["held"] is True
     assert len([call for call in server.calls if call[0] == "POST"]) == 1
+
+
+def test_sol_high_candidate_review_dispatch_uses_selected_upstream_settings(tmp_path, capsys, monkeypatch):
+    data, fetch, identity, server, codex_home = candidate_fixture(tmp_path, capsys, monkeypatch)
+    layout, _, _, _, _, entry, _, _, _ = data
+    entry.update(model="gpt-6.1-sol", effort="high")
+    first = cycle.advance(layout, [entry], fetch=fetch, http=server, codex_home=codex_home)
+    assert first["results"][0]["action"] == "awaiting-candidate-review", first
+    second = cycle.advance(layout, [entry], fetch=fetch, http=server, codex_home=codex_home)
+    assert second["results"][0]["action"] == "candidate-review-dispatched", second
+    posts = [c for c in server.calls if c[0] == "POST" and c[2] == "/conversations"]
+    assert len(posts) == 1
+    assert posts[0][3]["agent_settings"] == {"agent_kind": "acp", "acp_server": "codex",
+                                             "acp_model": "gpt-6.1-sol", "acp_effort": "high"}

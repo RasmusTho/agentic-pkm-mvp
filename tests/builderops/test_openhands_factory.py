@@ -351,7 +351,8 @@ def test_owner_can_inspect_and_stop_a_previously_colliding_port(tmp_path, monkey
     assert factory._owner_service(tmp_path, root, tmp_path, "stop", None, None, False)["status"] == "stopped"
 
 
-def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("model,effort", [(None, None), ("gpt-6.1-sol", "high")])
+def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monkeypatch, capsys, model, effort):
     from app.builderops import openhands_watcher as watcher
 
     install, state, worktrees = _installation(tmp_path)
@@ -377,8 +378,8 @@ def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monke
     monkeypatch.setattr(factory, "_executable", lambda name: node)
     monkeypatch.setattr(factory.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(
         a[0], 0, factory.CODEX_VERSION + "\n" if a[0][-1] == "--version" else str(python_root), ""))
-    monkeypatch.setattr(delivery, "_run", lambda command: subprocess.CompletedProcess(
-        command, 0, delivery.SERVER_VERSION + "\n", ""))
+    monkeypatch.setattr(delivery, "_run", lambda command, **kwargs: subprocess.CompletedProcess(
+        command, 0, ("acp-effort-supported\n" if "acp-effort-supported" in command[-1] else delivery.SERVER_VERSION + "\n"), ""))
     captured = {}
 
     def start(directory, repo, issue, authorized, branch, worktree, python, port, settings, node, acp,
@@ -393,8 +394,9 @@ def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monke
 
     monkeypatch.setattr(delivery, "start", start)
     monkeypatch.setattr(watcher, "launch", lambda *args: captured.update(watcher_started=True))
+    selection = ["--model", model, "--effort", effort] if model else []
     assert factory.main(["start", "--issue", "123", "--install-root", str(install),
-                         "--state-root", str(state), "--worktree-root", str(worktrees)]) == 0
+                         "--state-root", str(state), "--worktree-root", str(worktrees), *selection]) == 0
     result = json.loads(capsys.readouterr().out)
     assert captured["issue"] == captured["authorized"] == 123
     assert captured["auto_finish"] is True and captured["watcher_started"] is True
@@ -403,10 +405,14 @@ def test_owner_start_builds_real_settings_and_routes_to_delivery(tmp_path, monke
     assert captured["python"] == install / "venv/bin/python"
     assert not captured["settings_path"].exists()
     settings = captured["settings"]
-    assert 'model="gpt-6.1-terra"' in settings["codex_config_args"]
+    selected = model or "gpt-6.1-terra"
+    assert f'model="{selected}"' in settings["codex_config_args"]
+    if effort:
+        assert settings["acp_effort"] == effort
+        assert f'model_reasoning_effort="{effort}"' in settings["codex_config_args"]
     assert 'permissions.builder_factory.network.enabled=false' in settings["codex_config_args"]
     config = tomllib.loads("\n".join(settings["codex_config_args"][1::2]))
-    assert config["model"] == "gpt-6.1-terra" and config["model_provider"] == "openai"
+    assert config["model"] == selected and config["model_provider"] == "openai"
     profile = config["permissions"]["builder_factory"]
     assert profile["network"]["enabled"] is False
     assert str((install / "canvas").resolve()) in settings["sandbox_read_roots"]

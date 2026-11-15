@@ -73,6 +73,16 @@ cannot be restarted. Existing live older workers must be inspected and stopped b
 These mechanisms do not yet establish delegated-process cancellation. Roll back to the existing CLI
 if needed; retain recorded sessions and draft PRs.
 
+In the #6618 source candidate, the model-free owner accepts `start #456 gpt-6.1-sol high`, using
+exactly the model and effort fields also used for the owner sandbox. The direct start command accepts
+`--model gpt-6.1-sol --effort high`. Selection is recorded before creation and passed to ACP before
+the first prompt; the guarded proxy checks the selected model, effort, provider and subscription.
+The per-process Codex arguments do not change the global Codex home. An existing or uncertain run
+retains its original selection and cannot be restarted under a different choice. The older Terra route
+and its recorded evidence remain supported. The explicit-effort route checks the installed upstream
+ACP settings for effort support before making a worktree or claiming work. This candidate still
+requires independent review, cold installation and an actual Sol/high turn before runtime qualification.
+
 The CLI remains available directly. Replace the example paths and explicitly authorized Issue:
 
 ```sh
@@ -775,13 +785,25 @@ choice, use `--engine codex --model gpt-6.1-terra` explicitly for coordination, 
 diagnosis and review. The temporary Claude-first quota priority ended on 2026-11-14; a Claude reset
 does not by itself change this choice. This is not permanent vendor policy. The existing source CLI
 still defaults to Claude Code with `claude-sonnet-5-5` when `--engine` is omitted, so do not omit it
-for this operation. Codex accepts only `gpt-6.1-terra`, and Astra is refused. The conversation id
+for this operation. The installed baseline accepts only `gpt-6.1-terra`; the source candidate also admits explicit
+Sol/high as described below, and Astra is refused. The conversation id
 is recorded before the request. A lost response is reconciled by reading that id and is never
 retried as a create. In this source candidate, `conversation-status` reads the newest bounded
 upstream event page (default 50) and classifies only the latest `ConversationErrorEvent` as
 `quota_exhausted`, `authentication`, `context_exhausted`, `transient_network` or `task_failure`.
 The classifier recognizes the observed native session and weekly quota phrases; tool and message
 text cannot trigger a handoff. Upstream 1.60.1 already supports the newest-first event ordering.
+The #6618 source candidate adds `sandbox start gpt-6.1-sol high` for a stopped owner sandbox and
+admits an explicit subscription-backed Sol/high selection with
+`conversation-start --engine codex --model gpt-6.1-sol --effort high` and the same `model` and
+`effort` fields in PR-cycle admission. These fields are set in upstream ACP settings before the
+initial prompt and retained with the conversation; model and effort must agree with native readback.
+The candidate owner gateway and sandbox readiness also require the pinned container, first-party
+provider route and ChatGPT subscription login to be read back before admitting access.
+Terra remains available and the Claude quota handoff remains explicitly Terra. A retained or unknown
+conversation keeps its original selection and requires verified stop before a successor. The source
+candidate is not an installed or qualified Sol runtime: independent review, cold installation and
+an actual selected and observed Sol/high turn are still required.
 In the enabling #6618 source candidate, an applied coordinator pass can transfer a confirmed,
 identity-bound Claude quota failure to a new Codex/Terra conversation. The pass retains the
 existing Issue owner and Builder session, stops the exact predecessor container, checkpoints and

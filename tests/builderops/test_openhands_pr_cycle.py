@@ -376,6 +376,22 @@ def test_native_execution_reads_real_boundaries_and_rejects_paid_environment(tmp
     observed_model[0] = "other"
     with pytest.raises(cycle.CycleError, match="does not match"):
         cycle.native_execution_proof(layout, "reviewer", operation, entry, http=http)
+    # Explicit Sol/high binds both the persisted request and the observed ACP/session metadata.
+    ew._record_worker(layout, 6618, conversation={"id": "conv", "operation_id": operation,
+                      "engine": "codex", "model": "gpt-6.1-sol", "effort": "high", "status": "created"})
+    entry = {"engine": "codex", "model": "gpt-6.1-sol", "effort": "high"}
+    observed_model[0] = "gpt-6.1-sol"
+    info["agent"].update(acp_model="gpt-6.1-sol", acp_effort="high")
+    info["current_model_id"] = "gpt-6.1-sol"
+    assert cycle.native_execution_proof(layout, "reviewer", operation, entry, http=http)["effort"] == "high"
+    info["current_effort"] = "xhigh"
+    with pytest.raises(cycle.CycleError, match="conversation execution"):
+        cycle.native_execution_proof(layout, "reviewer", operation, entry, http=http)
+    info["current_effort"] = "high"
+    info["agent"]["acp_effort"] = "low"
+    with pytest.raises(cycle.CycleError, match="conversation execution"):
+        cycle.native_execution_proof(layout, "reviewer", operation, entry, http=http)
+    info["agent"]["acp_effort"] = "high"
     env.append("OPENAI_API_KEY=not-printed")
     with pytest.raises(cycle.CycleError, match="credential environment"):
         cycle.native_execution_proof(layout, "reviewer", operation, entry, http=http)
@@ -2035,3 +2051,13 @@ def test_reconcile_distinct_nonclosing_parent_preserves_its_lease_and_labels(tmp
     assert comments == {6617: [receipt], 6618: [receipt]}
     assert parent["state"] == "open" and parent["labels"] == [{"name": "agent:in-progress"}]
     assert child["labels"] == [] and saved["reconciled"] is True
+
+
+def test_explicit_sol_high_pr_admission_and_refusals():
+    row = {"number": 10, "head_sha": "a" * 40, "worker": "reviewer", "native_session_owned": True,
+           "verify_targets": ["tests/example.py::test_example"], "test_venv": "/synthetic",
+           "engine": "codex", "model": "gpt-6.1-sol", "effort": "high"}
+    assert cycle._validate_admission([row])[10] == row
+    for model, effort in (("gpt-6.1-sol", None), ("gpt-6.1-sol", "ultra"), ("gpt-6.1-astra", "high")):
+        with pytest.raises((cycle.CycleError, ew.LaunchRefused)):
+            cycle._validate_admission([{**row, "model": model, "effort": effort}])

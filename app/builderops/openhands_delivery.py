@@ -63,10 +63,10 @@ class _BoundWorkerKey(str):
 
 
 def _run(
-    command: list[str], *, allowed: tuple[int, ...] = (0,)
+    command: list[str], *, allowed: tuple[int, ...] = (0,), timeout: float = 30
 ) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=30)
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
         raise DeliveryError(f"Could not run {command[0]} readback") from exc
     if result.returncode not in allowed:
@@ -226,11 +226,17 @@ def _validate_executables(
                 break
     if metadata is None or metadata.get("version") != ACP_VERSION:
         raise DeliveryError(f"codex-acp {ACP_VERSION} package metadata is required")
+    settings = service._settings(settings_file)
     version = _run([str(python), "-c", "from importlib.metadata import version; "
                    "print(version('openhands-agent-server'))"]).stdout.strip()
-    if version != SERVER_VERSION:
-        raise DeliveryError(f"OpenHands agent-server {SERVER_VERSION} is required")
-    settings = service._settings(settings_file)
+    allowed_versions = {SERVER_VERSION, "1.62.0"} if settings.get("acp_effort") is not None else {SERVER_VERSION}
+    if version not in allowed_versions:
+        raise DeliveryError("OpenHands agent-server version is not admitted")
+    if settings.get("acp_effort") is not None:
+        probe = _run([str(python), "-c", "from openhands.sdk.settings.model import ACPAgentSettings; "
+                      "assert 'acp_effort' in ACPAgentSettings.model_fields; print('acp-effort-supported')"], timeout=90)
+        if probe.stdout.strip() != "acp-effort-supported":
+            raise DeliveryError("Installed OpenHands ACP effort support is unavailable")
     trusted_guard = Path(__file__).resolve().parents[2] / "scripts/openhands_guarded_codex"
     if Path(settings["guard_executable"]).resolve() != trusted_guard.resolve():
         raise DeliveryError("Settings do not select the repository's guarded Codex executable")
@@ -369,6 +375,16 @@ def _conversation(directory: Path, state: dict[str, Any]) -> dict[str, Any]:
     if (str(data.get("id")) != state["conversation_id"] or not isinstance(workspace, dict)
             or workspace.get("working_dir") != state["worktree"]):
         raise DeliveryError("Conversation identity or workspace mismatch")
+    if state.get("acp_effort") is not None:
+        agent = data.get("agent")
+        if (not isinstance(agent, dict) or agent.get("kind") != "ACPAgent"
+                or agent.get("acp_server") != "codex" or agent.get("acp_model") != state.get("acp_model")
+                or agent.get("acp_effort") != state.get("acp_effort")):
+            raise DeliveryError("Conversation selection readback mismatch")
+        if data.get("execution_status") in ("finished", "FINISHED") and (
+                data.get("current_model_id") != state.get("acp_model")
+                or data.get("current_effort") != state.get("acp_effort")):
+            raise DeliveryError("Finished conversation model or effort not verified")
     return data
 
 
@@ -457,6 +473,10 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
             "conversation_id": session_id, "port": port,
             "auto_finish": auto_finish,
         }
+        if "acp_model" in settings:
+            state["acp_model"] = settings["acp_model"]
+        if "acp_effort" in settings:
+            state["acp_effort"] = settings["acp_effort"]
         if test_python is not None:
             if not test_environment_lock_sha256 or not re.fullmatch(r"[0-9a-f]{64}", test_environment_lock_sha256):
                 raise DeliveryError("Prepared test environment lock identity is required")
@@ -516,7 +536,8 @@ def start(directory: Path, root: Path, issue: int, authorized_issue: int, branch
             "workspace": {"working_dir": str(worktree)},
             "agent_settings": {"agent_kind": "acp", "acp_server": "codex",
                                "acp_command": [str(python), "-c", _ACP_BOOTSTRAP, str(node), str(acp)],
-                               "acp_model": MODEL},
+                               "acp_model": settings.get("acp_model", MODEL),
+                               **({"acp_effort": settings["acp_effort"]} if settings.get("acp_effort") is not None else {})},
             "autotitle": False,
             "initial_message": {"role": "user", "content": [{"type": "text", "text": prompt}]},
         }
@@ -798,6 +819,9 @@ def status(directory: Path) -> dict[str, Any]:
             result["conversation_readback_error"] = str(exc)
         else:
             result["conversation_status"] = data.get("execution_status")
+            if state.get("acp_effort") is not None:
+                result["current_model_id"] = data.get("current_model_id")
+                result["current_effort"] = data.get("current_effort")
             result["sub_conversation_ids"] = data.get("sub_conversation_ids")
         if state["phase"] in {"interrupting", "interrupted", "resuming"}:
             result["recovery"] = _recovery_observation(directory, state, data)

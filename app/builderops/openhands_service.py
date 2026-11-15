@@ -140,8 +140,18 @@ def _settings(path: Path) -> dict[str, Any]:
         data = json.loads(path.read_text())
     except (OSError, ValueError) as exc:
         raise ServiceError("Cannot read settings JSON") from exc
-    if not isinstance(data, dict) or not _SETTINGS <= set(data) or set(data) - _SETTINGS - {"resume_thread_id"}:
+    if not isinstance(data, dict) or not _SETTINGS <= set(data) or set(data) - _SETTINGS - {"resume_thread_id", "acp_model", "acp_effort"}:
         raise ServiceError("Settings must contain the documented non-secret fields")
+    from app.builderops.epic_workspace import resolve_engine, resolve_effort
+    if "acp_model" in data and (not isinstance(data["acp_model"], str) or not data["acp_model"]):
+        raise ServiceError("Invalid model or effort selection")
+    try:
+        _, model = resolve_engine("codex", data.get("acp_model"))
+        resolve_effort("codex", model, data.get("acp_effort"))
+    except (ValueError, RuntimeError, TypeError, AttributeError) as exc:
+        raise ServiceError("Invalid model or effort selection") from exc
+    if "acp_effort" in data and "acp_model" not in data:
+        raise ServiceError("Explicit effort requires an explicit model")
     if "resume_thread_id" in data:
         try:
             thread_id = data["resume_thread_id"]
@@ -218,6 +228,13 @@ def start(
         raise ServiceError("Workspace must be a directory and port must be 1–65535")
     settings = _settings(settings_file)
     with _locked(directory):
+        delivery_state = None if control_only else _read(directory.parent)
+        if delivery_state and delivery_state.get("kind") == "openhands_delivery_run.v1":
+            if (delivery_state.get("acp_model", "gpt-6.1-terra") != settings.get("acp_model", "gpt-6.1-terra")
+                    or delivery_state.get("acp_effort") != settings.get("acp_effort")):
+                raise ServiceError("Delivery selection does not match retained settings")
+            if delivery_state.get("worktree") != str(workspace):
+                raise ServiceError("Delivery state does not match the worker workspace")
         old_status = _status(_read(directory))
         if old_status != "stopped":
             raise ServiceError(f"Cannot start: lifecycle state is {old_status}; inspect it first")
@@ -248,6 +265,8 @@ def start(
             "OPENHANDS_CODEX_BINARY": settings["codex_binary"],
             "OPENHANDS_CODEX_CONFIG_ARGS": json.dumps(settings["codex_config_args"]),
             "OPENHANDS_FACTORY_READ_ROOTS": json.dumps(settings["sandbox_read_roots"]),
+            "OPENHANDS_FACTORY_MODEL": settings.get("acp_model", "gpt-6.1-terra"),
+            "OPENHANDS_FACTORY_EFFORT": settings.get("acp_effort") or "",
             "OH_WORKSPACE_PATH": str(workspace),
             "OH_PERSISTENCE_DIR": str(directory / "openhands"),
             "OH_CONVERSATIONS_PATH": settings["conversations_path"],
@@ -259,10 +278,7 @@ def start(
         if control_only:
             env["OPENHANDS_FACTORY_CONTROL_ONLY"] = "1"
         else:
-            delivery_state = _read(directory.parent)
             if delivery_state and delivery_state.get("kind") == "openhands_delivery_run.v1":
-                if delivery_state.get("worktree") != str(workspace):
-                    raise ServiceError("Delivery state does not match the worker workspace")
                 env["OPENHANDS_FACTORY_DELIVERY_DIR"] = str(directory.parent)
                 data["delivery_identity_challenge"] = True
                 _write(directory, data)

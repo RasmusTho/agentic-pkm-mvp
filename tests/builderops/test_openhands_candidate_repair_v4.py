@@ -9,8 +9,8 @@ from app.builderops import openhands_pr_cycle as cycle
 from tests.builderops.test_openhands_candidate_result_v3 import advance, prepared
 
 
-def finding_ready(tmp_path, capsys, monkeypatch):
-    data, fetch, identity, server, home, reviewer, cid, report, _ = prepared(tmp_path, capsys, monkeypatch)
+def finding_ready(tmp_path, capsys, monkeypatch, *, sol=False):
+    data, fetch, identity, server, home, reviewer, cid, report, _ = prepared(tmp_path, capsys, monkeypatch, sol=sol)
     finding = {"severity": "P1", "category": "correctness", "protected_class": "none", "summary": "repair",
                "file": "new.py", "line": 1, "failure_scenario": "failure"}
     report.update(verdict="findings", findings=[finding])
@@ -202,3 +202,13 @@ def test_foreign_publisher_commit_holds_before_author_creation(tmp_path, capsys,
     assert _git(publisher, "rev-parse", "HEAD") == foreign
     assert (publisher / "foreign.txt").read_text() == "preserve foreign commit\n"
     assert len([call for call in server.calls if call[0] == "POST"]) == 1
+
+
+def test_candidate_repair_author_uses_explicit_sol_high(tmp_path, capsys, monkeypatch):
+    data, fetch, identity, server, home, _, _ = finding_ready(tmp_path, capsys, monkeypatch, sol=True)
+    answer = advance(data, fetch, server, home)
+    assert answer["action"] == "candidate-repair-author", answer
+    calls = [call for call in server.calls if call[0] == "POST" and call[2] == "/conversations"]
+    assert len(calls) == 2
+    assert calls[-1][3]["agent_settings"] == {"agent_kind": "acp", "acp_server": "codex",
+                                              "acp_model": "gpt-6.1-sol", "acp_effort": "high"}

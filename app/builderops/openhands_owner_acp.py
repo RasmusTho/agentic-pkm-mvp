@@ -21,9 +21,9 @@ from typing import Any, cast
 import acp
 from acp.schema import AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse, PromptResponse
 
-COMMAND = re.compile(r"/?(start|status|cancel|resume|stop|watch)\s+#?([1-9][0-9]{0,8})\s*", re.IGNORECASE)
+COMMAND = re.compile(r"/?(start|status|cancel|resume|stop|watch)\s+#?([1-9][0-9]{0,8})(?:\s+([a-zA-Z0-9.-]+)\s+([a-zA-Z0-9-]+))?\s*", re.IGNORECASE)
 HELP = ("Enter `start #123`, `status #123`, `cancel #123`, `resume #123`, `stop #123`, or `watch #123`. "
-        "Start authorizes only that Issue; the factory checks its contract and ownership.")
+        "For Sol/high use `start #123 gpt-6.1-sol high`. Start authorizes only that Issue; the factory checks its contract and ownership.")
 
 
 def _port() -> int:
@@ -50,6 +50,13 @@ def _summary(action: str, issue: int, result: dict[str, Any]) -> str:
                          ("Cancellation", result.get("cancel_status"))):
         if isinstance(value, str):
             fields.append(f"{label}: {value}.")
+    if isinstance(state.get("acp_model"), str) and isinstance(state.get("acp_effort"), str):
+        fields.append(f"Selected: {state['acp_model']} / {state['acp_effort']}.")
+        observed_model, observed_effort = result.get("current_model_id"), result.get("current_effort")
+        if observed_model == state["acp_model"] and observed_effort == state["acp_effort"]:
+            fields.append(f"ACP current: {observed_model} / {observed_effort}.")
+        else:
+            fields.append("ACP current model and effort are unavailable or differ.")
     reason = watcher.get("reason")
     if isinstance(reason, str) and len(reason) <= 240 and re.fullmatch(r"[A-Za-z0-9 .,;:_#()/-]+", reason):
         fields.append(f"Detail: {reason}.")
@@ -154,10 +161,22 @@ def run_command(entry: Path, message: str) -> str:
     match = COMMAND.fullmatch(message.strip())
     if match is None:
         return "Please use one explicit Issue command. " + HELP
-    action, issue_text = match.groups()
+    action, issue_text, model, effort = match.groups()
     action, issue = action.lower(), int(issue_text)
+    if model is not None:
+        if action != "start":
+            return "Model and effort apply only to a new start; use status to inspect retained work."
+        from app.builderops.epic_workspace import resolve_engine, resolve_effort
+        try:
+            _, model = resolve_engine("codex", model.lower())
+            effort = resolve_effort("codex", model, effort.lower())
+        except (ValueError, RuntimeError, AttributeError):
+            return "Model or effort is not permitted; no Issue was started."
+
     args = [str(entry), action, "--issue", str(issue)]
     if action == "start":
+        if model is not None:
+            args.extend(["--model", model, "--effort", effort])
         try:
             args.extend(["--port", str(_port())])
         except OSError:
