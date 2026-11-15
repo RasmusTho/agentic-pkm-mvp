@@ -86,6 +86,37 @@ def _private_test_venv(path):
         os.umask(previous_umask)
 
 
+def _write_private_admissions(path, admissions):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as output:
+        json.dump({'admissions': admissions}, output)
+
+
+def test_private_admissions_real_guard_and_atomic_refresh_under_permissive_umask(tmp_path):
+    layout = ew.Layout(tmp_path / 'workers', 6615)
+    private, unsafe = tmp_path / 'private.json', tmp_path / 'unsafe.json'
+    previous_umask = os.umask(0o002)
+    try:
+        _write_private_admissions(private, [])
+        assert os.umask(0o002) == 0o002
+        assert private.stat().st_uid == os.geteuid()
+        assert private.stat().st_mode & 0o777 == 0o600
+        assert cycle._read_configuration(layout, private) == {'admissions': []}
+        expected = private.read_text()
+        cycle._write_configuration(private, {'admissions': [], 'refreshed': True}, expected)
+        assert private.stat().st_mode & 0o777 == 0o600
+        assert cycle._read_configuration(layout, private)['refreshed'] is True
+        unsafe.write_text('{"admissions": []}')
+        assert unsafe.stat().st_mode & 0o777 == 0o664
+        with pytest.raises(cycle.CycleError, match='controller-owned'):
+            cycle._read_configuration(layout, unsafe)
+        with pytest.raises(FileExistsError):
+            _write_private_admissions(private, [])
+        assert os.umask(0o002) == 0o002
+    finally:
+        os.umask(previous_umask)
+
+
 def test_private_test_venv_modes_and_real_guard_under_permissive_umask(tmp_path):
     layout = ew.Layout(tmp_path / 'workers', 6615)
     private = tmp_path / 'private-venv'
@@ -419,7 +450,10 @@ def test_verify_failure_repairs_real_candidate_then_publishes(tmp_path, capsys, 
 
 def test_verify_repair_drift_holds_and_peer_progresses(tmp_path, capsys, monkeypatch):
     import copy
+    import time
+    from datetime import datetime, timezone
 
+    real_lifecycle_owner = cycle._lifecycle_owner
     fixture = verify_fixture(tmp_path, capsys, monkeypatch, fail=True)
     data, fetch, identity, server, home, http, advance, _, _ = fixture
     layout, _, _, engine, _, entry, _, _, lease = data
@@ -454,6 +488,45 @@ def test_verify_repair_drift_holds_and_peer_progresses(tmp_path, capsys, monkeyp
     retained['candidate_verification']['commands'][-1]['stdout'] += '\nchanged\n'
     cycle._save(layout, retained)
 
+    # Produce an independent peer registration and claim, using the same lifecycle
+    # producer and synthetic dispatcher port as the existing authority fixtures.
+    source = cycle.Path(entry['lifecycle_repo'])
+    peer_checkout = tmp_path / 'peer-owner'
+    subprocess.run(['git', '-C', str(source), 'worktree', 'add', '-b', 'b/peer',
+                    str(peer_checkout), entry['head_sha']], check=True, capture_output=True, text=True)
+    now = int(time.time())
+    cycle.agent_worktree.register_worktree(source, worktree=peer_checkout, owner='peer-session',
+                                           now=now - 30, ttl_seconds=3600)
+    peer_entry = {**entry, 'number': 9, 'worker': 'peer', 'claimant': 'peer-owner',
+                  'session': 'peer-session', 'lease_id': 'peer-lease',
+                  'owner_worktree': str(peer_checkout.resolve())}
+    original_lifecycle = cycle._lifecycle_owner
+    monkeypatch.setattr(cycle, '_lifecycle_owner', lambda layout, admitted, branch:
+                        real_lifecycle_owner(layout, admitted, branch) if branch == 'b/peer'
+                        else original_lifecycle(layout, admitted, branch))
+    peer_task_id = cycle.github_issue_task_id(cycle.completion.REPOSITORY, 6619)
+    peer_task = {'task_id': peer_task_id, 'repo': cycle.completion.REPOSITORY, 'issue_number': 6619,
+                 'status': 'claimed', 'claimed_by': 'peer-owner', 'lease_id': 'peer-lease',
+                 'lease_expires_at': '2099-01-01T00:00:00Z', 'linked_pr': 9}
+    peer_lease = {'lease_id': 'peer-lease', 'holder': 'peer-owner', 'resource': 'issue:6619',
+                  'expires_at': peer_task['lease_expires_at'], 'released_at': None}
+    peer_events = [{'task_id': peer_task_id, 'event_type': 'task.claimed', 'actor': 'peer-owner',
+                    'lease_id': 'peer-lease', 'timestamp': datetime.fromtimestamp(now - 20, timezone.utc).isoformat(),
+                    'payload': {'session': 'peer-session', 'ttl_minutes': 90}}]
+    original_dispatcher = cycle.closure._dispatcher_inspect
+    monkeypatch.setattr(cycle.closure, '_dispatcher_inspect', lambda executor, cwd, task_id:
+                        (peer_task, peer_events, peer_lease) if task_id == peer_task_id
+                        else original_dispatcher(executor, cwd, task_id))
+    registration, records = real_lifecycle_owner(layout, peer_entry, 'b/peer')
+    history = dict(registration=registration, records=records, comments=[], issue_comments=[], events=peer_events,
+                   origin={}, origin_at=None, issue=6619, pr_number=9, branch='b/peer', entry=peer_entry)
+    assert registration['owner'] == 'peer-session' and registration['path'] == str(peer_checkout.resolve())
+    assert cycle._claimant_history(**history) == []
+    foreign_events = copy.deepcopy(peer_events)
+    foreign_events[0]['payload']['session'] = 'foreign-session'
+    with pytest.raises(cycle.CycleError, match='current claimant differs'):
+        cycle._claimant_history(**{**history, 'events': foreign_events})
+
     ew.create_worker(layout, 'peer', issue=6619, branch='b/peer', next_action='review', runner=engine)
     ew.start_openhands_worker(layout, 'peer', runner=engine, http=server)
     old_head = entry['head_sha']
@@ -484,7 +557,7 @@ def test_verify_repair_drift_holds_and_peer_progresses(tmp_path, capsys, monkeyp
             return fetch(path, timeout)
         return 200, json.dumps(value).encode()
 
-    result = cycle.advance(layout, [{**entry, 'number': 9, 'worker': 'peer'}, entry],
+    result = cycle.advance(layout, [peer_entry, entry],
                            fetch=peer_fetch, http=http, codex_home=home)['results']
     assert result[0]['action'] == 'independent-review' and result[1]['action'] == 'wait', result
     assert cycle._mapping(layout, worker)['state'] == 'stopped_verified'
@@ -623,7 +696,7 @@ def _publish_verified_fixture(tmp_path, monkeypatch, fixture, *, lost_push=False
         verify = cycle._find(layout, 10, identity)['candidate_verification']
         entry['repair_publication'] = {'evidence_file': verify['evidence_file'], 'paths': verify['paths']}
     admission_path = tmp_path / 'admissions.json'
-    admission_path.write_text(json.dumps({'admissions': [entry]}))
+    _write_private_admissions(admission_path, [entry])
     result = cycle.advance(layout, admission_path, fetch=collector, http=http, codex_home=home,
                            publisher_executor=port)['results'][0]
     if lost_push:
