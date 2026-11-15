@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 from scripts.validate_issue_readiness import (
     _declared_verify_targets,
@@ -1599,8 +1599,9 @@ def _publish_full_update(
     write = persist if persist is not None else lambda value: service._write(directory, value)
     worktree = Path(state["worktree"]).resolve(strict=True)
     retry = isinstance(prior, dict) and prior.get("binding_sha256") == binding_hash
-    previous = prior.get("previous_candidate") if retry else (native_previous if native else prior.get("candidate"))
-    pr_number = state.get("native_pr_number") if native else prior.get("pr_number")
+    previous = (cast(dict[str, Any], prior).get("previous_candidate") if retry
+                else (native_previous if native else cast(dict[str, Any], prior).get("candidate")))
+    pr_number = state.get("native_pr_number") if native else cast(dict[str, Any], prior).get("pr_number")
     if type(pr_number) is not int or pr_number <= 0:
         raise DeliveryError("Previous publication has no valid PR number")
     if (not isinstance(previous, dict) or previous.get("issue") != state["issue"]
@@ -1614,10 +1615,10 @@ def _publish_full_update(
         raise DeliveryError("Previous published candidate does not bind an additive update")
     if native and prior is not None and not retry:
         raise DeliveryError("An earlier native publication remains unresolved or has different evidence")
-    if not retry and not native and (prior.get("state") != "draft_published"
-                      or prior.get("binding_sha256") != _sha(publication.canonical_json(previous))):
+    if not retry and not native and (cast(dict[str, Any], prior).get("state") != "draft_published"
+                      or cast(dict[str, Any], prior).get("binding_sha256") != _sha(publication.canonical_json(previous))):
         raise DeliveryError("Earlier publication must be reconciled before an update")
-    if retry and (prior.get("candidate") != binding or prior.get("state") not in {
+    if retry and (cast(dict[str, Any], prior).get("candidate") != binding or cast(dict[str, Any], prior).get("state") not in {
         "update_prepared", "update_pushing", "update_pushed", "update_patching", "check_readback_pending",
         *({"native_published"} if native else set())
     }):

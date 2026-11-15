@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Concatenate, Iterator, Mapping, ParamSpec, Sequence, TypeVar
+from typing import Any, Callable, Concatenate, Iterator, Mapping, ParamSpec, Sequence, TypeGuard, TypeVar
 
 from app.builderops import epic_run_state
 
@@ -839,13 +839,13 @@ def build_launch_argv(
             raise LaunchRefused("invalid credential mount")
         argv += ["--mount", f"type=bind,source={source},target={target}"]
     if verification_venv is not None:
-        source = Path(verification_venv)
-        if (not source.is_absolute() or source.is_symlink() or source.resolve() != source
-                or not source.is_dir() or not _MOUNT_PATH.fullmatch(str(source))
-                or _is_within(source, layout.root) or _is_within(layout.root, source)
+        venv_source = Path(verification_venv)
+        if (not venv_source.is_absolute() or venv_source.is_symlink() or venv_source.resolve() != venv_source
+                or not venv_source.is_dir() or not _MOUNT_PATH.fullmatch(str(venv_source))
+                or _is_within(venv_source, layout.root) or _is_within(layout.root, venv_source)
                 or credential_mounts or env_file is not None):
             raise LaunchRefused("verification environment must be a separate credential-free directory")
-        argv += ["--mount", f"type=bind,source={source},target=/opt/pr-cycle-venv,readonly"]
+        argv += ["--mount", f"type=bind,source={venv_source},target=/opt/pr-cycle-venv,readonly"]
     for path in ([env_file] if env_file is not None else []) + list(extra_env_files):
         argv += ["--env-file", str(path)]
     argv.append(image)
@@ -1926,8 +1926,8 @@ def status(layout: Layout, *, runner: Runner = subprocess.run,
         identity = identity if isinstance(identity, Mapping) else {}
         conversation = mapping.get("conversation")
         conversation = dict(conversation) if isinstance(conversation, Mapping) else None
-        proofs = [row.get("execution_proof") for row in state.get("compact_receipts", [])
-                  if isinstance(row, Mapping) and isinstance(row.get("execution_proof"), Mapping)]
+        proofs = [proof for row in state.get("compact_receipts", [])
+                  if isinstance(row, Mapping) and isinstance(proof := row.get("execution_proof"), Mapping)]
         matched = [p for p in proofs if conversation is not None
                    and p.get("source") == "native-session-metadata"
                    and isinstance(p.get("operation_id"), str) and bool(p["operation_id"])
@@ -2518,7 +2518,7 @@ def checkpoint_worker(layout: Layout, worker: str, *, reason: str, runner: Runne
     tracked_stop = (mapping.get("state") == "stopped_verified" and isinstance(stop_id, str)
                     and re.fullmatch(r"[0-9a-f]{32}", stop_id) is not None
                     and isinstance(prior_work, Mapping) and prior_work.get("stop_id") == stop_id)
-    if tracked_stop:
+    if tracked_stop and isinstance(prior_work, Mapping):
         # An independent checkpoint can advance the generation, or fail after writing a ref.
         # Fence old receipts before it starts and restore completion only for this exact snapshot.
         def invalidate(entry: dict[str, Any]) -> None:
@@ -2534,7 +2534,7 @@ def checkpoint_worker(layout: Layout, worker: str, *, reason: str, runner: Runne
                               or work.get("branch") != mapping.get("execution_branch", mapping.get("branch")))
     checkpoint = _checkpoint(layout, issue, worker, work, ignored_all, reason=reason, runner=runner, image=image,
                              force=force)
-    if tracked_stop and all(prior_work.get(key) == work.get(key) for key in
+    if tracked_stop and isinstance(prior_work, Mapping) and all(prior_work.get(key) == work.get(key) for key in
                             (*_IDENTITY_FIELDS, "present", "readable", "unique_work")):
         incomplete = {k: v for k, v in prior_work.items() if k != "checkpoint"}
 
@@ -3276,7 +3276,7 @@ def _worker_inspect(layout: Layout, worker: str, mapping: Mapping[str, Any], run
         return "unknown"
 
 
-def _conversation_bound(info: Any, layout: Layout, issue: int, worker: str, cid: str) -> bool:
+def _conversation_bound(info: Any, layout: Layout, issue: int, worker: str, cid: str) -> TypeGuard[Mapping[str, Any]]:
     return (isinstance(info, Mapping) and str(info.get("id")) == cid
             and info.get("tags") == {"epic": str(layout.epic), "issue": str(issue), "worker": worker}
             and isinstance(info.get("workspace"), Mapping)
@@ -3658,16 +3658,17 @@ def _start_conversation_locked(
             return current
         epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater,
                                              expected_epic_issue_number=layout.epic)
+    agent_settings = {"agent_kind": "acp", "acp_server": engine, "acp_model": model}
     payload = {
         "conversation_id": conversation_id,
         "workspace": {"working_dir": CONTAINER_WORKSPACE},
-        "agent_settings": {"agent_kind": "acp", "acp_server": engine, "acp_model": model},
+        "agent_settings": agent_settings,
         "autotitle": False,
         "tags": {"epic": str(layout.epic), "issue": str(issue), "worker": worker},
         "initial_message": {"role": "user", "content": [{"type": "text", "text": prompt}]},
     }
     if effort is not None:
-        payload["agent_settings"]["acp_effort"] = effort
+        agent_settings["acp_effort"] = effort
     try:
         with _endpoint_session(layout, worker, issue, mapping, runner) as (port, key):
             if key != initial_key:

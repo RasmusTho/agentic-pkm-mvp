@@ -10,7 +10,7 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 from app.builderops import epic_workspace as ew
 from app.builderops import openhands_pr_observation as github_read
@@ -256,7 +256,7 @@ def advance_locked(layout: ew.Layout, issue: int, worker: str, *, observed: Mapp
         if not isinstance(handoff.get("image"), str) or not isinstance(handoff.get("network"), str):
             raise ew.LaunchRefused("successor image or network is unavailable")
         ew._start_openhands_worker_locked(layout, worker,
-            budget=ew.Budget(budget.get("cpus"), budget.get("memory"), budget.get("pids")),
+            budget=ew.Budget(cast(str, budget.get("cpus")), cast(str, budget.get("memory")), cast(int, budget.get("pids"))),
             codex_home=codex_home, image=handoff["image"], network=handoff["network"], runner=runner, http=http)
         mapping = ew._load_state(layout)["issue_mappings"][str(issue)]
 

@@ -23,7 +23,7 @@ import uuid
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal, Mapping, Sequence
+from typing import Any, Callable, Iterator, Literal, Mapping, Sequence, cast
 from urllib.parse import urlencode
 
 from app.builderops import closure, epic_run_state, epic_workspace as workspace
@@ -2276,7 +2276,7 @@ def _report_items(report: Mapping[str, Any]) -> dict[tuple[str, int], Any]:
         collections[f"closing:{number}"] = child.get("limitations")
     if any(not isinstance(rows, list) for rows in collections.values()):
         raise ValueError("original limitations cannot be enumerated")
-    return {(where, index): item for where, rows in collections.items() for index, item in enumerate(rows)}
+    return {(where, index): item for where, rows in collections.items() for index, item in enumerate(cast(list[Any], rows))}
 
 
 def _archived_material_error(prior: Mapping[str, Any], current: Mapping[str, Any],
@@ -2385,7 +2385,7 @@ def _disposition_error(review: Mapping[str, Any], expected: Mapping[str, Any] | 
                 or not isinstance(operation, str) or not operation or archive.get("review_operation") != operation
                 or proof.get("operation_id") != operation or archive.get("stop_verified") is not True
                 or proof.get("source") != "native-session-metadata"
-                or proof.get("auth") != {"codex": "chatgpt", "claude-code": "claude-subscription"}.get(proof.get("engine"))
+                or proof.get("auth") != {"codex": "chatgpt", "claude-code": "claude-subscription"}.get(cast(str, proof.get("engine")))
                 or proof.get("engine") not in ("codex", "claude-code") or not _text(proof.get("model"))
                 or not _text(proof.get("native_session_id")) or not _text(proof.get("timestamp"))
                 or (proof.get("engine") == "codex" and proof.get("effort") not in ("high", "xhigh", "max", "ultra"))
@@ -3192,7 +3192,7 @@ def _review_quota_candidate(layout: workspace.Layout, pr: Mapping[str, Any], ent
     handoff = mapping.get("engine_handoff")
     pending = isinstance(handoff, Mapping) and handoff.get("status") == "pending"
     conversation = mapping.get("conversation")
-    operation = handoff.get("operation_id") if pending else (
+    operation = cast(Mapping[str, Any], handoff).get("operation_id") if pending else (
         conversation.get("operation_id") if isinstance(conversation, Mapping) else None)
     if not isinstance(operation, str):
         return None
@@ -3307,13 +3307,13 @@ def _effective_repair_entry(entry: Mapping[str, Any], mapping: Mapping[str, Any]
     effective = dict(entry)
     original = saved.get("repair_admission_selection", selection)
     if matches and isinstance(original, Mapping) and original.get("engine") == "claude-code":
-        confirmation = handoff.get("confirmation")
+        confirmation = cast(Mapping[str, Any], handoff).get("confirmation")
         if confirmation is not None and (not isinstance(confirmation, Mapping)
                 or confirmation.get("engine") != original.get("engine")
                 or confirmation.get("model") != original.get("model")):
             raise CycleError("repair handoff does not bind the admitted engine and model")
     if matches and selection["engine"] == "claude-code":
-        confirmation = handoff.get("confirmation")
+        confirmation = cast(Mapping[str, Any], handoff).get("confirmation")
         if confirmation is not None and (not isinstance(confirmation, Mapping)
                 or confirmation.get("engine") != selection["engine"]
                 or confirmation.get("model") != selection["model"]):
@@ -3424,7 +3424,7 @@ def _advance_repair(layout: workspace.Layout, worker: str, pr: Mapping[str, Any]
                                            native_authority(layout, pr, entry, purpose="repair")):
             raise CycleError("repair authority changed before worker launch")
         workspace._start_openhands_worker_locked(
-            layout, worker, budget=workspace.Budget(budget.get("cpus"), budget.get("memory"), budget.get("pids")),
+            layout, worker, budget=workspace.Budget(cast(str, budget.get("cpus")), cast(str, budget.get("memory")), cast(int, budget.get("pids"))),
             codex_home=codex_home or Path.home() / ".config/epic-workspace/codex",
             image=image, network=network, runner=_worker_runner, http=http)
         mapping = _mapping(layout, worker)
@@ -4177,7 +4177,8 @@ def _bind_stopped_repair_candidate(layout: workspace.Layout, worker: str, pr: Ma
     candidate = {"status": "awaiting_independent_review", "repository": completion.REPOSITORY,
                  "number": pr["number"], "identity": saved["identity"], "old_head": pr["head_sha"],
                  "candidate_head": head, "tree": tree, "branch": branch, "worktree": path,
-                 "generation": registration.get("generation"), "registration_epoch": registration.get("registration_epoch"),
+                 "generation": cast(Mapping[str, Any], registration).get("generation"),
+                 "registration_epoch": cast(Mapping[str, Any], registration).get("registration_epoch"),
                  "claim_issue": authority.get("claim_issue"), "stop_id": intent["stop_id"],
                  "checkpoint_ref": checkpoint.get("ref"), "operation_id": saved["repair_operation"],
                  "native_proof_sha256": _digest(saved["repair_execution_proof"]),
@@ -4333,7 +4334,7 @@ def _candidate_review_snapshot(layout: workspace.Layout, pr: Mapping[str, Any], 
             or live.get("body") != pr.get("body") or live.get("title") != pr.get("title")):
         raise CycleError("PR changed before candidate review")
     context, material = _review_context(pr)
-    issue_number = authority.get("governing_issue")
+    issue_number = cast(int, authority.get("governing_issue"))
     issue = closure._issue(executor, cwd, completion.REPOSITORY, issue_number)
     if issue.get("state") != "open" or issue.get("body") != pr.get("governing_issue", {}).get("body"):
         raise CycleError("governing Issue changed before candidate review")
@@ -4549,7 +4550,7 @@ def _advance_candidate_review(layout: workspace.Layout, pr: Mapping[str, Any], e
                     or not isinstance(network, str)):
                 raise CycleError("author OpenHands launch settings are unavailable")
             workspace.start_openhands_worker(layout, worker,
-                budget=workspace.Budget(budget.get("cpus"), budget.get("memory"), budget.get("pids")),
+                budget=workspace.Budget(cast(str, budget.get("cpus")), cast(str, budget.get("memory")), cast(int, budget.get("pids"))),
                 image=image, network=network, codex_home=codex_home or Path.home() / ".config/epic-workspace/codex",
                 runner=_worker_runner, http=http)
         current_binding, current_pr = _candidate_review_snapshot(layout, pr, entry, saved)
@@ -4798,7 +4799,7 @@ def _advance_candidate_verify(layout: workspace.Layout, pr: Mapping[str, Any], e
         if not isinstance(budget, Mapping) or not isinstance(image, str) or not isinstance(network, str):
             raise CycleError("candidate Verify launch settings are unavailable")
         workspace.start_openhands_worker(layout, worker,
-            budget=workspace.Budget(budget.get("cpus"), budget.get("memory"), budget.get("pids")),
+            budget=workspace.Budget(cast(str, budget.get("cpus")), cast(str, budget.get("memory")), cast(int, budget.get("pids"))),
             image=image, network=network, verification_venv=venv, runner=_worker_runner, http=http)
         mapping = _mapping(layout, worker)
     commands = intent["commands"]
@@ -4933,11 +4934,11 @@ def _advance_candidate_verify(layout: workspace.Layout, pr: Mapping[str, Any], e
     verification = []
     for index, row in enumerate(commands):
         output_path = evidence_dir / f"verify-{index}.txt"
-        output = (f"candidate {candidate['candidate_head']}\ntree {candidate['tree']}\nbinding {digest}\n"
+        output_text = (f"candidate {candidate['candidate_head']}\ntree {candidate['tree']}\nbinding {digest}\n"
                   f"target {row['target']}\ncommand {row['command_id']}\n"
                   f"events {','.join(row['output_event_ids'])}\nevents_sha256 {row['output_events_sha256']}\n"
                   f"stop {stop['stop_id']}\nexit {row['exit_code']}\n{row['stdout']}\n{row['stderr']}\n")
-        output_hash = _write_candidate_evidence(output_path, output)
+        output_hash = _write_candidate_evidence(output_path, output_text)
         verification.append({"target": row["target"], "head_sha": candidate["candidate_head"], "result": "pass",
                              "evidence": {"path": str(output_path), "sha256": output_hash}})
     authority = binding["authority_binding"]
@@ -5048,7 +5049,7 @@ def _advance_candidate_repair_locked(layout: workspace.Layout, pr: Mapping[str, 
                 or not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image) or not isinstance(network, str)):
             raise CycleError("candidate repair launch settings are unavailable")
         workspace.start_openhands_worker(layout, worker,
-            budget=workspace.Budget(budget.get("cpus"), budget.get("memory"), budget.get("pids")),
+            budget=workspace.Budget(cast(str, budget.get("cpus")), cast(str, budget.get("memory")), cast(int, budget.get("pids"))),
             image=image, network=network, codex_home=codex_home or Path.home() / ".config/epic-workspace/codex",
             runner=_worker_runner, http=http)
         mapping = _mapping(layout, worker)
@@ -5338,7 +5339,7 @@ def _advance_bound_publication(layout: workspace.Layout, path: Path | None, pr: 
                                                         Path(evidence), executor=executor)
         if result.get("pr_number") != number or result.get("commit_sha") != new:
             raise CycleError("confirmed publication readback does not match candidate")
-        _refresh_published_admission(layout, path, entry, old, new)
+        _refresh_published_admission(layout, path, entry, cast(str, old), cast(str, new))
     return {"number": number, "identity": saved["identity"], "action": "published-awaiting-new-head-review",
             "head_sha": new, "reason": "admission refreshed; obtain fresh new-head review, Verify and CI"}
 
@@ -5365,22 +5366,22 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
                     or saved.get("repair_publication") is not None
                     or type(saved.get("number")) is not int):
                 continue
-            number = saved.get("number")
-            entry = admitted.get(number)
+            candidate_number = cast(int, saved.get("number"))
+            entry = admitted.get(candidate_number)
             candidate = saved.get("repair_candidate")
-            observed = observations.get(number)
+            observed = observations.get(candidate_number)
             if (isinstance(candidate, Mapping) and isinstance(entry, Mapping) and isinstance(observed, Mapping)
                     and entry.get("head_sha") == candidate.get("old_head") == observed.get("head_sha")):
                 continue
             try:
                 _hold_candidate_verifier(layout, dict(saved))
-                saved = _find(layout, number, saved["identity"])
+                saved = _find(layout, candidate_number, saved["identity"])
                 _hold_candidate_repair_author(layout, dict(saved))
-                _hold_candidate_reviewer(layout, _find(layout, number, saved["identity"]))
+                _hold_candidate_reviewer(layout, _find(layout, candidate_number, saved["identity"]))
                 reason = "candidate PR observation or admission is unavailable or changed; reviewer held"
             except (workspace.EpicWorkspaceError, CycleError, OSError, ValueError) as exc:
                 reason = f"candidate reviewer stop unresolved: {exc}"
-            results.append({"number": number, "action": "wait", "reason": reason})
+            results.append({"number": candidate_number, "action": "wait", "reason": reason})
         for saved in state["compact_receipts"]:
             if (not isinstance(saved, dict) or saved.get("kind") != "pr_cycle"
                     or not isinstance(saved.get("merge_intent"), dict) or saved.get("reconciled") is True):
@@ -5414,6 +5415,7 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
                                     and entry is not None
                                     and row["repair_candidate"].get("old_head") == entry.get("head_sha")]
             if pending_publications:
+                entry = cast(dict[str, Any], entry)
                 try:
                     if len(pending_publications) != 1 or obligations:
                         raise CycleError("publication or merge reconciliation is ambiguous")
@@ -5455,11 +5457,10 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
                 continue
             try:
                 pending = [(item[0], item[1]) for item in obligations if item is not None]
-                options = {"codex_home": codex_home} if codex_home is not None else {}
                 if pending:
-                    result = _advance_one(layout, pr, entry, http=http, merge_obligations=pending, **options)
+                    result = _advance_one(layout, pr, entry, http=http, merge_obligations=pending, codex_home=codex_home)
                 else:
-                    result = _advance_one(layout, pr, entry, http=http, **options)
+                    result = _advance_one(layout, pr, entry, http=http, codex_home=codex_home)
                 eligible_for_handoff = not obligations
             except (CycleError, closure.ClosureError, observation.ObservationError, workspace.EpicWorkspaceError,
                     publication.PublicationRefusal, publication.PublicationCommandError, OSError, ValueError, KeyError, AttributeError, TypeError,
@@ -5594,9 +5595,12 @@ def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, An
         # stop/checkpoint path; absence alone must not manufacture its completion.
         try:
             stop = getattr(workspace.stop_worker, "__wrapped__", workspace.stop_worker) if locked else workspace.stop_worker
-            stop(layout, worker, reason=reason, **({"runner": _worker_runner} if prefix in ("candidate_review_", "candidate_repair_") else {}),
-                                  expected_container_id=intent["container_id"],
-                                  expected_assignment=mapping, stop_intent=intent)
+            if prefix in ("candidate_review_", "candidate_repair_"):
+                stop(layout, worker, reason=reason, runner=_worker_runner,
+                     expected_container_id=intent["container_id"], expected_assignment=mapping, stop_intent=intent)
+            else:
+                stop(layout, worker, reason=reason, expected_container_id=intent["container_id"],
+                     expected_assignment=mapping, stop_intent=intent)
         except workspace.EpicWorkspaceError:
             check_lineage(_mapping(layout, worker))
             raise
@@ -5882,14 +5886,15 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
             started = start_or_reconcile_review(layout, entry["worker"], op, pr, identity, entry, http=http,
                                                 reconciliation=pending)
             decision["reason"] = f"conversation {started.get('id')} {started.get('status')}"
-    if exhausted is not None and decision["action"] == "wait":
-        decision["reason"] = (f"report reconciliation under {REPORT_CONTRACT} did not produce a conforming report ("
+    response = dict(decision)
+    if exhausted is not None and response["action"] == "wait":
+        response["reason"] = (f"report reconciliation under {REPORT_CONTRACT} did not produce a conforming report ("
                               + "; ".join(exhausted["grammar"]) + "); the owning review workflow must repair it")
-    elif owner_wait is not None and decision["action"] == "wait":
-        decision["reason"] = "owning workflow must resolve review disposition: " + owner_wait
+    elif owner_wait is not None and response["action"] == "wait":
+        response["reason"] = "owning workflow must resolve review disposition: " + owner_wait
         if "disposition_request" in saved:
-            decision["disposition_request"] = saved["disposition_request"]
-    return dict(decision)
+            response["disposition_request"] = saved["disposition_request"]
+    return response
 
 
 def main(argv: Sequence[str] | None = None) -> int:
