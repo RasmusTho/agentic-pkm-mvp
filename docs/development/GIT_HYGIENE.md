@@ -25,6 +25,13 @@ limits, and resume procedure are specified in [Multi-Agent Workspace Guardrails]
 Before a claim, the operator path screens the registered and live checkout inventory against the
 declared model workspace using the same boundary as the native successor proof.
 
+The separately qualified #6560 operator path may prepare a dirty candidate only for its two
+identified files. Its registration readback binds their original index blobs, working-file hashes,
+patch hash, index hash, candidate tree and an independently preserved absolute backup. The
+prepared row remains unadmitted until the existing acknowledgment and pin checks succeed; other
+dirty candidates do not inherit this exception. The operator must still reconcile the source and
+publication outcomes described in [DEV_WORKFLOW](DEV_WORKFLOW.md#multi-agent-workspace-guardrails).
+
 The disposable integration oracle supplies byte input through a temporary regular
 file, including the complete NUL-separated attribute path set. This avoids pipe
 backpressure while preserving exact input, captured output, bounded Git execution,
