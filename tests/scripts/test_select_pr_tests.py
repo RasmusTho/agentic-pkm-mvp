@@ -907,6 +907,17 @@ def test_heimdal_mimer_contract_change_selects_its_owned_tests() -> None:
     assert "tests/knowledge_acquisition" in selection.targets
 
 
+def test_youtube_auth_cli_change_has_a_ci_owner() -> None:
+    """The non-production YouTube auth CLI must not fail CI selection as unowned."""
+    selection = select_tests(["app/cli/youtube_auth.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("heimdal_mimer",)
+    assert selection.unowned_paths == ()
+    assert "tests/knowledge_acquisition" in selection.targets
+    assert "tests/cli/test_youtube_auth_connect_cli.py" in selection.targets
+
+
 def test_watcher_change_defers_e2e_files_to_post_merge() -> None:
     selection = select_tests(["app/watcher/registry.py"])
 
