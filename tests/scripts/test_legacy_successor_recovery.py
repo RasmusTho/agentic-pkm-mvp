@@ -20,6 +20,7 @@ from app.dispatcher import leases
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import TaskRecord
 from app.dispatcher.models import EventRecord
+from app.dispatcher import store as dispatcher_store
 from app.dispatcher.store import SqliteStore
 from scripts import agent_worktree
 
@@ -996,7 +997,7 @@ def test_operator_rejects_symlinked_canonical_dispatcher_path(operator_case, tmp
 
 @pytest.mark.parametrize('lock_kind', ['cleanup', 'sqlite'])
 def test_operator_claim_refuses_dispatcher_lock_contention_without_wait(operator_case, lock_kind):
-    import sqlite3
+    import select
 
     case = operator_case
     task_id = case['receipt']['predecessor']['task_id']
@@ -1004,20 +1005,36 @@ def test_operator_claim_refuses_dispatcher_lock_contention_without_wait(operator
     if lock_kind == 'cleanup':
         lock = leases._cleanup_guard_lock(store)
         lock.__enter__()
-        connection = None
+        holder = None
     else:
         lock = None
-        connection = sqlite3.connect(store.db_path)
-        connection.execute('BEGIN IMMEDIATE')
+        # Hold the SQLite lock in another process, as a real competing
+        # dispatcher does. On POSIX, closing another descriptor for the same
+        # file can release this process's fcntl locks, so a connection held by
+        # the test process is not a reliable contention fixture on Linux.
+        holder = subprocess.Popen(
+            [sys.executable, '-u', '-c',
+             "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); "
+             "c.execute('BEGIN IMMEDIATE'); print('locked', flush=True); "
+             "sys.stdin.readline(); c.rollback(); c.close()", str(store.db_path)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
     try:
+        if holder is not None:
+            assert holder.stdout is not None
+            assert select.select([holder.stdout], [], [], 10)[0], 'lock holder did not start'
+            assert holder.stdout.readline().strip() == 'locked'
         started = time.monotonic()
         with pytest.raises(recovery.RecoveryEvidenceError):
             recovery.execute_operator_pickup(**_args(case))
         assert time.monotonic() - started < 10
     finally:
-        if connection is not None:
-            connection.rollback()
-            connection.close()
+        if holder is not None:
+            try:
+                holder.communicate(input='release\n', timeout=10)
+            except subprocess.TimeoutExpired:
+                holder.kill()
+                holder.communicate()
         if lock is not None:
             lock.__exit__(None, None, None)
     assert len([e for e in store.list_events(task_id) if e.event_type == 'task.claimed']) == 1
@@ -1679,7 +1696,7 @@ def test_dispatcher_read_uses_original_fd_if_path_swaps_during_sqlite_open(opera
     shutil.copy2(database, foreign)
     displaced = tmp_path / 'displaced.sqlite3'
     before = database.read_bytes()
-    sqlite_open = recovery.sqlite3.connect
+    sqlite_open = dispatcher_store.sqlite3.connect
     swapped = False
     def swap_then_open(target, *args, **kwargs):
         nonlocal swapped
@@ -1689,7 +1706,7 @@ def test_dispatcher_read_uses_original_fd_if_path_swaps_during_sqlite_open(opera
             if replacement == 'symlink': database.symlink_to(foreign)
             else: shutil.copy2(foreign, database)
         return sqlite_open(target, *args, **kwargs)
-    monkeypatch.setattr(recovery.sqlite3, 'connect', swap_then_open)
+    monkeypatch.setattr(dispatcher_store.sqlite3, 'connect', swap_then_open)
     with pytest.raises(recovery.RecoveryEvidenceError, match='identity'):
         recovery.read_live_predecessor(cwd=case['cwd'], issue=case['issue'])
     assert swapped and displaced.read_bytes() == before and foreign.read_bytes() == before

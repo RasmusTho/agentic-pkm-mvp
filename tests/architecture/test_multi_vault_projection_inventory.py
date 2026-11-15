@@ -1345,7 +1345,9 @@ def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
         # ``dispatcher show --events`` owns one explicit read transaction
         # whose SQL is intentionally local to the separate SQLite plane.
         "app/dispatcher/cli.py": 1,
-        "app/dispatcher/store.py": 2,
+        # Recovery reads only dispatcher tables inside its query-only snapshot;
+        # the additional invisible statement is its explicit BEGIN.
+        "app/dispatcher/store.py": 3,
         "app/dispatcher/verification_dispatch.py": 1,
         "app/dispatcher/verification_runtime.py": 1,
     }, (
