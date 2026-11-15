@@ -77,3 +77,119 @@ def test_copied_run_root_is_rejected(tmp_path, monkeypatch):
     with pytest.raises(fence.RunFenceError, match='qualified host run'):
         with fence.hold(state_root=root, issue=6597, worktree=worktree):
             pass
+
+# Reuse the real Git/SQLite producer fixture while keeping this regression separate.
+import importlib.util  # noqa: E402
+
+from app.builderops import legacy_owner_recovery as recovery  # noqa: E402
+from scripts import agent_worktree  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location(
+    'legacy_successor_fixture', Path(__file__).parents[1] / 'scripts/test_legacy_successor_recovery.py')
+assert _spec and _spec.loader
+_fixture_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_fixture_module)
+operator_case = _fixture_module.operator_case
+
+
+def test_changed_run_after_ack_stays_unadmitted_then_resume(operator_case, monkeypatch):
+    case = operator_case
+    read_ack = recovery._read_unique_operator_ack
+    server_state = case['run_state_root'] / 'issue-6601/server/service.json'
+
+    def changed_after_ack(**kwargs):
+        result = read_ack(**kwargs)
+        server_state.write_text(json.dumps({'version': 1, 'state': 'running'}))
+        return result
+
+    monkeypatch.setattr(recovery, '_read_unique_operator_ack', changed_after_ack)
+    with pytest.raises(recovery.RecoveryEvidenceError, match='not stopped'):
+        recovery.execute_operator_pickup(**_fixture_module._args(case))
+    assert 2 in case['comments']  # ACK was actually created before the failed fence.
+    row = agent_worktree._locked_lifecycle_snapshot(
+        agent_worktree._default_registry_path(case['cwd']))[str(case['worktree'])]
+    assert row['operator_registration']['state'] == 'prepared'
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match='unpinned'):
+        agent_worktree.assert_operator_registration_pinned(row)
+    server_state.write_text(json.dumps({'version': 1, 'state': 'stopped'}))
+    monkeypatch.setattr(recovery, '_read_unique_operator_ack', read_ack)
+    result = recovery.resume_operator_pickup(**_fixture_module._args(case))
+    assert result['state'] == 'pinned' and result['ack_comment_id'] == 2
+    assert len(case['comments']) == 2
+
+
+def test_lost_ack_reply_remains_prepared_when_resume_fence_fails(operator_case, monkeypatch):
+    case = operator_case
+    delegate = recovery.subprocess.run
+    posts = []
+
+    def lost_reply(args, **kwargs):
+        if args[0] == 'gh' and 'POST' in args:
+            posts.append(1)
+            delegate(args, **kwargs)
+            return subprocess.CompletedProcess(args, 1, stdout='', stderr='lost')
+        return delegate(args, **kwargs)
+
+    monkeypatch.setattr(recovery.subprocess, 'run', lost_reply)
+    with pytest.raises(recovery.RecoveryEvidenceError, match='ACK publication outcome unknown'):
+        recovery.execute_operator_pickup(**_fixture_module._args(case))
+    calls = []
+
+    def changed(*_args):
+        calls.append(1)
+        if len(calls) == 2:
+            raise fence.RunFenceError('target watcher process is active or pending')
+
+    monkeypatch.setattr(fence, '_check_processes', changed)
+    with pytest.raises(recovery.RecoveryEvidenceError, match='active or pending'):
+        recovery.resume_operator_pickup(**_fixture_module._args(case))
+    row = agent_worktree._locked_lifecycle_snapshot(
+        agent_worktree._default_registry_path(case['cwd']))[str(case['worktree'])]
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match='unpinned'):
+        agent_worktree.assert_operator_registration_pinned(row)
+    assert row['operator_registration']['state'] == 'prepared' and len(posts) == 1
+    monkeypatch.setattr(fence, '_check_processes', lambda *_args: None)
+    assert recovery.resume_operator_pickup(**_fixture_module._args(case))['state'] == 'pinned'
+    assert len(posts) == 1
+
+
+def test_resume_after_lost_pinned_reply_is_read_only(operator_case, monkeypatch):
+    case = operator_case
+    result = recovery.execute_operator_pickup(**_fixture_module._args(case))
+    # The successful response is discarded; resume must reconstruct it from readbacks.
+    delegate = recovery.subprocess.run
+
+    def no_writes(args, **kwargs):
+        assert not (args[0] == 'gh' and 'POST' in args)
+        assert not ('app.dispatcher' in args and 'claim' in args)
+        return delegate(args, **kwargs)
+
+    def no_pin(*_args, **_kwargs):
+        raise AssertionError('resume must not pin again')
+
+    monkeypatch.setattr(recovery.subprocess, 'run', no_writes)
+    monkeypatch.setattr(agent_worktree, 'pin_operator_registration', no_pin)
+    monkeypatch.setattr(agent_worktree, 'begin_operator_ack', no_pin)
+    resumed = recovery.resume_operator_pickup(**_fixture_module._args(case))
+    assert resumed['pickup_receipt'] == result['pickup_receipt']
+    assert resumed['registration_epoch'] == result['registration_epoch']
+    assert resumed['ack_comment_id'] == result['ack_comment_id']
+
+
+@pytest.mark.parametrize('drift', ['ack', 'lease', 'state'])
+def test_pinned_resume_refuses_changed_readbacks(operator_case, monkeypatch, drift):
+    from app.dispatcher import leases
+
+    case = operator_case
+    result = recovery.execute_operator_pickup(**_fixture_module._args(case))
+    if drift == 'ack':
+        case['comments'][2]['body'] += ' '
+    elif drift == 'lease':
+        leases.release(case['store'], result['task_id'], case['agent'])
+    else:
+        (case['run_state_root'] / 'issue-6601/server/service.json').write_text(
+            json.dumps({'version': 1, 'state': 'running'}))
+    monkeypatch.setattr(agent_worktree, 'pin_operator_registration',
+                        lambda *_args, **_kwargs: pytest.fail('unexpected pin'))
+    with pytest.raises(recovery.RecoveryEvidenceError):
+        recovery.resume_operator_pickup(**_fixture_module._args(case))

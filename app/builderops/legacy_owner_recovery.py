@@ -7,7 +7,7 @@ caller-supplied session identifier is not an observation.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 import hashlib
 import argparse
@@ -544,7 +544,8 @@ def _read_unique_operator_ack(*, cwd: Path, issue: int, pr: int, pending: Mappin
 
 def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path, session: str,
                                workspace_root: Path, pending_comment: dict[str, Any],
-                               receipt: dict[str, Any], prepared: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+                               receipt: dict[str, Any], prepared: dict[str, Any],
+                               before_pin: Callable[..., str]) -> tuple[int, dict[str, Any]]:
     try:
         pages = json.loads(_github_read(["--method", "GET", "--paginate", "--slurp",
                            f"repos/RasmusTho/agentic-pkm-mvp/issues/{issue}/comments", "-f", "per_page=100"], cwd=cwd))
@@ -587,6 +588,7 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
         if ack_comment.get("id") != ack_id or ack_comment.get("body") != ack_body:
             raise RecoveryEvidenceError("ACK readback changed; retain prepared registration")
         time.sleep(max(0.0, _timestamp(ack_comment.get("created_at")) + 1.1 - time.time()))
+        before_pin(prepared["successor_registration"]["epoch"])
         pinned = agent_worktree.pin_operator_registration(cwd, worktree=worktree, owner=session, issue=issue,
                     pr=pr, pending_comment=pending_comment, ack_comment=ack_comment, workspace_root=workspace_root)
     except agent_worktree.WorktreeLifecycleError as exc:
@@ -595,7 +597,8 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
 
 
 def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, agent: str, session: str,
-                            comment_id: int, workspace_root: Path) -> dict[str, Any]:
+                            comment_id: int, workspace_root: Path,
+                            before_pin: Callable[..., str]) -> dict[str, Any]:
     """Execute the supported operator transition after wrapper issue checks.
 
     Failed or ambiguous writes are retained for reconciliation, never released
@@ -639,9 +642,7 @@ def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, 
     except agent_worktree.WorktreeLifecycleError as exc:
         raise RecoveryEvidenceError("operator registration failed; retain claim") from exc
     ack_id, pinned = _post_and_pin_operator_ack(cwd=cwd, issue=issue, pr=pr, worktree=worktree, session=session,
-                      workspace_root=workspace_root, pending_comment=pending_comment, receipt=receipt, prepared=prepared)
-    _successor_claim_readback(cwd=cwd, task_id=task_id, issue=issue, agent=agent, session=session,
-                              claim_id=claim_id, predecessor=prior)
+                      workspace_root=workspace_root, pending_comment=pending_comment, receipt=receipt, prepared=prepared, before_pin=before_pin)
     pickup_receipt = (f"pickup-claim-complete issue={issue} branch={candidate['branch']} worktree={worktree} "
                       f"coordination_mode=dispatcher-backed fallback_reason=none task_id={task_id} "
                       f"lease_id={lease_id} holder={agent} evidence=verified-dispatcher-lease")
@@ -651,7 +652,8 @@ def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, 
 
 
 def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, agent: str, session: str,
-                           comment_id: int, workspace_root: Path) -> dict[str, Any]:
+                           comment_id: int, workspace_root: Path,
+                           before_pin: Callable[..., str]) -> dict[str, Any]:
     """Reconcile an existing claim and exact ACK without repeating a write."""
     if not session or session != os.environ.get("CODEX_SESSION_ID"):
         raise RecoveryEvidenceError("current Builder successor session is unavailable")
@@ -718,15 +720,46 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
             raise RecoveryEvidenceError("operator registration could not be resumed; retain claim") from exc
         ack_id, pinned = _post_and_pin_operator_ack(cwd=cwd, issue=issue, pr=pr, worktree=worktree,
                             session=session, workspace_root=workspace_root, pending_comment=pending_comment,
-                            receipt=pending, prepared=prepared)
-        _successor_claim_readback(cwd=cwd, task_id=task_id, issue=issue, agent=agent, session=session,
-                                  claim_id=claims[0]["payload"]["claim_id"], predecessor=pending["predecessor"])
+                            receipt=pending, prepared=prepared, before_pin=before_pin)
         return {"task_id": task_id, "lease_id": lease_id, "holder": agent, "session": session,
                 "pending_comment_id": comment_id, "ack_comment_id": ack_id, "registration_epoch": pinned["epoch"],
                 "state": "pinned", "pickup_receipt": (f"pickup-claim-complete issue={issue} branch={candidate['branch']} "
                   f"worktree={worktree} coordination_mode=dispatcher-backed fallback_reason=none task_id={task_id} "
                   f"lease_id={lease_id} holder={agent} evidence=verified-dispatcher-lease")}
-    if (not isinstance(proof, dict) or proof.get("state") not in {"prepared", "pinned"}
+    if isinstance(proof, dict) and proof.get("state") == "pinned":
+        try:
+            agent_worktree.assert_operator_registration_pinned(row)
+            if (row.get("owner") != session or row.get("status") != "active"
+                    or row.get("expires_at", 0) <= time.time() or proof.get("issue") != issue
+                    or proof.get("pending_comment_id") != comment_id or proof.get("pending_digest") != pending_digest
+                    or proof.get("predecessor") != pending.get("predecessor_registration")):
+                raise RecoveryEvidenceError("pinned operator registration changed; reconcile state")
+            intent = proof["ack_intent"]
+            expected_ack = {
+                "successor_registration": {"path": str(worktree), "branch": candidate["branch"],
+                    "owner": session, "generation": candidate["generation"], "epoch": proof["epoch"],
+                    "observed_at": proof["registration_read_at"]},
+                "candidate_readback": proof["candidate_readback"], "ack_attempt_id": intent["attempt_id"],
+            }
+            ack_comment = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr,
+                                                    pending=pending, expected_ack=expected_ack)
+            _, ack_at, ack_digest = agent_worktree._transfer_comment(
+                ack_comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
+            if (ack_comment.get("id") != proof["ack_comment_id"] or ack_digest != proof["ack_digest"]
+                    or ack_at != proof["ack_at"]):
+                raise RecoveryEvidenceError("pinned ACK changed; reconcile state")
+            current_lease = before_pin(proof["epoch"], "pinned", row)
+            if current_lease != lease_id:
+                raise RecoveryEvidenceError("successor lease changed; reconcile state")
+        except (agent_worktree.WorktreeLifecycleError, KeyError, TypeError) as exc:
+            raise RecoveryEvidenceError("pinned operator readback is unavailable; reconcile state") from exc
+        return {"task_id": task_id, "lease_id": lease_id, "holder": agent, "session": session,
+                "pending_comment_id": comment_id, "ack_comment_id": proof["ack_comment_id"],
+                "registration_epoch": proof["epoch"], "state": "pinned",
+                "pickup_receipt": (f"pickup-claim-complete issue={issue} branch={candidate['branch']} "
+                  f"worktree={worktree} coordination_mode=dispatcher-backed fallback_reason=none task_id={task_id} "
+                  f"lease_id={lease_id} holder={agent} evidence=verified-dispatcher-lease")}
+    if (not isinstance(proof, dict) or proof.get("state") != "prepared"
             or proof.get("pending_comment_id") != comment_id or proof.get("pending_digest") != pending_digest
             or row.get("owner") != session or proof.get("epoch") != row.get("registration_epoch")):
         raise RecoveryEvidenceError("prepared operator registration is unavailable; retain claim")
@@ -736,7 +769,7 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
     if proof.get("ack_intent") is None:
         ack_id, pinned = _post_and_pin_operator_ack(cwd=cwd, issue=issue, pr=pr, worktree=worktree, session=session,
                             workspace_root=workspace_root, pending_comment=pending_comment, receipt=pending,
-                            prepared=prepared)
+                            prepared=prepared, before_pin=before_pin)
         return {"task_id": task_id, "lease_id": lease_id, "holder": agent, "session": session,
                 "pending_comment_id": comment_id, "ack_comment_id": ack_id, "registration_epoch": pinned["epoch"],
                 "state": "pinned", "pickup_receipt": (f"pickup-claim-complete issue={issue} branch={candidate['branch']} "
@@ -751,6 +784,7 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
                                                 pending=pending, expected_ack=expected_ack)
         ack_id = ack_comment["id"]
         time.sleep(max(0.0, _timestamp(ack_comment.get("created_at")) + 1.1 - time.time()))
+        before_pin(proof["epoch"])
         pinned = agent_worktree.pin_operator_registration(cwd, worktree=worktree, owner=session, issue=issue,
                    pr=pr, pending_comment=pending_comment, ack_comment=ack_comment, workspace_root=workspace_root)
     except agent_worktree.WorktreeLifecycleError as exc:
@@ -774,31 +808,39 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
         raise RecoveryEvidenceError("operator workspace boundary is invalid") from exc
     try:
         with legacy_run_fence.hold(state_root=run_state_root, issue=issue, worktree=worktree):
-            result = operation(cwd=cwd, issue=issue, pr=pr, worktree=worktree, agent=agent,
-                               session=session, comment_id=comment_id, workspace_root=workspace_root)
-            row = agent_worktree._locked_lifecycle_snapshot(agent_worktree._default_registry_path(cwd)).get(str(worktree))
-            proof = row.get("operator_registration") if isinstance(row, dict) else None
-            if (not isinstance(proof, dict) or row.get("owner") != session
-                    or proof.get("state") != "pinned" or proof.get("epoch") != result.get("registration_epoch")):
-                raise RecoveryEvidenceError("successor registration changed; retain claim")
-            comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
-            pending, _, _ = agent_worktree._transfer_comment(
-                comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
-            predecessor = pending["predecessor"]
-            events = _read_task_events(cwd=cwd, task_id=result["task_id"])
-            claims = [event for event in events if event.get("event_type") == "task.claimed"
-                      and event.get("actor") == agent and isinstance(event.get("payload"), dict)
-                      and event["payload"].get("session") == session
-                      and isinstance(event["payload"].get("takeover"), dict)
-                      and event["payload"]["takeover"].get("previous_lease_id") == predecessor["lease_id"]]
-            if len(claims) != 1 or not isinstance(claims[0]["payload"].get("claim_id"), str):
-                raise RecoveryEvidenceError("successor claim identity changed; retain claim")
-            current_lease = _successor_claim_readback(cwd=cwd, task_id=result["task_id"], issue=issue,
-                agent=agent, session=session, claim_id=claims[0]["payload"]["claim_id"], predecessor=predecessor)
-            if current_lease != result["lease_id"]:
-                raise RecoveryEvidenceError("successor lease changed; retain claim")
-            legacy_run_fence.check_locked(state_root=run_state_root, issue=issue, worktree=worktree)
-            return result
+            def before_pin(epoch: str, expected_state: str = "prepared",
+                           expected_row: dict[str, Any] | None = None) -> str:
+                row = agent_worktree._locked_lifecycle_snapshot(
+                    agent_worktree._default_registry_path(cwd)).get(str(worktree))
+                proof = row.get("operator_registration") if isinstance(row, dict) else None
+                if (not isinstance(proof, dict) or row.get("owner") != session
+                        or proof.get("state") != expected_state or proof.get("epoch") != epoch
+                        or row.get("registration_epoch") != epoch
+                        or (expected_row is not None and row != expected_row)):
+                    raise RecoveryEvidenceError("successor registration changed; retain claim")
+                comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
+                pending, _, pending_digest = agent_worktree._transfer_comment(
+                    comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
+                if proof.get("pending_comment_id") != comment_id or proof.get("pending_digest") != pending_digest:
+                    raise RecoveryEvidenceError("operator decision changed; retain prepared registration")
+                predecessor = pending["predecessor"]
+                task_id = predecessor["task_id"]
+                events = _read_task_events(cwd=cwd, task_id=task_id)
+                claims = [event for event in events if event.get("event_type") == "task.claimed"
+                          and event.get("actor") == agent and isinstance(event.get("payload"), dict)
+                          and event["payload"].get("session") == session
+                          and isinstance(event["payload"].get("takeover"), dict)
+                          and event["payload"]["takeover"].get("previous_lease_id") == predecessor["lease_id"]]
+                if len(claims) != 1 or not isinstance(claims[0]["payload"].get("claim_id"), str):
+                    raise RecoveryEvidenceError("successor claim identity changed; retain claim")
+                lease = _successor_claim_readback(cwd=cwd, task_id=task_id, issue=issue, agent=agent,
+                    session=session, claim_id=claims[0]["payload"]["claim_id"], predecessor=predecessor)
+                legacy_run_fence.check_locked(state_root=run_state_root, issue=issue, worktree=worktree)
+                return lease
+
+            return operation(cwd=cwd, issue=issue, pr=pr, worktree=worktree, agent=agent,
+                             session=session, comment_id=comment_id, workspace_root=workspace_root,
+                             before_pin=before_pin)
     except legacy_run_fence.RunFenceError as exc:
         raise RecoveryEvidenceError(str(exc)) from exc
 
