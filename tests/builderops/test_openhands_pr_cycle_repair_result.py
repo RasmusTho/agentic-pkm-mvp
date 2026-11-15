@@ -36,16 +36,17 @@ def advance(layout, config, server, fetcher=fetch):
     return cycle.advance(layout, config, fetch=fetcher, http=server)['results'][1]
 
 
-def test_finished_author_preserved_and_pending_across_restart(tmp_path, monkeypatch):
+def test_finished_author_preserved_and_unverifiable_checkpoint_held_across_restart(tmp_path, monkeypatch):
     layout, config, server, author, calls = started(tmp_path, monkeypatch)
     first = advance(layout, config, server)
-    assert first['action'] == 'pending-trusted-publication'
+    assert first['action'] == 'wait' and 'checkpoint' in first['reason']
     receipt = saved(layout)
     assert receipt['repair_result']['conversation_id'] == author['id']
     assert receipt['repair_result']['work_at_stop']['checkpoint']['ref'] == 'synthetic-checkpoint'
     assert receipt['repair_stop_intent']['stop_id'] == cycle._mapping(layout, 'reviewer')['stop_id']
     assert receipt['repair_result']['head_sha'] == HEAD
-    assert advance(layout, config, server)['action'] == 'pending-trusted-publication'
+    again = advance(layout, config, server)
+    assert again['action'] == 'wait' and 'checkpoint' in again['reason']
     assert len(calls) == 1 and len(repair_records(layout)) == 1
     assert len([c for c in server.calls if c[0] == 'POST']) == 2
 
@@ -97,7 +98,8 @@ def test_interrupted_stop_resumes_same_intent(tmp_path, monkeypatch, lost_after_
         return stop(layout, worker, **kwargs)
     monkeypatch.setattr(ew, 'stop_worker', interrupt)
     assert 'response loss' in advance(layout, config, server)['reason']
-    assert advance(layout, config, server)['action'] == 'pending-trusted-publication'
+    resumed = advance(layout, config, server)
+    assert resumed['action'] == 'wait' and 'checkpoint' in resumed['reason']
     assert attempts[0] == attempts[1] and attempts[0][0] == 'e' * 64
     assert saved(layout)['repair_result']['conversation_id'] == author['id'] and len(calls) == 1
 
@@ -167,7 +169,7 @@ def test_actual_native_proof_is_consumed_before_stop(tmp_path, monkeypatch, logi
     monkeypatch.setattr(ew, 'stop_worker', checked_stop)
     result = advance(layout, config, server)
     if login_ok:
-        assert result['action'] == 'pending-trusted-publication'
+        assert result['action'] == 'wait' and 'checkpoint' in result['reason']
         assert saved(layout)['repair_execution_proof']['native_session_id'] == 'native-session'
         assert saved(layout)['repair_execution_proof']['effort'] == 'ultra'
     else:

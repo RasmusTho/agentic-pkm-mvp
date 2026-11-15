@@ -1676,7 +1676,12 @@ def publish_native_repair(
         raise DeliveryError("Native worker identity is unavailable")
     workspace.validate_worker_id(worker)
     with cycle._single_advancement(layout), workspace._worker_lifecycle_lock(layout, worker):
-        return _publish_native_repair_locked(layout, pr, entry, identity, paths, evidence_file, executor=executor)
+        saved = cycle._find(layout, pr["number"], identity)
+        source_worker = saved.get("repair_worker", worker)
+        if source_worker == worker:
+            return _publish_native_repair_locked(layout, pr, entry, identity, paths, evidence_file, executor=executor)
+        with workspace._worker_lifecycle_lock(layout, source_worker):
+            return _publish_native_repair_locked(layout, pr, entry, identity, paths, evidence_file, executor=executor)
 
 
 def _publish_native_repair_locked(
@@ -1698,6 +1703,10 @@ def _publish_native_repair_locked(
     workspace.validate_worker_id(worker)
     runner = executor or publication.SubprocessExecutor()
     saved = cycle._find(layout, number, identity)
+    source_worker = saved.get("repair_worker", worker)
+    if not isinstance(source_worker, str):
+        raise DeliveryError("Stopped repair source worker is unavailable")
+    workspace.validate_worker_id(source_worker)
     candidate = saved.get("repair_candidate")
     original = saved.get("repair_authority_binding")
     result = saved.get("repair_result")
@@ -1710,6 +1719,8 @@ def _publish_native_repair_locked(
             or original.get("body") != pr.get("body") or original.get("title") != pr.get("title")
             or result.get("status") != "pending_trusted_publication"):
         raise DeliveryError("Stopped repair candidate is unavailable; bind it before publication")
+    if source_worker != worker and candidate.get("source_worker") != source_worker:
+        raise DeliveryError("Stopped repair candidate source worker changed")
     head, branch, path = candidate.get("candidate_head"), candidate.get("branch"), candidate.get("worktree")
     if (not isinstance(head, str) or not publication.GIT_SHA_RE.fullmatch(head)
             or not isinstance(branch, str) or not isinstance(path, str)
@@ -1740,20 +1751,63 @@ def _publish_native_repair_locked(
 
     def check(snapshot: dict[str, Any]) -> None:
         current = cycle._find(layout, number, identity)
-        mapping = cycle._mapping(layout, worker)
-        if current.get("repair_candidate") != candidate:
+        mapping = cycle._mapping(layout, source_worker)
+        if current.get("repair_candidate") != candidate or current.get("repair_result") != result:
             raise DeliveryError("Repair candidate changed during publication")
+        generated = current.get("candidate_verification")
+        if (isinstance(generated, dict) and generated.get("state") == "artifact_ready"
+                and generated.get("evidence_file") == str(evidence_file)):
+            dispatch = current.get("candidate_review_dispatch")
+            review = current.get("candidate_review_receipt")
+            reviewed = current.get("candidate_review_result")
+            if (not isinstance(dispatch, dict) or not isinstance(dispatch.get("binding"), dict)
+                    or cycle._digest(dispatch["binding"]) != dispatch.get("binding_sha256")
+                    or dispatch["binding"].get("candidate") != candidate
+                    or generated.get("binding_sha256") != dispatch.get("binding_sha256")
+                    or generated.get("candidate_head") != head or generated.get("candidate_tree") != candidate.get("tree")
+                    or not isinstance(review, dict) or review.get("binding_sha256") != dispatch.get("binding_sha256")
+                    or not isinstance(review.get("raw_response"), str)
+                    or hashlib.sha256(review["raw_response"].encode()).hexdigest() != review.get("raw_sha256")
+                    or cycle._public_report(review["raw_response"]) != review.get("report")
+                    or review.get("report_sha256") != cycle._digest(review.get("report"))
+                    or review.get("native_proof") != current.get("candidate_review_execution_proof")
+                    or not isinstance(reviewed, dict) or reviewed.get("state") != "awaiting_verify_evidence"
+                    or hashlib.sha256(evidence_file.read_bytes()).hexdigest() != generated.get("evidence_sha256")):
+                raise DeliveryError("Candidate Verify or independent review receipt changed")
+            reviewer = dispatch.get("worker")
+            if not isinstance(reviewer, str):
+                raise DeliveryError("Candidate reviewer identity is unavailable")
+            reviewer_mapping = cycle._mapping(layout, reviewer)
+            cycle._review_stop_checkpoint(reviewer_mapping, current, require_receipt=True, prefix="candidate_review_")
+            cycle._assert_stopped(layout, reviewer, reviewer_mapping)
+            verifier, stop = generated.get("worker"), generated.get("stop_intent")
+            if (not isinstance(verifier, str) or not isinstance(stop, dict)
+                    or generated.get("stop_verified") is not True):
+                raise DeliveryError("Candidate Verify stop receipt is unavailable")
+            verify_mapping = cycle._mapping(layout, verifier)
+            verify_work = workspace._completed_stop(verify_mapping, stop.get("stop_id"))
+            if (verify_mapping.get("container_id") != stop.get("container_id")
+                    or verify_work.get("head") != head or verify_work.get("uncommitted_count") != 0):
+                raise DeliveryError("Candidate Verify stop or checkout changed")
+            cycle._assert_stopped(layout, verifier, verify_mapping)
         cycle._review_stop_checkpoint(mapping, current, require_receipt=True, prefix="repair_")
+        cycle._assert_stopped(layout, source_worker, mapping)
         intent = current["repair_stop_intent"]
         work = workspace._completed_stop(mapping, intent["stop_id"])
         checkpoint = work.get("checkpoint")
         if (not isinstance(checkpoint, dict) or checkpoint not in mapping.get("checkpoints", [])
-                or checkpoint.get("status") != "preserved" or checkpoint.get("ignored_count") != 0
+                or checkpoint.get("status") != "preserved"
                 or checkpoint.get("ref") != candidate.get("checkpoint_ref")
-                or checkpoint.get("tree") != candidate.get("tree")
                 or result.get("work_at_stop") != work or candidate.get("stop_id") != intent["stop_id"]
                 or candidate.get("native_proof_sha256") != cycle._digest(current.get("repair_execution_proof"))):
             raise DeliveryError("Stopped author source or proof changed")
+        if candidate.get("source_kind") in ("versioned_projection", "versioned_projection_explicit"):
+            cycle._verify_repair_candidate_projection_locked(layout, source_worker, pr, current, mapping, candidate)
+        elif (candidate.get("source_kind") is not None or checkpoint.get("ignored_count") != 0
+              or checkpoint.get("tree") != candidate.get("tree")):
+            raise DeliveryError("Stopped author source or proof changed")
+        if source_worker != worker:
+            cycle._verify_candidate_repair_history(layout, pr, entry, current, scope_check=False)
         if (snapshot.get("head") != head or publication._git_text(runner, worktree, "rev-parse", "HEAD^{tree}") != candidate.get("tree")):
             raise DeliveryError("Publisher candidate no longer matches the stopped source")
         rows = snapshot.get("prs")
@@ -1789,8 +1843,8 @@ def _publish_native_repair_locked(
     def persist(value: dict[str, Any]) -> None:
         attempt = value["full_publication"]
         def update(run_state: dict[str, Any]) -> dict[str, Any]:
-            issue_number = workspace._issue_for_worker(run_state, worker)
-            mapping = run_state["issue_mappings"][str(issue_number)]
+            workspace._issue_for_worker(run_state, source_worker)
+            mapping = workspace._worker_mapping(run_state, source_worker)
             records = [r for r in run_state["compact_receipts"] if isinstance(r, dict)
                        and r.get("kind") == "pr_cycle" and r.get("number") == number
                        and r.get("identity") == identity]

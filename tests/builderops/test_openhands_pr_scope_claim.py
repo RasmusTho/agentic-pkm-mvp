@@ -118,7 +118,7 @@ def test_advance_reaches_review_reservation_for_real_multi_issue_shape(tmp_path,
     f = _scope_fixture(tmp_path, monkeypatch)
     server = FakeAgentServer()
     entry = {**f["entry"], "head_sha": f["head"]}
-    monkeypatch.setattr(ew, "inspect_checkout", lambda _layout, _worker: {
+    monkeypatch.setattr(ew, "inspect_checkout", lambda _layout, _worker, **_kwargs: {
         "readable": True, "head": f["head"], "uncommitted_count": 0})
 
     def fetch(path, timeout):

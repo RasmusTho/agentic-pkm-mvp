@@ -56,7 +56,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(cycle, "native_execution_proof", lambda layout, worker, op, *args, **kwargs:
                         {"operation_id": op, "conversation_id": cycle._mapping(layout, worker)["conversation"]["id"],
                          "container_id": cycle._mapping(layout, worker)["container_id"]})
-    monkeypatch.setattr(ew, "inspect_checkout", lambda _layout, _worker: {"readable": True, "head": HEAD, "uncommitted_count": 0})
+    monkeypatch.setattr(ew, "inspect_checkout", lambda _layout, _worker, **_kwargs: {"readable": True, "head": HEAD, "uncommitted_count": 0})
     monkeypatch.setattr(cycle, "_review_context", lambda pr: ({"files_digest": "test", "closing_issue_hashes": {}, "check_config_digest": "test"}, review_material()))
     monkeypatch.setattr(cycle, "_test_venv_source", lambda layout, value: cycle.Path(value))
     monkeypatch.setattr(cycle, "_venv_python_minor", lambda source: 13)

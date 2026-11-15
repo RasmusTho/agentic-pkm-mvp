@@ -350,7 +350,74 @@ def _set_coordination_action(mapping: dict[str, Any], action: str) -> None:
     mapping["next_action"] = action
 
 
+def _worker_mapping(state: Mapping[str, Any], worker: str) -> dict[str, Any]:
+    """Resolve exactly one assignment, including an issue's isolated reviewers."""
+    matches: list[dict[str, Any]] = []
+    for primary in state.get("issue_mappings", {}).values():
+        if not isinstance(primary, dict):
+            continue
+        if primary.get("worker") == worker:
+            matches.append(primary)
+        reviewers = primary.get("review_workers", {})
+        if not isinstance(reviewers, dict):
+            raise EpicWorkspaceError("review worker assignments are malformed")
+        for name, assignment in reviewers.items():
+            if not isinstance(assignment, dict) or assignment.get("worker") != name:
+                raise EpicWorkspaceError("review worker assignment is malformed")
+            if name == worker:
+                matches.append(assignment)
+    if len(matches) != 1:
+        raise EpicWorkspaceError(f"worker {worker!r} has no unique assignment in run-state")
+    return matches[0]
+
+
+def _reserve_review_worker(layout: Layout, issue: int, author: str, worker: str) -> None:
+    """Reserve a separate assignment without replacing the stopped author's record.
+
+    Reservation alone does not create a checkout or authorize a conversation.
+    """
+    if worker == author:
+        raise LaunchRefused("reviewer must be a separate worker")
+    # Validate the worker name through the existing path boundary before recording it.
+    layout.checkout(worker)
+
+    def updater(state: dict[str, Any]) -> dict[str, Any]:
+        primary = state.get("issue_mappings", {}).get(str(int(issue)))
+        if (not isinstance(primary, dict) or primary.get("worker") != author
+                or primary.get("state") != "stopped_verified"):
+            raise LaunchRefused("review assignment requires the recorded stopped author")
+        _completed_stop(primary, primary.get("stop_id"))
+        reviewers = primary.setdefault("review_workers", {})
+        if not isinstance(reviewers, dict):
+            raise LaunchRefused("review worker assignments are malformed")
+        existing = reviewers.get(worker)
+        if existing is not None:
+            if (not isinstance(existing, dict) or existing.get("worker") != worker
+                    or existing.get("author_worker") != author
+                    or existing.get("author_stop_id") != primary.get("stop_id")):
+                raise LaunchRefused("review worker assignment is malformed")
+            if _worker_mapping(state, worker) is not existing:
+                raise LaunchRefused("review worker assignment is ambiguous")
+            return state
+        _assert_reviewers_stopped(primary)
+        for other in state.get("issue_mappings", {}).values():
+            if not isinstance(other, Mapping):
+                continue
+            assigned = other.get("review_workers", {})
+            if not isinstance(assigned, Mapping):
+                raise LaunchRefused("review worker assignments are malformed")
+            if other.get("worker") == worker or worker in assigned:
+                raise LaunchRefused("review worker already belongs to an assignment")
+        reviewers[worker] = {"worker": worker, "state": "reserved", "author_worker": author,
+                             "author_stop_id": primary["stop_id"], "updated_at": _now()}
+        return state
+
+    epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater,
+                                         expected_epic_issue_number=layout.epic)
+
+
 def _record_worker(layout: Layout, issue: int, **fields: Any) -> dict[str, Any]:
+    """Update the primary issue assignment (legacy issue-keyed callers)."""
     key = str(int(issue))
 
     def updater(state: dict[str, Any]) -> dict[str, Any]:
@@ -358,6 +425,21 @@ def _record_worker(layout: Layout, issue: int, **fields: Any) -> dict[str, Any]:
         mapping.update(fields)
         mapping["updated_at"] = _now()
         state.setdefault("issue_mappings", {})[key] = mapping
+        return state
+
+    return epic_run_state.update_epic_run_state(
+        layout.run_id, root=layout.run_state_dir, updater=updater,
+        expected_epic_issue_number=layout.epic,
+    )
+
+
+def _record_assigned_worker(layout: Layout, issue: int, worker: str, **fields: Any) -> dict[str, Any]:
+    def updater(state: dict[str, Any]) -> dict[str, Any]:
+        if _issue_for_worker(state, worker) != int(issue):
+            raise EpicWorkspaceError("worker issue changed before recording")
+        mapping = _worker_mapping(state, worker)
+        mapping.update(fields)
+        mapping["updated_at"] = _now()
         return state
 
     return epic_run_state.update_epic_run_state(
@@ -378,6 +460,9 @@ def _reserve_worker(layout: Layout, issue: int, worker: str, **fields: Any) -> d
         for other_key, other in mappings.items():
             if not isinstance(other, Mapping):
                 continue
+            reviewers = other.get("review_workers", {})
+            if not isinstance(reviewers, Mapping) or worker in reviewers:
+                raise LaunchRefused(f"worker {worker!r} is already a reviewer or assignments are malformed")
             if other_key == key and other.get("worker") not in (None, worker):
                 raise LaunchRefused(f"issue #{key} already belongs to worker {other.get('worker')!r}")
             if other_key != key and other.get("worker") == worker:
@@ -411,6 +496,21 @@ def _assert_no_pending_takeover(mapping: Mapping[str, Any]) -> None:
         raise TakeoverRefused("takeover required: reconcile the predecessor's work and publication before any successor writes")
 
 
+def _assert_reviewers_stopped(mapping: Mapping[str, Any]) -> None:
+    reviewers = mapping.get("review_workers", {})
+    if not isinstance(reviewers, Mapping):
+        raise LaunchRefused("review worker assignments are malformed")
+    for reviewer in reviewers.values():
+        if not isinstance(reviewer, Mapping):
+            raise LaunchRefused("review worker assignment is malformed")
+        if reviewer.get("state") == "retired":
+            continue
+        try:
+            _completed_stop(reviewer, reviewer.get("stop_id"))
+        except TakeoverRefused as exc:
+            raise LaunchRefused("reviewer assignment must be stopped before author continuation") from exc
+
+
 def _begin_start(
     layout: Layout, issue: int, worker: str, *, preflight: Mapping[str, Any] | None,
     runner: Runner, inspection_image: str, **fields: Any,
@@ -426,9 +526,37 @@ def _begin_start(
     key = str(int(issue))
 
     def updater(state: dict[str, Any]) -> dict[str, Any]:
-        mapping = dict(state.get("issue_mappings", {}).get(key, {}))
-        if mapping.get("worker") != worker:
+        mapping = _worker_mapping(state, worker)
+        if _issue_for_worker(state, worker) != int(issue) or mapping.get("worker") != worker:
             raise LaunchRefused(f"issue #{key} does not belong to worker {worker!r}")
+        _assert_reviewers_stopped(mapping)
+        author_worker = mapping.get("author_worker")
+        if author_worker is not None:
+            primary = state.get("issue_mappings", {}).get(key)
+            if not isinstance(primary, Mapping) or primary.get("worker") != author_worker:
+                raise LaunchRefused("reviewer author assignment changed")
+            _completed_stop(primary, mapping.get("author_stop_id"))
+            author_id = primary.get("container_id")
+            if (not isinstance(author_id, str) or not _CONTAINER_ID.fullmatch(author_id)
+                    or _container_state(layout, author_worker, runner) is not None
+                    or _id_present(author_id, runner)):
+                raise LaunchRefused("reviewer author container absence is not established")
+            siblings = primary.get("review_workers", {})
+            if not isinstance(siblings, Mapping):
+                raise LaunchRefused("sibling worker assignments are malformed")
+            for sibling_name, sibling in siblings.items():
+                if sibling_name == worker:
+                    continue
+                if not isinstance(sibling, Mapping):
+                    raise LaunchRefused("sibling worker assignment is malformed")
+                if sibling.get("state") == "retired":
+                    continue
+                _completed_stop(sibling, sibling.get("stop_id"))
+                sibling_id = sibling.get("container_id")
+                if (not isinstance(sibling_id, str) or not _CONTAINER_ID.fullmatch(sibling_id)
+                        or _container_state(layout, sibling_name, runner) is not None
+                        or _id_present(sibling_id, runner)):
+                    raise LaunchRefused("sibling worker container absence is not established")
         _assert_no_pending_takeover(mapping)
         recorded = mapping.get("state")
         if recorded == "retired":
@@ -471,7 +599,6 @@ def _begin_start(
         if pending.get("status") == "authorized":
             mapping["takeover"] = {**pending, "status": "consumed", "consumed_at": _now(), "consumed_by": fields.get("runtime")}
         mapping.update(fields, state="starting", container_id=None, launch_protocol=LAUNCH_PROTOCOL, updated_at=_now())
-        state["issue_mappings"][key] = mapping
         return state
 
     try:
@@ -494,7 +621,7 @@ def _launch(layout: Layout, issue: int, worker: str, argv: Sequence[str], runner
         # A create never starts a process. A late created container may occupy the name,
         # but cannot write; worker-stop can remove it after verifying its scope.
         raise EpicWorkspaceError("worker create failed or returned no ID; run worker-stop or takeover to settle")
-    _record_worker(layout, issue, container_id=cid)
+    _record_assigned_worker(layout, issue, worker, container_id=cid)
     try:
         started = runner(["docker", "start", cid], capture_output=True, text=True, check=False, timeout=300.0)
     except (subprocess.TimeoutExpired, OSError) as exc:
@@ -505,8 +632,10 @@ def _launch(layout: Layout, issue: int, worker: str, argv: Sequence[str], runner
 
 
 def _issue_for_worker(state: Mapping[str, Any], worker: str) -> int:
+    _worker_mapping(state, worker)  # Refuse duplicate or malformed assignments.
     for key, mapping in state.get("issue_mappings", {}).items():
-        if isinstance(mapping, Mapping) and mapping.get("worker") == worker:
+        if isinstance(mapping, Mapping) and (mapping.get("worker") == worker
+                or worker in mapping.get("review_workers", {})):
             return int(key)
     raise EpicWorkspaceError(f"worker {worker!r} is not recorded in run-state")
 
@@ -658,6 +787,7 @@ def build_launch_argv(
     env: Mapping[str, str] | None = None,
     publish_port: int | None = None,
     credential_mounts: Sequence[tuple[str, str]] = (),
+    verification_venv: Path | None = None,
     tmpfs_exec: bool = False,
 ) -> list[str]:
     budget = budget.validated()
@@ -708,6 +838,14 @@ def build_launch_argv(
         if not _MOUNT_PATH.match(source) or target != CODEX_HOME_TARGET:
             raise LaunchRefused("invalid credential mount")
         argv += ["--mount", f"type=bind,source={source},target={target}"]
+    if verification_venv is not None:
+        source = Path(verification_venv)
+        if (not source.is_absolute() or source.is_symlink() or source.resolve() != source
+                or not source.is_dir() or not _MOUNT_PATH.fullmatch(str(source))
+                or _is_within(source, layout.root) or _is_within(layout.root, source)
+                or credential_mounts or env_file is not None):
+            raise LaunchRefused("verification environment must be a separate credential-free directory")
+        argv += ["--mount", f"type=bind,source={source},target=/opt/pr-cycle-venv,readonly"]
     for path in ([env_file] if env_file is not None else []) + list(extra_env_files):
         argv += ["--env-file", str(path)]
     argv.append(image)
@@ -734,14 +872,14 @@ def start_worker(
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
-    _assert_no_pending_takeover(state["issue_mappings"][str(issue)])
+    _assert_no_pending_takeover(_worker_mapping(state, worker))
     env_path = _validate_env_file(env_file, layout)
     argv = build_launch_argv(layout, worker, image=image, command=command, budget=budget, env_file=env_path, extra_mounts=extra_mounts, network=network)
     _assert_engine(runner)
     existing = _container_state(layout, worker, runner)
     if existing is not None:
         raise LaunchRefused(f"container for worker {worker!r} already exists ({existing}); stop it before a successor starts")
-    preflight = _preflight_start(layout, worker, state["issue_mappings"][str(issue)], runner=runner, image=DEFAULT_IMAGE)
+    preflight = _preflight_start(layout, worker, _worker_mapping(state, worker), runner=runner, image=DEFAULT_IMAGE)
     _begin_start(
         layout, issue, worker, preflight=preflight, runner=runner, inspection_image=DEFAULT_IMAGE,
         # Plain container execution is a recorded bootstrap/diagnostic exception, never the
@@ -756,7 +894,7 @@ def start_worker(
         started_at=_now(),
     )
     container_id = _launch(layout, issue, worker, argv, runner)
-    _record_worker(layout, issue, state="running", container_id=container_id)
+    _record_assigned_worker(layout, issue, worker, state="running", container_id=container_id)
     return container_id
 
 
@@ -833,7 +971,7 @@ def _remove_owned(name: str, labels: Mapping[str, str], runner: Runner, *, cid: 
 
 def _settle_checkpoint_writer(layout: Layout, worker: str, runner: Runner) -> None:
     state = _load_state(layout)
-    marker = state["issue_mappings"][str(_issue_for_worker(state, worker))].get("checkpoint_inspection_unknown")
+    marker = _worker_mapping(state, worker).get("checkpoint_inspection_unknown")
     if not marker:
         return
     if not isinstance(marker, Mapping) or marker.get("protocol") != LAUNCH_PROTOCOL:
@@ -862,15 +1000,16 @@ def _stop_worker(
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
-    if state["issue_mappings"][str(issue)].get("state") == "retired":
+    if _worker_mapping(state, worker).get("state") == "retired":
         raise LaunchRefused(f"worker {worker!r} is retired")
-    if expected_assignment is not None and not _same_assignment(state["issue_mappings"][str(issue)], expected_assignment):
+    if expected_assignment is not None and not _same_assignment(_worker_mapping(state, worker), expected_assignment):
         raise EpicWorkspaceError("worker assignment changed before stop")
     if expected_container_id is not None and (
             not _CONTAINER_ID.fullmatch(expected_container_id)
-            or state["issue_mappings"][str(issue)].get("container_id") != expected_container_id):
+            or _worker_mapping(state, worker).get("container_id") != expected_container_id):
         raise EpicWorkspaceError("worker container identity changed before stop")
-    mapping = state["issue_mappings"][str(issue)]
+    mapping = _worker_mapping(state, worker)
+    _assert_reviewers_stopped(mapping)
     stop_id = uuid.uuid4().hex
     resuming = False
     if stop_intent is not None:
@@ -1176,9 +1315,9 @@ def _raw_byte_preflight(checkout: Path, repo: Path, *, runner: Runner, image: st
         if read.returncode != 0 or read.stdout != expected:
             fail(read, "CRLF did not round-trip")
     finally:
-        if checkpoint_owner is None or not _load_state(checkpoint_owner[0])["issue_mappings"][str(
-            _issue_for_worker(_load_state(checkpoint_owner[0]), checkpoint_owner[1])
-        )].get("checkpoint_inspection_unknown"):
+        if checkpoint_owner is None or not _worker_mapping(
+            _load_state(checkpoint_owner[0]), checkpoint_owner[1]
+        ).get("checkpoint_inspection_unknown"):
             shutil.rmtree(fixture, ignore_errors=True)
 
 
@@ -1765,7 +1904,15 @@ def status(layout: Layout, *, runner: Runner = subprocess.run,
     except EngineUnavailable:
         engine = None
     workers = []
-    for key, mapping in sorted(state.get("issue_mappings", {}).items()):
+    assignments = []
+    for key, primary in sorted(state.get("issue_mappings", {}).items()):
+        if isinstance(primary, Mapping):
+            assignments.append((key, primary))
+            reviewers = primary.get("review_workers", {})
+            if not isinstance(reviewers, Mapping):
+                raise EpicWorkspaceError("review worker assignments are malformed")
+            assignments.extend((key, _worker_mapping(state, worker)) for worker in sorted(reviewers))
+    for key, mapping in assignments:
         if not isinstance(mapping, Mapping) or "worker" not in mapping:
             continue
         worker = mapping["worker"]
@@ -1912,9 +2059,9 @@ def _checkpoint(
             git("add", "-f", "-A", "--", *ignored_all[offset:offset + 100], env={"GIT_LITERAL_PATHSPECS": "1"})
         tree = git("write-tree")
     finally:
-        if not _load_state(layout)["issue_mappings"][str(issue)].get("checkpoint_inspection_unknown"):
+        if not _worker_mapping(_load_state(layout), worker).get("checkpoint_inspection_unknown"):
             _checkpoint_index(repo)
-    mapping = _load_state(layout)["issue_mappings"][str(issue)]
+    mapping = _worker_mapping(_load_state(layout), worker)
     recorded = {c.get("ref"): c for c in mapping.get("checkpoints", []) if isinstance(c, Mapping)}
     present: dict[str, tuple[str, str, str]] = {}
     staged_present: dict[str, tuple[str, str, str]] = {}
@@ -2000,12 +2147,14 @@ def _checkpoint(
     )
     if not _checkpoint_present(checkout, repo, record, runner, image):
         raise EpicWorkspaceError(f"checkpoint {record['ref']} could not be read back")
-    return record if already_recorded else _record_checkpoint(layout, issue, record)
+    return record if already_recorded else _record_checkpoint(layout, issue, worker, record)
 
 
-def _record_checkpoint(layout: Layout, issue: int, record: dict[str, Any]) -> dict[str, Any]:
+def _record_checkpoint(layout: Layout, issue: int, worker: str, record: dict[str, Any]) -> dict[str, Any]:
     def updater(state: dict[str, Any]) -> dict[str, Any]:
-        entry = state["issue_mappings"][str(issue)]
+        if _issue_for_worker(state, worker) != int(issue):
+            raise EpicWorkspaceError("worker issue changed during checkpoint")
+        entry = _worker_mapping(state, worker)
         entry["checkpoints"] = [*entry.get("checkpoints", []), record]
         entry["updated_at"] = _now()
         return state
@@ -2071,6 +2220,286 @@ def _checkpoint_present(checkout: Path, repo: Path, record: Mapping[str, Any], r
     return check.returncode == 0
 
 
+def _projection_path_valid(path: bytes) -> bool:
+    return bool(path) and all(part not in (b"", b".", b"..") and part.lower() != b".git"
+                              for part in path.split(b"/"))
+
+
+def _projection_entries(raw: bytes) -> dict[bytes, tuple[str, str]]:
+    """Parse a complete Git tree without interpreting quoted or newline-containing paths."""
+    entries: dict[bytes, tuple[str, str]] = {}
+    if raw and not raw.endswith(b"\0"):
+        raise TakeoverRefused("projection tree listing is incomplete")
+    for item in raw.split(b"\0"):
+        if not item:
+            continue
+        try:
+            metadata, path = item.split(b"\t", 1)
+            mode, kind, oid = metadata.decode("ascii").split(" ")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise TakeoverRefused("projection tree entry is malformed") from exc
+        if (not _projection_path_valid(path)
+                or mode not in ("100644", "100755", "120000") or kind != "blob"
+                or not _OID.fullmatch(oid) or path in entries):
+            raise TakeoverRefused("projection contains an unsafe path or unsupported Git mode")
+        entries[path] = (mode, oid)
+    return entries
+
+
+def _projection_indexed_file_exists(checkout: Path, path: bytes) -> bool:
+    """Inspect an indexed addition without following parent links or adding directories."""
+    if not _projection_path_valid(path):
+        raise TakeoverRefused("projection index contains an unsafe path")
+    descriptors: list[int] = []
+    try:
+        current = os.open(checkout, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(current)
+        parts = path.split(b"/")
+        for component in parts[:-1]:
+            current = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current)
+            descriptors.append(current)
+        mode = os.stat(parts[-1], dir_fd=current, follow_symlinks=False).st_mode
+        if stat.S_ISDIR(mode):
+            return False
+        if not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+            raise TakeoverRefused("projection indexed addition has an unsupported file type")
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise TakeoverRefused("projection indexed path is unsafe or unreadable") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _projection_physical_bytes(checkout: Path, path: bytes, mode: str) -> bytes:
+    """Read a tree entry without following a worker-controlled parent symlink."""
+    descriptors: list[int] = []
+    try:
+        current = os.open(checkout, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(current)
+        parts = path.split(b"/")
+        for component in parts[:-1]:
+            current = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current)
+            descriptors.append(current)
+        name = parts[-1]
+        info = os.stat(name, dir_fd=current, follow_symlinks=False)
+        if mode == "120000":
+            if not stat.S_ISLNK(info.st_mode):
+                raise TakeoverRefused("projection symlink mode changed")
+            target = os.readlink(name, dir_fd=current)
+            if not isinstance(target, bytes) or not target or os.path.isabs(target):
+                raise TakeoverRefused("projection symlink target is unsafe")
+            resolved = (checkout / os.fsdecode(path)).resolve(strict=False)
+            if not _is_within(resolved, checkout.resolve()) or _is_within(resolved, checkout.resolve() / ".git"):
+                raise TakeoverRefused("projection symlink escapes the source checkout")
+            return target
+        if not stat.S_ISREG(info.st_mode) or (bool(info.st_mode & 0o111) != (mode == "100755")):
+            raise TakeoverRefused("projection file type or executable mode changed")
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=current)
+        with os.fdopen(fd, "rb") as source:
+            actual = os.fstat(source.fileno())
+            if not stat.S_ISREG(actual.st_mode) or (actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino):
+                raise TakeoverRefused("projection source changed while reading")
+            return source.read()
+    except TakeoverRefused:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise TakeoverRefused("projection source path is unsafe or unreadable") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _projection_check_file_types(checkout: Path) -> None:
+    """Git silently omits some special files, including otherwise untracked source."""
+    def fail(exc: OSError) -> None:
+        raise exc
+
+    try:
+        for directory, dirs, files in os.walk(checkout, followlinks=False, onerror=fail):
+            if Path(directory) == checkout and ".git" in dirs:
+                dirs.remove(".git")
+            for name in (*dirs, *files):
+                mode = (Path(directory) / name).lstat().st_mode
+                if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+                    raise TakeoverRefused("source contains a special file that Git cannot preserve")
+    except OSError as exc:
+        raise TakeoverRefused("source file types are unavailable for projection") from exc
+
+
+def _projection_matches_blob(checkout: Path, path: bytes, mode: str, oid: str) -> bool:
+    data = _projection_physical_bytes(checkout, path, mode)
+    return _projection_blob_oid(data, oid) == oid
+
+
+def _projection_blob_oid(data: bytes, expected: str) -> str:
+    digest = hashlib.new("sha1" if len(expected) == 40 else "sha256")
+    digest.update(b"blob " + str(len(data)).encode("ascii") + b"\0")
+    digest.update(data)
+    return digest.hexdigest()
+
+
+def _project_stopped_versioned_source_locked(
+    layout: Layout, worker: str, *, stop_id: str, checkpoint_ref: str, branch: str, head: str,
+    runner: Runner, image: str,
+) -> dict[str, Any]:
+    """Observe versioned physical source against an exact, fully retained stopped checkpoint.
+
+    The returned tree and entries are a point-in-time observation, not publication authority.
+    Scratch objects are disposable; every projected blob is also in the preserved checkpoint.
+    The caller must revalidate this observation before any subsequent effect.
+    """
+    state = _load_state(layout)
+    mapping = _worker_mapping(state, worker)
+    work = _completed_stop(mapping, stop_id)
+    checkpoint = work.get("checkpoint")
+    if (not isinstance(checkpoint, Mapping) or checkpoint.get("status") != "preserved"
+            or checkpoint not in mapping.get("checkpoints", []) or checkpoint.get("ref") != checkpoint_ref
+            or work.get("branch") != branch or mapping.get("branch") != branch
+            or checkpoint.get("branch") != branch or work.get("head") != head or checkpoint.get("head") != head
+            or checkpoint.get("tree") != work.get("snapshot_tree")
+            or mapping.get("checkout") != str(layout.checkout(worker))):
+        raise TakeoverRefused("stopped source or preservation checkpoint changed; reconcile the worker")
+    expected = _checkout_identity(work)
+    checkout = layout.checkout(worker)
+    repo = _checkpoint_repo(layout, worker)
+    container_id = mapping.get("container_id")
+
+    def recheck() -> None:
+        state = _load_state(layout)
+        current = _worker_mapping(state, worker)
+        if (_completed_stop(current, stop_id) != work or checkpoint not in current.get("checkpoints", [])
+                or current.get("branch") != branch or current.get("container_id") != container_id
+                or current.get("checkout") != str(checkout)
+                or current.get("checkpoint_inspection_unknown")):
+            raise TakeoverRefused("stopped source changed during projection")
+        if (not isinstance(container_id, str) or not _CONTAINER_ID.fullmatch(container_id)
+                or _container_state(layout, worker, runner) is not None or _id_present(container_id, runner)):
+            raise TakeoverRefused("worker absence is not established for projection")
+        if not _checkpoint_present(checkout, repo, checkpoint, runner, image):
+            raise TakeoverRefused("preserved checkpoint custody is unavailable")
+        observed, _ = _inspect(layout, worker, runner=runner, image=image)
+        if _checkout_identity(observed) != expected:
+            raise TakeoverRefused("stopped source bytes or identity changed; reconcile the worker")
+        _projection_check_file_types(checkout)
+
+    recheck()
+    with _scratch_gitdir(layout, head) as scratch:
+        def git(args: Sequence[str], *, binary: bool = False, store: Path = scratch,
+                readonly: bool = False, env: Mapping[str, str] | None = None) -> Any:
+            result = _contained_git(checkout, args, runner=runner, image=image, scratch=store,
+                                    scratch_readonly=readonly, env=env, binary=binary)
+            if result.returncode != 0:
+                raise TakeoverRefused("contained projection Git failed; preserve and reconcile the source")
+            return result.stdout
+
+        try:
+            _raw_byte_preflight(checkout, scratch, runner=runner, image=image)
+            if _copy_worker_index(checkout, scratch, scratch / "index") != expected["index_fingerprint"]:
+                raise TakeoverRefused("stopped source index changed")
+            indexed = git(["ls-files", "--cached", "-z"], binary=True).split(b"\0")
+            if git(["write-tree"]).strip() != expected["staged_tree"]:
+                raise TakeoverRefused("stopped staged tree changed")
+            (scratch / "index").unlink()
+            git(["read-tree", head])
+            head_entries = _projection_entries(git(["ls-tree", "-r", "-z", "--full-tree", head], binary=True))
+            git(["add", "-A", "--", "."])
+            # Index-tracked additions remain versioned even when an ignore rule matches them.
+            # Do not force-add ordinary ignored, untracked artifacts.
+            existing = [os.fsdecode(p) for p in indexed if p and p not in head_entries
+                        and _projection_indexed_file_exists(checkout, p)]
+            for offset in range(0, len(existing), 100):
+                git(["add", "-f", "-A", "--", *existing[offset:offset + 100]],
+                    env={"GIT_LITERAL_PATHSPECS": "1"})
+            tree = git(["write-tree"]).strip()
+            if not isinstance(tree, str) or not _OID.fullmatch(tree):
+                raise TakeoverRefused("versioned projection tree is unavailable")
+            projected = _projection_entries(git(["ls-tree", "-r", "-z", "--full-tree", tree], binary=True))
+            retained = _projection_entries(git(["ls-tree", "-r", "-z", "--full-tree", checkpoint["tree"]],
+                                               binary=True, store=repo, readonly=True,
+                                               env={"GIT_ALTERNATE_OBJECT_DIRECTORIES": ""}))
+            for path, (mode, oid) in retained.items():
+                if mode == "120000":
+                    if not _projection_matches_blob(checkout, path, mode, oid):
+                        raise TakeoverRefused("retained symlink does not match physical source")
+            for path, (mode, oid) in projected.items():
+                if retained.get(path) != (mode, oid):
+                    raise TakeoverRefused("projection differs from the preserved full checkpoint")
+                if not _projection_matches_blob(checkout, path, mode, oid):
+                    raise TakeoverRefused("projection blob does not match physical source bytes")
+        except _Unreadable as exc:
+            raise TakeoverRefused("projection raw-byte or index proof failed") from exc
+    recheck()
+    return {"stop_id": stop_id, "branch": branch, "head": head, "checkpoint_ref": checkpoint_ref,
+            "checkpoint_tree": checkpoint["tree"], "versioned_tree": tree, "source_identity": expected,
+            "entries": [{"path": os.fsdecode(path), "mode": mode, "oid": oid}
+                        for path, (mode, oid) in sorted(projected.items())]}
+
+
+@_serialized_worker
+def project_stopped_versioned_source(
+    layout: Layout, worker: str, *, stop_id: str, checkpoint_ref: str, branch: str, head: str,
+    runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE,
+) -> dict[str, Any]:
+    return _project_stopped_versioned_source_locked(layout, worker, stop_id=stop_id,
+                                                     checkpoint_ref=checkpoint_ref, branch=branch, head=head,
+                                                     runner=runner, image=image)
+
+
+def _read_projected_source_blobs_locked(
+    layout: Layout, worker: str, projection: Mapping[str, Any], paths: Sequence[str], *, runner: Runner, image: str,
+) -> dict[str, bytes]:
+    """Read only explicitly projected bytes from the self-contained retained checkpoint.
+
+    This returns data for a future materializer, not authority to write a publisher.
+    Both source and checkpoint are revalidated before and after the contained reads.
+    """
+    keys = ("stop_id", "checkpoint_ref", "branch", "head")
+    if any(not isinstance(projection.get(key), str) for key in keys):
+        raise TakeoverRefused("projection identity is incomplete")
+    if (isinstance(paths, (str, bytes)) or any(not isinstance(path, str) for path in paths)
+            or len(set(paths)) != len(paths)):
+        raise TakeoverRefused("projected blob paths must be a unique list")
+
+    def refresh() -> dict[str, Any]:
+        result = _project_stopped_versioned_source_locked(
+            layout, worker, stop_id=projection["stop_id"], checkpoint_ref=projection["checkpoint_ref"],
+            branch=projection["branch"], head=projection["head"], runner=runner, image=image,
+        )
+        if result != projection:
+            raise TakeoverRefused("projection changed before reading retained source")
+        return result
+
+    refreshed = refresh()
+    entries = {item["path"]: item for item in refreshed["entries"]}
+    if any(path not in entries for path in paths):
+        raise TakeoverRefused("requested path is outside the versioned source projection")
+    checkout = layout.checkout(worker)
+    repo = _checkpoint_repo(layout, worker)
+    contents: dict[str, bytes] = {}
+    for path in paths:
+        oid = entries[path]["oid"]
+        result = _contained_git(checkout, ["cat-file", "blob", oid], runner=runner, image=image,
+                                scratch=repo, scratch_readonly=True,
+                                env={"GIT_ALTERNATE_OBJECT_DIRECTORIES": ""}, binary=True)
+        if (result.returncode != 0 or not isinstance(result.stdout, bytes)
+                or _projection_blob_oid(result.stdout, oid) != oid):
+            raise TakeoverRefused("retained projection blob is unavailable or has changed")
+        contents[path] = result.stdout
+    refresh()
+    return contents
+
+
+@_serialized_worker
+def read_projected_source_blobs(
+    layout: Layout, worker: str, projection: Mapping[str, Any], paths: Sequence[str], *,
+    runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE,
+) -> dict[str, bytes]:
+    return _read_projected_source_blobs_locked(layout, worker, projection, paths, runner=runner, image=image)
+
+
 @_serialized_worker
 def checkpoint_worker(layout: Layout, worker: str, *, reason: str, runner: Runner = subprocess.run, image: str = DEFAULT_IMAGE) -> dict[str, Any] | None:
     """Checkpoint a worker whose container is already proven absent; refuse otherwise."""
@@ -2079,7 +2508,7 @@ def checkpoint_worker(layout: Layout, worker: str, *, reason: str, runner: Runne
     issue = _issue_for_worker(state, worker)
     _assert_engine(runner)
     _settle_checkpoint_writer(layout, worker, runner)
-    mapping = state["issue_mappings"][str(issue)]
+    mapping = _worker_mapping(state, worker)
     if mapping.get("state") in ("starting", "running"):
         raise EpicWorkspaceError("worker launch or execution is unresolved; run worker-stop before checkpoint")
     if _container_state(layout, worker, runner) is not None:
@@ -2128,8 +2557,8 @@ def release_checkpoint(
     """
 
     state = _load_state(layout)
-    issue = _issue_for_worker(state, worker)
-    mapping = state["issue_mappings"][str(issue)]
+    _issue_for_worker(state, worker)
+    mapping = _worker_mapping(state, worker)
     record = next((c for c in mapping.get("checkpoints", []) if c.get("ref") == ref), None)
     if record is None or record.get("status") != "preserved":
         raise EpicWorkspaceError(f"no preserved checkpoint {ref!r} for worker {worker!r}")
@@ -2175,7 +2604,7 @@ def release_checkpoint(
                 raise EpicWorkspaceError(f"checkpoint content not in the published commit: {differing[:5]}")
 
     def updater(current: dict[str, Any]) -> dict[str, Any]:
-        entry = current["issue_mappings"][str(issue)]
+        entry = _worker_mapping(current, worker)
         if not any(c == record and c.get("status") == "preserved" for c in entry.get("checkpoints", []) if isinstance(c, Mapping)):
             raise EpicWorkspaceError("checkpoint changed during release; preserving it")
         entry["checkpoints"] = [
@@ -2197,7 +2626,7 @@ def _mutate_mapping(layout: Layout, worker: str, mutate: Callable[[dict[str, Any
     box: list[Any] = []
 
     def updater(state: dict[str, Any]) -> dict[str, Any]:
-        entry = state["issue_mappings"][str(issue)]
+        entry = _worker_mapping(state, worker)
         if entry.get("worker") != worker:
             raise EpicWorkspaceError(f"issue #{issue} no longer belongs to worker {worker!r}")
         box.append(mutate(entry))
@@ -2410,7 +2839,7 @@ def continuation_brief(layout: Layout, worker: str) -> dict[str, Any]:
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
-    mapping = state["issue_mappings"][str(issue)]
+    mapping = _worker_mapping(state, worker)
     action = next_authorized_action(mapping)
     checkpoints = [
         {k: c.get(k) for k in ("ref", "commit", "status", "uncommitted_count", "ignored_count", "at")}
@@ -2486,10 +2915,11 @@ def _takeover_locked(
     """
 
     state = _load_state(layout)
-    issue = _issue_for_worker(state, worker)
-    mapping = state["issue_mappings"][str(issue)]
+    _issue_for_worker(state, worker)
+    mapping = _worker_mapping(state, worker)
     if mapping.get("state") == "retired":
         raise TakeoverRefused("worker is retired")
+    _assert_reviewers_stopped(mapping)
     recorded = mapping.get("branch")
     previous_execution = mapping.get("execution_branch", recorded)
     generation = int(_takeover_of(mapping).get("generation", 0))
@@ -2564,7 +2994,7 @@ def _takeover_locked(
     identity = _checkout_identity(after)
     if (actual is None or actual != previous_execution) and checkpoint is None:
         raise TakeoverRefused("detached checkout or branch drift lacks a retained checkpoint; preserve checkout")
-    latest_mapping = _load_state(layout)["issue_mappings"][str(issue)]
+    latest_mapping = _worker_mapping(_load_state(layout), worker)
     if readback_provider is not None:
         try:
             readbacks = readback_provider(latest_mapping)
@@ -2643,7 +3073,7 @@ def retire_worker(layout: Layout, worker: str, *, runner: Runner = subprocess.ru
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     work = _stop_worker(layout, worker, reason="retirement", runner=runner, image=image, retain_identity=False)
-    entry = _load_state(layout)["issue_mappings"][str(issue)]
+    entry = _worker_mapping(_load_state(layout), worker)
     reasons = []
     if not work.get("present"):
         reasons.append("checkout evidence is missing")
@@ -2714,7 +3144,7 @@ def retire_worker(layout: Layout, worker: str, *, runner: Runner = subprocess.ru
         except OSError as exc:
             raise EpicWorkspaceError(f"could not remove checkout: {exc}") from exc
         removed = True
-    _record_worker(layout, issue, state="retired", retired_at=_now(), checkout_removed=removed)
+    _record_assigned_worker(layout, issue, worker, state="retired", retired_at=_now(), checkout_removed=removed)
     return {"worker": worker, "container_removed": True, "checkout_removed": removed}
 
 
@@ -2835,6 +3265,12 @@ def _worker_inspect(layout: Layout, worker: str, mapping: Mapping[str, Any], run
         if (ports != [{"HostIp": "127.0.0.1", "HostPort": str(port)}] or len(mounts) != 1
                 or mounts[0].get("Type") != "bind" or mounts[0].get("Source") != str(layout.checkout(worker))):
             return "unknown"
+        venv = mapping.get("verification_venv")
+        if venv is not None:
+            mounts = [m for m in info["Mounts"] if m.get("Destination") == "/opt/pr-cycle-venv"]
+            if (len(mounts) != 1 or mounts[0].get("Type") != "bind"
+                    or mounts[0].get("Source") != venv or mounts[0].get("RW") is not False):
+                return "unknown"
         return "running"
     except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.TimeoutExpired):
         return "unknown"
@@ -2876,7 +3312,10 @@ def _endpoint_session(layout: Layout, worker: str, issue: int, expected: Mapping
     """
 
     with _worker_lifecycle_lock(layout, worker, reentrant=True), _port_selection_lock(layout, shared=True):
-        current = _load_state(layout).get("issue_mappings", {}).get(str(int(issue)))
+        state = _load_state(layout)
+        current = _worker_mapping(state, worker)
+        if _issue_for_worker(state, worker) != int(issue):
+            raise EndpointUnavailable("worker issue changed before session access")
         if not isinstance(current, Mapping) or not _same_assignment(expected, current):
             raise EndpointUnavailable("worker assignment changed before session access")
         if starting and current.get("state") != "starting":
@@ -2942,6 +3381,7 @@ def _start_openhands_worker_locked(
     budget: Budget = Budget(cpus="1.0", memory="1536m", pids=512),
     claude_env_file: Path | None = None,
     codex_home: Path | None = None,
+    verification_venv: Path | None = None,
     image: str = OPENHANDS_IMAGE,
     network: str = DEFAULT_NETWORK,
     runner: Runner = subprocess.run,
@@ -2954,12 +3394,12 @@ def _start_openhands_worker_locked(
 
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
-    _assert_no_pending_takeover(state["issue_mappings"][str(issue)])
+    _assert_no_pending_takeover(_worker_mapping(state, worker))
     credential_env = _validate_env_file(claude_env_file, layout)
     _assert_engine(runner)
     if _container_state(layout, worker, runner) is not None:
         raise LaunchRefused(f"container for worker {worker!r} already exists; stop it before a successor starts")
-    preflight = _preflight_start(layout, worker, state["issue_mappings"][str(issue)], runner=runner, image=DEFAULT_IMAGE)
+    preflight = _preflight_start(layout, worker, _worker_mapping(state, worker), runner=runner, image=DEFAULT_IMAGE)
     codex_mounts = _validate_codex_home(codex_home, layout, runner)
     key_file = _session_key_file(layout, worker)
     port = _allocate_port(runner)
@@ -2975,7 +3415,7 @@ def _start_openhands_worker_locked(
     argv = build_launch_argv(
         layout, worker, image=image, command=[], budget=budget, env_file=credential_env,
         extra_env_files=[key_file], env=env, publish_port=port, credential_mounts=codex_mounts,
-        network=network, tmpfs_exec=True,
+        network=network, tmpfs_exec=True, verification_venv=verification_venv,
     )
     if codex_mounts:
         argv[argv.index("--label"):argv.index("--label")] = ["--label", "epic-workspace.codex-home=1"]
@@ -2983,11 +3423,12 @@ def _start_openhands_worker_locked(
         layout, issue, worker, preflight=preflight, runner=runner, inspection_image=DEFAULT_IMAGE,
         runtime="openhands", container=layout.container_name(worker), image=image, port=port,
         budget={"cpus": budget.cpus, "memory": budget.memory, "pids": budget.pids}, network=network,
+        **({"verification_venv": str(verification_venv)} if verification_venv is not None else {}),
         credentials={"claude": "oauth-token-env" if credential_env else None, "codex": "chatgpt-login-dir" if codex_mounts else None},
         started_at=_now(),
     )
-    _record_worker(layout, issue, container_id=_launch(layout, issue, worker, argv, runner))
-    starting = _load_state(layout)["issue_mappings"][str(issue)]
+    _record_assigned_worker(layout, issue, worker, container_id=_launch(layout, issue, worker, argv, runner))
+    starting = _worker_mapping(_load_state(layout), worker)
     deadline = time.monotonic() + ready_timeout
     while True:
         try:
@@ -3003,7 +3444,7 @@ def _start_openhands_worker_locked(
             raise EpicWorkspaceError("agent-server did not become ready; inspect container")
         time.sleep(1.0)
     def ready(state: dict[str, Any]) -> dict[str, Any]:
-        entry = state["issue_mappings"][str(issue)]
+        entry = _worker_mapping(state, worker)
         if not _same_assignment(entry, starting):
             raise EpicWorkspaceError("worker assignment changed during readiness; the newer state is kept")
         entry.update(state="running", updated_at=_now())
@@ -3018,13 +3459,15 @@ def _start_openhands_worker_locked(
 def start_openhands_worker(
     layout: Layout, worker: str, *, budget: Budget = Budget(cpus="1.0", memory="1536m", pids=512),
     claude_env_file: Path | None = None, codex_home: Path | None = None,
+    verification_venv: Path | None = None,
     image: str = OPENHANDS_IMAGE, network: str = DEFAULT_NETWORK,
     runner: Runner = subprocess.run, http: Callable[..., tuple[int, Any]] = _http,
     ready_timeout: float = 90.0,
 ) -> dict[str, Any]:
     return _start_openhands_worker_locked(layout, worker, budget=budget, claude_env_file=claude_env_file,
                                           codex_home=codex_home, image=image, network=network,
-                                          runner=runner, http=http, ready_timeout=ready_timeout)
+                                          runner=runner, http=http, ready_timeout=ready_timeout,
+                                          verification_venv=verification_venv)
 
 
 def resolve_engine(engine: str, model: str | None) -> tuple[str, str]:
@@ -3045,11 +3488,9 @@ def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mappi
                           expected: Mapping[str, Any]) -> dict[str, Any]:
     """Atomically admit one writer: refuse while any earlier conversation could still write."""
 
-    key = str(int(issue))
-
     def updater(state: dict[str, Any]) -> dict[str, Any]:
-        mapping = dict(state.get("issue_mappings", {}).get(key, {}))
-        if not _same_assignment(mapping, expected):
+        mapping = _worker_mapping(state, worker)
+        if _issue_for_worker(state, worker) != int(issue) or not _same_assignment(mapping, expected):
             raise LaunchRefused("worker assignment changed before conversation reservation")
         if mapping.get("worker") != worker or mapping.get("runtime") != "openhands" or mapping.get("state") != "running":
             raise LaunchRefused("worker has no running OpenHands agent-server")
@@ -3091,7 +3532,6 @@ def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mappi
         if isinstance(prior, Mapping):
             history.append(dict(prior))
         mapping.update(conversation=dict(record), conversation_history=history, updated_at=_now())
-        state["issue_mappings"][key] = mapping
         return state
 
     return epic_run_state.update_epic_run_state(
@@ -3134,7 +3574,7 @@ def _start_conversation_locked(
     engine, model = resolve_engine(engine, model)
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
-    expected = state["issue_mappings"][str(issue)]
+    expected = _worker_mapping(state, worker)
     try:
         with _endpoint_session(layout, worker, issue, expected, runner) as (_, initial_key):
             pass
@@ -3149,12 +3589,12 @@ def _start_conversation_locked(
             raise LaunchRefused("invalid PR completion operation id")
         record["operation_id"] = operation_id
     reserved = _reserve_conversation(layout, issue, worker, record, expected)
-    mapping = reserved["issue_mappings"][str(issue)]
+    mapping = _worker_mapping(reserved, worker)
 
     def finish(value: dict[str, Any]) -> None:
         def updater(current: dict[str, Any]) -> dict[str, Any]:
-            if _same_assignment(current["issue_mappings"][str(issue)], mapping):
-                entry = current["issue_mappings"][str(issue)]
+            if _same_assignment(_worker_mapping(current, worker), mapping):
+                entry = _worker_mapping(current, worker)
                 entry["conversation"] = value
                 _complete_engine_handoff(entry, value)
             else:
@@ -3174,7 +3614,7 @@ def _start_conversation_locked(
         with _endpoint_session(layout, worker, issue, mapping, runner) as (port, key):
             if key != initial_key:
                 raise EndpointUnavailable("existing worker session key changed before creation")
-            current = _load_state(layout)["issue_mappings"][str(issue)]
+            current = _worker_mapping(_load_state(layout), worker)
             if expected_owner_binding is not None and any(
                     current.get(field) != value for field, value in expected_owner_binding.items()):
                 raise EndpointUnavailable("worker owner or Builder session changed before creation")
@@ -3225,7 +3665,7 @@ def _reconcile_worker_conversation_locked(layout: Layout, worker: str, *, http: 
                                           runner: Runner = subprocess.run) -> dict[str, Any]:
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
-    mapping = state["issue_mappings"][str(issue)]
+    mapping = _worker_mapping(state, worker)
     record = mapping.get("conversation")
     if not isinstance(record, Mapping):
         raise EpicWorkspaceError("worker has no conversation to reconcile")
@@ -3241,7 +3681,7 @@ def _reconcile_worker_conversation_locked(layout: Layout, worker: str, *, http: 
     updated = {**record, "status": status}
 
     def updater(current: dict[str, Any]) -> dict[str, Any]:
-        entry = current["issue_mappings"][str(issue)]
+        entry = _worker_mapping(current, worker)
         if not _same_assignment(entry, mapping):
             raise EpicWorkspaceError("worker assignment changed during reconciliation; the newer state is kept")
         entry.update(conversation=updated, updated_at=_now())
@@ -3343,7 +3783,7 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
                         require_event_count: bool = False) -> dict[str, Any]:
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
-    mapping = state["issue_mappings"][str(issue)]
+    mapping = _worker_mapping(state, worker)
     record = mapping.get("conversation")
     if not isinstance(record, Mapping):
         return {"issue": issue, "worker": worker, "conversation": None}

@@ -578,7 +578,7 @@ def test_pr_review_continuation_reuses_cycle_prompt_and_operation(tmp_path, caps
     inspect = ew.inspect_checkout
     monkeypatch.setattr(cycle, "_command", docker_read)
     monkeypatch.setattr(cycle, "_worker_runner", h.engine)
-    monkeypatch.setattr(ew, "inspect_checkout", lambda layout, worker: inspect(layout, worker, runner=h.engine))
+    monkeypatch.setattr(ew, "inspect_checkout", lambda layout, worker, **_kwargs: inspect(layout, worker, runner=h.engine))
     head = _git(h.layout.checkout("w-a"), "rev-parse", "HEAD")
     pr = {"number": 44, "head_sha": head, "body": "PR contract", "governing_issue": {"body": CONTRACT},
           "review_material": {"diff": "synthetic diff", "issues": {}, "paths": ["README.md"]}}

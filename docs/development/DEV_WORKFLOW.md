@@ -471,14 +471,50 @@ closing Issue's Verify targets. For multiple Issue contracts, `review.scope_issu
 the governing and every closing Issue number to its current body hash; the independent review source
 must contain those hashes and the candidate SHA. A distinct open parent is the governing contract;
 its unfinished targets are not required unless it also closes. The admission and evidence are supplied
-by the trusted controller, not the model worker. Automatic production and dispatch of this candidate
-review/evidence is not yet wired.
+by the trusted controller, not the model worker. Source dispatches an isolated candidate review and
+retains its bounded finished response and independently observed native execution proof before the
+reviewer stop. Full evidence production remains outstanding.
 
 The source cycle invokes the existing governed native publisher under its cycle and worker locks. It
 records the original observation and push intent, reconciles uncertain outcomes before ordinary
 head admission, and atomically refreshes the same file-backed admission only after exact PR/head
 readback. The refreshed entry drops the old review disposition and publication request so the next
 head needs fresh review, Verify and CI. An unresolved effect holds that PR while other PRs continue.
+The source also provides a stopped-source projection helper: under the worker lifecycle lock it
+rechecks the stop, container absence, source identity and retained full checkpoint, then constructs
+an ordinary versioned tree in contained scratch. It records the full checkpoint tree separately from
+the projected tree and checks each projected blob and mode against both the checkpoint and physical
+source. Ignored untracked work stays in the full checkpoint and original checkout. The projection is
+a point-in-time observation, with disposable tree objects and a manifest. A contained blob reader
+can return explicitly selected projected bytes from the self-contained checkpoint after revalidating
+the projection before and after the read; it checks each returned blob's Git object ID. The default
+advancement records the stopped source and registered publisher intent, materializes versioned
+bytes, uses the branch gate and creates an additive commit with readback and replay checks when no
+candidate head is supplied. The publisher revalidates the projection and full checkpoint custody at
+its source checks; ignored work stays preserved outside the delivery tree. Explicit candidate heads
+retain the earlier full-checkpoint binding where it applies and use a verified projection when the
+checkpoint also contains ignored work. Preparation holds on unresolved commit outcomes, changed
+publisher work, configured filters or file/directory topology changes needing reconciliation.
+The worker lifecycle can reserve a separate review assignment under the same issue while retaining
+the stopped author's primary assignment and checkpoint. Endpoint, conversation, stop and checkpoint
+operations resolve the specific worker; a pending reviewer fences author continuation, and reviewer
+start checks the original author stop and container absence. The default source cycle records a
+candidate-bound intent, materializes a separate checkout with independent Git objects, and starts or
+reconciles one OpenHands conversation. It rechecks source custody and PR/Issue/owner scope before
+dispatch and after the reviewer stop; a stale binding holds the operation and stops the identified
+reviewer. A persisted finished response resumes its exact stop without reopening the conversation.
+The existing structured report gate checks the candidate and issue scope. A clean report waits for
+actual Verify evidence. The source cycle can run exact supported closing-Issue pytest targets in a
+separate credential-free OpenHands workspace using its Bash command/event API and a controller-owned
+read-only test environment. It records command intent before dispatch, reconciles the same server
+command after an unknown reply, retains actual output and exit status, and stops the exact workspace.
+A successful run produces a controller-owned artifact checked by the existing full-publication
+validator before the native publisher; unsupported targets or unknown outcomes remain held. Bounded
+findings start one separately materialized author at the reviewed
+local candidate, while the observed remote PR head and both predecessor checkpoints remain bound.
+After native author proof and an exact stop, the publisher prepares a new additive commit whose parent
+is that reviewed candidate; the next candidate needs a fresh review. No passing Verify artifact is
+inferred from a review or from an unknown command outcome.
 This describes the source candidate, not a claim that the currently running controller has adopted it;
 new-head review dispatch, full qualification and closure remain to be completed. A legacy or
 non-conforming report is never edited and never passed. When it has no known blocker, the original
