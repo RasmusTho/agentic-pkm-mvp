@@ -1074,7 +1074,7 @@ def test_venv_preflight_accepts_supported_runtimes_and_binds_interpreter(tmp_pat
     calls = []
     def command(argv, *, timeout):
         calls.append(argv)
-        return cycle.subprocess.CompletedProcess(argv, 0, "e" * 64 if argv[1] == "create" else "1 passed", "")
+        return cycle.subprocess.CompletedProcess(argv, 0, "e" * 64 if argv[1] == "create" else "1 passed in 0.1s", "")
     monkeypatch.setattr(cycle, "_command", command)
     result = cycle.sandbox_verify(layout, "reviewer", HEAD, ["tests/example.py"], str(venv),
                                   {"kind": "pr_cycle", "number": 10, "identity": f"py3{minor}"})

@@ -518,6 +518,9 @@ actual Verify evidence. The source cycle can run exact supported closing-Issue p
 separate credential-free OpenHands workspace using its Bash command/event API and a controller-owned
 read-only test environment. It records command intent before dispatch, reconciles the same server
 command after an unknown reply, retains actual output and exit status, and stops the exact workspace.
+A passing pytest result requires a single complete summary across retained output; multiple
+summary-like lines or a no-tests result are ambiguous or incomplete and hold verification, even
+when an additional line looks like a pass. Ordinary diagnostic text remains usable.
 A successful run produces a controller-owned artifact checked by the existing full-publication
 validator before the native publisher; unsupported targets or unknown outcomes remain held. Bounded
 findings or a retained failed or incomplete Verify result start one separately materialized author at

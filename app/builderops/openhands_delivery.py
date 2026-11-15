@@ -59,16 +59,26 @@ class DeliveryError(RuntimeError):
 
 
 def _pytest_pass_count(source: str) -> int:
-    """Count passes only from a complete pytest summary, never arbitrary output."""
+    """Accept one unambiguous complete pytest summary across retained output."""
     summary = re.compile(
         r"^\s*(?:=+\s*)?((?:[0-9]+ (?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|warnings?)"
-        r"(?:,\s*)?)+)(?:\s+in\s+\S+)?\s*(?:=+)?\s*$", re.IGNORECASE
+        r"(?:,\s*)?)+)(?:\s+(in\s+\S+)(?:\s+\([0-9:.]+\))?)?\s*(?:=+)?\s*$", re.IGNORECASE
     )
-    matches = [match for line in source.splitlines() if (match := summary.fullmatch(line))]
-    if not matches:
+    summary_like = re.compile(
+        r"^\s*(?:=+\s*)?[0-9]+ [a-z]+(?:,\s*[0-9]+ [a-z]+)*"
+        r"(?:\s+in\s+\S+(?:\s+\([0-9:.]+\))?)?\s*(?:=+)?\s*$", re.IGNORECASE
+    )
+    no_tests = re.compile(r"^\s*(?:=+\s*)?no tests (?:ran|collected)\b.*$", re.IGNORECASE)
+    lines = source.splitlines()
+    matches = [match for line in lines if (match := summary.fullmatch(line))]
+    # stdout and stderr have no reliable combined ordering or summary provenance.
+    # A second summary, even a positive one, cannot displace the real result.
+    if (len(matches) != 1 or matches[0].group(2) is None
+            or sum(bool(summary_like.fullmatch(line)) for line in lines) != 1
+            or any(no_tests.match(line) for line in lines)):
         return 0
     counts = re.findall(r"([0-9]+)\s+(passed|failed|errors?|skipped|xfailed|xpassed|deselected)",
-                        matches[-1].group(1), re.IGNORECASE)
+                        matches[0].group(1), re.IGNORECASE)
     if any(int(count) and kind.lower() != "passed" for count, kind in counts):
         return 0
     return sum(int(count) for count, kind in counts if kind.lower() == "passed")

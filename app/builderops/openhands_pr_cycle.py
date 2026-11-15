@@ -4916,9 +4916,12 @@ def _advance_candidate_verify(layout: workspace.Layout, pr: Mapping[str, Any], e
             row.get("stdout", "") + "\n" + row.get("stderr", "")) for row in commands):
         failed = next(row for row in commands if row.get("exit_code") != 0 or not delivery._pytest_pass_count(
             row.get("stdout", "") + "\n" + row.get("stderr", "")))
+        reason = ("incomplete or ambiguous pytest summary" if failed["exit_code"] == 0
+                  else "pytest exited nonzero")
         intent.update(state="failed", failing_target=failed["target"], failing_exit=failed["exit_code"],
                       next_action=(f"continue candidate-aware repair at {candidate['candidate_head']} for "
-                                   f"{failed['target']} using the retained OpenHands output and exit {failed['exit_code']}"))
+                                   f"{failed['target']}: {reason}; use the retained OpenHands output "
+                                   f"and exit {failed['exit_code']}"))
         _save(layout, saved)
         return {"number": pr["number"], "identity": saved["identity"], "action": "candidate-verify-failed",
                 "reason": intent["next_action"]}
