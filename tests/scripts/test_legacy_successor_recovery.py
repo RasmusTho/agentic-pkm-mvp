@@ -237,6 +237,75 @@ def test_recovery_refuses_authority_or_candidate_drift(operator_case, drift):
     assert 2 not in case["comments"]
 
 
+@pytest.mark.parametrize("drift", ["closed", "label_removed"])
+def test_issue_drift_during_final_run_check_refuses_before_claim(operator_case, monkeypatch, drift):
+    from app.builderops import legacy_run_fence
+
+    case = operator_case
+    check = legacy_run_fence.check_locked
+    calls = 0
+
+    def drift_during_check(**kwargs):
+        nonlocal calls
+        check(**kwargs)
+        calls += 1
+        if calls == 2:  # The held run is rechecked immediately before the claim.
+            if drift == "closed":
+                case["issue_data"]["state"] = "closed"
+            else:
+                case["issue_data"]["labels"] = []
+
+    monkeypatch.setattr(legacy_run_fence, "check_locked", drift_during_check)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="current issue validation"):
+        recovery.execute_operator_pickup(**_args(case))
+    task_id = case["receipt"]["predecessor"]["task_id"]
+    claims = [event for event in case["store"].list_events(task_id) if event.event_type == "task.claimed"]
+    assert calls == 2
+    assert len(claims) == 1
+    assert case["store"].get_task(task_id).lease_id == case["old_lease"].lease_id
+    assert 2 not in case["comments"]
+
+
+def test_operator_refuses_workspace_overlap_before_claim(operator_case):
+    case = operator_case
+    case["workspace_root"].mkdir()
+    overlapping = case["workspace_root"] / "other-checkout"
+    _git(case["cwd"], "worktree", "add", "--detach", str(overlapping))
+    with pytest.raises(recovery.RecoveryEvidenceError, match="outside model workspaces"):
+        recovery.execute_operator_pickup(**_args(case))
+    task_id = case["receipt"]["predecessor"]["task_id"]
+    claims = [event for event in case["store"].list_events(task_id) if event.event_type == "task.claimed"]
+    assert len(claims) == 1
+    assert case["store"].get_task(task_id).lease_id == case["old_lease"].lease_id
+    assert 2 not in case["comments"]
+
+
+def test_operator_refuses_workspace_overlap_during_final_run_check(operator_case, monkeypatch):
+    from app.builderops import legacy_run_fence
+
+    case = operator_case
+    case["workspace_root"].mkdir()
+    check = legacy_run_fence.check_locked
+    calls = 0
+
+    def add_worktree_during_check(**kwargs):
+        nonlocal calls
+        check(**kwargs)
+        calls += 1
+        if calls == 2:
+            _git(case["cwd"], "worktree", "add", "--detach", str(case["workspace_root"] / "late-checkout"))
+
+    monkeypatch.setattr(legacy_run_fence, "check_locked", add_worktree_during_check)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="outside model workspaces"):
+        recovery.execute_operator_pickup(**_args(case))
+    task_id = case["receipt"]["predecessor"]["task_id"]
+    claims = [event for event in case["store"].list_events(task_id) if event.event_type == "task.claimed"]
+    assert calls == 2
+    assert len(claims) == 1
+    assert case["store"].get_task(task_id).lease_id == case["old_lease"].lease_id
+    assert 2 not in case["comments"]
+
+
 @pytest.mark.parametrize("kind", ["root", "relative", "overlap", "nested"])
 def test_operator_rejects_workspace_before_read_or_claim(operator_case, monkeypatch, kind):
     case = operator_case
@@ -567,7 +636,7 @@ def test_direct_operator_entries_fail_closed_on_issue_drift(operator_case, monke
     assert 2 not in case["comments"]
 
 
-@pytest.mark.parametrize("at_read", list(range(2, 13)))
+@pytest.mark.parametrize("at_read", list(range(2, 14)))
 def test_issue_drift_at_effect_boundary_retains_exact_state(operator_case, monkeypatch, at_read):
     case = operator_case
     original = recovery._github_read
@@ -584,15 +653,15 @@ def test_issue_drift_at_effect_boundary_retains_exact_state(operator_case, monke
         recovery.execute_operator_pickup(**_args(case))
     task_id = case["receipt"]["predecessor"]["task_id"]
     claims = [e for e in case["store"].list_events(task_id) if e.event_type == "task.claimed"]
-    assert len(claims) == (1 if at_read <= 3 else 2)
-    assert (2 in case["comments"]) == (at_read >= 10)
+    assert len(claims) == (1 if at_read <= 4 else 2)
+    assert (2 in case["comments"]) == (at_read >= 11)
     case["issue_data"]["state"] = "open"
-    if at_read in (8, 9):
+    if at_read in (9, 10):
         # An established intent with no readable ACK is ambiguous; never repost.
         with pytest.raises(recovery.RecoveryEvidenceError, match="ACK outcome is unknown or ambiguous"):
             recovery.resume_operator_pickup(**_args(case))
         assert 2 not in case["comments"]
-    elif at_read >= 4:
+    elif at_read >= 5:
         result = recovery.resume_operator_pickup(**_args(case))
         assert result["state"] == "pinned"
         assert len([e for e in case["store"].list_events(task_id) if e.event_type == "task.claimed"]) == 2

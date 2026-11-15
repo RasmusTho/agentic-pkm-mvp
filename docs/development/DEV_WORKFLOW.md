@@ -1878,6 +1878,16 @@ registry records an ACK intent before POST: when no intent exists, resume may co
 attempt; after an intent exists, absence of a matching ACK remains unknown and is never permission
 to repost. Missing or ambiguous readback remains unresolved; do not release another owner's claim
 or retry a write blindly.
+The operator pickup and resume preflight does not require the historical candidate to contain current
+`origin/main`; the guarded host recovery still requires the exact clean candidate and authority.
+Integrate current main after transfer before the normal commit and publication gates.
+Immediately before the claim, the host refreshes Issue authority after the final run check; this
+is a check followed by a dispatcher write, not an atomic GitHub/SQLite lock. The native successor
+proof refreshes its dispatcher and worktree authority after its external lineage reads; a later
+change still requires the consuming delivery gate to revalidate authority.
+Before claiming, the host applies the same registered and live checkout workspace screen used by
+the native successor proof. The supplied model workspace root must reflect actual access; this
+screen does not establish that a controller or its shared authority is protected from model access.
 The original candidate and claim remain historical provenance. A reviewed descendant can proceed
 only through the ordinary current-head scope, review, CI, native or executor merge and closure gates.
 

@@ -5,7 +5,7 @@ import hashlib
 import json
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -510,6 +510,112 @@ def test_operator_successor_proof_adapter_reads_actual_pinned_lineage(production
     with pytest.raises(cycle.CycleError):
         adapter.verify(issue=case['issue'], pr=case['pr'], cwd=case['cwd'], worktree=case['worktree'],
             workspace_root=f['layout'].root, agent=case['agent'], session=case['session'])
+
+
+@pytest.mark.parametrize('drift', ['lease_released', 'lease_expired', 'lease_replaced', 'registration_expired',
+                                   'registration_owner', 'registration_epoch', 'heartbeat'])
+def test_operator_successor_proof_rechecks_authority_after_lineage(production_path, monkeypatch, drift):
+    from scripts import verify_operator_successor as adapter
+
+    f = production_path
+    case = f['case']
+    monkeypatch.setattr(recovery_module, '_verify_current_issue', lambda **kw: None)
+    original_pr = cycle.closure._pr
+    calls = 0
+
+    def change_after_lineage(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            task_id = case['receipt']['predecessor']['task_id']
+            if drift in ('lease_released', 'lease_replaced'):
+                leases.release(case['store'], task_id, case['agent'])
+                if drift == 'lease_replaced':
+                    leases.claim(case['store'], task_id, case['agent'])
+            elif drift == 'lease_expired':
+                task = case['store'].get_task(task_id)
+                with case['store']._connect() as conn:
+                    conn.execute("UPDATE dispatcher_leases SET expires_at = ? WHERE lease_id = ?",
+                                 ('2000-01-01T00:00:00+00:00', task.lease_id))
+                    conn.execute("UPDATE dispatcher_tasks SET lease_expires_at = ? WHERE task_id = ?",
+                                 ('2000-01-01T00:00:00+00:00', task_id))
+            elif drift == 'heartbeat':
+                leases.heartbeat(case['store'], task_id, case['agent'])
+                cycle.agent_worktree.heartbeat_worktree(case['cwd'], worktree=case['worktree'], owner=case['session'])
+            else:
+                registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+                with cycle.agent_worktree._locked_registry(registry) as payload:
+                    row = payload['worktrees'][str(case['worktree'])]
+                    if drift == 'registration_expired': row['expires_at'] = 1
+                    elif drift == 'registration_owner': row['owner'] = 'other-session'
+                    else: row['registration_epoch'] = 'f' * 32
+        return original_pr(*args)
+
+    monkeypatch.setattr(cycle.closure, '_pr', change_after_lineage)
+    args = dict(issue=case['issue'], pr=case['pr'], cwd=case['cwd'], worktree=case['worktree'],
+                workspace_root=f['layout'].root, agent=case['agent'], session=case['session'])
+    if drift == 'heartbeat':
+        assert adapter.verify(**args)['head'] == f['pr']['head_sha']
+    else:
+        with pytest.raises((cycle.CycleError, cycle.closure.ClosureError)):
+            adapter.verify(**args)
+    assert calls == 2
+
+
+def test_operator_successor_refuses_registry_drift_during_final_dispatcher_read(production_path, monkeypatch):
+    from scripts import verify_operator_successor as adapter
+
+    f = production_path
+    case = f['case']
+    monkeypatch.setattr(recovery_module, '_verify_current_issue', lambda **kw: None)
+    original = adapter._readonly_dispatcher
+    calls = 0
+
+    def drift_during_read(**kwargs):
+        nonlocal calls
+        calls += 1
+        result = original(**kwargs)
+        if calls == 2:
+            registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+            payload = json.loads(registry.read_text())
+            payload['worktrees'][str(case['worktree'])]['owner'] = 'other-session'
+            registry.write_text(json.dumps(payload))
+        return result
+
+    monkeypatch.setattr(adapter, '_readonly_dispatcher', drift_during_read)
+    with pytest.raises(cycle.CycleError):
+        adapter.verify(issue=case['issue'], pr=case['pr'], cwd=case['cwd'], worktree=case['worktree'],
+                       workspace_root=f['layout'].root, agent=case['agent'], session=case['session'])
+    assert calls == 2
+
+
+def test_operator_successor_refuses_lease_expiry_during_final_registry_read(production_path, monkeypatch):
+    from scripts import verify_operator_successor as adapter
+
+    f = production_path
+    case = f['case']
+    monkeypatch.setattr(recovery_module, '_verify_current_issue', lambda **kw: None)
+    original = adapter._readonly_lifecycle
+    calls = 0
+
+    class FutureDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) + timedelta(hours=2)
+
+    def advance_after_read(**kwargs):
+        nonlocal calls
+        result = original(**kwargs)
+        calls += 1
+        if calls == 2:
+            monkeypatch.setattr(cycle.closure, 'datetime', FutureDatetime)
+        return result
+
+    monkeypatch.setattr(adapter, '_readonly_lifecycle', advance_after_read)
+    with pytest.raises(cycle.closure.ClosureError, match='expired'):
+        adapter.verify(issue=case['issue'], pr=case['pr'], cwd=case['cwd'], worktree=case['worktree'],
+                       workspace_root=f['layout'].root, agent=case['agent'], session=case['session'])
+    assert calls == 2
 
 
 @pytest.mark.parametrize('consumer', ['native', 'review', 'adapter'])

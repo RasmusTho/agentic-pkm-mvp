@@ -378,6 +378,115 @@ def _run(
     )
 
 
+def _stale_operator_fixture(tmp_path: Path, issue_number: int = 3301, pr: int = 34) -> tuple[Path, dict[str, str], list[str]]:
+    """Real Git, preflight and host entry; isolate GitHub and host config."""
+    sandbox = tmp_path / "harness"
+    sandbox.mkdir()
+    issue = json.dumps({"number": issue_number, "state": "open", "labels": [
+        {"name": "type:task"}, {"name": "prio:high"}, {"name": "lane:governance"},
+        {"name": "agent:in-progress"}], "body": VALID_READY_BODY})
+    _, env = _make_harness(sandbox, status_json="{}", issue_json=issue)
+    Path(env["COMMAND_LOG"]).write_text("")
+    Path(env["PATH"].split(os.pathsep)[0], "git").unlink()
+    fake_python = Path(env["PYTHON"])
+    fake_python.write_text(fake_python.read_text().replace(
+        'case "$*" in\n',
+        'case "$*" in\n  *"legacy_git_config.py "*) exit 0 ;;\n'
+        '  *"-m app.builderops.legacy_owner_recovery "*) exec "$JSON_PYTHON" "$@" ;;\n', 1))
+    env["FAKE_WRAPPER"] = str(SCRIPT)
+    env["JSON_PYTHON"] = sys.executable
+
+    repo = tmp_path / "agentic-pkm-mvp"
+    repo.mkdir()
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+    git("init", "-b", "main")
+    git("config", "user.name", "Fixture")
+    git("config", "user.email", "fixture@example.invalid")
+    git("remote", "add", "origin", "https://github.com/RasmusTho/agentic-pkm-mvp.git")
+    path = repo / "tests/scripts/test_validate_issue_readiness.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("def test_target_repo_verify_path(): pass\n")
+    git("add", ".")
+    git("commit", "-m", "base")
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                          capture_output=True, text=True).stdout.strip()
+    worktree = tmp_path / "candidate"
+    git("worktree", "add", "-b", "codex/candidate", str(worktree))
+    (repo / "main-only").write_text("new main\n")
+    git("add", "main-only")
+    git("commit", "-m", "advance main")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("update-ref", "refs/heads/main", base)
+    args = ["--takeover-stale", "--target-worktree", str(worktree),
+            "--operator-comment-id", "12", "--operator-pr", str(pr),
+            "--operator-workspace-root", str(tmp_path / "model-workspaces"),
+            "--legacy-run-state-root", str(tmp_path / "runs")]
+    return worktree, env, args
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("issue_number,pr", [(6601, 6602), (6597, 6603)])
+def test_operator_pickup_accepts_clean_stale_base_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resume: bool,
+                                                       issue_number: int, pr: int) -> None:
+    worktree, env, args = _stale_operator_fixture(tmp_path, issue_number, pr)
+    from app.builderops import legacy_git_config
+    from app.builderops.legacy_owner_recovery import RecoveryEvidenceError, read_clean_candidate
+    from scripts import agent_worktree
+    monkeypatch.setattr(legacy_git_config, "QUALIFIED_COMMON", (tmp_path / "agentic-pkm-mvp/.git").resolve())
+    monkeypatch.setattr(legacy_git_config, "_qualified_home", lambda: tmp_path)
+    monkeypatch.setattr(legacy_git_config, "check_host_config", lambda: None)
+    agent_worktree.register_worktree(worktree, worktree=worktree, owner="fixture")
+    clean = read_clean_candidate(cwd=worktree, worktree=worktree)
+    assert clean["branch"] == "codex/candidate"
+    result = _run(worktree, env, *args, *(["--operator-resume"] if resume else []), issue=str(issue_number))
+    assert result.returncode != 0
+    assert '"status": "not_checked"' in result.stdout
+    assert '"ok": false' in result.stdout
+    log = Path(env["COMMAND_LOG"]).read_text()
+    action = "resume" if resume else "pickup"
+    assert f"-m app.builderops.legacy_owner_recovery {action} " in log
+    assert "app.dispatcher claim" not in log
+
+    Path(env["COMMAND_LOG"]).write_text("")
+    (worktree / "untracked").write_text("dirty")
+    result = _run(worktree, env, *args, *(["--operator-resume"] if resume else []), issue=str(issue_number))
+    assert result.returncode != 0
+    assert '"dirty_tree": true' in result.stdout
+    assert f"-m app.builderops.legacy_owner_recovery {action} " in Path(env["COMMAND_LOG"]).read_text()
+    with pytest.raises(RecoveryEvidenceError, match="candidate is dirty"):
+        read_clean_candidate(cwd=worktree, worktree=worktree)
+
+
+def test_operator_pickup_preserves_standard_base_gates(tmp_path: Path) -> None:
+    worktree, env, _ = _stale_operator_fixture(tmp_path)
+    normal = _run(worktree, env)
+    assert normal.returncode != 0
+    assert '"reason": "rebase_required"' in normal.stdout
+    assert "app.dispatcher claim" not in Path(env["COMMAND_LOG"]).read_text()
+    gate = REPO_ROOT / "scripts/agent_workspace_preflight.sh"
+    for extra in ([], ["--allow-dirty"]):
+        result = subprocess.run([str(gate), "--cwd", str(worktree), "--expected-branch", "codex/candidate",
+                                 "--expected-worktree", str(worktree), *extra], env=env,
+                                capture_output=True, text=True, check=False)
+        assert result.returncode != 0
+        assert '"reason": "rebase_required"' in result.stdout
+    wrong_branch = subprocess.run([str(gate), "--cwd", str(worktree), "--expected-branch", "codex/wrong",
+                                   "--expected-worktree", str(worktree), "--base-branch", ""], env=env,
+                                  capture_output=True, text=True, check=False)
+    assert wrong_branch.returncode != 0
+    assert '"branch_mismatch": true' in wrong_branch.stdout
+    gitdir = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=worktree, check=True,
+                            capture_output=True, text=True).stdout.strip()
+    (Path(gitdir) / "rebase-merge").mkdir()
+    unknown = subprocess.run([str(gate), "--cwd", str(worktree), "--expected-branch", "codex/candidate",
+                              "--expected-worktree", str(worktree), "--base-branch", ""], env=env,
+                             capture_output=True, text=True, check=False)
+    assert unknown.returncode != 0
+    assert "rebase" in unknown.stdout
+
+
 @pytest.mark.parametrize("lost_reply", [False, True])
 def test_pickup_persists_session_and_reconciles_its_real_claim(tmp_path: Path, lost_reply: bool) -> None:
     from app.dispatcher.models import TaskRecord
