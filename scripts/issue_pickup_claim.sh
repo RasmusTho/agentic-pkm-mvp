@@ -10,6 +10,11 @@ AGENT_ID=""
 SESSION_ID=""
 PREFLIGHT_ONLY=0
 TAKEOVER_STALE=0
+OPERATOR_PICKUP=0
+OPERATOR_ACTION="pickup"
+OPERATOR_COMMENT_ID=""
+OPERATOR_PR=""
+OPERATOR_WORKSPACE_ROOT=""
 COORDINATION_MODE="auto"
 FALLBACK_REASON=""
 TASK_ID=""
@@ -61,6 +66,26 @@ while [[ $# -gt 0 ]]; do
       TAKEOVER_STALE=1
       shift
       ;;
+    --operator-resume)
+      OPERATOR_PICKUP=1
+      OPERATOR_ACTION="resume"
+      shift
+      ;;
+    --operator-comment-id)
+      OPERATOR_PICKUP=1
+      OPERATOR_COMMENT_ID="$2"
+      shift 2
+      ;;
+    --operator-pr)
+      OPERATOR_PICKUP=1
+      OPERATOR_PR="$2"
+      shift 2
+      ;;
+    --operator-workspace-root)
+      OPERATOR_PICKUP=1
+      OPERATOR_WORKSPACE_ROOT="$2"
+      shift 2
+      ;;
     --coordination-mode)
       COORDINATION_MODE="$2"
       shift 2
@@ -91,6 +116,12 @@ fi
 if [[ "$TAKEOVER_STALE" -eq 1 && "$COORDINATION_MODE" == "github-label-only-fallback" ]]; then
   echo "--takeover-stale requires dispatcher-backed coordination" >&2
   exit 2
+fi
+if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+  if [[ "$TAKEOVER_STALE" -ne 1 || ! "$OPERATOR_COMMENT_ID" =~ ^[1-9][0-9]*$ || ! "$OPERATOR_PR" =~ ^[1-9][0-9]*$ || -z "$OPERATOR_WORKSPACE_ROOT" ]]; then
+    echo "operator pickup requires --takeover-stale, --operator-comment-id, --operator-pr, and --operator-workspace-root" >&2
+    exit 2
+  fi
 fi
 if ! [[ "$TTL_MINUTES" =~ ^[1-9][0-9]*$ ]]; then
   echo "--ttl-minutes must be a positive integer" >&2
@@ -857,6 +888,20 @@ if [[ "$TAKEOVER_STALE" -eq 1 ]]; then
     ISSUE_NUMBER="$ISSUE_NUMBER" verify_current_in_progress_issue; then
     echo "stale takeover refused: exact Issue is not freshly open, in-progress, and strictly valid" >&2
     exit 1
+  fi
+
+  if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+    if [[ "$REPO" != "RasmusTho/agentic-pkm-mvp" || "$TTL_MINUTES" != "90" || "$TARGET_WORKTREE_EXPLICIT" -ne 1 ]]; then
+      echo "operator pickup refused: explicit target worktree, supported repository, and default TTL required" >&2
+      exit 1
+    fi
+    # The host owns the entire successor transition. Never run the normal
+    # stale-lease, heartbeat, claim, release, or label path around it.
+    cd "$SCRIPT_REPO_ROOT"
+    exec "$PYTHON_BIN" -m app.builderops.legacy_owner_recovery "$OPERATOR_ACTION" \
+      --issue "$ISSUE_NUMBER" --pr "$OPERATOR_PR" --worktree "$EXPECTED_WORKTREE" \
+      --agent "$AGENT_ID" --session "$SESSION_ID" --comment-id "$OPERATOR_COMMENT_ID" \
+      --workspace-root "$OPERATOR_WORKSPACE_ROOT"
   fi
 
   previous_lease=""

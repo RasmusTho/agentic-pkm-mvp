@@ -22,11 +22,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
-from app.builderops import closure, epic_run_state, epic_workspace as workspace
+from app.builderops import closure, epic_run_state, epic_workspace as workspace, legacy_owner_recovery
 from app.builderops import openhands_pr_completion as completion
 from app.builderops import openhands_pr_observation as observation
 from app.builderops.publication import SubprocessExecutor
 from app.dispatcher.sync_github import github_issue_task_id
+from app.dispatcher.events import claim_event_digest, event_history_digest
 from app.dispatcher.verification_contract import has_closing_issue_attempt
 from scripts import agent_worktree
 from scripts.pr_body_generator import resolve_native_issue_authority
@@ -759,6 +760,146 @@ def _predecessor_pickup_reference(comments: Sequence[Any], proof: Any, *, issue:
     return value
 
 
+def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str, Any],
+                      origin: Mapping[str, str], registration: Mapping[str, Any],
+                      records: Mapping[str, Mapping[str, Any]],
+                      comments: Sequence[Any], issue_comments: Sequence[Any], issue: int, pr_number: int,
+                      branch: str, head: str, files: list[str], entry: Mapping[str, Any]) -> None:
+    """Verify the initial operator recovery without asserting predecessor consent."""
+    proof = registration.get("operator_registration")
+    if not isinstance(proof, Mapping) or proof.get("state") != "pinned" or proof.get("issue") != issue:
+        raise CycleError("operator registration is missing or unpinned")
+    if any(path != registration.get("path") and row.get("branch") == branch for path, row in records.items()):
+        raise CycleError("operator recovery has ambiguous branch registration history")
+    previous = registration.get("previous_registration")
+    if (registration.get("transfer_registration") is not None or not isinstance(previous, Mapping)
+            or previous.get("transfer_registration") is not None):
+        raise CycleError("operator recovery cannot replace transfer history")
+    rows = []
+    for name, digest_name in (("pending_comment_id", "pending_digest"), ("ack_comment_id", "ack_digest")):
+        matches = [c for c in comments if isinstance(c, dict) and c.get("id") == proof.get(name)]
+        if len(matches) != 1:
+            raise CycleError("operator comment is unavailable or ambiguous")
+        try:
+            receipt, at, digest = agent_worktree._transfer_comment(matches[0], issue=issue, pr=pr_number,
+                                                   receipt_key="operator_reconciliation.v1")
+            values = {key: receipt[key] for key in ("successor", "predecessor", "registration", "candidate", "writer", "publication")}
+            legacy_owner_recovery.validate_operator_reconciliation(matches[0], issue=issue, pr=pr_number,
+                                                                     github_login="RasmusTho", **values)
+        except (agent_worktree.WorktreeLifecycleError, legacy_owner_recovery.RecoveryEvidenceError, KeyError, TypeError) as exc:
+            raise CycleError("operator comment is invalid or unauthenticated") from exc
+        if digest != proof.get(digest_name):
+            raise CycleError("operator comment differs from its pin")
+        rows.append((receipt, at))
+    pending, pending_at = rows[0]
+    acknowledged, ack_at = rows[1]
+    predecessor, successor = pending["predecessor"], pending["successor"]
+    candidate = proof.get("candidate_readback")
+    ack = acknowledged.get("successor_acknowledgment")
+    expected_registration = {"path": registration.get("path"), "branch": branch, "owner": registration.get("owner"),
+                             "generation": registration.get("generation"), "epoch": proof.get("epoch"),
+                             "observed_at": proof.get("registration_read_at")}
+    if (proof.get("pending_comment_id") == proof.get("ack_comment_id")
+            or pending != {k: v for k, v in acknowledged.items() if k != "successor_acknowledgment"}
+            or "successor_acknowledgment" in pending or not isinstance(ack, dict)
+            or ack.get("successor_registration") != expected_registration or ack.get("candidate_readback") != candidate
+            or proof.get("predecessor") != pending.get("predecessor_registration")
+            or proof.get("branch_history_digest") != pending.get("branch_history_digest")
+            or proof.get("epoch") != registration.get("registration_epoch")
+            or proof.get("authority_since") != registration.get("authority_since")
+            or successor != {"agent": entry.get("claimant"), "session": registration.get("owner")}
+            or registration.get("owner") != entry.get("session")
+            or not all(agent_worktree._valid_authority_timestamp(proof.get(k)) for k in
+                       ("authority_since", "registration_read_at", "verified_through"))
+            or not pending_at + 1 <= proof["authority_since"] <= proof["registration_read_at"] < ack_at
+            or proof.get("ack_at") != ack_at or not ack_at + 1 <= proof["verified_through"] <= registration.get("expires_at", 0)):
+        raise CycleError("operator registration or acknowledgment drifted")
+    prior = proof.get("predecessor")
+    if (not isinstance(prior, dict) or any(k in prior for k in ("prior_owner", "previous_registration", "transfer_registration", "operator_registration"))
+            or prior.get("status") != "active" or prior.get("prior_bindings", []) != []
+            or prior.get("expires_at", pending_at + 1) > pending_at
+            or not isinstance(registration.get("prior_owner"), Mapping)
+            or any(registration["prior_owner"].get(k) != prior.get(k) for k in ("path", "branch", "generation", "owner", "registered_at"))
+            or any(prior.get(k) != registration.get(k) for k in ("path", "branch", "generation"))):
+        raise CycleError("operator predecessor registry history is ambiguous")
+    task_id = github_issue_task_id(completion.REPOSITORY, issue)
+    task_events = [row for row in events if row.get("task_id") == task_id]
+    claims = [row for row in task_events if row.get("event_type") == "task.claimed"]
+    if len(claims) != 2:
+        raise CycleError("operator dispatcher claim history is ambiguous")
+    old, new = claims
+    new_index = task_events.index(new)
+    takeover = new.get("payload", {}).get("takeover") if isinstance(new.get("payload"), Mapping) else None
+    try:
+        digest = event_history_digest(task_events[:new_index])
+        old_digest = claim_event_digest(old)
+        old_at = closure._parse_timestamp(old.get("timestamp"), "legacy claim")
+        new_at = closure._parse_timestamp(new.get("timestamp"), "successor claim")
+        expiry = closure._parse_timestamp(predecessor.get("expires_at"), "predecessor expiry")
+    except (ValueError, closure.ClosureError) as exc:
+        raise CycleError("operator dispatcher history is invalid") from exc
+    if (predecessor.get("session") is not None or _claim_session(old) is not None
+            or old.get("actor") != predecessor.get("holder") or old.get("lease_id") != predecessor.get("lease_id")
+            or old.get("event_id") != predecessor.get("claim_event_id") or old_digest != predecessor.get("claim_event_digest")
+            or digest != predecessor.get("history_digest") or origin.get("mode") != closure.DISPATCHER_MODE
+            or origin.get("lease_id") != old.get("lease_id") or origin.get("agent") != old.get("actor")
+            or (origin.get("path") is not None and origin.get("path") != prior.get("path"))
+            or new.get("lease_id") != owner.get("lease_id") or new.get("lease_id") != entry.get("lease_id")
+            or new.get("actor") != owner.get("lease_holder")
+            or new.get("actor") != successor.get("agent") or _claim_session(new) != successor.get("session")
+            or takeover != {"previous_holder": old.get("actor"), "previous_lease_id": old.get("lease_id"),
+                            "previous_expires_at": predecessor.get("expires_at")}
+            or not old_at < expiry <= datetime.fromtimestamp(pending_at, timezone.utc)
+            or not datetime.fromtimestamp(pending_at + 1, timezone.utc) <= new_at
+            or new_at.timestamp() >= proof["authority_since"]
+            or new_at.timestamp() >= ack_at
+            or any(row.get("event_type") in {"task.released", "task.completed"} for row in task_events[:new_index])):
+        raise CycleError("operator takeover does not bind the legacy claim")
+    if _predecessor_lease_expiry({"claim": old, "claimed_at": old_at, "events": events},
+                                 datetime.fromtimestamp(pending_at, timezone.utc)) != expiry:
+        raise CycleError("operator predecessor expiry differs from dispatcher history")
+    window = {"claim": new, "claimed_at": new_at, "events": events}
+    if datetime.fromtimestamp(ack_at + 1, timezone.utc) > _predecessor_lease_expiry(window, datetime.fromtimestamp(ack_at, timezone.utc)):
+        raise CycleError("operator successor claim was not live through acknowledgment")
+    # Every authenticated fallback pickup since the origin remains subject to conflict checks.
+    for comment in issue_comments:
+        if not _authenticated_comment(comment):
+            continue
+        match = closure.PICKUP_RECEIPT_RE.fullmatch(str(comment.get("body", "")))
+        if match and match["issue"] == str(issue) and closure._parse_timestamp(comment["created_at"], "fallback pickup") + timedelta(seconds=1) > old_at:
+            raise CycleError("operator history contains a conflicting fallback pickup")
+    current_base = entry.get("base_sha")
+    if (not isinstance(candidate, dict) or candidate.get("branch") != branch or candidate.get("clean") is not True
+            or not isinstance(candidate.get("base_sha"), str) or not closure.SHA_RE.fullmatch(candidate["base_sha"])
+            or not isinstance(candidate.get("head"), str) or not closure.SHA_RE.fullmatch(candidate["head"])
+            or candidate.get("head") != pending["candidate"].get("head")
+            or candidate.get("base") != pending.get("base") or candidate.get("base_sha") != pending.get("base")
+            or candidate.get("changed_files") != pending.get("changed_files")
+            or not isinstance(current_base, str) or not closure.SHA_RE.fullmatch(current_base)
+            or not agent_worktree._valid_authority_timestamp(candidate.get("observed_at"))
+            or not pending_at + 1 <= candidate["observed_at"] <= proof["registration_read_at"]):
+        raise CycleError("operator candidate proof is invalid")
+    try:
+        live = legacy_owner_recovery.read_clean_candidate(cwd=Path(str(entry["lifecycle_repo"])),
+                                                           worktree=Path(str(registration["path"])))
+        worktree = Path(str(registration["path"]))
+        read = legacy_owner_recovery._git_read
+        read(worktree, "merge-base", "--is-ancestor", candidate["head"], head)
+        old_tree = read(worktree, "rev-parse", "--verify", f"{candidate['head']}^{{tree}}").decode().strip()
+        old_files = read(worktree, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "--find-renames", "-z",
+                         f"{candidate['base_sha']}...{candidate['head']}").decode().split("\0")
+        current_files = read(worktree, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "--find-renames", "-z",
+                             f"{current_base}...{head}").decode().split("\0")
+    except (KeyError, OSError, RuntimeError, UnicodeDecodeError, legacy_owner_recovery.RecoveryEvidenceError) as exc:
+        raise CycleError("operator candidate readback is unavailable") from exc
+    observed = pending["candidate"]
+    if (any(live.get(k) != observed.get(k) for k in ("path", "branch", "generation", "status_digest"))
+            or live.get("head") != head or old_tree != observed.get("tree")
+            or sorted(p for p in old_files if p) != candidate.get("changed_files")
+            or sorted(p for p in current_files if p) != files):
+        raise CycleError("operator candidate changed")
+
+
 def _dispatcher_migration_lineage(events: Sequence[Mapping[str, Any]], owner: Mapping[str, Any], *,
                                   origin: Mapping[str, str], registration: Mapping[str, Any],
                                   comments: Sequence[Any], issue: int, branch: str,
@@ -1447,6 +1588,9 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
         prior_path: str | None = None
         prior_lease: str | None = None
         same_session_transfer: tuple[Mapping[str, Any], dict[str, Any], dict[str, Any]] | None = None
+        operator_recovery = "operator_registration" in registration
+        if operator_recovery and entry.get("coordination_mode", "dispatcher-backed") != "dispatcher-backed":
+            raise CycleError("operator recovery requires dispatcher coordination")
         if entry.get("coordination_mode", "dispatcher-backed") == "github-label-only-fallback":
             status = executor.run([sys.executable, "-m", "app.dispatcher", "status", "--json"], cwd=cwd)
             if status.returncode != 0:
@@ -1568,7 +1712,18 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                     prior_path = prior_registration.get("path") if isinstance(prior_registration, Mapping) else None
                     assert isinstance(handoff_ack, dict)
                     same_session_transfer = (proof, pinned_receipt, handoff_ack)
-            if same_session_transfer is None:
+            if operator_recovery:
+                if same_session_transfer is not None or registration.get("transfer_registration") is not None:
+                    raise CycleError("operator and handoff authority cannot be mixed")
+                changed_files = _api_pages(executor, cwd, f"/pulls/{pr['number']}/files")
+                if not changed_files or any(not isinstance(x, dict) or not isinstance(x.get("filename"), str) for x in changed_files):
+                    raise CycleError("candidate changed-file readback is unavailable")
+                _operator_lineage(events=events, owner=owner, origin=origin, registration=registration, records=lifecycle_records,
+                    comments=[*issue_comments, *pr_comments], issue_comments=issue_comments,
+                    issue=authority.governing_issue, pr_number=int(pr["number"]), branch=branch,
+                    head=pr["head_sha"], files=sorted(x["filename"] for x in changed_files),
+                    entry={**entry, "base_sha": live.get("base", {}).get("sha")})
+            elif same_session_transfer is None:
                 lineage = _dispatcher_migration_lineage(events, owner, origin=origin, registration=registration,
                                                         comments=[*issue_comments, *pr_comments], issue=authority.governing_issue,
                                                         branch=branch, predecessor_pickup_id=pickup_reference)
@@ -1592,7 +1747,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                 raise CycleError("verification-dispatch state is unavailable or owns this PR")
         else:
             raise CycleError("unsupported coordination mode")
-        if not changed_owner and origin.get("path"):
+        if not changed_owner and not operator_recovery and origin.get("path"):
             _validate_original_moves(registration, lifecycle_records, origin["path"])
         if changed_owner:
             _validate_transfer_move(registration, lifecycle_records)
@@ -1633,7 +1788,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                             prior_lease=prior_lease, lineage=lineage, prior_registration=prior_registration,
                             fallback_pickup_at=fallback_pickup_at, fallback_origin_at=fallback_origin_at,
                             remote_prior=remote_prior)
-        anchors = _claimant_history(registration=registration, records=lifecycle_records,
+        anchors = [] if operator_recovery else _claimant_history(registration=registration, records=lifecycle_records,
             comments=[*issue_comments, *pr_comments], issue_comments=issue_comments, events=dispatcher_events,
             origin=origin, origin_at=original_at, issue=authority.governing_issue,
             pr_number=int(pr["number"]), branch=branch, entry=entry)
@@ -1754,7 +1909,8 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
         raise CycleError("transfer review source is unavailable")
     registration, records = _lifecycle_owner(layout, entry, branch)
     proof = registration.get("transfer_registration")
-    if proof is None and registration.get("prior_owner") is not None:
+    operator_recovery = "operator_registration" in registration
+    if proof is None and registration.get("prior_owner") is not None and not operator_recovery:
         raise CycleError("historical transfer registration is unproved; reconcile through maintenance")
     authority = resolve_native_issue_authority(pr.get("body"))
     if authority is None:
@@ -1763,18 +1919,34 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
     pr_comments = _api_pages(executor, cwd, f"/issues/{pr['number']}/comments")
     origin, origin_at = _pickup_origin(pr.get("body", ""), issue=authority.governing_issue,
         closing=authority.closing_issues, branch=branch, comments=issue_comments)
-    if proof is None and origin.get("path"):
+    if proof is None and not operator_recovery and origin.get("path"):
         _validate_original_moves(registration, records, origin["path"])
     events = None
     if entry.get("coordination_mode", closure.DISPATCHER_MODE) == closure.DISPATCHER_MODE:
-        _, events, _ = closure._dispatcher_inspect(executor, cwd,
+        task, events, lease = closure._dispatcher_inspect(executor, cwd,
             github_issue_task_id(completion.REPOSITORY, authority.governing_issue))
-    _claimant_history(registration=registration, records=records, comments=[*issue_comments, *pr_comments],
-        issue_comments=issue_comments, events=events, origin=origin, origin_at=origin_at,
-        issue=authority.governing_issue, pr_number=int(pr["number"]), branch=branch, entry=entry)
-    if proof is None:
-        return
-    _validate_transfer_move(registration, records)
+    if operator_recovery:
+        if events is None or proof is not None:
+            raise CycleError("operator recovery requires separate dispatcher authority")
+        owner = closure._dispatcher_snapshot_from_task(task, github_issue_task_id(completion.REPOSITORY, authority.governing_issue),
+            repository=completion.REPOSITORY, issue_number=authority.governing_issue, pr_number=int(pr["number"]), lease=lease)
+        closure._validate_claimant_history(events, owner)
+        changed_files = _api_pages(executor, cwd, f"/pulls/{pr['number']}/files")
+        if not changed_files or any(not isinstance(x, dict) or not isinstance(x.get("filename"), str) for x in changed_files):
+            raise CycleError("candidate changed-file readback is unavailable")
+        _operator_lineage(events=events, owner=owner, origin=origin, registration=registration, records=records,
+            comments=[*issue_comments, *pr_comments], issue_comments=issue_comments,
+            issue=authority.governing_issue, pr_number=int(pr["number"]), branch=branch,
+            head=pr["head_sha"], files=sorted(x["filename"] for x in changed_files),
+            entry={**entry, "base_sha": live.get("base", {}).get("sha")})
+        proof = registration.get("operator_registration")
+    else:
+        _claimant_history(registration=registration, records=records, comments=[*issue_comments, *pr_comments],
+            issue_comments=issue_comments, events=events, origin=origin, origin_at=origin_at,
+            issue=authority.governing_issue, pr_number=int(pr["number"]), branch=branch, entry=entry)
+        if proof is None:
+            return
+        _validate_transfer_move(registration, records)
     if not isinstance(proof, dict) or proof.get("state") != "pinned":
         raise CycleError("historical transfer registration is unproved; reconcile through maintenance")
     worktree, source = str(registration["path"]), Path(str(entry["lifecycle_repo"]))

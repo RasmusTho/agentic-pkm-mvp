@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import uuid
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
+from app.dispatcher.events import claim_event_digest, event_history_digest
 from app.dispatcher.models import EventRecord, LeaseRecord, TaskRecord
 from app.dispatcher.store import SqliteStore
 
@@ -311,6 +313,13 @@ def claim(
     expected_lease_id: str | None = None,
     session: str | None = None,
     claim_id: str | None = None,
+    expected_lease_holder: str | None = None,
+    expected_lease_expires_at: str | None = None,
+    expected_claim_event_id: str | None = None,
+    expected_claim_event_digest: str | None = None,
+    expected_history_digest: str | None = None,
+    expected_repo: str | None = None,
+    expected_issue_number: int | None = None,
 ) -> tuple[TaskRecord, LeaseRecord]:
     """Claim a task by creating a lease and updating task state.
 
@@ -320,6 +329,11 @@ def claim(
     2. Create lease
     3. Update task with lease reference and claimed_by
     4. Emit task.claimed event
+
+    Optional exact-predecessor fields compare an observation under the same
+    transaction; they do not establish its provenance, operator authority,
+    worktree ownership, or the absence of an active writer. Callers must use
+    the applicable lifecycle workflow before treating a claim as authority.
 
     Raises ValueError if task doesn't exist, is not ready, or is already claimed.
     """
@@ -332,6 +346,16 @@ def claim(
             raise ValueError("Expected stale lease id must be a non-empty exact identifier")
         if not takeover_stale:
             raise ValueError("Expected stale lease id requires --takeover-stale")
+    observed = (expected_lease_holder, expected_lease_expires_at, expected_claim_event_id,
+                expected_claim_event_digest, expected_history_digest, expected_repo, expected_issue_number)
+    if any(value is not None for value in observed) and (
+        not takeover_stale or expected_lease_id is None
+        or any(not isinstance(value, str) or not value or value.strip() != value for value in observed[:-1])
+        or type(expected_issue_number) is not int or expected_issue_number <= 0
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_claim_event_digest or "")
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_history_digest or "")
+    ):
+        raise ValueError("Exact predecessor comparison requires repo, issue, holder, expiry and claim event")
 
     lease_id = _make_lease_id()
     ttl_seconds = ttl_minutes * 60
@@ -384,6 +408,38 @@ def claim(
                 raise ValueError(
                     f"Cannot claim task {task_id}: lease has expired; retry with --takeover-stale"
                 )
+            if expected_lease_holder is not None:
+                rows = conn.execute(
+                    "SELECT event_id, timestamp, task_id, event_type, actor, lease_id, payload "
+                    "FROM dispatcher_events WHERE task_id = ? ORDER BY timestamp, event_id",
+                    (task_id,),
+                ).fetchall()
+                history = []
+                for row in rows:
+                    projection = dict(row)
+                    try:
+                        projection["payload"] = json.loads(projection["payload"]) if projection["payload"] is not None else None
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"Cannot claim task {task_id}: predecessor event is invalid") from exc
+                    history.append(projection)
+                matching_events = [event for event in history if event["event_type"] == "task.claimed"
+                                   and event["lease_id"] == existing_lease_id]
+                event_projection = None
+                if len(matching_events) == 1:
+                    event_projection = matching_events[0]
+                if (existing_lease["holder"] != expected_lease_holder
+                        or existing_lease["expires_at"] != expected_lease_expires_at
+                        or task_row["claimed_by"] != expected_lease_holder
+                        or task_row["lease_expires_at"] != expected_lease_expires_at
+                        or task_row["repo"] != expected_repo or task_row["issue_number"] != expected_issue_number
+                        or existing_lease["resource"] != f"issue:{expected_issue_number}"
+                        or len(matching_events) != 1
+                        or matching_events[0]["event_id"] != expected_claim_event_id
+                        or matching_events[0]["actor"] != expected_lease_holder
+                        or event_projection is None
+                        or claim_event_digest(event_projection) != expected_claim_event_digest
+                        or event_history_digest(history) != expected_history_digest):
+                    raise ValueError(f"Cannot claim task {task_id}: observed predecessor changed")
             if task_row["status"] not in {"claimed", "ready"}:
                 raise ValueError(
                     f"Cannot claim task {task_id}: not eligible for stale takeover "

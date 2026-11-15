@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -457,6 +457,7 @@ def _locked_lifecycle_authority(
                     f"cleanup target lifecycle authority changed: {reason}"
                 )
             record = records[str(canonical)]
+            assert_operator_registration_pinned(record)
             generation = record.get("generation")
             if (
                 not _valid_generation(generation)
@@ -747,7 +748,7 @@ def _validate_transfer_registration(value: object, *, branch: object, owner: obj
             or candidate.get("branch") != branch or candidate.get("clean") is not True
             or not _valid_authority_timestamp(candidate.get("observed_at"))
             or not value["authority_since"] <= candidate["observed_at"] <= value["registration_read_at"]
-            or not isinstance(candidate.get("base"), str)
+            or candidate.get("base") not in ("main", candidate.get("base_sha"))
             or any(not isinstance(candidate.get(k), str) or not re.fullmatch(r"[0-9a-f]{40,64}", candidate[k])
                    for k in ("base_sha", "head"))
             or not isinstance(candidate.get("changed_files"), list)
@@ -771,9 +772,70 @@ def _validate_transfer_registration(value: object, *, branch: object, owner: obj
             raise WorktreeLifecycleError("worktree transfer pin is invalid")
 
 
-def _validate_authority_record(key: str, record: object) -> dict[str, object]:
+def assert_operator_registration_pinned(record: Mapping[str, Any]) -> None:
+    """Reject incomplete or stale operator registrations, without granting authority.
+
+    Callers must independently validate claim, comments, writer and publication
+    evidence. Ordinary records without an operator registration are unchanged.
+    """
+    if "operator_registration" not in record:
+        return
+    proof = record.get("operator_registration")
+    required = {"state", "issue", "pending_comment_id", "pending_digest", "predecessor",
+                "branch_history_digest", "candidate_readback", "epoch", "authority_since",
+                "registration_read_at", "ack_comment_id", "ack_digest", "ack_at", "verified_through"}
+    if (not isinstance(proof, dict) or set(proof) != required or proof.get("state") != "pinned"
+            or type(proof.get("issue")) is not int or proof["issue"] < 1
+            or not isinstance(proof.get("branch_history_digest"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", proof["branch_history_digest"])
+            or not _valid_generation(proof.get("epoch"))
+            or proof.get("epoch") != record.get("registration_epoch")
+            or not _valid_authority_timestamp(proof.get("authority_since"))
+            or proof.get("authority_since") != record.get("authority_since")
+            or type(proof.get("pending_comment_id")) is not int or proof["pending_comment_id"] < 1
+            or type(proof.get("ack_comment_id")) is not int or proof["ack_comment_id"] < 1
+            or proof["pending_comment_id"] == proof["ack_comment_id"]
+            or any(not isinstance(proof.get(k), str) or not re.fullmatch(r"[0-9a-f]{64}", proof[k])
+                   for k in ("pending_digest", "ack_digest"))
+            or not _valid_authority_timestamp(proof.get("registration_read_at"))
+            or not _valid_authority_timestamp(proof.get("ack_at"))
+            or not _valid_authority_timestamp(proof.get("verified_through"))
+            or not proof["authority_since"] <= proof["registration_read_at"] < proof["ack_at"]
+            or proof["ack_at"] + 1 > proof["verified_through"]
+            or not _valid_authority_timestamp(record.get("expires_at"))
+            or proof["verified_through"] > record["expires_at"]):
+        raise WorktreeLifecycleError("operator registration is unpinned or its epoch changed")
+    predecessor = proof["predecessor"]
+    candidate = proof["candidate_readback"]
+    if (not isinstance(predecessor, dict) or not isinstance(candidate, dict)
+            or any(k in predecessor for k in ("prior_owner", "previous_registration", "transfer_registration", "operator_registration"))
+            or predecessor.get("status") != "active" or predecessor.get("owner") == record.get("owner")
+            or not _valid_authority_timestamp(predecessor.get("expires_at"))
+            or predecessor["expires_at"] > proof["authority_since"]
+            or any(predecessor.get(k) != record.get(k) for k in ("path", "branch", "generation"))
+            or not isinstance(record.get("prior_owner"), dict)
+            or record["prior_owner"].get("released_at") is not None
+            or any(record["prior_owner"].get(k) != predecessor.get(k)
+                   for k in ("path", "branch", "generation", "owner", "registered_at"))
+            or set(candidate) != {"branch", "base", "base_sha", "head", "changed_files", "clean", "observed_at"}
+            or candidate.get("branch") != record.get("branch") or candidate.get("clean") is not True
+            or not isinstance(candidate.get("base"), str)
+            or any(not isinstance(candidate.get(k), str) or not re.fullmatch(r"[0-9a-f]{40,64}", candidate[k])
+                   for k in ("base_sha", "head"))
+            or not isinstance(candidate.get("changed_files"), list)
+            or not all(isinstance(item, str) and item for item in candidate["changed_files"])
+            or sorted(set(candidate["changed_files"])) != candidate["changed_files"]
+            or not _valid_authority_timestamp(candidate.get("observed_at"))
+            or candidate["observed_at"] > proof["registration_read_at"]):
+        raise WorktreeLifecycleError("operator registration evidence is invalid")
+    _validate_authority_record(str(predecessor.get("path")), predecessor)
+
+
+def _validate_authority_record(key: str, record: object, *, allow_prepared_operator: bool = False) -> dict[str, object]:
     if not isinstance(record, dict):
         raise WorktreeLifecycleError("worktree lifecycle record is invalid")
+    if not allow_prepared_operator:
+        assert_operator_registration_pinned(record)
     path = record.get("path")
     branch = record.get("branch")
     owner = record.get("owner")
@@ -869,6 +931,25 @@ def _validate_authority_record(key: str, record: object) -> dict[str, object]:
             raise WorktreeLifecycleError("worktree lifecycle record is invalid")
         prior_branches.add(binding["branch"])
     return dict(record)
+
+
+def _branch_history_digest(records: dict[str, Any], branch: str) -> str:
+    """Fingerprint the exact registry rows for one branch, not an authorization."""
+    if not isinstance(records, dict) or not isinstance(branch, str) or not branch:
+        raise WorktreeLifecycleError("worktree branch history is invalid")
+    relevant: dict[str, Any] = {}
+    for key, record in records.items():
+        if not isinstance(key, str) or not isinstance(record, dict):
+            raise WorktreeLifecycleError("worktree branch history is invalid")
+        if record.get("branch") == branch:
+            _validate_authority_record(key, record)
+            relevant[key] = record
+    try:
+        body = json.dumps(relevant, sort_keys=True, ensure_ascii=False,
+                          separators=(",", ":"), allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise WorktreeLifecycleError("worktree branch history is invalid") from exc
+    return hashlib.sha256(body).hexdigest()
 
 
 def _live_worktree_entries(cwd: Path) -> list[dict[str, str]]:
@@ -1257,9 +1338,13 @@ def _lifecycle_update_snapshot(
         return requested, record
 
 
-def _transfer_comment(comment: object, *, issue: int, pr: int | None) -> tuple[dict[str, Any], float, str]:
+def _transfer_comment(comment: object, *, issue: int, pr: int | None,
+                      receipt_key: str = "lifecycle_handoff_receipt.v1") -> tuple[dict[str, Any], float, str]:
     """Validate a fresh controller-supplied GitHub comment readback."""
     import yaml
+
+    if receipt_key not in {"lifecycle_handoff_receipt.v1", "operator_reconciliation.v1"}:
+        raise WorktreeLifecycleError("handoff comment type is invalid")
 
     class UniqueLoader(yaml.SafeLoader):
         pass
@@ -1291,7 +1376,12 @@ def _transfer_comment(comment: object, *, issue: int, pr: int | None) -> tuple[d
         parsed = yaml.load(match.group(1) if match else body, Loader=UniqueLoader)
     except (ValueError, TypeError, yaml.YAMLError, RecursionError) as exc:
         raise WorktreeLifecycleError("handoff comment is malformed") from exc
-    receipt = parsed.get("lifecycle_handoff_receipt.v1") if isinstance(parsed, dict) else None
+    authority_keys = {"lifecycle_handoff_receipt.v1", "operator_reconciliation.v1"}
+    if isinstance(parsed, dict) and len(authority_keys.intersection(parsed)) > 1:
+        raise WorktreeLifecycleError("handoff comment has mixed authority")
+    if receipt_key == "operator_reconciliation.v1" and (not isinstance(parsed, dict) or set(parsed) != {receipt_key}):
+        raise WorktreeLifecycleError("operator reconciliation comment has mixed authority")
+    receipt = parsed.get(receipt_key) if isinstance(parsed, dict) else None
     if not isinstance(receipt, dict):
         raise WorktreeLifecycleError("handoff comment is malformed")
     return receipt, at, hashlib.sha256(body.encode()).hexdigest()
@@ -1369,6 +1459,8 @@ def prepare_transfer_registration(cwd: Path, *, worktree: Path, owner: str, issu
                         statuses={"active"}, error="active successor registration is required")
     canonical, branch = _worktree_identity(cwd, worktree)
     generation = _worktree_generation(cwd, canonical, create=False)
+    if "operator_registration" in snapshot:
+        raise WorktreeLifecycleError("operator registration is not a predecessor handoff")
     predecessor = snapshot.get("prior_owner")
     remote_dispatcher = receipt.get("predecessor_dispatcher")
     if remote_dispatcher is not None:
@@ -1451,6 +1543,8 @@ def pin_transfer_registration(cwd: Path, *, worktree: Path, owner: str, issue: i
         raise WorktreeLifecycleError("transfer requires the repository's existing lifecycle registry")
     requested, snapshot = _lifecycle_update_snapshot(path, worktree=worktree, owner=owner,
                         statuses={"active"}, error="active successor registration is required")
+    if "operator_registration" in snapshot:
+        raise WorktreeLifecycleError("operator registration is not a predecessor handoff")
     proof = snapshot.get("transfer_registration")
     if not isinstance(proof, dict) or proof.get("state") not in {"prepared", "pinned"}:
         raise WorktreeLifecycleError("prepared transfer is unavailable")
@@ -1497,6 +1591,146 @@ def pin_transfer_registration(cwd: Path, *, worktree: Path, owner: str, issue: i
         return dict(pinned)
 
 
+def _operator_candidate(cwd: Path, *, worktree: Path, receipt: dict[str, Any],
+                        base_sha: str, observed_at: float, verify_base_ref: bool = True) -> dict[str, Any]:
+    # Do not let status hide assume-unchanged or skip-worktree entries.
+    try:
+        flags = git_hygiene.run_git(["-C", str(worktree), "ls-files", "-v", "-z"], cwd)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        raise WorktreeLifecycleError("operator candidate index readback unavailable") from exc
+    if any(not entry.startswith("H ") for entry in flags.split("\0") if entry):
+        raise WorktreeLifecycleError("operator candidate has hidden index flags")
+    return _transfer_candidate(cwd, worktree=worktree, receipt=receipt, base_sha=base_sha,
+                               observed_at=observed_at, verify_base_ref=verify_base_ref)
+
+
+def prepare_operator_registration(cwd: Path, *, worktree: Path, owner: str, issue: int,
+                                  pending_comment: dict[str, Any], base_sha: str,
+                                  workspace_root: Path, expected_branch_history_digest: str,
+                                  pr: int | None = None, now: float | None = None,
+                                  ttl_seconds: int = DEFAULT_TTL_SECONDS) -> dict[str, Any]:
+    """Atomically register an unacknowledged successor against observed history.
+
+    This records comparisons only. The host must establish authority, claim and
+    writer/effect fences independently; consumers must reject prepared records.
+    """
+    receipt, pending_at, digest = _transfer_comment(
+        pending_comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
+    _screen_transfer_workspace(cwd, worktree, workspace_root)
+    timestamp = time.time() if now is None else now
+    canonical, branch = _worktree_identity(cwd, worktree)
+    generation = _worktree_generation(cwd, canonical, create=False)
+    predecessor = receipt.get("predecessor_registration")
+    if (canonical != _canonical(worktree) or type(issue) is not int or issue < 1
+            or receipt.get("issue") != issue or receipt.get("branch") != branch
+            or receipt.get("writable_worktree") != str(canonical)
+            or not isinstance(receipt.get("successor"), dict)
+            or receipt["successor"].get("session") != owner or not owner.strip()
+            or receipt.get("successor_acknowledgment") is not None
+            or receipt.get("branch_history_digest") != expected_branch_history_digest
+            or not isinstance(predecessor, dict) or predecessor.get("path") != str(canonical)
+            or predecessor.get("branch") != branch or predecessor.get("generation") != generation
+            or predecessor.get("owner") == owner
+            or not _valid_authority_timestamp(predecessor.get("expires_at"))
+            or predecessor["expires_at"] > pending_at or pending_at + 1 > timestamp):
+        raise WorktreeLifecycleError("operator decision does not bind the predecessor and successor")
+    observed = receipt.get("candidate")
+    registration = receipt.get("registration")
+    try:
+        predecessor_digest = hashlib.sha256(json.dumps(predecessor, sort_keys=True).encode()).hexdigest()
+        tree = git_hygiene.run_git(["-C", str(canonical), "rev-parse", "--verify", "HEAD^{tree}"], cwd)
+    except (OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError) as exc:
+        raise WorktreeLifecycleError("operator predecessor or candidate is invalid") from exc
+    if (not isinstance(observed, dict) or not isinstance(registration, dict)
+            or observed.get("path") != str(canonical) or observed.get("branch") != branch
+            or observed.get("generation") != generation or observed.get("head") != receipt.get("unpublished_candidate_head")
+            or observed.get("tree") != tree or observed.get("status_digest") != hashlib.sha256(b"").hexdigest()
+            or registration.get("history_digest") != predecessor_digest
+            or any(registration.get(k) != predecessor.get(k) for k in ("path", "branch", "generation", "owner"))):
+        raise WorktreeLifecycleError("operator observation differs from predecessor or candidate")
+    candidate = _operator_candidate(cwd, worktree=canonical, receipt=receipt, base_sha=base_sha,
+                                    observed_at=timestamp)
+    pending = {"issue": issue, "pending_comment_id": pending_comment["id"], "pending_digest": digest,
+               "predecessor": predecessor, "branch_history_digest": expected_branch_history_digest,
+               "candidate_readback": candidate}
+    record = register_worktree(cwd, worktree=canonical, owner=owner, ttl_seconds=ttl_seconds,
+                               now=now, expected_branch_history_digest=expected_branch_history_digest,
+                               _operator_pending=pending)
+    proof = record["operator_registration"]
+    return {"successor_registration": {"path": str(canonical), "branch": branch, "owner": owner,
+            "generation": generation, "epoch": proof["epoch"], "observed_at": proof["registration_read_at"]},
+            "candidate_readback": candidate}
+
+
+def pin_operator_registration(cwd: Path, *, worktree: Path, owner: str, issue: int,
+                              pending_comment: dict[str, Any], ack_comment: dict[str, Any],
+                              workspace_root: Path, pr: int | None = None,
+                              now: float | None = None) -> dict[str, Any]:
+    """Pin a separate authenticated operator ACK in the same successor epoch."""
+    pending, pending_at, pending_digest = _transfer_comment(
+        pending_comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
+    receipt, ack_at, ack_digest = _transfer_comment(
+        ack_comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
+    _screen_transfer_workspace(cwd, worktree, workspace_root)
+    registry = _canonical(_default_registry_path(cwd))
+    requested, snapshot = _lifecycle_update_snapshot(registry, worktree=worktree, owner=owner,
+                         statuses={"active"}, error="active successor registration is required")
+    proof = snapshot.get("operator_registration")
+    if (not isinstance(proof, dict) or proof.get("state") not in {"prepared", "pinned"}
+            or not isinstance(proof.get("predecessor"), dict)
+            or not isinstance(proof.get("branch_history_digest"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", proof["branch_history_digest"])
+            or not _valid_generation(proof.get("epoch"))
+            or not _valid_authority_timestamp(proof.get("registration_read_at"))
+            or not _valid_authority_timestamp(proof.get("authority_since"))):
+        raise WorktreeLifecycleError("operator registration is unavailable")
+    candidate = proof.get("candidate_readback")
+    if (not isinstance(candidate, dict) or not isinstance(candidate.get("base_sha"), str)
+            or not _valid_authority_timestamp(candidate.get("observed_at"))):
+        raise WorktreeLifecycleError("operator candidate readback is invalid")
+    expected = {"path": str(requested), "branch": snapshot.get("branch"), "owner": owner,
+                "generation": snapshot.get("generation"), "epoch": proof.get("epoch"),
+                "observed_at": proof.get("registration_read_at")}
+    ack = receipt.get("successor_acknowledgment")
+    if (proof.get("issue") != issue or proof.get("pending_comment_id") != pending_comment["id"]
+            or proof.get("pending_digest") != pending_digest or ack_comment["id"] == pending_comment["id"]
+            or pending_at + 1 > ack_at or pending != {k: v for k, v in receipt.items() if k != "successor_acknowledgment"}
+            or not isinstance(ack, dict) or ack.get("successor_registration") != expected
+            or ack.get("candidate_readback") != candidate
+            or ack_at <= max(proof["registration_read_at"], candidate["observed_at"])):
+        raise WorktreeLifecycleError("operator acknowledgment differs from prepared readbacks")
+    canonical, branch = _worktree_identity(cwd, worktree)
+    generation = _worktree_generation(cwd, canonical, create=False)
+    current_candidate = _operator_candidate(cwd, worktree=canonical, receipt=pending,
+                         base_sha=candidate["base_sha"], observed_at=candidate["observed_at"], verify_base_ref=False)
+    if canonical != requested or current_candidate != candidate:
+        raise WorktreeLifecycleError("operator candidate changed before pin")
+    with _locked_registry(registry) as payload:
+        timestamp = time.time() if now is None else now
+        record = payload["worktrees"].get(str(canonical))
+        prior_history = dict(payload["worktrees"])
+        prior_history[str(canonical)] = proof["predecessor"]
+        if (record != snapshot or _branch_history_digest(prior_history, branch) != proof["branch_history_digest"]
+                or not isinstance(record, dict) or record.get("status") != "active"
+                or record.get("registration_epoch") != proof["epoch"] or record.get("generation") != generation
+                or record.get("branch") != branch or record.get("authority_since") != proof["authority_since"]
+                or not _valid_authority_timestamp(record.get("expires_at"))
+                or not _valid_authority_timestamp(record.get("heartbeat_at")) or timestamp < record["heartbeat_at"]
+                or timestamp >= record["expires_at"] or ack_at + 1 > timestamp
+                or ack_at + 1 > record["expires_at"]):
+            raise WorktreeLifecycleError("operator successor epoch changed before pin")
+        if proof["state"] == "pinned":
+            if (proof.get("ack_comment_id") != ack_comment["id"] or proof.get("ack_digest") != ack_digest
+                    or proof.get("ack_at") != ack_at):
+                raise WorktreeLifecycleError("operator pin cannot be replaced")
+            return dict(proof)
+        pinned = {**proof, "state": "pinned", "ack_comment_id": ack_comment["id"],
+                  "ack_digest": ack_digest, "ack_at": ack_at, "verified_through": timestamp}
+        record["operator_registration"] = pinned
+        _validate_authority_record(str(canonical), record)
+        return dict(pinned)
+
+
 def register_worktree(
     cwd: Path,
     *,
@@ -1505,9 +1739,15 @@ def register_worktree(
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     registry_path: Path | None = None,
     now: float | None = None,
+    expected_branch_history_digest: str | None = None,
+    _operator_pending: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Register a worktree; an optional exact comparison does not grant authority."""
     if not owner.strip() or ttl_seconds < 1:
         raise WorktreeLifecycleError("owner and positive ttl are required")
+    if (expected_branch_history_digest is not None
+            and not re.fullmatch(r"[0-9a-f]{64}", expected_branch_history_digest)):
+        raise WorktreeLifecycleError("expected branch history digest is invalid")
     timestamp = time.time() if now is None else now
     path = _canonical(registry_path or _default_registry_path(cwd))
     requested = _canonical(worktree)
@@ -1537,6 +1777,9 @@ def register_worktree(
         # the actual registry write, not at the earlier optimistic snapshot.
         timestamp = time.time() if now is None else now
         worktrees = payload["worktrees"]
+        if (expected_branch_history_digest is not None
+                and _branch_history_digest(worktrees, branch) != expected_branch_history_digest):
+            raise WorktreeLifecycleError("observed branch history changed before registration")
         _assert_no_missing_preserved_path_alias(worktrees, canonical)
         existing = worktrees.get(str(canonical))
         current_record = dict(existing) if isinstance(existing, dict) else None
@@ -1573,12 +1816,15 @@ def register_worktree(
         history = []
         for key, row in worktrees.items():
             if isinstance(row, dict) and row.get("branch") == branch:
-                _validate_authority_record(key, row)
+                _validate_authority_record(key, row, allow_prepared_operator=True)
                 if row.get("status") in ("active", "released", "complete", "removal_pending", "removed", "missing_preserved"):
                     history.append(row)
         ended = [row for row in history if row["expires_at"] <= timestamp]
         ended.sort(key=lambda row: row["expires_at"], reverse=True)
         predecessor = None if continuous else (ended[0] if ended else None)
+        if (not continuous and isinstance(predecessor, dict)
+                and "operator_registration" in predecessor):
+            raise WorktreeLifecycleError("operator registration requires lineage reconciliation")
         same_owner = (current_record is not None and same_identity and (predecessor is None or
                       (predecessor.get("path") == str(canonical)
                        and predecessor.get("registered_at") == current_record.get("registered_at"))))
@@ -1606,6 +1852,8 @@ def register_worktree(
                 record["previous_registration"] = current_record["previous_registration"]
             if "transfer_registration" in current_record:
                 record["transfer_registration"] = current_record["transfer_registration"]
+            if "operator_registration" in current_record:
+                record["operator_registration"] = current_record["operator_registration"]
         elif predecessor is not None and predecessor.get("owner") == owner:
             if "prior_owner" in predecessor:
                 record["prior_owner"] = predecessor["prior_owner"]
@@ -1648,7 +1896,19 @@ def register_worktree(
             record["previous_registration"]["released_at"] = predecessor_snapshot["released_at"]
         if prior_bindings:
             record["prior_bindings"] = prior_bindings
-        _validate_authority_record(str(canonical), record)
+        if _operator_pending is not None:
+            if (expected_branch_history_digest is None or continuous or same_owner
+                    or predecessor != current_record or predecessor != _operator_pending.get("predecessor")
+                    or predecessor is None or predecessor.get("status") != "active"
+                    or predecessor.get("expires_at", timestamp + 1) > timestamp
+                    or predecessor.get("generation") != generation
+                    or any(k in predecessor for k in ("prior_owner", "previous_registration", "transfer_registration", "operator_registration"))):
+                raise WorktreeLifecycleError("operator predecessor changed or is ineligible")
+            record["operator_registration"] = {
+                **_operator_pending, "state": "prepared", "epoch": record["registration_epoch"],
+                "authority_since": record["authority_since"], "registration_read_at": timestamp,
+            }
+        _validate_authority_record(str(canonical), record, allow_prepared_operator=_operator_pending is not None)
         worktrees[str(canonical)] = record
         return dict(record)
 
@@ -1661,6 +1921,7 @@ def heartbeat_worktree(
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     registry_path: Path | None = None,
     now: float | None = None,
+    allow_prepared_operator: bool = False,
 ) -> dict[str, Any]:
     if ttl_seconds < 1:
         raise WorktreeLifecycleError("positive ttl is required")
@@ -1698,6 +1959,16 @@ def heartbeat_worktree(
         if (not _valid_authority_timestamp(record.get("heartbeat_at"))
                 or timestamp < record["heartbeat_at"]):
             raise WorktreeLifecycleError("worktree lifecycle clock moved backwards")
+        if not (allow_prepared_operator and isinstance(record.get("operator_registration"), dict)
+                and record["operator_registration"].get("state") == "prepared"):
+            assert_operator_registration_pinned(record)
+        if ("operator_registration" in record and
+                (not _valid_authority_timestamp(record.get("expires_at"))
+                 or timestamp >= record["expires_at"]
+                 or not isinstance(record["operator_registration"], dict)
+                 or record["operator_registration"].get("epoch") != record.get("registration_epoch")
+                 or record["operator_registration"].get("authority_since") != record.get("authority_since"))):
+            raise WorktreeLifecycleError("operator registration epoch cannot be revived")
         if (not _valid_authority_timestamp(record.get("expires_at"))
                 or timestamp >= record["expires_at"]
                 or not _valid_authority_timestamp(record.get("authority_since"))
@@ -1750,6 +2021,7 @@ def _finish_worktree(
             or record.get("status") not in {"active", "released", "complete"}
         ):
             raise WorktreeLifecycleError("matching lifecycle registration is required")
+        assert_operator_registration_pinned(record)
         if recorded_generation is not None and recorded_generation != generation:
             raise WorktreeLifecycleError("matching lifecycle registration is required")
         if (not _valid_authority_timestamp(record.get("heartbeat_at"))

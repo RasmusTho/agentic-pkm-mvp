@@ -562,6 +562,7 @@ remain bound to the current head. The controller never runs host Git against a m
 Only a comment from the existing authenticated GitHub identity with OWNER, MEMBER or COLLABORATOR
 association is considered.
 
+
 The reviewer uses the public final response for its exact finished conversation. One bounded JSON
 report may be enclosed between `<BEGIN_PR_CYCLE_REPORT>` and `<END_PR_CYCLE_REPORT>` after plain
 public closeout text. The controller binds the report to the native execution observation, persists
@@ -1560,6 +1561,28 @@ Enforcement surfaces:
 - Consumption: `issue-to-code` gates on `Verify:` presence and reuses meaningful behavioral coverage and performs non-behavioral writeback.
 
 ## Multi-Agent Workspace Guardrails
+
+For an explicitly authorized local legacy task whose predecessor claim has no recorded Builder
+session, the trusted host operator may use the separate operator reconciliation path. First record
+the exact user mandate, successor agent and actual current Builder session, predecessor claim and
+registry history, candidate, writer/delegation and restart observations, attempted effects and
+current PR in an immutable `operator_reconciliation.v1` Issue comment under the authenticated
+owner account. The comment identifies the accountable operator's observations; it does not claim
+the old owner signed or released anything, or that a human personally authored the account comment.
+Name the sources used for execution, delegation, restart, attempted effects and GitHub readback.
+An active or genuinely uncertain competing writer, automatic restart or relevant external effect
+must remain unknown and blocks the corresponding conflicting work.
+
+For an eligible clean candidate, use the existing pickup wrapper with `--takeover-stale`, the
+explicit target worktree, `--operator-comment-id`, `--operator-pr` and
+`--operator-workspace-root`. It compares the exact predecessor and branch history, claims as the
+new agent/session, registers a prepared successor, and pins a separate account-read-back ACK. A
+prepared registration is not worker or publication authority. If a response is lost, use the same
+wrapper and arguments with `--operator-resume`: it reads the exact new claim and, when an ACK may
+have been sent, searches for one matching existing ACK instead of posting another. Missing or
+ambiguous readback remains unresolved; do not release another owner's claim or retry a write blindly.
+The original candidate and claim remain historical provenance. A reviewed descendant can proceed
+only through the ordinary current-head scope, review, CI, native or executor merge and closure gates.
 
 - Preflight before claim/integration:
   - `scripts/agent_workspace_preflight.sh --expected-branch "$(git branch --show-current)" --expected-worktree "$(git rev-parse --show-toplevel)"`
