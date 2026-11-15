@@ -6,6 +6,7 @@ from app.builderops import epic_workspace as ew
 from app.builderops import openhands_pr_cycle as cycle
 from tests.builderops.test_epic_workspace_lifecycle import _git
 from tests.builderops.test_openhands_candidate_commit import fixture
+from tests.builderops.openhands_peer_test_support import registered_peer
 
 
 def bind(data):
@@ -260,6 +261,7 @@ def test_unknown_projected_publication_does_not_block_actual_peer_review(tmp_pat
     from app.builderops import publication
     from tests.builderops.test_epic_workspace_openhands import FakeAgentServer
 
+    real_lifecycle_owner = cycle._lifecycle_owner
     data, fetch, identity = advance_fixture(tmp_path, capsys, monkeypatch)
     layout, _, publisher, engine, pr, entry, _, _, _ = data
     assert cycle.advance(layout, [entry], fetch=fetch)['results'][0]['action'] == 'awaiting-candidate-review'
@@ -356,7 +358,7 @@ def test_unknown_projected_publication_does_not_block_actual_peer_review(tmp_pat
             return super().run(argv, cwd=cwd, input_text=input_text)
     candidate_entry = {**entry, 'repair_publication': {'paths': ['README.md', 'remove.py', 'new.py', 'link.py'],
                         'evidence_file': str(tmp_path / 'missing-evidence.json')}}
-    peer_entry = {**entry, 'number': 9, 'worker': 'peer'}
+    peer_entry = registered_peer(tmp_path, monkeypatch, layout, entry, real_lifecycle_owner)
     admission = tmp_path / 'admissions.json'
     admission.write_text(json.dumps({'admissions': [peer_entry, candidate_entry]}))
     result = cycle.advance(layout, admission, fetch=peer_fetch, http=server, publisher_executor=Network())

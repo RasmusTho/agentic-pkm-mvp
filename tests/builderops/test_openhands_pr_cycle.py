@@ -1404,10 +1404,12 @@ def _prepare_and_pin(f, record, *, receipt_at, ack_at, first_id=41):
     return comments
 
 
-def _native_authority_fixture(tmp_path, monkeypatch):
+def _native_authority_fixture(tmp_path, monkeypatch, *, source_name=None):
     """Real lifecycle registry and Git worktree; GitHub and dispatcher are fake ports."""
     layout, config, _ = setup(tmp_path / "workers", monkeypatch)
     source = cycle.Path(_seed_repo(tmp_path))
+    if source_name is not None:
+        source = source.rename(tmp_path / source_name)
     worktree = tmp_path / "owner-checkout"
     cycle.subprocess.run(["git", "-C", str(source), "worktree", "add", "-b", "codex/example", str(worktree)],
                          check=True, capture_output=True, text=True)

@@ -5,6 +5,8 @@ action:wait-dependency) and ``Closes #6619`` with an authenticated label-only
 pickup on #6619. Real Git worktree and lifecycle registry; GitHub is a fake port.
 """
 import json
+import os
+import subprocess
 import time
 
 import pytest
@@ -35,7 +37,33 @@ def _body(path, *, issue=6619, closes="Closes #6619", comment_id=PICKUP_ID, bran
 
 
 def _scope_fixture(tmp_path, monkeypatch):
-    f = _native_authority_fixture(tmp_path, monkeypatch)
+    # This fixture owns its Git configuration. Do not inherit the suite's
+    # XDG or Git overrides when exercising registered-owner refusals.
+    monkeypatch.delenv('XDG_CONFIG_HOME', raising=False)
+    for key in list(os.environ):
+        if key.startswith('GIT_') and key != 'GIT_PAGER':
+            monkeypatch.delenv(key, raising=False)
+    f = _native_authority_fixture(tmp_path, monkeypatch, source_name='agentic-pkm-mvp')
+    (tmp_path / '.gitconfig').write_text('[user]\n name = Fixture\n')
+    config = cycle.legacy_git_config
+    monkeypatch.setattr(config, '_qualified_home', lambda: tmp_path)
+    monkeypatch.setattr(config, 'QUALIFIED_COMMON', f['source'] / '.git')
+    real_read, real_run = config._read, subprocess.run
+
+    def fixture_read(path, **kwargs):
+        if path == cycle.Path('/etc/gitconfig'):
+            return None
+        return real_read(path, **kwargs)
+
+    def fixture_run(argv, **kwargs):
+        if argv == ['/usr/bin/git', '--version']:
+            return subprocess.CompletedProcess(argv, 0, b'git version 2.50.1 (Apple Git-fixture)\n', b'')
+        if argv == ['/usr/bin/git', 'config', '--system', '--no-includes', '--list']:
+            return subprocess.CompletedProcess(argv, 128, b'', b'/etc/gitconfig: No such file or directory')
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(config, '_read', fixture_read)
+    monkeypatch.setattr(config.subprocess, 'run', fixture_run)
     now = int(time.time())
     worktree = str(f["worktree"])
     cycle.agent_worktree.register_worktree(f["source"], worktree=worktree, owner=SESSION,
@@ -89,6 +117,22 @@ def _scope_fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(cycle.closure, "_dispatcher_inspect", dispatcher)
     f.update(now=now, issues=issues, comments=comments, closing=closing, calls=calls, worktree_path=worktree)
     return f
+
+
+def test_scope_fixture_isolates_xdg_and_preserves_host_config_guard(tmp_path, monkeypatch):
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'inherited-xdg'))
+    monkeypatch.setenv('GIT_CONFIG_COUNT', '1')
+    _scope_fixture(tmp_path, monkeypatch)
+    assert 'XDG_CONFIG_HOME' not in os.environ
+    assert 'GIT_CONFIG_COUNT' not in os.environ
+    cycle.legacy_git_config.check_host_config()
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'inherited-xdg'))
+    with pytest.raises(cycle.legacy_git_config.ConfigError, match='environment is unsupported'):
+        cycle.legacy_git_config.check_host_config()
+    monkeypatch.delenv('XDG_CONFIG_HOME')
+    monkeypatch.setenv('GIT_CONFIG_COUNT', '1')
+    with pytest.raises(cycle.legacy_git_config.ConfigError, match='inherited Git environment'):
+        cycle.legacy_git_config.check_host_config()
 
 
 def _review_shape(f):
@@ -201,12 +245,23 @@ def test_child_pickup_requires_current_registered_owner(tmp_path, monkeypatch, d
     elif defect == "wrong_session":
         entry["session"] = "session-rival"
     elif defect == "wrong_worktree":
-        entry["owner_worktree"] = str(tmp_path / "other")
+        other = tmp_path / "other"
+        subprocess.run(['git', '-C', str(f['source']), 'worktree', 'add', '-b', 'fixture/other', str(other)],
+                       check=True, capture_output=True, text=True)
+        entry["owner_worktree"] = str(other)
     else:
         cycle.agent_worktree.heartbeat_worktree(f["source"], worktree=f["worktree_path"], owner=SESSION,
                                                now=f["now"] - 500, ttl_seconds=60)
-    with pytest.raises(cycle.CycleError, match=match):
-        cycle._add_transfer_review_context(f["layout"], entry, _review_shape(f))
+    if defect == "wrong_worktree":
+        # The real lifecycle fence refuses to probe the registered branch's
+        # different checkout before reaching the registered-owner check.
+        with pytest.raises(cycle.CycleError, match='^host worktree lifecycle authority is unavailable$') as caught:
+            cycle._add_transfer_review_context(f["layout"], entry, _review_shape(f))
+        assert type(caught.value.__cause__) is cycle.agent_worktree.WorktreeLifecycleError
+        assert str(caught.value.__cause__) == 'lifecycle authority contains an unqualified checkout'
+    else:
+        with pytest.raises(cycle.CycleError, match=match):
+            cycle._add_transfer_review_context(f["layout"], entry, _review_shape(f))
     with pytest.raises(cycle.CycleError):
         cycle.native_authority(f["layout"], f["pr"], entry)
 

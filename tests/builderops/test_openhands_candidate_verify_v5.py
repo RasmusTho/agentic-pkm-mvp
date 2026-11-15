@@ -6,6 +6,8 @@ Clear only their inherited pytest options; outer CI timeouts and finite child de
 
 import json
 import os
+import shutil
+import stat
 import subprocess
 import uuid
 import venv as venv_module
@@ -81,7 +83,20 @@ def _private_test_venv(path):
     # The real controller guard requires private fixture output regardless of CI's umask.
     previous_umask = os.umask(0o077)
     try:
+        path.mkdir(mode=0o700)
         venv_module.EnvBuilder(system_site_packages=True, symlinks=False).create(path)
+        # Copy operations can preserve the source mode despite the umask. Only
+        # touch newly created, owned entries, never a link or a shared inode.
+        for root, dirs, files in os.walk(path, followlinks=False):
+            for name in ['.', *dirs, *files]:
+                item = cycle.Path(root) / name
+                info = item.lstat()
+                if stat.S_ISLNK(info.st_mode):
+                    continue
+                if info.st_uid != os.geteuid() or not (stat.S_ISDIR(info.st_mode) or
+                        (stat.S_ISREG(info.st_mode) and info.st_nlink == 1)):
+                    raise RuntimeError('unexpected shared or unowned venv fixture entry')
+                item.chmod(stat.S_IMODE(info.st_mode) & 0o700)
     finally:
         os.umask(previous_umask)
 
@@ -154,6 +169,31 @@ def test_private_test_venv_restores_umask_after_creation_failure(tmp_path, monke
         assert os.umask(0o002) == 0o002
     finally:
         os.umask(previous_umask)
+
+
+def test_private_test_venv_scrubs_copy_preserved_modes(tmp_path, monkeypatch):
+    source = tmp_path / 'permissive-source'
+    source.write_text('fixture copy\n')
+    source.chmod(0o664)
+    setup_python = venv_module.EnvBuilder.setup_python
+
+    def copy_permissive_source(self, context):
+        setup_python(self, context)
+        copied = cycle.Path(context.bin_path) / 'copied-fixture'
+        shutil.copy2(source, copied)
+        assert copied.stat().st_mode & 0o777 == 0o664
+
+    monkeypatch.setattr(venv_module.EnvBuilder, 'setup_python', copy_permissive_source)
+    private = tmp_path / 'private-venv'
+    _private_test_venv(private)
+    assert source.stat().st_mode & 0o777 == 0o664
+    for root, dirs, files in os.walk(private, followlinks=False):
+        for name in ['.', *dirs, *files]:
+            info = (cycle.Path(root) / name).lstat()
+            assert info.st_uid == os.geteuid()
+            if not stat.S_ISLNK(info.st_mode):
+                assert info.st_mode & 0o077 == 0
+    assert cycle._test_venv_source(ew.Layout(tmp_path / 'workers', 6615), str(private)) == private
 
 
 def verify_fixture(tmp_path, capsys, monkeypatch, *, fail=False, lose=False, lose_output=False, repaired=False,

@@ -10,6 +10,7 @@ from app.builderops import epic_workspace as ew
 from app.builderops import openhands_pr_cycle as cycle
 from tests.builderops.test_epic_workspace_openhands import FakeAgentServer
 from tests.builderops.test_openhands_candidate_wiring import advance_fixture
+from tests.builderops.openhands_peer_test_support import registered_peer
 
 
 def candidate_fixture(tmp_path, capsys, monkeypatch, *, test_source="def test_example(): pass\n"):
@@ -150,6 +151,7 @@ def test_interrupted_git_materialization_replays_same_intent_and_checkout(tmp_pa
 
 
 def test_source_drift_stops_actual_reviewer_and_preserves_original_work(tmp_path, capsys, monkeypatch):
+    real_lifecycle_owner = cycle._lifecycle_owner
     data, fetch, identity, server, codex_home = candidate_fixture(tmp_path, capsys, monkeypatch)
     layout, author, _, engine, _, entry, _, _, _ = data
     assert cycle.advance(layout, [entry], fetch=fetch, http=server, codex_home=codex_home)["results"][0]["action"] == "awaiting-candidate-review"
@@ -158,6 +160,7 @@ def test_source_drift_stops_actual_reviewer_and_preserves_original_work(tmp_path
     worker = dispatched["results"][0]["worker"]
     assert engine.containers[worker] == "running"
     old = entry["head_sha"]
+    peer_entry = registered_peer(tmp_path, monkeypatch, layout, entry, real_lifecycle_owner)
     ew.create_worker(layout, "peer", issue=6619, branch="b/peer", next_action="review", runner=engine)
     ew.start_openhands_worker(layout, "peer", runner=engine, http=server)
     original_pr, original_issue = cycle.closure._pr, cycle.closure._issue
@@ -189,7 +192,7 @@ def test_source_drift_stops_actual_reviewer_and_preserves_original_work(tmp_path
         return 200, json.dumps(value).encode()
 
     (author / "private.cache").write_text("new retained work\n")
-    held = cycle.advance(layout, [{**entry, "number": 9, "worker": "peer"}, entry],
+    held = cycle.advance(layout, [peer_entry, entry],
                          fetch=peer_fetch, http=server, codex_home=codex_home)
     assert held["results"][0]["action"] == "independent-review", held
     assert held["results"][1]["action"] == "wait", held
