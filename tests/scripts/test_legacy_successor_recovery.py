@@ -24,6 +24,12 @@ from app.dispatcher.models import EventRecord
 from app.dispatcher import store as dispatcher_store
 from app.dispatcher.store import SqliteStore
 from scripts import agent_worktree
+from tests.builderops import test_legacy_run_fence_6561 as sources_6561
+
+
+@pytest.fixture
+def codex_6561_source(tmp_path, monkeypatch):
+    return sources_6561.source_bound.__wrapped__(tmp_path, monkeypatch)
 
 _real_operator_dispatcher_paths = recovery._operator_dispatcher_paths
 
@@ -98,6 +104,7 @@ def operator_case(tmp_path, monkeypatch, request):
         patch.setattr(leases, "_utc_now", lambda: old_time)
         _, old_lease = leases.claim(store, task_id, old_agent)
         minutes_list = ([225, 218, 211, 204, 197, 190, 183, 176, 169, 162, 155] if heartbeat_count == 11 else
+                        [225, 210, 195, 180, 165, 150, 135, 120, 105] if heartbeat_count == 9 else
                         [225, 210, 195, 180, 165, 150] if heartbeat_count == 6 else
                         [195, 150] if heartbeat_count == 2 else [110, 100])
         for position, minutes in enumerate(minutes_list):
@@ -105,7 +112,7 @@ def operator_case(tmp_path, monkeypatch, request):
             heartbeat_at = heartbeat_time.isoformat(timespec="microseconds")
             patch.setattr(leases, "_utc_now", lambda: heartbeat_at)
             leases.heartbeat(store, task_id, old_agent)
-            if heartbeat_count == 11 and position == 5:
+            if (heartbeat_count == 11 and position == 5) or (heartbeat_count == 9 and position == 1):
                 updated_at = (heartbeat_time + timedelta(minutes=3)).isoformat(timespec="microseconds")
                 task = store.get_task(task_id)
                 task.linked_pr = str(pr_number)
@@ -204,7 +211,7 @@ def operator_case(tmp_path, monkeypatch, request):
     return {"run_state_root": run_state_root, "cwd": checkout, "issue": issue, "pr": pr_number, "worktree": checkout, "agent": "new-agent",
             "session": "new-session", "comment_id": 1, "workspace_root": tmp_path / "model", "store": store,
             "old_lease": old_lease, "comments": comments, "old_record": old_record, "receipt": receipt, "pr_data": pr,
-            "issue_data": issue_data}
+            "issue_data": issue_data, "github_read": github_read}
 
 
 def _args(case):
@@ -2636,3 +2643,316 @@ def test_6560_late_ack_during_intent_read_prevents_intent(operator_case, tmp_pat
     row = agent_worktree._locked_lifecycle_snapshot(agent_worktree._default_registry_path(case['cwd']))[str(case['worktree'])]
     assert row['operator_registration']['state'] == 'prepared'
     assert 'ack_intent' not in row['operator_registration'] and 2 not in case['comments']
+
+
+def _bind_6561_sources(case, source_bound, monkeypatch):
+    from app.builderops import legacy_codex_6561_guard as guard
+    monkeypatch.setattr(guard, "WORKTREE", str(case["worktree"]))
+    monkeypatch.setattr(guard, "BRANCH", "codex/example")
+    monkeypatch.setattr(guard, "GENERATION", case["receipt"]["candidate"]["generation"])
+    monkeypatch.setattr(guard, "OWNER", case["old_record"]["owner"])
+    monkeypatch.setattr(guard, "HOLDER", case["receipt"]["predecessor"]["holder"])
+    monkeypatch.setattr(guard, "LEASE", case["old_lease"].lease_id)
+    monkeypatch.setattr(guard, "HEAD", case["pr_data"]["head"]["sha"])
+    monkeypatch.setattr(guard, "BODY", case["receipt"]["publication"]["body_sha256"])
+    for row in source_bound["child"]:
+        item = row["payload"].get("item", {})
+        if item.get("id") in guard.PUBLICATION_COMMANDS:
+            item["aggregated_output"] = json.dumps({"pr": 6562, "head": guard.HEAD,
+                "body_sha256": guard.BODY, "state": "open"}) + "\ncomment link"
+    source_bound["child_path"].write_bytes(sources_6561._jsonl(source_bound["child"]))
+    evidence = copy.deepcopy(source_bound["receipt"]["writer"]["codex_custody"])
+    evidence["child_sha256"] = hashlib.sha256(source_bound["child_path"].read_bytes()).hexdigest()
+    case["receipt"]["writer"].update({"boot": "2026-11-14T21:48:30Z",
+        "last_activity": "2026-11-15T08:03:36.536Z", "codex_custody": evidence})
+    case["comments"][1] = _comment(case["receipt"], 1, time.time() - 5)
+    monkeypatch.setattr(agent_worktree, "_read_github_transfer_comment", lambda ident, *, cwd: case["comments"][ident])
+    def github(args, *, cwd):
+        if args and "/issues/comments/" in args[0]:
+            return json.dumps({"id": int(args[0].rsplit("/", 1)[1]), "user": {"login": "RasmusTho"},
+                "issue_url": "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/6561"})
+        return case["github_read"](args, cwd=cwd)
+    monkeypatch.setattr(recovery, "_github_read", github)
+    return guard
+
+
+@pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)
+@pytest.mark.parametrize("projection", [None, "6562"])
+def test_6561_real_pickup_and_lost_ack_resume_with_synthetic_sources(operator_case, codex_6561_source, monkeypatch, projection):
+    case = operator_case
+    if projection is None:
+        task_id = case["receipt"]["predecessor"]["task_id"]
+        with case["store"]._connect() as conn:
+            conn.execute("UPDATE dispatcher_tasks SET linked_pr=NULL WHERE task_id=?", (task_id,))
+            conn.execute("DELETE FROM dispatcher_events WHERE event_id=?", ("fixture-linked-pr",))
+        case["receipt"]["predecessor"] = recovery.read_live_predecessor(cwd=case["cwd"], issue=case["issue"])
+    source_bound = codex_6561_source
+    guard = _bind_6561_sources(case, source_bound, monkeypatch)
+    from scripts import legacy_operator_evidence
+    draft = legacy_operator_evidence.build_draft(cwd=case["cwd"], issue=6561, pr=6562,
+        worktree=case["worktree"], base=case["receipt"]["base"], agent=case["agent"],
+        session=case["session"])["operator_reconciliation.v1"]
+    assert draft["writer"]["codex_custody"]["observed_at"] is None
+    assert draft["writer"]["codex_custody"]["unrecorded_effects"] == "unknown"
+    original = guard.check
+    checks = []
+    def check(**kwargs):
+        result = original(**kwargs)
+        checks.append(result)
+        return result
+    monkeypatch.setattr(guard, "check", check)
+    run = recovery.subprocess.run
+    posts = []
+    def lost_ack(args, **kwargs):
+        if args[0] == "gh" and "POST" in args:
+            posts.append(1)
+            run(args, **kwargs)
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="lost response")
+        return run(args, **kwargs)
+    monkeypatch.setattr(recovery.subprocess, "run", lost_ack)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="ACK publication outcome unknown"):
+        recovery.execute_operator_pickup(**_args(case))
+    monkeypatch.setattr(recovery.subprocess, "run", run)
+    before_resume = len(checks)
+    result = recovery.resume_operator_pickup(**_args(case))
+    assert result["state"] == "pinned" and len(posts) == 1
+    assert before_resume >= 3 and len(checks) > before_resume
+    assert all(item["unrecorded_effects"] == "UNKNOWN" for item in checks)
+
+    from app.builderops import openhands_pr_cycle as cycle
+    from scripts import verify_operator_successor
+    (case["worktree"] / "file.txt").write_text("synthetic repair\n")
+    _git(case["worktree"], "commit", "-am", "repair")
+    head = _git(case["worktree"], "rev-parse", "HEAD")
+    live = case["pr_data"]
+    live["head"]["sha"] = head
+    live["body"] = (f"Governing-Issue: #6561\nFixes #6561\n"
+                    f"Pickup-Receipt: {result['pickup_receipt']}\n")
+    class Executor:
+        def __init__(self, **kwargs): pass
+        def run(self, args, *, cwd):
+            return subprocess.CompletedProcess(args, 0, "RasmusTho\n", "")
+    monkeypatch.setattr(cycle, "SubprocessExecutor", Executor)
+    monkeypatch.setattr(cycle.closure, "_api", lambda *args: {
+        "full_name": "RasmusTho/agentic-pkm-mvp", "default_branch": "main"})
+    monkeypatch.setattr(cycle.closure, "_pr", lambda *args: live)
+    monkeypatch.setattr(cycle.closure, "_closing_issue_references", lambda *args: [6561])
+    def pages(executor, cwd, endpoint):
+        if endpoint == "/issues/6561/comments": return list(case["comments"].values())
+        if endpoint == "/issues/6562/comments": return []
+        if endpoint == "/pulls/6562/files": return [{"filename": "file.txt"}]
+        raise AssertionError(endpoint)
+    monkeypatch.setattr(cycle, "_api_pages", pages)
+    args = {key: case[key] for key in ("issue", "pr", "worktree", "workspace_root", "agent", "session", "cwd")}
+    proof = verify_operator_successor.verify(**args)
+    assert proof["head"] == head and proof["task_pr_projection"] == projection
+
+    # A legitimate renewal during the final native source check must not be
+    # confused with a new claimant or lifecycle registration.
+    runtime_check = guard.check_runtime
+    checks = []
+    def heartbeat_during_guard(**kwargs):
+        result = runtime_check(**kwargs)
+        checks.append(1)
+        if len(checks) == 2:
+            leases.heartbeat(case["store"], case["receipt"]["predecessor"]["task_id"], case["agent"])
+            agent_worktree.heartbeat_worktree(case["cwd"], worktree=case["worktree"], owner=case["session"])
+        return result
+    with monkeypatch.context() as patch:
+        patch.setattr(guard, "check_runtime", heartbeat_during_guard)
+        assert verify_operator_successor.verify(**args)["head"] == head
+    assert len(checks) == 2
+
+    import sqlite3
+    with sqlite3.connect(source_bound["database"]) as db:
+        db.execute("INSERT INTO thread_spawn_edges VALUES (?, ?, ?)",
+                   (guard.CHILD, "01a10000-0000-7000-8000-000000000003", "open"))
+    with pytest.raises(cycle.CycleError, match="UNKNOWN"):
+        verify_operator_successor.verify(**args)
+    with sqlite3.connect(source_bound["database"]) as db:
+        db.execute("DELETE FROM thread_spawn_edges WHERE child_thread_id=?",
+                   ("01a10000-0000-7000-8000-000000000003",))
+
+    # Release after the last #6561 source callback must be caught by the
+    # common final dispatcher readback, before proof is returned.
+    checks.clear()
+    def release_during_guard(**kwargs):
+        result = runtime_check(**kwargs)
+        checks.append(1)
+        if len(checks) == 2:
+            leases.release(case["store"], case["receipt"]["predecessor"]["task_id"], case["agent"])
+        return result
+    with monkeypatch.context() as patch:
+        patch.setattr(guard, "check_runtime", release_during_guard)
+        with pytest.raises((cycle.CycleError, cycle.closure.ClosureError)):
+            verify_operator_successor.verify(**args)
+    assert len(checks) == 2
+
+
+@pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)
+@pytest.mark.parametrize("target", [True, False])
+def test_6561_wal_changes_between_pickup_checkpoints(operator_case, codex_6561_source, monkeypatch, target):
+    import sqlite3
+    case = operator_case
+    source_bound = codex_6561_source
+    guard = _bind_6561_sources(case, source_bound, monkeypatch)
+    db = sqlite3.connect(source_bound["database"])
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("INSERT INTO thread_spawn_edges VALUES (?, ?, ?)",
+               ("unrelated-seed", "01a10000-0000-7000-8000-000000000002", "open"))
+    db.commit()
+    original = recovery._post_and_pin_operator_ack
+    def post(**kwargs):
+        db.execute("INSERT INTO thread_spawn_edges VALUES (?, ?, ?)",
+                   (guard.CHILD if target else "unrelated", "01a10000-0000-7000-8000-000000000001", "open"))
+        db.commit()
+        return original(**kwargs)
+    monkeypatch.setattr(recovery, "_post_and_pin_operator_ack", post)
+    try:
+        if target:
+            with pytest.raises(recovery.RecoveryEvidenceError, match="UNKNOWN"):
+                recovery.execute_operator_pickup(**_args(case))
+            assert 2 not in case["comments"]
+            assert case["store"].get_task(case["receipt"]["predecessor"]["task_id"]).lease_id != case["old_lease"].lease_id
+        else:
+            assert recovery.execute_operator_pickup(**_args(case))["state"] == "pinned"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)
+def test_6561_unknown_target_child_refuses_before_claim(operator_case, codex_6561_source, monkeypatch):
+    import sqlite3
+    case = operator_case
+    source_bound = codex_6561_source
+    guard = _bind_6561_sources(case, source_bound, monkeypatch)
+    with sqlite3.connect(source_bound["database"]) as db:
+        db.execute("INSERT INTO thread_spawn_edges VALUES (?, ?, ?)",
+                   (guard.CHILD, "01a10000-0000-7000-8000-000000000004", "open"))
+    with pytest.raises(recovery.RecoveryEvidenceError, match="UNKNOWN"):
+        recovery.execute_operator_pickup(**_args(case))
+    assert case["store"].get_task(case["receipt"]["predecessor"]["task_id"]).lease_id == case["old_lease"].lease_id
+    assert 2 not in case["comments"]
+
+
+@pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)
+@pytest.mark.parametrize("drift", ["closed", "label_removed"])
+def test_6561_issue_drift_in_last_guard_refuses_before_claim(operator_case, codex_6561_source, monkeypatch, drift):
+    case = operator_case
+    guard = _bind_6561_sources(case, codex_6561_source, monkeypatch)
+    task_id = case["receipt"]["predecessor"]["task_id"]
+    events = case["store"].list_events(task_id)
+    registry = agent_worktree._default_registry_path(case["cwd"])
+    row = agent_worktree._locked_lifecycle_snapshot(registry)[str(case["worktree"])]
+    original = guard.check
+    calls = []
+    def drift_during_guard(**kwargs):
+        result = original(**kwargs)
+        calls.append(1)
+        if len(calls) == 2:
+            if drift == "closed":
+                case["issue_data"]["state"] = "closed"
+            else:
+                case["issue_data"]["labels"] = []
+        return result
+    monkeypatch.setattr(guard, "check", drift_during_guard)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="current issue validation failed"):
+        recovery.execute_operator_pickup(**_args(case))
+    assert len(calls) == 2
+    assert case["store"].get_task(task_id).lease_id == case["old_lease"].lease_id
+    assert case["store"].list_events(task_id) == events
+    assert agent_worktree._locked_lifecycle_snapshot(registry)[str(case["worktree"])] == row
+    assert 2 not in case["comments"]
+
+
+@pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)
+def test_6561_contradictory_linked_pr_refuses_draft_and_claim(operator_case, codex_6561_source, monkeypatch):
+    case = operator_case
+    _bind_6561_sources(case, codex_6561_source, monkeypatch)
+    task_id = case["receipt"]["predecessor"]["task_id"]
+    with case["store"]._connect() as conn:
+        conn.execute("UPDATE dispatcher_tasks SET linked_pr=? WHERE task_id=?", ("999999", task_id))
+        conn.execute("UPDATE dispatcher_events SET payload=? WHERE event_id=?",
+                     (json.dumps({"linked_pr": 999999}), "fixture-linked-pr"))
+    events = case["store"].list_events(task_id)
+    registry = agent_worktree._default_registry_path(case["cwd"])
+    row = agent_worktree._locked_lifecycle_snapshot(registry)[str(case["worktree"])]
+    from scripts import legacy_operator_evidence
+    with pytest.raises(recovery.RecoveryEvidenceError, match="linked to a different PR"):
+        legacy_operator_evidence.build_draft(cwd=case["cwd"], issue=6561, pr=6562,
+            worktree=case["worktree"], base=case["receipt"]["base"], agent=case["agent"], session=case["session"])
+    with pytest.raises(recovery.RecoveryEvidenceError, match="linked to a different PR"):
+        recovery.execute_operator_pickup(**_args(case))
+    assert case["store"].get_task(task_id).lease_id == case["old_lease"].lease_id
+    assert case["store"].list_events(task_id) == events
+    assert agent_worktree._locked_lifecycle_snapshot(registry)[str(case["worktree"])] == row
+    assert 2 not in case["comments"]
+
+
+@pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)
+def test_6561_linked_pr_drift_in_last_guard_refuses_before_claim(operator_case, codex_6561_source, monkeypatch):
+    case = operator_case
+    guard = _bind_6561_sources(case, codex_6561_source, monkeypatch)
+    task_id = case["receipt"]["predecessor"]["task_id"]
+    events = case["store"].list_events(task_id)
+    original = guard.check
+    calls = []
+    def drift_during_guard(**kwargs):
+        result = original(**kwargs)
+        calls.append(1)
+        if len(calls) == 2:
+            with case["store"]._connect() as conn:
+                conn.execute("UPDATE dispatcher_tasks SET linked_pr=? WHERE task_id=?", ("999999", task_id))
+        return result
+    monkeypatch.setattr(guard, "check", drift_during_guard)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="linked to a different PR"):
+        recovery.execute_operator_pickup(**_args(case))
+    assert len(calls) == 2
+    assert case["store"].get_task(task_id).lease_id == case["old_lease"].lease_id
+    assert case["store"].list_events(task_id) == events
+    assert 2 not in case["comments"]
+
+
+@pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)
+def test_6561_postclaim_linked_pr_drift_retains_claim_and_resume_refuses(operator_case, codex_6561_source, monkeypatch):
+    case = operator_case
+    _bind_6561_sources(case, codex_6561_source, monkeypatch)
+    task_id = case["receipt"]["predecessor"]["task_id"]
+    original = recovery._successor_claim_readback
+    calls = []
+    def drift_after_claim(**kwargs):
+        result = original(**kwargs)
+        calls.append(1)
+        if len(calls) == 1:
+            with case["store"]._connect() as conn:
+                conn.execute("UPDATE dispatcher_tasks SET linked_pr=? WHERE task_id=?", ("999999", task_id))
+        return result
+    monkeypatch.setattr(recovery, "_successor_claim_readback", drift_after_claim)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="linked to a different PR"):
+        recovery.execute_operator_pickup(**_args(case))
+    current = case["store"].get_task(task_id)
+    assert current.lease_id != case["old_lease"].lease_id and 2 not in case["comments"]
+    registry = agent_worktree._default_registry_path(case["cwd"])
+    row = agent_worktree._locked_lifecycle_snapshot(registry)[str(case["worktree"])]
+    assert "operator_registration" not in row
+    events = case["store"].list_events(task_id)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="linked to a different PR"):
+        recovery.resume_operator_pickup(**_args(case))
+    assert case["store"].list_events(task_id) == events and 2 not in case["comments"]
+
+
+@pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)
+def test_6561_missing_linked_pr_field_refuses_before_claim(operator_case, codex_6561_source, monkeypatch):
+    case = operator_case
+    _bind_6561_sources(case, codex_6561_source, monkeypatch)
+    task_id = case["receipt"]["predecessor"]["task_id"]
+    original = recovery._readonly_dispatcher
+    def missing_projection(**kwargs):
+        task, events, lease = original(**kwargs)
+        task.pop("linked_pr")
+        return task, events, lease
+    monkeypatch.setattr(recovery, "_readonly_dispatcher", missing_projection)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="PR projection is unavailable"):
+        recovery.execute_operator_pickup(**_args(case))
+    assert case["store"].get_task(task_id).lease_id == case["old_lease"].lease_id
+    assert 2 not in case["comments"]

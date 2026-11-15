@@ -168,6 +168,18 @@ def read_expired_registration(*, cwd: Path, candidate: Mapping[str, Any]) -> dic
             "branch_history_digest": branch_history_digest}
 
 
+def _check_6561_linked_pr(task: Mapping[str, Any], issue: int) -> None:
+    """Refuse a contradictory PR projection for the scoped #6561 recovery."""
+    if issue == 6561:
+        from app.builderops import legacy_codex_6561_guard
+
+        if "linked_pr" not in task:
+            raise RecoveryEvidenceError("#6561 dispatcher PR projection is unavailable; retain state")
+        linked_pr = task["linked_pr"]
+        if linked_pr is not None and str(linked_pr) != str(legacy_codex_6561_guard.PR):
+            raise RecoveryEvidenceError("#6561 dispatcher task is linked to a different PR; retain state")
+
+
 def read_live_predecessor(*, cwd: Path, issue: int,
                           expected_identity: tuple[int, int] | None = None) -> dict[str, Any]:
     """Read one expired dispatcher predecessor and its claim in one snapshot.
@@ -182,6 +194,7 @@ def read_live_predecessor(*, cwd: Path, issue: int,
     if (not isinstance(task, dict) or not isinstance(lease, dict) or not isinstance(events, list)
             or any(not isinstance(event, dict) for event in events)):
         raise RecoveryEvidenceError("dispatcher predecessor is incomplete")
+    _check_6561_linked_pr(task, issue)
     if (task.get("task_id") != task_id or task.get("repo") != "RasmusTho/agentic-pkm-mvp"
             or task.get("issue_number") != issue or task.get("status") not in {"ready", "claimed"}
             or not isinstance(lease.get("lease_id"), str) or not lease["lease_id"]
@@ -586,6 +599,7 @@ def _successor_claim_readback(*, cwd: Path, task_id: str, issue: int, agent: str
     if (not isinstance(task, dict) or not isinstance(lease, dict) or not isinstance(events, list)
             or any(not isinstance(event, dict) for event in events)):
         raise RecoveryEvidenceError("successor claim readback is incomplete; retain claim")
+    _check_6561_linked_pr(task, issue)
     lease_id = lease.get("lease_id")
     matches = [event for event in events if isinstance(event, dict) and event.get("event_type") == "task.claimed"
                and event.get("lease_id") == lease_id and event.get("actor") == agent]
@@ -700,7 +714,7 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
     def before_intent_write(payload: dict[str, Any]) -> None:
         before_pin(prepared["successor_registration"]["epoch"], registry_reader=lambda _path: payload)
         _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
-        if issue == 6560:
+        if issue in (6560, 6561):
             before_pin(prepared["successor_registration"]["epoch"], registry_reader=lambda _path: payload,
                        ack_check=lambda: _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt))
     try:
@@ -728,7 +742,7 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
                 or proof.get("epoch") != prepared["successor_registration"]["epoch"]
                 or proof.get("ack_intent") != intent):
             raise RecoveryEvidenceError("operator ACK intent or branch history changed; retain state")
-        if issue == 6560:
+        if issue in (6560, 6561):
             before_pin(prepared["successor_registration"]["epoch"], registry_reader=reader,
                        ack_check=lambda: _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt))
         try:
@@ -762,7 +776,7 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
             latest = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt, expected_ack=prepared)
             if tuple(latest.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
                 raise RecoveryEvidenceError("ACK changed before pin; retain state")
-            if issue == 6560:
+            if issue in (6560, 6561):
                 def check_ack() -> None:
                     last = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt, expected_ack=prepared)
                     if tuple(last.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
@@ -811,7 +825,7 @@ def _before_operator_prepare(*, payload: dict[str, Any], cwd: Path, issue: int, 
         raise RecoveryEvidenceError("successor lease changed before prepare; retain claim")
     _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
     check_run()
-    if issue == 6560:
+    if issue in (6560, 6561):
         _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
         final_lease = _successor_claim_readback(cwd=cwd, task_id=predecessor["task_id"], issue=issue,
                         agent=agent, session=session, claim_id=claim_id, predecessor=predecessor,
@@ -883,6 +897,9 @@ def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, 
         _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
         check_run()
         screen_inventory()
+        if issue == 6561 and read_live_predecessor(
+                cwd=cwd, issue=issue, expected_identity=preflight["dispatcher_identity"]) != prior:
+            raise RecoveryEvidenceError("#6561 predecessor changed before claim")
         if (reader(registry_path).get("worktrees") != records
                 or _dispatcher_db_identity(paths.db_path) != preflight["dispatcher_identity"]):
             raise RecoveryEvidenceError("claim effect identity changed before execution")
@@ -1076,7 +1093,7 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
             latest = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=pending, expected_ack=expected_ack)
             if tuple(latest.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
                 raise RecoveryEvidenceError("ACK changed before pin; retain state")
-            if issue == 6560:
+            if issue in (6560, 6561):
                 def check_ack() -> None:
                     last = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=pending, expected_ack=expected_ack)
                     if tuple(last.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
@@ -1098,7 +1115,7 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
 def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: int, pr: int,
                    worktree: Path, agent: str, session: str, comment_id: int,
                    workspace_root: Path) -> dict[str, Any]:
-    from app.builderops import legacy_codex_6560_guard, legacy_run_fence
+    from app.builderops import legacy_codex_6560_guard, legacy_codex_6561_guard, legacy_run_fence
     from contextlib import nullcontext
 
     try:
@@ -1114,7 +1131,7 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
         expected_digest = None
         def check_run() -> None:
             nonlocal expected_digest
-            if issue != 6560:
+            if issue not in (6560, 6561):
                 legacy_run_fence.check_locked(state_root=run_state_root, issue=issue, worktree=worktree)
                 return
             comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
@@ -1122,17 +1139,24 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
                 comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
             if expected_digest is not None and digest != expected_digest:
                 raise RecoveryEvidenceError("Codex operator decision changed; retain state")
-            custody = pending.get("codex_custody")
-            if not isinstance(custody, dict) or _timestamp(custody.get("observed_at")) > created_at:
-                raise RecoveryEvidenceError("Codex observation is missing or newer than operator decision")
             try:
-                legacy_codex_6560_guard.check(issue=issue, pr=pr, worktree=worktree, session=session, receipt=pending)
-            except legacy_codex_6560_guard.CodexGuardError as exc:
+                if issue == 6560:
+                    custody = pending.get("codex_custody")
+                    if not isinstance(custody, dict) or _timestamp(custody.get("observed_at")) > created_at:
+                        raise RecoveryEvidenceError("Codex observation is missing or newer than operator decision")
+                    legacy_codex_6560_guard.check(issue=issue, pr=pr, worktree=worktree, session=session, receipt=pending)
+                else:
+                    checked = legacy_codex_6561_guard.check(cwd=cwd, issue=issue, pr=pr, worktree=worktree,
+                                                            session=session, comment_id=comment_id)
+                    if checked.get("operator_digest") != digest:
+                        raise RecoveryEvidenceError("Codex operator decision changed during observation")
+            except (legacy_codex_6560_guard.CodexGuardError, legacy_codex_6561_guard.GuardRefused) as exc:
                 raise RecoveryEvidenceError(f"{exc}; retain claim and prepared registration") from exc
             expected_digest = digest
         fence: ContextManager[None]
-        if issue == 6560:
-            if pr != legacy_codex_6560_guard.PR or str(worktree) != legacy_codex_6560_guard.WORKTREE:
+        if issue in (6560, 6561):
+            guard = legacy_codex_6560_guard if issue == 6560 else legacy_codex_6561_guard
+            if pr != guard.PR or str(worktree) != guard.WORKTREE:
                 raise RecoveryEvidenceError("Codex guard target is outside qualified scope")
             check_run()
             fence = nullcontext()
@@ -1158,7 +1182,7 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
                 if (not isinstance(row, dict) or not isinstance(proof, dict) or row.get("owner") != session
                         or proof.get("state") != expected_state or proof.get("epoch") != epoch
                         or row.get("registration_epoch") != epoch
-                        or (issue == 6560 and (row.get("status") != "active"
+                        or (issue in (6560, 6561) and (row.get("status") != "active"
                             or not agent_worktree._valid_authority_timestamp(row.get("expires_at"))
                             or row["expires_at"] <= time.time()))
                         or (expected_row is not None and row != expected_row)):
@@ -1194,7 +1218,7 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
                     session=session, claim_id=claims[0]["payload"]["claim_id"], predecessor=predecessor,
                     expected_identity=dispatcher_identity)
                 check_run()
-                if issue == 6560:
+                if issue in (6560, 6561):
                     _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
                     if ack_check is not None:
                         ack_check()
@@ -1272,12 +1296,11 @@ def validate_operator_reconciliation(
 ) -> tuple[dict[str, Any], float, str]:
     """Compare an account-authenticated comment to caller-provided values.
 
-    No current transfer pin accepts this operator type. The digest does not
-    authorize any effect, and the caller must re-read and verify each source
-    immediately before mutation. Account authentication does not establish
-    that a human personally wrote the comment or that a session is live. This
-    first comparison supports the post-execution reboot case only; other
-    legitimate stop evidence requires a separate verified path. An operator
+    The digest does not authorize any effect, and the caller must re-read and
+    verify each source immediately before mutation. Account authentication does
+    not establish that a human personally wrote the comment or that a session is
+    live. General timing requires a post-execution reboot; #6561's separately
+    scoped postboot inventory requires its own live source guard. An operator
     receipt must never masquerade as predecessor consent.
     """
     if github_login != "RasmusTho":
@@ -1371,7 +1394,17 @@ def validate_operator_reconciliation(
             or not re.fullmatch(r"[0-9a-f]{64}", str(publication.get("body_sha256", "")))
             or not re.fullmatch(r"[0-9a-f]{40,64}", str(publication.get("head", "")))):
         raise RecoveryEvidenceError("publication is not bound to an observed PR head")
-    if (not _timestamp(writer.get("last_activity")) < _timestamp(writer.get("boot")) <= created_at
+    if issue == 6561:
+        from app.builderops import legacy_codex_6561_guard
+        custody = writer.get("codex_custody")
+        timing_valid = (pr == legacy_codex_6561_guard.PR and candidate.get("path") == legacy_codex_6561_guard.WORKTREE
+                        and candidate.get("branch") == legacy_codex_6561_guard.BRANCH and isinstance(custody, dict)
+                        and _timestamp(writer.get("boot")) == legacy_codex_6561_guard.BOOT.timestamp()
+                        and _timestamp(writer.get("boot")) < legacy_codex_6561_guard.INVENTORY_START.timestamp()
+                        <= _timestamp(writer.get("last_activity")) <= _timestamp(custody.get("observed_at")) <= created_at)
+    else:
+        timing_valid = _timestamp(writer.get("last_activity")) < _timestamp(writer.get("boot")) <= created_at
+    if (not timing_valid
             or _timestamp(predecessor.get("expires_at")) > created_at
             or _timestamp(registration.get("registered_at")) >= _timestamp(registration.get("expires_at"))
             or _timestamp(registration.get("expires_at")) > created_at):

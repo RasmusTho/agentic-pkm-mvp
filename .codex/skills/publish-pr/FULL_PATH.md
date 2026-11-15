@@ -52,6 +52,28 @@ promotion remain with their named skills.
    Report commit SHA, PR number, base SHA, checks run, plan/gate receipts, and the next workflow.
    Never fabricate a receipt or treat publication as merge, closure, release, or delivery success.
 
+### #6561 existing PR observation
+
+For interactive native continuation of the separately reconciled #6561 / #6562, immediately before
+each push or PR update re-read the pinned successor, current claim, local candidate and unique PR
+under the ordinary procedure above. Also run the bounded read-only source observation below with
+the exact original pending operator comment ID and actual current session; compare its
+`operator_digest` with the pinned registration's pending digest. A missing or mismatched source,
+observation or pin is UNKNOWN. Coordinate no new manual starts throughout the observation and
+effect. The observation is not publication authority or a lock, and does not replace the normal
+PR, scope, review, branch or effect-readback gates.
+
+```sh
+python3 -c 'import json,sys; from pathlib import Path; from app.builderops.legacy_codex_6561_guard import check_runtime; print(json.dumps(check_runtime(cwd=Path.cwd(), issue=6561, pr=6562, worktree=Path(sys.argv[1]), session=sys.argv[2], comment_id=int(sys.argv[3]))))' \
+  <absolute-6561-worktree> <current-session> <pending-operator-comment-id>
+```
+
+The current head and body are checked by the ordinary full-path PR readback: the original
+publication's terminal commands and source-bound old body remain historical evidence. Read back
+each exact push or update; a timeout, contradictory result, or unavailable readback remains UNKNOWN
+and cannot justify a blind retry. Do not use this route to replace an observed dispatched or in-flight
+executor's authority or phase gates.
+
 ### #6560 existing PR proof
 
 For recovery of #6560 into its existing PR #6565, run the read-only proof below immediately before

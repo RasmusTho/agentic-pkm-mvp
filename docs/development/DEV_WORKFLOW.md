@@ -1585,7 +1585,7 @@ wrapper's first Git command, the host checks its qualified Git binary and existi
 and linked-worktree configuration without following config includes; unsupported includes, filters,
 helpers or worktree config are refused. The qualified GitHub credential helper remains unchanged.
 This is a coordinated host check, not a fence against uncoordinated file writers. Other legacy runs
-except the separately scoped #6560 procedure below, and any unknown active work, remain unresolved.
+except the separately scoped #6560 and #6561 procedures below, and any unknown active work, remain unresolved.
 
 Use the pickup wrapper with `--takeover-stale`, the explicit target worktree,
 `--operator-comment-id`, `--operator-pr`, `--operator-workspace-root` and
@@ -1636,6 +1636,23 @@ statuses and the current PR/ref may be observed without knowing the exact histor
 or edited body bytes: those two fields remain `unknown`, not asserted equal to the current PR.
 The Issue, ACK, registry and dispatcher are point-in-time readbacks, not a distributed atomic lock.
 Follow the #6560 full-path publication proof in `publish-pr/FULL_PATH.md` for each subsequent PR effect.
+
+For the separately qualified clean Codex recovery #6561 / #6562, the same draft producer emits an
+incomplete `writer.codex_custody` section. The operator must fill it from the named child and parent
+journals, a read-only consistent Codex state snapshot of the named session relations, host boot,
+identified processes and restart configuration, and the reconciled current PR and historical
+terminal commands. The 2026-11-15 inventory occurred after boot: it is not a rejected start and
+was not stopped by the preceding reboot. Its eight registered commands must have terminal zero
+results and the identified PIDs must be absent. Record the parent journal prefix length and hash,
+observation times, exact source and relation list, and coordinated no-new-manual-start window.
+The earlier push output, earlier body, historical PPIDs and unrecorded effects remain unknown.
+The narrow host reader rechecks only the named registered target relations in fresh read-only SQLite
+snapshots; it does not prove all processes, unregistered children, future activity, or a lock. A
+missing or contradictory source refuses the transition. The guard runs before claim, prepare, ACK,
+pin and resume, alongside the existing claim, registration and publication checks. Use only the
+interactive native continuation; an observed earlier executor or in-flight action must retain that
+executor's own authority and recovery gates. Follow `publish-pr/FULL_PATH.md` for PR effects and
+`verification-and-closure/FULL_PATH.md` for the current-head native proof.
 
 - Preflight before claim/integration:
   - `scripts/agent_workspace_preflight.sh --expected-branch "$(git branch --show-current)" --expected-worktree "$(git rev-parse --show-toplevel)"`

@@ -30,6 +30,10 @@ def build_draft(*, cwd: Path, issue: int, pr: int, worktree: Path, base: str,
         legacy_git_config.check(cwd=cwd, worktree=worktree)
     except legacy_git_config.ConfigError as exc:
         raise recovery.RecoveryEvidenceError("candidate Git configuration is unsupported") from exc
+    if issue == 6561:
+        from app.builderops import legacy_codex_6561_guard as guard_6561
+        if pr != guard_6561.PR or str(worktree) != guard_6561.WORKTREE:
+            raise recovery.RecoveryEvidenceError("#6561 draft is outside the qualified scope")
     if dirty_material is not None and (issue != 6560 or pr != guard.PR or str(worktree) != guard.WORKTREE):
         raise recovery.RecoveryEvidenceError("dirty draft is outside the qualified scope")
     predecessor = recovery.read_live_predecessor(cwd=cwd, issue=issue)
@@ -86,6 +90,15 @@ def build_draft(*, cwd: Path, issue: int, pr: int, worktree: Path, base: str,
         "predecessor_registration": prior, "branch_history_digest": registration["branch_history_digest"],
         "base": base, "unpublished_candidate_head": candidate["head"], "changed_files": changed_files,
     }}
+    if issue == 6561:
+        draft["operator_reconciliation.v1"]["writer"]["codex_custody"] = {
+            "child_sha256": None, "parent_sha256": None, "parent_prefix_bytes": None,
+            "observed_at": None, "no_new_manual_starts": None, "historical_push_output": "unknown",
+            "earlier_body": "unknown", "historical_ppids": "unknown", "unrecorded_effects": "unknown",
+            "boot": None, "relations": {key: None for key in (
+                "source", "source_tables", "read_method", "parent", "child", "child_rollout", "parent_rollout",
+                "child_thread_source", "parent_edge_count", "child_thread_count", "parent_thread_count",
+                "registered_children", "observation_complete", "observed_at", "coordination_started_at", "coordination")}}
     if dirty_material is not None:
         draft["operator_reconciliation.v1"]["dirty_candidate"] = dirty_material
         draft["operator_reconciliation.v1"]["codex_custody"] = {

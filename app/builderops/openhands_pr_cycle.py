@@ -847,8 +847,13 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
                       origin: Mapping[str, str], registration: Mapping[str, Any],
                       records: Mapping[str, Mapping[str, Any]],
                       comments: Sequence[Any], issue_comments: Sequence[Any], issue: int, pr_number: int,
-                      branch: str, head: str, files: list[str], entry: Mapping[str, Any]) -> None:
+                      branch: str, head: str, files: list[str], entry: Mapping[str, Any],
+                      native_6561_check: Callable[[], None] | None = None) -> None:
     """Verify the initial operator recovery without asserting predecessor consent."""
+    if issue == 6561:
+        if native_6561_check is None:
+            raise CycleError("#6561 executor lineage is unsupported; native source check required")
+        native_6561_check()
     proof = registration.get("operator_registration")
     if not isinstance(proof, Mapping) or proof.get("state") != "pinned" or proof.get("issue") != issue:
         raise CycleError("operator registration is missing or unpinned")
@@ -1017,6 +1022,9 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
             or sorted(p for p in old_files if p) != candidate.get("changed_files")
             or sorted(p for p in current_files if p) != files):
         raise CycleError("operator candidate changed")
+    if issue == 6561:
+        assert native_6561_check is not None
+        native_6561_check()
 
 
 def _dispatcher_migration_lineage(events: Sequence[Mapping[str, Any]], owner: Mapping[str, Any], *,
