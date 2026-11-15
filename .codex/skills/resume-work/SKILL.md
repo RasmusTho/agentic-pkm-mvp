@@ -83,9 +83,11 @@ python3 -B scripts/agent_worktree.py --cwd <trusted-checkout> recovery-report \
 Supply the expected selectors from the current bounded inventory; do not adopt changed values to
 make a refused report pass. The command reads the existing repository registry without updating it,
 compares two content-bound Git candidate observations, and outputs hashes and selected metadata,
-not file contents. It includes staged, unstaged and non-ignored untracked changes; unsupported,
-oversized or differing readbacks refuse rather than truncate. This is not an atomic snapshot,
-and Git's candidate inventory is not a census of filesystem objects or writers. It is not a
+not file contents. It includes staged, unstaged and non-ignored untracked changes. Index hints
+such as Git's assume-unchanged or skip-worktree refuse before candidate content reads; the command
+does not clear them. Unsupported, oversized or differing readbacks refuse rather than truncate.
+This is not an atomic snapshot, and Git's candidate inventory is not a census of filesystem
+objects or writers. It is not a
 preservation backup, authenticated handoff, ownership recovery, writer fence or proof of process,
 child or remote-operation closure. Those states remain unknown until separately proved. Do not
 renew/reclaim an expired owner, resume a prohibited model or replace an owner because this report

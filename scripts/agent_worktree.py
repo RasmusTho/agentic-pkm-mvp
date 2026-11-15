@@ -144,6 +144,13 @@ def _recovery_candidate(worktree: Path, expected_head: str) -> dict[str, Any]:
     if head != expected_head:
         raise WorktreeLifecycleError("recovery HEAD differs from the expected candidate")
     index = _recovery_git(worktree, "ls-files", "--stage", "-z")
+    index_flags = _recovery_git(worktree, "ls-files", "-v", "-z")
+    # Status deliberately trusts assume-unchanged/skip-worktree hints. Refuse those
+    # inputs before selecting or reading content; never clear hints in an old index.
+    if (index_flags and not index_flags.endswith(b"\0")) or any(
+        len(row) <= 2 or row[:2] != b"H " for row in index_flags.split(b"\0")[:-1]
+    ):
+        raise WorktreeLifecycleError("recovery index flags are unsupported or malformed")
     status_bytes = _recovery_git(worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all")
     statuses: dict[str, str] = {}
     for row in status_bytes.split(b"\0"):
@@ -215,6 +222,7 @@ def _recovery_candidate(worktree: Path, expected_head: str) -> dict[str, Any]:
     except OSError as exc:
         raise WorktreeLifecycleError("recovery candidate input is unavailable or unsupported") from exc
     return {"head": head, "index_sha256": hashlib.sha256(index).hexdigest(),
+            "index_flags_sha256": hashlib.sha256(index_flags).hexdigest(),
             "status_sha256": hashlib.sha256(status_bytes).hexdigest(),
             "clean": not statuses, "files": sorted(entries, key=lambda entry: entry["path"])}
 

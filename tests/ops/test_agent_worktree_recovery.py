@@ -96,6 +96,7 @@ def test_recovery_cli_binds_candidate_without_writes(retained, dirty):
     assert report["registration"]["generation"] == registration["generation"]
     assert report["registration"]["expires_at"] == 11  # Expiry was not renewed.
     assert report["candidate"]["head"] == head
+    assert len(report["candidate"]["index_flags_sha256"]) == 64
     assert report["candidate"]["clean"] is not dirty
     assert len(report["candidate_sha256"]) == 64
     assert "must not" not in result.stdout
@@ -205,3 +206,35 @@ def test_recovery_report_keeps_deleted_paths_and_literal_names(retained):
     assert entries["base.txt"] == {"path": "base.txt", "status": " D", "worktree": "absent"}
     assert entries["literal\nname.py"]["status"] == "??"
     assert entries["literal\nname.py"]["size"] == len("retained data\n")
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_recovery_cli_refuses_hidden_index_changes(retained, flag):
+    _repo, worktree, _registration, _head = retained
+    _git(worktree, "update-index", flag, "base.txt")
+    (worktree / "base.txt").write_text("hidden unpublished content\n")
+    index = Path(_git(worktree, "rev-parse", "--git-path", "index"))
+    before = index.read_bytes()
+    result = _cli(retained)
+    assert result.returncode == 1, result.stdout
+    assert json.loads(result.stdout)["ok"] is False
+    assert "index" in json.loads(result.stdout)["error"]
+    assert "hidden unpublished content" not in result.stdout
+    assert index.read_bytes() == before  # Refusal must not clear or normalize the hints.
+    assert (worktree / "base.txt").read_text() == "hidden unpublished content\n"
+
+
+@pytest.mark.parametrize("flags", [b"H base.txt", b"H \0", b"\0"])
+def test_recovery_refuses_malformed_index_flags_before_status(retained, monkeypatch, flags):
+    _repo, worktree, _registration, head = retained
+    original = agent_worktree._recovery_git
+
+    def observe(path, *args):
+        if args == ("ls-files", "-v", "-z"):
+            return flags
+        assert args[0] != "status", "index refusal must precede candidate selection and content reads"
+        return original(path, *args)
+
+    monkeypatch.setattr(agent_worktree, "_recovery_git", observe)
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match="index flags"):
+        agent_worktree._recovery_candidate(worktree, head)
