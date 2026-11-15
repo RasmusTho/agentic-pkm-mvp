@@ -22,6 +22,7 @@ import uuid
 from typing import Any
 
 from scripts import agent_worktree
+from app.builderops import legacy_git_config
 from app.dispatcher.config import load_paths as load_dispatcher_paths
 from app.dispatcher.events import claim_event_digest, event_history_digest
 
@@ -37,6 +38,11 @@ def read_expired_registration(*, cwd: Path, candidate: Mapping[str, Any]) -> dic
     generation = candidate.get("generation")
     if not isinstance(path, str) or not Path(path).is_absolute() or not isinstance(branch, str):
         raise RecoveryEvidenceError("candidate registration identity is incomplete")
+    try:
+        legacy_git_config.check_host_config()
+        legacy_git_config.check(cwd=cwd, worktree=Path(path))
+    except legacy_git_config.ConfigError as exc:
+        raise RecoveryEvidenceError("candidate Git configuration is unsupported") from exc
     registry = agent_worktree._default_registry_path(cwd)
     if not registry.is_file():
         raise RecoveryEvidenceError("worktree registry is unavailable")
@@ -161,6 +167,11 @@ def read_clean_candidate(*, cwd: Path, worktree: Path) -> dict[str, Any]:
     Dirty or untracked work is refused rather than discarded. Preserving and
     transferring such a candidate requires its own content-bound path.
     """
+    try:
+        legacy_git_config.check_host_config()
+        legacy_git_config.check(cwd=cwd, worktree=worktree)
+    except legacy_git_config.ConfigError as exc:
+        raise RecoveryEvidenceError("candidate Git configuration is unsupported") from exc
     if not worktree.is_absolute() or worktree != worktree.resolve():
         raise RecoveryEvidenceError("candidate worktree path is invalid")
 
@@ -815,6 +826,11 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
     except agent_worktree.WorktreeLifecycleError as exc:
         raise RecoveryEvidenceError("operator workspace boundary is invalid") from exc
     try:
+        legacy_git_config.check_host_config()
+        legacy_git_config.check(cwd=cwd, worktree=worktree)
+    except legacy_git_config.ConfigError as exc:
+        raise RecoveryEvidenceError("candidate Git configuration is unsupported") from exc
+    try:
         with legacy_run_fence.hold(state_root=run_state_root, issue=issue, worktree=worktree):
             def before_pin(epoch: str, expected_state: str = "prepared",
                            expected_row: dict[str, Any] | None = None) -> str:
@@ -1009,6 +1025,9 @@ def _main() -> int:
     parser.add_argument("--workspace-root", type=Path, required=True)
     parser.add_argument("--legacy-run-state-root", type=Path, required=True)
     args = parser.parse_args()
+    for key in tuple(os.environ):
+        if key.startswith("GIT_"):
+            del os.environ[key]
     try:
         operation = execute_operator_pickup if args.action == "pickup" else resume_operator_pickup
         result = operation(run_state_root=args.legacy_run_state_root, cwd=Path.cwd(), issue=args.issue, pr=args.pr, worktree=args.worktree,

@@ -216,10 +216,13 @@ def test_live_github_publication_readback_refuses_duplicate_or_drift(tmp_path, m
         read_live_publication(cwd=tmp_path, pr=6602, branch="codex/issue-6601")
 
 
-def test_clean_candidate_readback_preserves_dirty_work(tmp_path):
+def test_clean_candidate_readback_preserves_dirty_work(tmp_path, monkeypatch):
     primary = tmp_path / "primary"
     worktree = tmp_path / "checkout"
     subprocess.run(["git", "init", "-b", "main", str(primary)], check=True, capture_output=True)
+    from app.builderops import legacy_git_config
+    monkeypatch.setattr(legacy_git_config, "QUALIFIED_COMMON", (primary / ".git").resolve())
+    monkeypatch.setattr(legacy_git_config, "check_host_config", lambda: None)
     (primary / "candidate.txt").write_text("original\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(primary), "add", "candidate.txt"], check=True, capture_output=True)
     subprocess.run(["git", "-C", str(primary), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
@@ -248,7 +251,7 @@ def test_clean_candidate_readback_preserves_dirty_work(tmp_path):
 
     other = tmp_path / "other-repo"
     subprocess.run(["git", "init", str(other)], check=True, capture_output=True)
-    with pytest.raises(RecoveryEvidenceError, match="candidate identity is unavailable"):
+    with pytest.raises(RecoveryEvidenceError, match="candidate (identity is unavailable|Git configuration is unsupported)"):
         read_clean_candidate(cwd=other, worktree=worktree)
 
     (worktree / "candidate.txt").write_text("unpublished change\n", encoding="utf-8")

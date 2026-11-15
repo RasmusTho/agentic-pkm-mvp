@@ -1580,8 +1580,12 @@ with the actual `CODEX_SESSION_ID`. The operator must fill the missing explicit 
 writer, delegation, restart and publication observations from real evidence; nulls are not proof.
 Before admission establish that the reboot followed the recorded activity, inspect the exact run's
 restart configuration and observe that no identified post-reboot writer or delegated work remains.
-Coordinate no new direct starts during the transition. Other legacy runs or unknown active work are
-not covered and must remain unresolved.
+Coordinate no new direct starts or Git configuration changes during the transition. Before the
+wrapper's first Git command, the host checks its qualified Git binary and existing global, common
+and linked-worktree configuration without following config includes; unsupported includes, filters,
+helpers or worktree config are refused. The qualified GitHub credential helper remains unchanged.
+This is a coordinated host check, not a fence against uncoordinated file writers. Other legacy runs
+or unknown active work are not covered and must remain unresolved.
 
 Use the pickup wrapper with `--takeover-stale`, the explicit target worktree,
 `--operator-comment-id`, `--operator-pr`, `--operator-workspace-root` and

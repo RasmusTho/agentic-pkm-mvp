@@ -77,7 +77,7 @@ def test_operator_wrapper_delegates_after_issue_readback_without_normal_pickup(t
         "fallback_reason": None}), issue_json=issue)
     fake_python = Path(env["PYTHON"])
     content = fake_python.read_text()
-    content = content.replace('case "$*" in\n', f'case "$*" in\n  *"-m app.builderops.legacy_owner_recovery {action} "*) exit 0 ;;\n', 1)
+    content = content.replace('case "$*" in\n', f'case "$*" in\n  *"legacy_git_config.py "*) exit 0 ;;\n  *"-m app.builderops.legacy_owner_recovery {action} "*) exit 0 ;;\n', 1)
     fake_python.write_text(content)
     resume_flag = ["--operator-resume"] if action == "resume" else []
     result = harness._run(worktree, env, *resume_flag, "--takeover-stale", "--target-worktree", str(worktree),
@@ -134,7 +134,7 @@ def test_wrapper_arguments_drive_real_host_cli_and_resume_existing_ack(tmp_path,
     fake_python = Path(env["PYTHON"])
     content = fake_python.read_text().replace(
         'case "$*" in\n',
-        'case "$*" in\n  *"-m app.builderops.legacy_owner_recovery "*) exit 0 ;;\n', 1)
+        'case "$*" in\n  *"legacy_git_config.py "*) exit 0 ;;\n  *"-m app.builderops.legacy_owner_recovery "*) exit 0 ;;\n', 1)
     fake_python.write_text(content)
     monkeypatch.chdir(case["cwd"])
     delegate = recovery.subprocess.run
@@ -204,3 +204,38 @@ def test_operator_workspace_refused_before_git_or_external_reads(tmp_path, case)
     assert result.returncode != 0
     assert "operator pickup" in result.stderr
     assert not log.exists()
+
+
+def test_operator_config_refusal_precedes_git_and_clears_inherited_overrides(tmp_path):
+    import importlib.util
+    import os
+
+    path = Path(__file__).resolve().parents[1] / "scripts/test_issue_pickup_claim.py"
+    spec = importlib.util.spec_from_file_location("pickup_config_harness", path)
+    harness = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(harness)
+    worktree, env = harness._make_harness(tmp_path, status_json=json.dumps({"ok": True, "db_exists": True,
+        "coordination_mode": "dispatcher-backed", "fallback_reason": None}))
+    git_called = tmp_path / "git-called"
+    config_seen = tmp_path / "config-seen"
+    Path(env["PATH"].split(os.pathsep)[0], "git").write_text(
+        f'#!/bin/sh\ntouch "{git_called}"\nexit 1\n')
+    fake_python = Path(env["PYTHON"])
+    content = fake_python.read_text().replace(
+        'case "$*" in\n',
+        f'case "$*" in\n  *"legacy_git_config.py "*) printf "%s" "${{GIT_CONFIG_COUNT-unset}}" > "{config_seen}"; exit 1 ;;\n', 1)
+    fake_python.write_text(content)
+    env["GIT_CONFIG_COUNT"] = "1"
+    env["GIT_CONFIG_KEY_0"] = "include.path"
+    env["GIT_CONFIG_VALUE_0"] = "/ignored/secret"
+    result = harness._run(worktree, env, "--takeover-stale", "--target-worktree", str(worktree),
+                          "--operator-comment-id", "12", "--operator-pr", "34",
+                          "--legacy-run-state-root", str(tmp_path / "runs"),
+                          "--operator-workspace-root", str(tmp_path.parent / (tmp_path.name + "-model")))
+    assert result.returncode != 0
+    assert "Git configuration is unsupported" in result.stderr
+    assert config_seen.read_text() == "unset"
+    assert not git_called.exists()
+    log = Path(env["COMMAND_LOG"]).read_text()
+    assert "gh api" not in log and "app.dispatcher claim" not in log

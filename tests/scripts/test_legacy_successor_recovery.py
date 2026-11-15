@@ -77,6 +77,9 @@ def operator_case(tmp_path, monkeypatch):
     monkeypatch.setattr(recovery, "load_dispatcher_paths", lambda *_args, **_kwargs: SimpleNamespace(
         state_dir=state_dir, db_path=db_path))
     monkeypatch.setenv("CODEX_SESSION_ID", "new-session")
+    from app.builderops import legacy_git_config
+    monkeypatch.setattr(legacy_git_config, "QUALIFIED_COMMON", (repo / ".git").resolve())
+    monkeypatch.setattr(legacy_git_config, "check_host_config", lambda: None)
     source_root = str(Path(recovery.__file__).resolve().parents[2])
     monkeypatch.setenv("PYTHONPATH", source_root)
     predecessor = recovery.read_live_predecessor(cwd=checkout, issue=6601)

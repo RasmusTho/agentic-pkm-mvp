@@ -172,6 +172,17 @@ if ! TARGET_WORKTREE="$(cd "$TARGET_WORKTREE" 2>/dev/null && pwd -P)"; then
   echo "pickup refused: target worktree path is unavailable" >&2
   exit 1
 fi
+if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+  # Do not let inherited Git overrides select uninspected configuration or a different index.
+  while IFS= read -r git_variable; do
+    unset "$git_variable"
+  done < <(compgen -A variable GIT_ || true)
+  if ! "$PYTHON_BIN" "$SCRIPT_REPO_ROOT/app/builderops/legacy_git_config.py" \
+      --cwd "$SCRIPT_REPO_ROOT" --worktree "$TARGET_WORKTREE"; then
+    echo "operator pickup refused: Git configuration is unsupported" >&2
+    exit 1
+  fi
+fi
 if ! EXPECTED_WORKTREE="$(git -C "$TARGET_WORKTREE" rev-parse --show-toplevel 2>/dev/null)"; then
   echo "pickup refused: target path is not a Git worktree" >&2
   exit 1

@@ -33,6 +33,8 @@ def test_draft_reads_real_git_and_leaves_authority_unknown(tmp_path, monkeypatch
                     "branch_history_digest": "c" * 64}
     publication = {"state": "open_pr_observed", "pr": 10, "branch": branch, "head": head}
     monkeypatch.setenv("CODEX_SESSION_ID", "successor")
+    monkeypatch.setattr(evidence.legacy_git_config, "QUALIFIED_COMMON", (root / ".git").resolve())
+    monkeypatch.setattr(evidence.legacy_git_config, "check_host_config", lambda: None)
     monkeypatch.setattr(recovery, "read_live_predecessor", lambda **kw: {"repo": "fixture/repo"})
     monkeypatch.setattr(recovery, "read_clean_candidate", lambda **kw: candidate)
     monkeypatch.setattr(recovery, "read_expired_registration", lambda **kw: registration)
@@ -62,3 +64,15 @@ def test_refuses_missing_actual_successor(tmp_path, monkeypatch):
     with pytest.raises(recovery.RecoveryEvidenceError, match="successor identity"):
         evidence.build_draft(cwd=tmp_path, issue=1, pr=2, worktree=tmp_path,
                              base="a" * 40, agent="agent", session="other")
+
+
+def test_draft_refuses_config_before_dispatcher_or_candidate(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_SESSION_ID", "successor")
+    monkeypatch.setattr(evidence.legacy_git_config, "check_host_config", lambda: None)
+    def refuse(**_kwargs):
+        raise evidence.legacy_git_config.ConfigError("unsupported config")
+    monkeypatch.setattr(evidence.legacy_git_config, "check", refuse)
+    monkeypatch.setattr(recovery, "read_live_predecessor", lambda **_kwargs: pytest.fail("dispatcher read before config check"))
+    with pytest.raises(recovery.RecoveryEvidenceError, match="Git configuration"):
+        evidence.build_draft(cwd=tmp_path, issue=1, pr=2, worktree=tmp_path,
+                             base="a" * 40, agent="agent", session="successor")

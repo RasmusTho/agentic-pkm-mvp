@@ -16,7 +16,7 @@ import re
 import sys
 from typing import Any
 
-from app.builderops import legacy_owner_recovery as recovery
+from app.builderops import legacy_git_config, legacy_owner_recovery as recovery
 from scripts import agent_worktree
 
 
@@ -24,6 +24,11 @@ def build_draft(*, cwd: Path, issue: int, pr: int, worktree: Path, base: str,
                 agent: str, session: str) -> dict[str, Any]:
     if not agent or agent.strip() != agent or not session or session != os.environ.get("CODEX_SESSION_ID"):
         raise recovery.RecoveryEvidenceError("current successor identity is unavailable")
+    try:
+        legacy_git_config.check_host_config()
+        legacy_git_config.check(cwd=cwd, worktree=worktree)
+    except legacy_git_config.ConfigError as exc:
+        raise recovery.RecoveryEvidenceError("candidate Git configuration is unsupported") from exc
     predecessor = recovery.read_live_predecessor(cwd=cwd, issue=issue)
     candidate = recovery.read_clean_candidate(cwd=cwd, worktree=worktree)
     registration = recovery.read_expired_registration(cwd=cwd, candidate=candidate)
