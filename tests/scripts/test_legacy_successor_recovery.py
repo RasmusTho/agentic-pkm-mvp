@@ -468,7 +468,7 @@ def test_successor_preserves_delivery_gates(operator_case):
     openhands_pr_cycle._operator_lineage(
         events=[event.to_dict() for event in case["store"].list_events(result["task_id"])],
         owner={"task_id": result["task_id"], "lease_id": result["lease_id"], "lease_holder": "new-agent"},
-        origin={"mode": "dispatcher-backed", "lease_id": case["old_lease"].lease_id, "agent": "old-agent"},
+        origin={"mode": "dispatcher-backed", "lease_id": result["lease_id"], "agent": "new-agent", "path": str(case["worktree"])},
         registration=row, records={str(case["worktree"]): row}, comments=list(case["comments"].values()),
         issue_comments=[], issue=6601, pr_number=6602, branch="codex/example", head=case["receipt"]["candidate"]["head"],
         files=["file.txt"], entry=entry,
@@ -496,7 +496,7 @@ def test_successor_can_commit_a_repair_and_renew_its_lease(operator_case):
     openhands_pr_cycle._operator_lineage(
         events=[event.to_dict() for event in case["store"].list_events(result["task_id"])],
         owner={"task_id": result["task_id"], "lease_id": result["lease_id"], "lease_holder": "new-agent"},
-        origin={"mode": "dispatcher-backed", "lease_id": case["old_lease"].lease_id, "agent": "old-agent"},
+        origin={"mode": "dispatcher-backed", "lease_id": result["lease_id"], "agent": "new-agent", "path": str(case["worktree"])},
         registration=row, records={str(case["worktree"]): row}, comments=list(case["comments"].values()),
         issue_comments=[], issue=6601, pr_number=6602, branch="codex/example", head=head, files=["file.txt"], entry=entry,
     )
