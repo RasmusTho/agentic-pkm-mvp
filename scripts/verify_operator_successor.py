@@ -11,6 +11,7 @@ import os
 import time
 import sys
 from pathlib import Path
+from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -31,7 +32,8 @@ def _readonly_dispatcher(*, cwd: Path, task_id: str) -> tuple[dict, list, dict]:
 
 
 def _readonly_lifecycle(*, cwd: Path, worktree: Path, workspace_root: Path,
-                        branch: str, session: str) -> tuple[dict, dict]:
+                        branch: str, session: str,
+                        while_locked: Callable[[], None] | None = None) -> tuple[dict, dict]:
     """Use the existing registry lock and an identity-bound no-follow reader."""
     try:
         common = recovery.legacy_git_config._common(recovery.legacy_git_config._gitdir(cwd))
@@ -41,11 +43,7 @@ def _readonly_lifecycle(*, cwd: Path, worktree: Path, workspace_root: Path,
             records = agent_worktree._lifecycle_records(payload)
             live = agent_worktree.git_hygiene._parse_worktrees(
                 agent_worktree.git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd))
-            paths = [*records, *(row.get("worktree") for row in live)]
-            for value in paths:
-                if not isinstance(value, str):
-                    raise cycle.CycleError("lifecycle checkout path is unavailable")
-                agent_worktree._screen_transfer_workspace(cwd, Path(value), workspace_root)
+            agent_worktree._screen_transfer_worktree_inventory(cwd, workspace_root, records, live)
             candidate_paths = {str(Path(row["worktree"]).resolve()) for row in live
                                if row.get("branch", "").removeprefix("refs/heads/") == branch}
             selected = agent_worktree._select_authority_records(
@@ -65,6 +63,10 @@ def _readonly_lifecycle(*, cwd: Path, worktree: Path, workspace_root: Path,
                     or active[0]["expires_at"] <= time.time()
                     or not agent_worktree._valid_generation(active[0].get("registration_epoch"))):
                 raise cycle.CycleError("current lifecycle successor is unavailable")
+            if while_locked is not None:
+                while_locked()
+                if read_registry(registry) != payload:
+                    raise cycle.CycleError("lifecycle registry changed during dispatcher read")
             return active[0], records
     except (OSError, ValueError, recovery.legacy_git_config.ConfigError, agent_worktree.WorktreeLifecycleError) as exc:
         raise cycle.CycleError("existing lifecycle registry or lock is unavailable") from exc
@@ -131,6 +133,25 @@ def verify(*, issue: int, pr: int, worktree: Path, workspace_root: Path,
     if cycle.closure._pr(executor, cwd, repo, pr) != live:
         raise cycle.CycleError("PR changed during operator proof")
     recovery._verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
+    # Re-read authority after the network/lineage work; a heartbeat may renew
+    # expiry without changing the claimant or the registration's identity.
+    fresh_dispatcher: list[tuple[dict, list, dict]] = []
+    fresh_registration, _ = _readonly_lifecycle(
+        cwd=cwd, worktree=worktree, workspace_root=workspace_root, branch=head["ref"], session=session,
+        while_locked=lambda: fresh_dispatcher.append(_readonly_dispatcher(cwd=cwd, task_id=task_id)))
+    if ({k: v for k, v in fresh_registration.items() if k not in {"heartbeat_at", "expires_at"}}
+            != {k: v for k, v in registration.items() if k not in {"heartbeat_at", "expires_at"}}):
+        raise cycle.CycleError("lifecycle successor changed during operator proof")
+    fresh_task, fresh_events, fresh_lease = fresh_dispatcher[0]
+    fresh_owner = cycle.closure._dispatcher_lease_snapshot(
+        fresh_task, task_id, repository=repo, issue_number=issue, lease=fresh_lease)
+    cycle.closure._validate_claimant_history(fresh_events, fresh_owner)
+    if ({k: v for k, v in fresh_owner.items() if k != "lease_expires_at"}
+            != {k: v for k, v in owner.items() if k != "lease_expires_at"}
+            or fresh_task.get("linked_pr") != linked_pr):
+        raise cycle.CycleError("dispatcher successor changed during operator proof")
+    if fresh_registration["expires_at"] <= time.time():
+        raise cycle.CycleError("lifecycle successor expired during operator proof")
     return {"issue": issue, "pr": pr, "head": head["sha"], "agent": agent, "session": session,
             "lease_id": owner["lease_id"], "registration_epoch": registration["registration_epoch"],
             "task_pr_projection": task.get("linked_pr")}
