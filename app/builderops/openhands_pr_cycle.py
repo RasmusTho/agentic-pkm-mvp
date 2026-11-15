@@ -3543,6 +3543,9 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
             and saved["verification"].get("passed") is True and isinstance(saved.get("ci"), dict)
             and saved["ci"].get("exit_code") == 0 and decision["action"] == "wait"
             and decision["reason"] == "active or unknown writable owner"):
+        if any(old_head == pr["head_sha"] for _, old_head in merge_obligations):
+            return {"number": pr["number"], "action": "wait", "identity": identity,
+                    "reason": "earlier merge at this head remains unknown; do not repeat"}
         return merge_once(layout, pr, entry, saved)
     if decision["action"] in ("independent-review", "reconcile"):
         op = decision["operation_id"]

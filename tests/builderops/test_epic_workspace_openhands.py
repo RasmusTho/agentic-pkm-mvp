@@ -35,6 +35,8 @@ class FakeAgentServer:
                 self.lose_next_create = False
                 raise OSError("response lost")
             return 201, self.conversations[cid]
+        if method == "GET" and "/events/count" in path:
+            return 200, len(self.events)
         if method == "GET" and "/events/search" in path:
             params = parse_qs(urlsplit(path).query)
             events = self.events[::-1] if params.get("sort_order") == ["TIMESTAMP_DESC"] else self.events

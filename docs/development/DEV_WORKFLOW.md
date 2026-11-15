@@ -887,21 +887,32 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
 - **Evidence and isolation.** It checks the assigned checkout against the recorded worker path, reads
   the checkout through contained Git, inspects the exact recorded container and compares test, PR and
   error observations. Heartbeats, event counts, delivery, error-text churn and narration are not progress. A pytest last-failed
-  cache is only a partial test observation; existing `validation_status` remains available for other
-  test evidence. An applied pass also reads the public open-PR inventory and matches the worker's
-  branch and governing Issue. It does not establish CI or review outcomes. An incomplete inventory,
+  cache is only a partial test observation. Existing `validation_status` result or pytest outcomes
+  provide additional test evidence; unsupported shapes are an evidence gap, and command, summary
+  and head metadata do not count as progress. An applied pass also reads the public open-PR inventory and matches the worker's
+  branch, repository, governing Issue and unique closing child. It does not establish CI or review outcomes. An incomplete inventory,
   unreachable event stream or mismatched checkout is an evidence gap for the affected item.
 - **Bounded judgement.** Repeated equivalent evidence on an inactive conversation records
   `change_approach`, one `bounded_diagnosis` (helper budget 0), `handoff`, then a no-progress stop.
-  Changed checkout, test or PR evidence resets the ladder. A no-progress directive waits for at least
-  60 seconds without such evidence, and accepted sends have a 60-second interval before another
-  directive. The diagnosis is executed in the same pass, read-only and without interrupting the
+  Changed checkout, supported validation result, test or PR evidence resets the ladder. A fresh
+  no-progress decision waits for at least 60 seconds without such evidence, and accepted sends have
+  a 60-second interval before another directive. **Replay limit (KD-4B9E44394285):** after an
+  interrupted pass, do not replay its latest tick with `--apply`; use a fresh tick to judge new
+  checkout, test and PR evidence. The send-boundary recheck below also applies to replay and refuses
+  an observed mismatch, but does not establish that every replay/recovery sequence is safe. This
+  limitation remains an obligation for full #6618 activation. The diagnosis is
+  executed in the same pass, read-only and without interrupting the
   writer: the conversation, a bounded event page, the checkout and test evidence are read and the
   finding is recorded on the decision. An active conversation with unchanged evidence is diagnosed
-  first. Its `change_approach` directive is then sent while it runs, superseding the in-flight prompt
-  through the upstream message endpoint. That happens on the next unchanged pass if the agent keeps
-  taking steps (a loop), or once one operation has produced no new event for 30 minutes (a long
-  tool or backoff gets that long). Event activity is diagnosis input only, never progress. Quota, authentication, context, transient network and policy errors retain separate
+  first. Conversation errors do not identify the current tool call or operation, and may be nonfatal.
+  Matching errors while a conversation runs therefore lead to a recorded investigation through the
+  owning workflow, without automatically superseding the writer. Only exact, identifiable error
+  observations are compared; a later operation, missing event history or new work invalidates the
+  series. The coordinator stores a keyed digest rather than error text. An inactive stalled worker
+  can still receive the bounded changed-approach directive. An event alone and a 30-minute operation
+  are not evidence of a loop. After 30 minutes without changed work
+  evidence, the coordinator records an active-work investigation stop without interrupting the
+  writer. Event activity is diagnosis input only, never progress. Quota, authentication, context, transient network and policy errors retain separate
   next actions; they are not silently treated as task failures or a license to switch engines. A
   locally OOM-killed or exited container holds its unfinished assignment, recorded owner when known,
   checkout and remaining action, while eligible peers continue. With `--apply`, a confirmed Claude
@@ -922,8 +933,10 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
   `worker_blocker.v1` and a `summary`; its text is not authority. The controller reads current Issue
   labels and the latest blocker-action receipt independently of declarations. This public read accepts a matching
   receipt only from a GitHub `OWNER`-associated comment; other or unverifiable authors leave authority
-  unknown for trusted reconciliation. A valid external/human-owned receipt remains an authority stop.
-  A technical dependency without that stop is routed to `issue-maintenance-change-control`; the
+  unknown for trusted reconciliation. Every valid live receipt remains a hold, including a
+  builder-owned dependency. Its recorded owner and next action remain intact; a builder can
+  investigate and resolve technical validity through the owning workflow without a new human approval.
+  An unsupported worker-declared dependency without a canonical hold is routed to `issue-maintenance-change-control`; the
   trusted coordinator retains any GitHub write. `--no-observe-github` skips public Issue and PR reads;
   directives then remain fenced because current source authority is unknown.
 - **Optional directive application.** With `--apply`, only `change_approach` and
@@ -932,7 +945,21 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
   tick, action and random marker are recorded before the request. The controller checks the actual
   container ID, published loopback port, checkout mount, existing session key, and conversation ID,
   tags and working directory before contacting or directing a worker. It rechecks identity and
-  current Issue and PR authority at the send boundary, including a replay. The upstream message endpoint
+  current Issue and PR authority after reservation. It then rereads the actual conversation, checkout,
+  test cache and validation evidence and compares them with the decision, including on replay. Missing
+  or changed evidence, a new event, or active execution refuses the affected send. These observations
+  are not atomic with the worker or GitHub, so changes after the final read remain outside the fence.
+  In this candidate, coordination compares the unfiltered event count with the count under the
+  supported wide-time filter, then checks the unfiltered count again after the bounded newest page.
+  The selected 1.62 reader counts indexed entries without parsing them in the unfiltered case, but
+  skips unreadable payloads in the filtered case. Unequal, unavailable, invalid or changing counts,
+  or a short page when the history fits, hold the directive. The filtered scan is admitted only for
+  at most 2,000 indexed events and uses a ten-second client timeout; larger histories hold with an
+  explicit scan-limit gap. An event outside the wide-time filter can cause a conservative hold.
+  Concurrent appends may increase server work after admission, and a client timeout cannot cancel the
+  upstream scan. Changes invisible to the server's index or cache, and changes after the final read,
+  remain outside the check. No actual event damage is implied.
+  The upstream message endpoint
   can supersede a running ACP prompt or goal loop; callers must intend that effect. A user event with
   the marker must be read back before delivery is reported. A lost reply or missing event is unknown,
   never proof of absence: the original attempt is reconciled by marker and is not resent, even on a
@@ -952,14 +979,20 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
   shared hold on the OpenHands start (port-selection) lock, which is the same fence that serializes
   `worker-stop`, starts and conversation operations. A coordinator item holds that worker's
   lifecycle for its bounded duration. All locks are non-blocking, so a busy worker is reported as
-  `held_lifecycle_busy` without contact and peers continue. A stop or start requested meanwhile is
+  `held_lifecycle_busy` without contact and peers continue. An unsafe or unavailable individual
+  lifecycle lock holds that worker without contact; unreadable shared run-state fails the pass. A stop or start requested meanwhile is
   refused and can be retried. Every request keeps its finite timeout. An unresolved effect whose
   conversation ended with a verified stop is preserved but no longer blocks a successor.
 - **Replay and obligations.** Every previously applied tick remains idempotent even out of order;
   a replay still observes current authority. Decisions,
   effects and remaining actions live in the existing `dispatch_decisions` and `stop_conditions`;
-  GitHub Issues, PRs and CI remain authoritative. Issue maintenance and other lifecycle actions
-  remain explicit coordinator obligations; the confirmed quota handoff above uses the existing lifecycle.
+  GitHub Issues, PRs and CI remain authoritative. Issue maintenance and other lifecycle actions remain explicit coordinator obligations;
+  the confirmed quota handoff above uses the existing lifecycle. A fresh authorized
+  judgment can follow a refused zero-attempt blocker decision with a new linked decision; the old
+  decision and refusal remain as evidence. A reserved, unknown, delivered or run-deferred attempt
+  cannot be rebound or resent. A refusal containing conflicting POST or marker evidence holds the
+  writer as an unknown effect until reconciled. Three successive known-not-sent refusals trigger a
+  bounded owning-workflow investigation; new work evidence or a changed blocker permits renewed judgment.
 
 The source tests use simulated engine, GitHub and agent-server boundaries; they do not demonstrate a
 real model's reaction. After independent review and trusted integration, an operator can create a

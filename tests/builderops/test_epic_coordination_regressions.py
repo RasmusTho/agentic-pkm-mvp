@@ -86,6 +86,8 @@ class Harness:
                     raise TimeoutError("local regression synchronization failed")
                 return 429, None
             return 200, {"success": True}
+        if "/events/count" in path:
+            return 200, len(self.events[cid])
         if "/events/search" in path:
             return 200, {"items": list(reversed(self.events[cid]))}
         info = {"id": cid, "execution_status": self.execution,
@@ -242,7 +244,7 @@ def test_out_of_order_replays_and_error_churn_do_not_reset_or_advance(make_harne
     results = [h.run(tick, apply=False)["items"][0] for tick in ("A", "B", "A", "B", "A")]
     assert [item["stage"] for item in results] == [0, 1, 1, 1, 1]
     for i in range(3):
-        h.events[h.cids[9000002]] = [{"kind": "ConversationErrorEvent", "detail": f"failure {i}"}]
+        h.events[h.cids[9000002]] = [{"id": f"error-{i}", "kind": "ConversationErrorEvent", "detail": f"failure {i}"}]
         item = h.run(f"E{i}", apply=False)["items"][0]
         assert item["state"] != "progressing" and "failure" not in item["changed_parts"]
 
@@ -301,8 +303,9 @@ def test_authority_change_after_reservation_prevents_the_post(make_harness):
     h.fetch = original
     h.run("C")
     assert h.posts == [h.cids[9000002]]
-    effect = next(r for r in h.state()["dispatch_decisions"] if r.get("kind") == "epic_coordination_effect")
-    assert effect["outcome"] == "delivered" and effect["attempts"] == 1 and effect["previous_refusal"]
+    attempts = [r for r in h.state()["dispatch_decisions"] if r.get("kind") == "epic_coordination_effect"]
+    assert [r["outcome"] for r in attempts] == ["refused", "delivered"]
+    assert [r["attempts"] for r in attempts] == [0, 1]
 
 
 def test_fifo_blocker_does_not_hold_independent_peer(make_harness):
@@ -364,3 +367,55 @@ def test_stop_after_post_prevents_followup_session_access(make_harness):
     before = len(h.requests)
     assert h.run("B")["items"][0]["state"] == "authority_stop"
     assert len(h.requests) == before
+
+
+def test_builder_dependency_hold_appearing_after_reservation_fences_post(make_harness):
+    h = make_harness()
+    h.blocker(9000002)
+    original = h.fetch
+    reads = 0
+    receipt = ("receipt: blocker_action.v1\naction: action:wait-dependency\nowner: builder\n"
+               "next_action: Verify the dependency\nunblocks_when: Dependency resolved\n"
+               "last_verified_at: 2026-11-13T00:00:00Z\n")
+    def changing(path, timeout):
+        nonlocal reads
+        if path.endswith("/issues/9000002"):
+            reads += 1
+        if reads >= 4 and "/issues/9000002" in path:
+            if "/comments?" in path:
+                return 200, json.dumps([{"body": receipt, "author_association": "OWNER"}]).encode()
+            return 200, json.dumps({"number": 9000002, "state": "open", "labels": [
+                {"name": "agent:blocked"}, {"name": "action:wait-dependency"}]}).encode()
+        return original(path, timeout)
+    h.fetch = changing
+    item = h.run("before-hold")["items"][0]
+    assert reads >= 4 and h.posts == [] and item["effects"][0]["outcome"] == "refused"
+    effect = next(r for r in h.state()["dispatch_decisions"] if r.get("kind") == "epic_coordination_effect")
+    assert effect["attempts"] == 0
+    assert h.run("held")["items"][0]["state"] == "authority_stop"
+    stop = next(s for s in h.state()["stop_conditions"] if s.get("stop") == "authority_stop")
+    assert stop["owner"] == "builder" and stop["investigation_workflow"] == coord.REPAIR_WORKFLOW
+
+
+def test_child_pr_scope_changing_after_reservation_fences_post(make_harness):
+    h = make_harness()
+    h.blocker(9000002)
+    original = h.fetch
+    reads = 0
+    def changing(path, timeout):
+        nonlocal reads
+        if "/pulls?" in path:
+            reads += 1
+            child = 9000002 if reads < 4 else 9000003
+            row = {"number": 6628, "state": "open", "draft": False,
+                   "body": f"Governing-Issue: #{h.epic}\nCloses #{child}",
+                   "head": {"ref": "b/9000002", "sha": "a" * 40,
+                            "repo": {"full_name": coord.github_read.REPOSITORY}},
+                   "base": {"repo": {"full_name": coord.github_read.REPOSITORY}}}
+            return 200, json.dumps([row]).encode()
+        return original(path, timeout)
+    h.fetch = changing
+    item = h.run("pr-changed")["items"][0]
+    assert reads >= 4 and h.posts == [] and item["effects"][0]["outcome"] == "refused"
+    effect = next(r for r in h.state()["dispatch_decisions"] if r.get("kind") == "epic_coordination_effect")
+    assert effect["attempts"] == 0

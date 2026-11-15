@@ -50,7 +50,8 @@ def _pending(state: Mapping[str, Any], issue: int) -> list[dict[str, Any]]:
     record, but it no longer blocks (or is reconciled against) a successor assignment.
     """
     return [r for r in state.get("dispatch_decisions", []) if isinstance(r, dict)
-            and r.get("kind") == EFFECT_KIND and r.get("issue") == issue and r.get("outcome") in PENDING
+            and r.get("kind") == EFFECT_KIND and r.get("issue") == issue
+            and (r.get("outcome") in PENDING or coord._ambiguous_refusal(r))
             and not _ended(state, issue, r.get("conversation_id"))]
 
 
@@ -93,7 +94,9 @@ def _update(layout: ew.Layout, effect: Mapping[str, Any], *, next_action: str) -
                             pending = record.setdefault("pending_obligations", [])
                             if obligation not in pending:
                                 pending.append(obligation)
-                    if effect.get("not_sent"):
+                    if (effect.get("not_sent") and record.get("outcome") == "reserved"
+                            and "post_status" not in record and record.get("event_id") is None
+                            and record.get("event_timestamp") is None):
                         record.update(outcome="refused", attempts=0, reason=effect.get("reason"))
                     elif record.get("event_id") and record.get("post_status") == 429:
                         record["outcome"] = "delivered_run_deferred"
@@ -125,8 +128,11 @@ def _reserve(layout: ew.Layout, issue: int, worker: str, decision: Mapping[str, 
         conversation = mapping.get("conversation")
         records = state["dispatch_decisions"]
         prior = [r for r in records if isinstance(r, dict) and r.get("decision_id") == decision["id"]]
+        persisted = next((r for r in records if isinstance(r, Mapping) and r.get("id") == decision["id"]), None)
         if (_pending(state, issue) or _cooling(state, issue)
                 or len(prior) > 1 or any(r.get("outcome") != "refused" or r.get("attempts") != 0 for r in prior)
+                or (prior and decision.get("action") == "repair_technical_dependency")
+                or persisted != decision or mapping.get("coordination", {}).get("last_result", {}).get("decision_id") != decision["id"]
                 or mapping.get("worker") != worker or mapping.get("runtime") != "openhands" or mapping.get("state") != "running"
                 or ew.assignment_of(mapping) != observed or decision.get("assignment") != observed
                 or not isinstance(conversation, Mapping) or conversation.get("status") != "created" or not conversation.get("id")):
@@ -210,18 +216,23 @@ def _session(layout: ew.Layout, issue: int, worker: str, expected: Mapping[str, 
         yield port, key, cid, str(info.get("execution_status") or "").lower(), identity
 
 
-def _fresh_authority(layout: ew.Layout, issue: int, mapping: Mapping[str, Any], fetch: coord.Fetch | None) -> bool:
+def _fresh_context(layout: ew.Layout, issue: int, mapping: Mapping[str, Any], fetch: coord.Fetch | None) -> str | None:
+    """Read current authority and the actual PR projection; None means unknown or held."""
     if fetch is None:
-        return False
+        return None
     try:
         receipt = coord.read_issue_authority(issue, fetch)
         authority = coord.authority_for({"compact_receipts": [receipt]}, issue)
         rows = coord.github_read._Reader(fetch, time.monotonic).pages(
             f"/repos/{coord.github_read.REPOSITORY}/pulls?state=open", coord.github_read.MAX_PAGES)
-        coord._live_pr_part(issue, mapping.get("branch"), rows, epic=layout.epic)
-        return authority.get("kind") in ("none", "technical")
+        pr = coord._live_pr_part(issue, layout.epic, mapping.get("branch"), rows)
+        return pr if authority.get("kind") == "none" else None
     except Exception:  # noqa: BLE001 - unavailable or conflicting live authority fails closed
-        return False
+        return None
+
+
+def _fresh_authority(layout: ew.Layout, issue: int, mapping: Mapping[str, Any], fetch: coord.Fetch | None) -> bool:
+    return _fresh_context(layout, issue, mapping, fetch) is not None
 
 
 def _refuse(layout: ew.Layout, issue: int, worker: str, tick: str, decision: Mapping[str, Any], reason: str,
@@ -230,11 +241,16 @@ def _refuse(layout: ew.Layout, issue: int, worker: str, tick: str, decision: Map
         record = {"id": f"effect:{decision['id']}", "kind": EFFECT_KIND, "schema": coord.SCHEMA,
                   "issue": issue, "worker": worker, "decision_id": decision["id"], "action": decision["action"],
                   "tick": tick, "outcome": "refused", "attempts": 0, "reason": reason}
+        if decision["action"] == "repair_technical_dependency":
+            record["pending_obligations"] = [f"Trusted coordinator: {coord.REPAIR_WORKFLOW}"]
         if not any(isinstance(r, Mapping) and r.get("id") == record["id"] for r in state["dispatch_decisions"]):
             state["dispatch_decisions"].append(record)
             mapping = state["issue_mappings"][str(issue)]
             if ew.assignment_of(mapping) == observed:
-                ew._set_coordination_action(mapping, f"Directive refused: {reason}; reconcile the worker identity before a new decision.")
+                ew._set_coordination_action(mapping, (f"Directive refused: {reason}; reobserve the worker and source authority, "
+                                          f"then continue {coord.REPAIR_WORKFLOW}."
+                                          if decision["action"] == "repair_technical_dependency" else
+                                          f"Directive refused: {reason}; reconcile the worker identity before a new decision."))
         return state
     epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater,
                                          expected_epic_issue_number=layout.epic)
@@ -295,7 +311,8 @@ def apply_item(layout: ew.Layout, issue: int, worker: str, tick: str, *, decisio
         return [_refuse(layout, issue, worker, tick, decision, "invalid current conversation identity", observed)]
     if ew.assignment_of(mapping) != observed or decision.get("assignment") != observed:
         return [_refuse(layout, issue, worker, tick, decision, "the decision belongs to an earlier assignment", observed)]
-    allowed = {"idle", "finished", "error", "stuck", *(("running",) if decision.get("while_active") else ())}
+    # Retained decisions from older code cannot authorize interruption of an active operation.
+    allowed = {"idle", "finished", "error", "stuck"}
     effect: dict[str, Any] | None = None
     posted = False
     try:
@@ -315,10 +332,23 @@ def apply_item(layout: ew.Layout, issue: int, worker: str, tick: str, *, decisio
             if decision["action"] == "repair_technical_dependency":
                 blocker, gap = coord._read_declared_blocker(layout.checkout(worker))
                 blocker_matches = not gap and blocker is not None and blocker.get("summary") == decision.get("declared_blocker")
+            fresh_pr = _fresh_context(layout, issue, current, fetch)
             if (not _binding(current, effect, worker) or ew._checkout_mount_identity(layout, worker, current) != identity
-                    or (decision["action"] == "change_approach" and not aged) or not blocker_matches
-                    or not _fresh_authority(layout, issue, current, fetch)):
+                    or (decision["action"] == "change_approach" and not aged) or not blocker_matches or fresh_pr is None):
                 raise ValueError("effect boundary changed")
+            # Re-read real evidence after reservation and after the last source-authority read.
+            # The endpoint and lifecycle locks bind identity, not the independently running writer.
+            fresh_state = ew._load_state(layout)
+            fresh = coord.observe_worker(layout, worker, issue, fresh_state, runner=runner, http=http)
+            fresh["parts"]["pr"] = fresh_pr
+            latest_state = ew._load_state(layout)
+            latest = latest_state["issue_mappings"][str(issue)]
+            validation, validation_gap = coord._validation_part(latest_state.get("validation_status", {}).get(str(issue)))
+            evidence = coord.directive_evidence(fresh)
+            if (not _binding(latest, effect, worker) or ew._checkout_mount_identity(layout, worker, latest) != identity
+                    or validation_gap or validation != fresh["parts"].get("validation")
+                    or evidence is None or evidence != decision.get("directive_evidence")):
+                raise ValueError("current work evidence changed or is unavailable")
             payload = {"role": "user", "content": [{"type": "text", "text": compose(decision, marker)}], "run": True}
             posted = True
             try:
@@ -340,8 +370,10 @@ def apply_item(layout: ew.Layout, issue: int, worker: str, tick: str, *, decisio
             raise  # the reservation stays pending/unknown; it is never re-posted
         if effect is None:
             return [_refuse(layout, issue, worker, tick, decision, "current endpoint, conversation or authority is unavailable", observed)]
+        next_action = (f"Reobserve current worker evidence and source authority, then continue {coord.REPAIR_WORKFLOW}."
+                       if decision["action"] == "repair_technical_dependency" else "Reconcile current worker and source authority.")
         updated = _update(layout, {"id": effect["id"], "issue": issue, "not_sent": True, "reason": "effect boundary changed"},
-                          next_action="Reconcile current worker and source authority.")
+                          next_action=next_action)
         return [{"decision_id": decision["id"], "action": decision["action"], "outcome": updated.get("outcome"), "event_id": None}]
     result = {"id": effect["id"], "issue": issue, "execution_status": status, "event_id": event_id, "event_timestamp": timestamp}
     if event_id:

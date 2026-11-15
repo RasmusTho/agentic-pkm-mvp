@@ -16,6 +16,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -91,10 +92,13 @@ class Harness:
             if self.post_mode == "lost":
                 raise OSError("synthetic lost reply")
             return (429, None) if self.post_mode == "full" else (200, {"success": True})
+        if "/events/count" in path:
+            return 200, len(self.events.get(cid, []))
         if "/events/search" in path:
             if self.event_hook:
                 self.event_hook(issue, cid)
-            return 200, {"items": list(reversed(self.events.get(cid, [])))}
+            limit = int(parse_qs(urlsplit(path).query).get("limit", ["100"])[0])
+            return 200, {"items": list(reversed(self.events.get(cid, [])))[:limit]}
         if self.get_hook:
             self.get_hook(issue, cid)
         return 200, self.info(issue, cid)
@@ -417,7 +421,7 @@ def _ladder(h):
     return [d for d in h.state()["dispatch_decisions"] if d.get("kind") == coord.KIND and d["issue"] == ISSUE]
 
 
-def test_active_no_progress_executes_a_diagnosis_then_a_bounded_continuation(harness, monkeypatch):
+def test_active_no_progress_is_diagnosed_then_held_without_interrupting(harness, monkeypatch):
     h = harness()
     h.execution = "running"
     h.run("base")
@@ -426,33 +430,58 @@ def test_active_no_progress_executes_a_diagnosis_then_a_bounded_continuation(har
     assert diagnosis["action"] == "bounded_diagnosis" and diagnosis["diagnosis"]["tick"] == "diagnose"
     assert diagnosis["diagnosis"]["execution_status"] == "running" and "no new event" in diagnosis["diagnosis"]["finding"]
     assert "diagnosis executed" in h.mapping()["next_action"] and h.posts == []
-    # A single long operation inside its budget is left alone; the wait names its bound.
+    # A single long operation, including a later unrelated event, is left alone.
     for n in range(4):
         item = h.run(f"wait{n}")["items"][0]
-        assert item["state"] == "waiting_active_or_backoff" and "at most" in item["next_action"] and h.posts == []
-    # Past the operation budget the changed-approach directive supersedes it: not a perpetual wait.
+        assert item["state"] == "waiting_active_or_backoff" and h.posts == []
+    h.events[h.cids[ISSUE]].append({"id": "tool-event", "kind": "ActionEvent", "source": "agent"})
     monkeypatch.setattr(coord, "ACTIVE_OPERATION_SECONDS", 0.0)
     item = h.run("due")["items"][0]
-    assert item["action"] == "change_approach" and h.posts == [h.cids[ISSUE]]
-    assert h.payloads[0]["run"] is True and h.effects()[0]["while_active"] is True
+    assert item["state"] == "stopped_active_unconfirmed" and h.posts == []
+    assert any(s.get("stop") == "active_unconfirmed" for s in h.state()["stop_conditions"])
     for n in range(3):
         h.run(f"after{n}")
-    assert len(h.posts) == 1
+    assert h.posts == []
 
 
-def test_looping_active_worker_gets_the_directive_on_the_next_unchanged_pass(harness):
+def test_looping_active_worker_is_not_directed_without_bound_failure(harness):
     h = harness()
     h.execution = "running"
     cid = h.cids[ISSUE]
-    def step():
+    for tick in ("base", "diagnose", "loop"):
         h.events[cid].append({"id": str(uuid.uuid4()), "kind": "ActionEvent", "source": "agent",
                               "timestamp": datetime.now(timezone.utc).isoformat()})
-    for tick in ("base", "diagnose", "loop"):
-        step()
         h.run(tick)
-    assert [d["action"] for d in _ladder(h)] == ["bounded_diagnosis", "change_approach"]
-    assert "loop" in _ladder(h)[0]["diagnosis"]["finding"] or "steps" in _ladder(h)[0]["diagnosis"]["finding"]
+    assert [d["action"] for d in _ladder(h)] == ["bounded_diagnosis"]
+    assert h.posts == []
+
+
+def test_active_repeated_errors_require_investigation_then_inactive_work_can_be_directed(harness):
+    h = harness()
+    h.execution = "running"
+    cid = h.cids[ISSUE]
+    def failure(event_id):
+        h.events[cid].append({"id": event_id, "kind": "ConversationErrorEvent", "code": "ToolError",
+                              "detail": "pytest failed", "timestamp": datetime.now(timezone.utc).isoformat()})
+    h.run("base")
+    failure("failure-1")
+    h.run("diagnose")
+    h.run("same-error")
+    assert h.posts == []
+    failure("failure-2")
+    item = h.run("loop")["items"][0]
+    assert item["state"] == "stopped_active_unconfirmed" and item["action"] == "active_failure_review"
+    assert [d["action"] for d in _ladder(h)] == ["bounded_diagnosis", "active_failure_review"]
+    assert _ladder(h)[1]["failure_events"] == ["failure-1", "failure-2"]
+    assert _ladder(h)[1]["failure_signature"]
+    assert h.posts == [] and h.effects() == []
+    for n in range(3):
+        h.run(f"after{n}")
+    assert h.posts == []
+    h.execution = "error"
+    h.run("inactive")
     assert h.posts == [cid]
+    assert h.payloads[0]["run"] is True
 
 
 def test_progress_after_diagnosis_resets_the_ladder(harness):
@@ -517,3 +546,117 @@ def test_fixture_verify_refuses_success_when_authority_stops(harness, monkeypatc
         return response
     with pytest.raises(ValueError, match="authority"):
         fixture._run(["verify", *args], runner=h.runner, http=http)
+
+
+def _pr_row(h):
+    return {"number": 6628, "state": "open", "draft": False,
+            "body": f"Governing-Issue: #{h.epic}\nCloses #{ISSUE}",
+            "head": {"ref": f"b/{ISSUE}", "sha": "a" * 40,
+                     "repo": {"full_name": coord.github_read.REPOSITORY}},
+            "base": {"repo": {"full_name": coord.github_read.REPOSITORY}}}
+
+
+def test_parent_governed_child_pr_allows_bound_directive(harness):
+    h = harness()
+    row = _pr_row(h)
+    fetch = h.fetch
+    def with_pr(path, timeout):
+        if "/pulls?" in path:
+            return 200, json.dumps([row]).encode()
+        return fetch(path, timeout)
+    h.blocker(ISSUE)
+    result = coord.coordinate(h.layout, tick="parent-pr", stall_limit=1, runner=h.runner,
+                              http=h.http, fetch=with_pr, apply=True)
+    assert result["items"][0]["action"] == "repair_technical_dependency"
+    assert h.posts == [h.cids[ISSUE]]
+
+
+@pytest.mark.parametrize("mutation", ["wrong_child", "wrong_parent", "wrong_head_repo", "wrong_base_repo",
+                                        "wrong_branch", "multi_close", "duplicate_governing", "multiple_prs"])
+def test_pr_scope_ambiguities_fence_directives(harness, mutation):
+    h = harness()
+    row = _pr_row(h)
+    rows = [row]
+    if mutation == "wrong_child":
+        row["body"] = f"Governing-Issue: #{h.epic}\nCloses #{ISSUE + 1}"
+    elif mutation == "wrong_parent":
+        row["body"] = f"Governing-Issue: #999999\nCloses #{ISSUE}"
+    elif mutation == "wrong_head_repo":
+        row["head"]["repo"]["full_name"] = "other/repository"
+    elif mutation == "wrong_base_repo":
+        row["base"]["repo"]["full_name"] = "other/repository"
+    elif mutation == "wrong_branch":
+        row["head"]["ref"] = "b/wrong"
+    elif mutation == "multi_close":
+        row["body"] += f"\nCloses #{ISSUE + 1}"
+    elif mutation == "duplicate_governing":
+        row["body"] += f"\nGoverning-Issue: #{h.epic}"
+    else:
+        rows.append(dict(row, number=6629))
+    fetch = h.fetch
+    def with_pr(path, timeout):
+        if "/pulls?" in path:
+            return 200, json.dumps(rows).encode()
+        return fetch(path, timeout)
+    h.blocker(ISSUE)
+    result = coord.coordinate(h.layout, tick="invalid-pr", stall_limit=1, runner=h.runner,
+                              http=h.http, fetch=with_pr, apply=True)
+    assert result["items"][0]["evidence_gaps"]["pr"] == "unavailable"
+    assert h.posts == []
+
+
+def test_unsafe_worker_lifecycle_lock_holds_only_that_worker(harness):
+    h = harness(2)
+    h.blocker(ISSUE)
+    h.blocker(ISSUE + 1)
+    lock = ew._controller_dir(h.layout, "lifecycle-locks") / "worker-0.lock"
+    lock.unlink()
+    lock.mkdir()  # real non-regular owned lock path, not a mocked lock failure
+    result = h.run("unsafe-lock")
+    items = {item["issue"]: item for item in result["items"]}
+    assert items[ISSUE]["state"] == "held_lifecycle_unavailable" and ISSUE in result["held"]
+    assert h.posts == [h.cids[ISSUE + 1]]
+    assert not any(port == h.ports["worker-0"] for _, port, _ in h.requests)
+    from app.builderops import epic_run_state
+    state_path = epic_run_state.epic_run_state_path(h.layout.run_id, root=h.layout.run_state_dir)
+    state_path.write_text("{")  # shared state corruption must stop the pass, not be treated as a peer fault
+    prior = len(h.posts)
+    with pytest.raises(ValueError):
+        h.run("corrupt-state")
+    assert len(h.posts) == prior
+
+
+def test_active_failure_evidence_resets_on_new_failure_or_progress(harness):
+    h = harness()
+    h.execution = "running"
+    cid = h.cids[ISSUE]
+    def failure(event_id, detail):
+        h.events[cid].append({"id": event_id, "kind": "ConversationErrorEvent", "code": "ToolError", "detail": detail})
+    h.run("baseline")
+    failure("one", "pytest failed")
+    h.run("diagnosis")
+    failure("two", "build failed")
+    h.run("different-failure")
+    assert h.posts == []
+    (h.layout.checkout("worker-0") / "progress.py").write_text("real work\n")
+    assert h.run("progress")["items"][0]["state"] == "progressing"
+    failure("three", "build failed")
+    h.run("new-baseline")
+    assert h.posts == []
+    failure("four", "build failed")
+    item = h.run("repeated")["items"][0]
+    assert item["action"] == "active_failure_review" and h.posts == []
+
+
+def test_provider_backoff_does_not_become_an_active_loop(harness, monkeypatch):
+    h = harness()
+    h.execution = "running"
+    monkeypatch.setattr(coord, "ACTIVE_OPERATION_SECONDS", 0.0)
+    cid = h.cids[ISSUE]
+    h.run("baseline")
+    for n in range(4):
+        h.events[cid].append({"id": f"backoff-{n}", "kind": "ConversationErrorEvent",
+                              "code": "Provider", "detail": "503 service unavailable"})
+        item = h.run(f"backoff-{n}")["items"][0]
+        assert item["state"] in ("waiting_transient", "held_transient_network")
+    assert h.posts == []
