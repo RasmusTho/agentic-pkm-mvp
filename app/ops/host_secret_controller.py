@@ -55,6 +55,28 @@ def _validate_deploy_image_binding(raw: object, target: object) -> None:
         raise HostSecretAdmissionError() from None
 
 
+def _deploy_image_binding_matches_public_selectors(
+    stored: object, expected: object,
+) -> bool:
+    """Allow readback across a consumer-only plan evolution.
+
+    The native journal retains the full historical plan and independently
+    authenticates whether its consumer list is the pre-YouTube shape. The host
+    journal stores only the value-free image binding, so reconciliation may
+    compare the public channel/revision/digest selectors while preserving the
+    historical fingerprint. Any selector change remains a hard refusal.
+    """
+    try:
+        stored_payload = json.loads(stored) if isinstance(stored, str) else None
+        expected_payload = json.loads(expected) if isinstance(expected, str) else None
+        if not isinstance(stored_payload, dict) or not isinstance(expected_payload, dict):
+            return False
+        fields = ("schema", "repository", "channel", "revision", "image_digest")
+        return all(stored_payload.get(field) == expected_payload.get(field) for field in fields)
+    except Exception:
+        return False
+
+
 def _validate_source_image_binding(raw: object, target: object) -> None:
     from app.ops.pg_acceptance import IMAGE_REPOSITORY
 
@@ -613,7 +635,10 @@ class HostSecretController:
             ) != expected:
                 raise HostSecretAdmissionError()
             if (pending["kind"] == "deploy" and pending.get("deploy_image_binding") is not None
-                    and pending.get("deploy_image_binding") != expected_deploy_image_binding):
+                    and pending.get("deploy_image_binding") != expected_deploy_image_binding
+                    and not _deploy_image_binding_matches_public_selectors(
+                        pending.get("deploy_image_binding"), expected_deploy_image_binding
+                    )):
                 raise HostSecretAdmissionError()
             prior_generation = pending.get("prior_generation")
             allow_bootstrap = pending.get("allow_bootstrap")
@@ -1016,7 +1041,15 @@ class HostSecretController:
                 # matching remote receipt before a new request can adopt the ID.
                 raise HostSecretAdmissionError()
             if pending and pending.get("deploy_image_binding") != deploy_image_binding:
-                if not (reconciliation_only and pending.get("deploy_image_binding") is None):
+                if not (
+                    reconciliation_only
+                    and (
+                        pending.get("deploy_image_binding") is None
+                        or _deploy_image_binding_matches_public_selectors(
+                            pending.get("deploy_image_binding"), deploy_image_binding
+                        )
+                    )
+                ):
                     raise HostSecretAdmissionError()
             if pending and operation_id is not None and pending['operation_id'] != operation_id:
                 raise HostSecretAdmissionError()
@@ -1042,9 +1075,16 @@ class HostSecretController:
                     )
                     legacy_terminal = (last.get('deploy_image_binding') is None
                                        and (reconciliation_only or allow_legacy_terminal))
+                    compatible_terminal = (
+                        (reconciliation_only or allow_legacy_terminal)
+                        and _deploy_image_binding_matches_public_selectors(
+                            last.get('deploy_image_binding'), deploy_image_binding
+                        )
+                    )
                     if (last['kind'] != 'deploy' or last['target'] != target
                         or last.get('allow_bootstrap') is not False
-                        or (last.get('deploy_image_binding') != deploy_image_binding and not legacy_terminal)
+                        or (last.get('deploy_image_binding') != deploy_image_binding
+                            and not legacy_terminal and not compatible_terminal)
                         or not terminal_matches):
                         raise HostSecretAdmissionError()
                     completed = str(last['stage'])

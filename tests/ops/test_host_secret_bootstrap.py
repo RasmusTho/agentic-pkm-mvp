@@ -2572,6 +2572,84 @@ def test_bws_malformed_postgres_password_is_refused(tmp_path, password):
         resolve_host_secret_values(channel="dev", consumer="postgres-api", provider="bws", bws_reader=reader, controller=controller)
 
 
+def test_youtube_nonprod_consumer_is_scoped_and_redacted(tmp_path: Path) -> None:
+    contract = host_secret_bootstrap.load_host_secret_contract()
+    values = {
+        "youtube.oauth-client-id": "fixture-client-id",
+        "youtube.oauth-client-secret": "fixture-client-secret",
+        "youtube.token-store-key": "0" * 64,
+    }
+    requested: list[str] = []
+
+    def lookup(_service: str, account: str) -> str:
+        requested.append(account)
+        secret = account.rsplit(":", 1)[-1]
+        if account.startswith("dev:youtube-auth-cli:"):
+            return values[secret]
+        raise HostSecretBootstrapError()
+
+    with materialize_consumer_environment(
+        channel="dev",
+        consumer="youtube-auth-cli",
+        contract=contract,
+        keychain_lookup=lookup,
+        directory=tmp_path,
+    ) as env_file:
+        content = env_file.read_text(encoding="utf-8")
+        assert "YOUTUBE_OAUTH_CLIENT_ID=fixture-client-id" in content
+        assert "YOUTUBE_OAUTH_CLIENT_SECRET=fixture-client-secret" in content
+        assert "YOUTUBE_TOKEN_STORE_KEY=" + values["youtube.token-store-key"] in content
+        assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+    assert not env_file.exists()
+    assert all("prod:" not in account for account in requested)
+    assert all(secret not in "".join(requested) for secret in values.values())
+
+    runtime_accounts = {
+        "dev:youtube-runtime-api:youtube.oauth-client-id": values["youtube.oauth-client-id"],
+    }
+
+    def partial_lookup(_service: str, account: str) -> str:
+        if account in runtime_accounts:
+            return runtime_accounts[account]
+        raise HostSecretBootstrapError()
+
+    with pytest.raises(HostSecretBootstrapError):
+        with materialize_consumer_environment(
+            channel="dev",
+            consumer="youtube-runtime-api",
+            contract=contract,
+            keychain_lookup=partial_lookup,
+            directory=tmp_path,
+        ):
+            pytest.fail("partial YouTube declarations must fail closed")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_youtube_shared_token_key_agreement_decodes_hex_case(tmp_path: Path) -> None:
+    """Runtime siblings compare token-store keys by decoded key bytes."""
+    values = {
+        "youtube.oauth-client-id": "fixture-client-id",
+        "youtube.oauth-client-secret": "fixture-client-secret",
+        "youtube.token-store-key": "a" * 64,
+    }
+
+    def lookup(_service: str, account: str) -> str:
+        _channel, _consumer, secret = account.split(":", 2)
+        value = values[secret]
+        if secret == "youtube.token-store-key" and _consumer != "youtube-runtime-api":
+            return value.upper()
+        return value
+
+    with materialize_consumer_environment(
+        channel="dev",
+        consumer="youtube-runtime-api",
+        keychain_lookup=lookup,
+        directory=tmp_path,
+    ) as env_file:
+        assert "YOUTUBE_TOKEN_STORE_KEY=" + values["youtube.token-store-key"] in env_file.read_text()
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_first_use_controller_directory_chain_is_durable_before_admission(tmp_path, monkeypatch):
     path = tmp_path / "new-state" / "yggdrasil" / "secret-controller"
     observed = set()

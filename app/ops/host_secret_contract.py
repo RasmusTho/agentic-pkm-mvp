@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from typing import cast
 from urllib.parse import quote
 
 
@@ -43,9 +45,9 @@ _KEYCHAIN_ACCOUNT_TEMPLATE = "{channel}:{consumer}:{secret}"
 _KEYCHAIN_SERVICE = "yggdrasil.host-secrets"
 _CHANNEL_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,15}$")
 _CONSUMER_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,15}(?:-[a-z][a-z0-9]{0,15}){2,3}$")
-_LOGICAL_SECRET_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,15}\.[a-z][a-z0-9-]{0,15}$")
+_LOGICAL_SECRET_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,15}\.[a-z][a-z0-9-]{0,31}$")
 _CHILD_BINDING_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
-_KIND_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,15}$")
+_KIND_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 _ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
 _IDENTIFIER_MAX_LENGTH = 128
 CHANNEL_PROJECTS = {"dev": "non-prod", "test": "non-prod", "prod": "prod"}
@@ -62,6 +64,12 @@ BWS_IDENTITIES = {
     "karakeep.search-token": "channel",
     "karakeep.api-key": "channel",
     "karakeep.account-pass": "channel",
+    # The same OAuth client may be provisioned into both non-production
+    # channels, but the records stay channel-scoped so an unconfigured channel
+    # cannot inherit a sibling's optional group.
+    "youtube.oauth-client-id": "channel",
+    "youtube.oauth-client-secret": "channel",
+    "youtube.token-store-key": "channel",
 }
 BWS_MACHINE_ACCOUNTS = {
     "admin": ["non-prod", "prod"],
@@ -77,6 +85,49 @@ DATABASE_CONSUMERS = {
     "postgres-watcher": "watcher",
     "postgres-capture-watch": "heimdal-capture-watch",
 }
+YOUTUBE_SECRET_IDS = frozenset({
+    "youtube.oauth-client-id",
+    "youtube.oauth-client-secret",
+    "youtube.token-store-key",
+})
+YOUTUBE_BWS_CONSUMER_GRANTS = {
+    "youtube-runtime-api": YOUTUBE_SECRET_IDS,
+    "youtube-runtime-worker": YOUTUBE_SECRET_IDS,
+    "youtube-runtime-watcher": YOUTUBE_SECRET_IDS,
+}
+YOUTUBE_KEYCHAIN_CONSUMER = "youtube-auth-cli"
+_KEYCHAIN_ONLY_GRANTS = frozenset(
+    (channel, YOUTUBE_KEYCHAIN_CONSUMER, secret)
+    for channel in ("dev", "test")
+    for secret in YOUTUBE_SECRET_IDS
+)
+
+
+def youtube_runtime_consumers(channel: str) -> tuple[str, ...]:
+    return tuple(YOUTUBE_BWS_CONSUMER_GRANTS) if channel in {"dev", "test"} else ()
+
+
+def is_legacy_youtube_consumer_upgrade(
+    channel: str, historical: object, requested: object,
+) -> bool:
+    """Recognize only the bounded pre-YouTube non-production profile upgrade."""
+    if channel not in {"dev", "test"}:
+        return False
+    base = frozenset((*DATABASE_CONSUMERS, "heimdal-api-ingress"))
+    if (
+        isinstance(historical, (str, bytes))
+        or isinstance(requested, (str, bytes))
+        or not isinstance(historical, Iterable)
+        or not isinstance(requested, Iterable)
+    ):
+        return False
+    try:
+        return (
+            set(cast(Iterable[str], historical)) == base
+            and set(cast(Iterable[str], requested)) == base | set(youtube_runtime_consumers(channel))
+        )
+    except (TypeError, ValueError):
+        return False
 # The witness is not a deployment service and must never join a start/stop set.
 SOURCE_WITNESS_CONSUMER = "postgres-source-witness"
 SOURCE_WITNESS_SERVICE = "source-identity-db-witness"
@@ -90,7 +141,6 @@ _ENVIRONMENT_GRANTS = {
     "heimdal-external-alerts": {"discord.webhook"},
 }
 _KEYCHAIN_ONLY_SECRETS: frozenset[str] = frozenset()
-_KEYCHAIN_ONLY_GRANTS: frozenset[tuple[str, str, str]] = frozenset()
 KARAKEEP_GRANTS = {
     "karakeep-service-web": {"karakeep.session-token", "karakeep.search-token"},
     "karakeep-service-search": {"karakeep.search-token"},
@@ -139,6 +189,8 @@ class HostSecretContract:
             self.file_binding(channel=channel, consumer=consumer, secret=secret)
         else:
             self.require_declared(channel=channel, consumer=consumer, secret=secret)
+        if (channel, consumer, secret) in _KEYCHAIN_ONLY_GRANTS:
+            raise UndeclaredSecretConsumerError("undeclared BWS consumer request")
         if channel not in CHANNEL_PROJECTS or secret not in BWS_IDENTITIES:
             raise UndeclaredSecretConsumerError("undeclared host secret request")
         scope = BWS_IDENTITIES[secret]
@@ -401,8 +453,10 @@ def load_host_secret_contract_bytes(raw: bytes) -> HostSecretContract:
 def _validate_keychain_only_contract(
     payload: dict[str, object], allowed: set[tuple[str, str, str]]
 ) -> None:
-    if payload["keychain_only_secrets"] != [] or any(
-        grant[2] in _KEYCHAIN_ONLY_SECRETS for grant in allowed
+    if (
+        payload["keychain_only_secrets"] != []
+        or not _KEYCHAIN_ONLY_GRANTS <= allowed
+        or any(grant[2] in _KEYCHAIN_ONLY_SECRETS for grant in allowed)
     ):
         raise ValueError("invalid host secret Keychain-only contract")
 
@@ -421,6 +475,11 @@ def _validate_bws_contract(
         (channel, consumer, secret)
         for channel in ("dev", "test")
         for consumer, secrets in KARAKEEP_GRANTS.items()
+        for secret in secrets
+    } | {
+        (channel, consumer, secret)
+        for channel in ("dev", "test")
+        for consumer, secrets in YOUTUBE_BWS_CONSUMER_GRANTS.items()
         for secret in secrets
     }
     expected_bws = {

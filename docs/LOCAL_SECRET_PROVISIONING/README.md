@@ -70,6 +70,27 @@ is accepted; bootstrap still requires the existing local qualification receipt d
 deployment owner. The owner decision does not supply that local file or complete live deployment
 qualification. Explicit `--existing-secrets-only` deployment retains its read-only qualification exception.
 
+The non-production YouTube OAuth boundary uses the same BWS reader and channel project, with no
+new store or daemon. `youtube.oauth-client-id`, `youtube.oauth-client-secret`, and
+`youtube.token-store-key` are declared only for `youtube-runtime-api`, `youtube-runtime-worker`,
+and `youtube-runtime-watcher` on `dev` and `test`; the client id and client secret resolve the
+channel-scoped identities such as `dev/youtube.oauth-client-id` and
+`test/youtube.oauth-client-secret`; the same OAuth client may be provisioned into both channels,
+while the token-store key remains channel-scoped as `dev/youtube.token-store-key` or
+`test/youtube.token-store-key`. Missing all three leaves the YouTube runtime unconfigured; a
+partial or malformed set fails closed. Production has no YouTube grant. The native deploy writes
+only mode-0600 temporary env-file handles for the three runtime
+consumers, and Compose receives those handles through `YOUTUBE_RUNTIME_ENV_FILE_API`,
+`YOUTUBE_RUNTIME_ENV_FILE_WORKER`, and `YOUTUBE_RUNTIME_ENV_FILE_WATCHER`.
+The normal writer invocation is value-free in the command surface and reads the value from stdin
+on the approved writer host; repeat it for the three logical ids and selected channel only:
+
+```text
+scripts/secrets import <dev|test> youtube.oauth-client-id --stdin
+scripts/secrets import <dev|test> youtube.oauth-client-secret --stdin
+scripts/secrets import <dev|test> youtube.token-store-key --stdin
+```
+
 PostgreSQL alone uses file delivery: a root-owned `0440` source, group `LOCAL_GID`, under root-only
 `0700` tmpfs is mounted into the six authorized database services. Direct DSNs must be credential-free;
 one database resolver reads `DATABASE_PASSWORD_FILE` in process memory for app config, migrations,
@@ -116,7 +137,9 @@ parent #5667 remains open for that gate.
 ### Declared identifier contract
 
 The existing BWS-backed value-free declarations are `heimdal.raw-store-key`, `heimdal.archive-pass`, `openai.api-key`,
-`anthropic.api-key`, `github.token`, and `discord.webhook`, their child bindings, validation kinds, and whether each is optional. The
+`anthropic.api-key`, `github.token`, `discord.webhook`, `youtube.oauth-client-id`,
+`youtube.oauth-client-secret`, and `youtube.token-store-key`, their child bindings, validation kinds,
+and whether each is optional. The
 raw-store key is granted to `heimdal-capture-watch`, `heimdal-api-ingress`, and the one-shot
 `heimdal-raw-migrate` transformer. The existing `openai.api-key` grants are `builderops-model-inquiry`
 with the `model_inquiry` role and `builderops-ckm-semantic` with the `ckm_semantic` role;

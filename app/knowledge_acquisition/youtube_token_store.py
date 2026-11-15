@@ -41,6 +41,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -83,7 +84,7 @@ class OAuthWriterAdmissionError(RuntimeError):
     """Another process owns the channel's one OAuth writer transition."""
 
 
-def resolve_token_store_key() -> bytes:
+def resolve_token_store_key(environment: Mapping[str, str] | None = None) -> bytes:
     """Resolve the AES-256-GCM key, fail-loud (mirrors ``resolve_raw_store_key``).
 
     The key is a 64-char hex string (32 bytes) in ``YOUTUBE_TOKEN_STORE_KEY``;
@@ -91,7 +92,14 @@ def resolve_token_store_key() -> bytes:
     A missing or malformed key raises rather than falling back to plaintext or
     a fixed default key.
     """
-    raw = os.environ.get(KEY_ENV_VAR)
+    source = os.environ if environment is None else environment
+    raw = source.get(KEY_ENV_VAR)
+    if not raw:
+        # The host-secret bootstrap owns the temporary file; the consumer
+        # receives only its path and resolves the declared binding here.
+        from app.ops.host_secret_bootstrap import load_runtime_secret_values
+
+        raw = load_runtime_secret_values(source).get(KEY_ENV_VAR)
     if not raw:
         raise TokenStoreKeyMissingError(
             f"{KEY_ENV_VAR} is not set: YouTube OAuth tokens are encrypted at rest and this "
@@ -372,8 +380,15 @@ class YouTubeTokenStore:
     transitions across processes.
     """
 
-    def __init__(self, path: Path | str | None = None, *, read_only: bool = False) -> None:
+    def __init__(
+        self,
+        path: Path | str | None = None,
+        *,
+        read_only: bool = False,
+        environment: Mapping[str, str] | None = None,
+    ) -> None:
         self._read_only = read_only
+        self._environment = environment
         if path is None:
             configured_path = (os.environ.get(PATH_ENV_VAR) or "").strip()
             state_root = canonical_oauth_state_root()
@@ -1119,7 +1134,7 @@ class YouTubeTokenStore:
 
     def put(self, binding_id: str, token: StoredToken) -> None:
         """Encrypt and persist ``token`` for ``binding_id`` (requires the key)."""
-        key = resolve_token_store_key()
+        key = resolve_token_store_key(self._environment)
         plaintext = json.dumps(token._to_plain(), sort_keys=True).encode("utf-8")
         nonce = os.urandom(_NONCE_BYTES)
         ciphertext = AESGCM(key).encrypt(nonce, plaintext, None)
@@ -1143,7 +1158,7 @@ class YouTubeTokenStore:
             record = self._load_file()["records"].get(binding_id)
         if record is None:
             return None
-        key = resolve_token_store_key()
+        key = resolve_token_store_key(self._environment)
         ciphertext = base64.b64decode(record["ciphertext"])
         nonce = base64.b64decode(record["nonce"])
         plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)

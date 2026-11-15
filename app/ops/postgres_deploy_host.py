@@ -15,7 +15,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from app.ops.bws_secret_admin import BwsAdminConfig, BwsSecretAdmin
-from app.ops.host_secret_contract import DATABASE_CONSUMERS
+from app.ops.host_secret_contract import (
+    DATABASE_CONSUMERS,
+    is_legacy_youtube_consumer_upgrade,
+    youtube_runtime_consumers,
+)
 from app.ops.host_secret_controller import (
     HostSecretAdmissionError, HostSecretController, TerminalEvidence,
 )
@@ -218,6 +222,48 @@ _TEST_RECOVERY_MARKER_SCHEMA = 'test-source-recovery-host.v1'
 _TEST_RECOVERY_REPAIR_MARKER_SCHEMA = 'test-source-recovery-host.v2'
 
 
+def _test_recovery_requests_compatible(
+    stored: TestRecoveryRequest, current: TestRecoveryRequest,
+) -> bool:
+    if (
+        stored.failed_operation_id != current.failed_operation_id
+        or stored.authority_cutover != current.authority_cutover
+        or stored.source_operation_id != current.source_operation_id
+    ):
+        return False
+
+    return (
+        (stored.plan == current.plan or _test_recovery_plans_compatible(stored.plan, current.plan))
+        and (
+            stored.source_plan == current.source_plan
+            or _test_recovery_plans_compatible(stored.source_plan, current.source_plan)
+        )
+    )
+
+
+def _test_recovery_plans_compatible(
+    historical: DeployPlan | None, requested: DeployPlan | None,
+) -> bool:
+    """Allow only the bounded pre-YouTube consumer-profile expansion."""
+    if historical is None or requested is None:
+        return historical is requested
+    if historical == requested:
+        return True
+    return (
+        is_legacy_youtube_consumer_upgrade(
+            requested.channel, historical.consumers, requested.consumers
+        )
+        and all(
+            getattr(historical, field) == getattr(requested, field)
+            for field in (
+                'channel', 'revision', 'services', 'ack_forward_only', 'image_digest',
+                'automatic', 'authority_cutover', 'promotion_plan',
+                'principal_cutover', 'activation_scope',
+            )
+        )
+    )
+
+
 def _test_recovery_marker_path(controller: HostSecretController,
                                request: TestRecoveryRequest) -> Path:
     request.validate()
@@ -275,7 +321,7 @@ def _read_test_recovery_marker(controller: HostSecretController,
     if (stored.source_operation_id is not None
             or stored.failed_operation_id != source_operation_id
             or stored.authority_cutover != request.authority_cutover
-            or (marker['state'] != 'ready' and stored != request)):
+            or (marker['state'] != 'ready' and not _test_recovery_requests_compatible(stored, request))):
         raise PostgresDeployError()
     if marker['schema'] == _TEST_RECOVERY_REPAIR_MARKER_SCHEMA:
         repair = marker.get('repair')
@@ -335,9 +381,19 @@ def _write_test_recovery_repair_marker(
         'next_operation_id': next_operation_id,
     }
     if prior['schema'] == _TEST_RECOVERY_REPAIR_MARKER_SCHEMA:
-        normalized = dict(prior['repair'])
-        normalized.pop('candidate_plan_object', None)
-        if normalized != repair:
+        prior_repair = dict(prior['repair'])
+        prior_repair.pop('candidate_plan_object', None)
+        candidate_payload = prior_repair.pop('candidate_plan', None)
+        if candidate_payload is None:
+            raise PostgresDeployError()
+        try:
+            prior_candidate = DeployPlan.from_payload(candidate_payload)
+        except Exception:
+            raise PostgresDeployError() from None
+        expected_ids = {key: value for key, value in repair.items()
+                        if key != 'candidate_plan'}
+        if (prior_repair != expected_ids
+                or not _test_recovery_plans_compatible(prior_candidate, candidate_plan)):
             raise PostgresDeployError()
         if prior['instance_state_reconstructed'] or not instance_state_reconstructed:
             return
@@ -913,8 +969,13 @@ def main(argv: list[str] | None = None) -> int:
             raise PostgresDeployError()
         # The controller can inspect DB credentials and the API's degrade-visibly
         # binding. VM-only consumers are selected from VM runtime/migration state.
+        # Ordinary host deploys carry the complete non-production runtime
+        # consumer parity. Explicit authority/principal cutovers are retained
+        # existing-authority operations and keep their historical DB/API
+        # consumer shape; they do not create a YouTube runtime secret layer.
+        youtube_consumers = () if cutover is not None or args.principal_cutover else youtube_runtime_consumers(args.channel)
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),
-                          (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only,
+                          (*DATABASE_CONSUMERS, 'heimdal-api-ingress', *youtube_consumers), args.ack_forward_only,
                           args.image_digest, args.automatic, cutover, args.promotion_plan, args.principal_cutover,
                           args.activation_scope)
         recovery_request = None
@@ -998,7 +1059,9 @@ def main(argv: list[str] | None = None) -> int:
                 failed_successor_operation_id = marker['fresh_operation_id']
                 if marker['schema'] == _TEST_RECOVERY_REPAIR_MARKER_SCHEMA:
                     repair = marker['repair']
-                    if repair['candidate_plan_object'] != plan:
+                    if not _test_recovery_plans_compatible(
+                        repair['candidate_plan_object'], plan
+                    ):
                         raise PostgresDeployError()
                     next_operation_id = repair['next_operation_id']
                 else:
@@ -1060,10 +1123,17 @@ def main(argv: list[str] | None = None) -> int:
 
             if marker is not None and marker['schema'] != _TEST_RECOVERY_MARKER_SCHEMA:
                 raise PostgresDeployError()
-            if (marker is not None
-                    and TestRecoveryRequest.from_payload(marker['request'])
-                    != recovery_request):
-                raise PostgresDeployError()
+            if marker is not None:
+                stored_marker_request = TestRecoveryRequest.from_payload(marker['request'])
+                if not _test_recovery_requests_compatible(stored_marker_request, recovery_request):
+                    raise PostgresDeployError()
+                # The marker authenticates that reset/reconstruction completed;
+                # it is not an admission record for the successor operation.
+                # Always send the current plan so an unadmitted successor gets
+                # the complete runtime consumer set. If a legacy host record
+                # already exists for this ID, deploy_from_host's bounded
+                # compatibility path preserves that host binding while native
+                # admission still validates the current plan.
             if marker is None:
                 fresh_operation_id = str(uuid4())
                 marker_state = 'resetting'
@@ -1096,7 +1166,8 @@ def main(argv: list[str] | None = None) -> int:
                         controller, recovery_request, 'ready', fresh_operation_id,
                     )
             receipt = deploy_from_host(
-                admin, remote, plan, qualified=lambda: require_qualification(controller),
+                admin, remote, recovery_request.plan,
+                qualified=lambda: require_qualification(controller),
                 allow_bootstrap=False, operation_id=fresh_operation_id,
             )
             print(json.dumps(receipt.payload(), sort_keys=True))

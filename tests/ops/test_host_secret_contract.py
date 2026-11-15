@@ -282,7 +282,7 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
     contract = load_host_secret_contract()
 
     assert payload["channels"] == ["dev", "test", "prod"]
-    assert [item for item in payload["secrets"] if not item["logical_id"].startswith("karakeep.")] == [
+    assert [item for item in payload["secrets"] if not item["logical_id"].startswith(("karakeep.", "youtube."))] == [
         {
             "logical_id": "heimdal.raw-store-key",
             "child_binding": "HEIMDAL_RAW_STORE_KEY",
@@ -337,8 +337,32 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "shared_key_domain": False,
         },
     ]
+    assert [item for item in payload["secrets"] if item["logical_id"].startswith("youtube.")] == [
+        {
+            "logical_id": "youtube.oauth-client-id",
+            "child_binding": "YOUTUBE_OAUTH_CLIENT_ID",
+            "kind": "oauth-client-id",
+            "optional": True,
+            "shared_key_domain": True,
+        },
+        {
+            "logical_id": "youtube.oauth-client-secret",
+            "child_binding": "YOUTUBE_OAUTH_CLIENT_SECRET",
+            "kind": "oauth-client-secret",
+            "optional": True,
+            "shared_key_domain": True,
+        },
+        {
+            "logical_id": "youtube.token-store-key",
+            "child_binding": "YOUTUBE_TOKEN_STORE_KEY",
+            "kind": "token-store-key",
+            "optional": True,
+            "shared_key_domain": True,
+        },
+    ]
     assert [item for item in payload["consumers"] if item["consumer"] not in {
-        "karakeep-service-web", "karakeep-service-search", "heimdal-karakeep-fetch", "karakeep-account-setup"
+        "karakeep-service-web", "karakeep-service-search", "heimdal-karakeep-fetch", "karakeep-account-setup",
+        "youtube-auth-cli", "youtube-runtime-api", "youtube-runtime-worker", "youtube-runtime-watcher",
     }] == [
         {
             "consumer": "heimdal-api-ingress",
@@ -597,6 +621,11 @@ def test_existing_consumer_environment_grants_are_unchanged() -> None:
             "karakeep-account-setup": {"karakeep.account-pass"},
         }.items()
         for secret in secrets
+    } | {
+        (channel, consumer, secret)
+        for channel in ("dev", "test")
+        for consumer in ("youtube-runtime-api", "youtube-runtime-worker", "youtube-runtime-watcher", "youtube-auth-cli")
+        for secret in ("youtube.oauth-client-id", "youtube.oauth-client-secret", "youtube.token-store-key")
     }
     assert "POSTGRES_PASSWORD" not in contract.child_bindings
     assert "DATABASE_PASSWORD" not in contract.child_bindings

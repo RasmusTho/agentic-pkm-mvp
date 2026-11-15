@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -117,12 +118,13 @@ def _identity_probe(access_token: str) -> ChannelIdentity:
 
 def _build_youtube_inbox_dev_services(
     account_binding_id: str | None = None,
+    environment: Mapping[str, str] | None = None,
 ) -> YouTubeInboxDevServices:
     """Compose only already-delivered V1 services after the dev/secret preflight."""
 
     http = httpx.Client()
-    oauth_client = OAuthClient.from_env(http=http)
-    token_store = YouTubeTokenStore()
+    oauth_client = OAuthClient.from_env(http=http, environment=environment)
+    token_store = YouTubeTokenStore(environment=environment)
     binding_store = AccountBindingStore.for_runtime()
     registry = SourceRegistry.for_runtime()
     binder = YouTubeAccountBinder(
