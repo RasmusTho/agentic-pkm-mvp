@@ -231,6 +231,45 @@ question is now resolved by one explicit instance-level resolver
 Full terminology, producers, provenance vocabulary, and the one-time last-active migration live
 in `docs/ENVIRONMENTS.md :: Vault terminology`.
 
+### Which binding background work runs on (shipped, MVR-06B / #3864)
+
+Background watcher/worker/settings lifecycles do **not** follow the request/session resolver
+above. After the MVR-06B compatibility bridge handoff they follow durable instance-local
+background intent (`backgroundIntent`, `app/instance/background_intent.py`), owned by
+`app/instance/background_supervisor.py`:
+
+- **Handoff.** `python -m app.instance.runtime background-supervisor-handoff`, inside the proved
+  stopped deployment window, imports the live #3163 legacy picker bridge binding (else the
+  instance default, else the already-registered `VAULT_ROOT`/`WATCHER_VAULT_PATH` legacy
+  bootstrap, else truthful no-vault) as durable `compatibility_binding_id`, drains the MVR-05
+  scalar worker through the exclusive binding-effect lease, and records the
+  `backgroundSupervisor` receipt in the **same** registry generation. Before that generation the
+  bridge owns the watcher; after it the supervisor does. A failed handoff leaves the bridge
+  authoritative and every intent mutation `capability_not_ready`. MVR-06 never creates a binding.
+- **Compatibility mode.** The durable binding survives restart even when it differs from the
+  instance default and is never re-derived from history or the default. A legacy choose/open
+  picker event or an explicit MVR-02 default set/clear moves it only through #3163's full
+  two-phase transaction (mutation gate → old-root pre-commit scan/buffer/quiescent ack → commit
+  → old-root post-commit scan/buffer drain → resume); the intent revision commits in the same
+  generation as the selection/default. Default clear falls back to the registered legacy
+  bootstrap before no-vault, so foreground and background resolution stay identical.
+- **Explicit mode.** The first governed add/remove (API `POST`/`DELETE
+  /api/instance/background-bindings`, or `background-binding-add|remove`) snapshots the effective
+  compatibility singleton (or the empty set for no-vault) before applying the command. MVR-06B
+  admits only singleton or explicit-empty intent: a second binding is `capability_not_ready`
+  until MVR-06C/06D. Add requires live membership and content authority; remove needs only
+  instance-administrative authority and stays idempotent for stale/removed members. Removing the
+  last member is durable explicit-empty idle: restart never re-enrols the default. Picker and
+  default changes no longer move explicit intent.
+- **Request/session selection, registry membership, and the env root are never background
+  intent.** Every member is re-resolved and re-authorized at start and on each durable revision
+  or auth-epoch change.
+
+The `settings_rebind.v1` record stays the shared two-phase phase journal; after the handoff its
+candidate is a projection of durable intent, not the binding authority. In explicit mode the
+carrier-free foreground compatibility binding therefore no longer reads that candidate: it follows
+the last foreground selection, then the instance default, then the registered legacy bootstrap.
+
 Suggested event payload:
 
 ```json

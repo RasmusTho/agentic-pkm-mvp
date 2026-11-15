@@ -24,6 +24,893 @@ minimal coordinator dispatches each bug to its own end-to-end Codex task/session
 worktree, with serial implementation as the default. This is Builder System transition guidance,
 not Product/Runtime behavior or evidence of a shipped deterministic orchestrator.
 
+## OpenHands factory owner trial
+
+The local OpenHands delivery entry point is an experimental, explicitly authorized single-Issue
+path. It does not establish factory qualification or authorize merge or release. Install the pinned
+components with `scripts/setup_openhands_factory.sh /absolute/install/root /absolute/worktree/root`;
+the second argument is optional and defaults to `worktrees` under the install root. `uv`, Node and Codex must be
+on `PATH`, with Codex CLI 0.167.0 and the existing ChatGPT subscription login. Start fetches
+`origin/main` and verifies it against the remote's current default-branch SHA before preparing a
+worktree. It fails if the network is unavailable, the default branch is not `main`, the SHAs
+do not match, or updating the tracking ref would not be a fast-forward; it does not use the
+factory checkout's `HEAD` as the base.
+
+The installer also installs the Canvas launcher at the reviewed #6602 revision and checks its
+SHA-256; if that Git object is absent locally it retrieves the same pinned file from GitHub. An
+existing launcher with different contents is left in place and setup stops for inspection. The
+OpenHands bootstrap builds its pinned `func-timeout` source in a separate filesystem sandbox without
+the host home or Git metadata; the remaining bootstrap packages use wheels. Package tools use a
+private setup home. The test lock below is independent of this bootstrap.
+
+The installer creates a private state directory and a short owner entry point bound to this factory
+checkout and the chosen roots. The experimental Canvas route uses a dedicated model-free owner
+service, independent of a worker Issue or its conversation. Start or restore it with:
+
+```sh
+/absolute/install/root/bin/openhands owner --ui-action start --port 8766 --ui-port 3001
+```
+
+Open the returned Canvas URL. In **Builder control**, enter `start #456` to authorize that one
+Issue and its draft PR, or `status #456`, `cancel #456`, `resume #456`, or `stop #456` for the
+recorded run. This conversation is a command bridge and makes no model request; the task itself
+still uses the guarded native Codex session. No backlog scanner is enabled. The control session
+uses a model-free native ACP profile. A browser connecting to this Canvas origin for the first time
+may ask for the local session key from `<install-root>/runs/owner/server/session-api-key`; retain it
+privately. This is one-time browser setup, not a model or provider credential.
+The control session
+is a trial route, not an adopted default. Use `owner --ui-action status` and
+`owner --ui-action stop` for that service; restarting it uses its recorded backend and Canvas ports and retained
+conversation. The owner service refuses native Codex launches; tasks start on their own worker backend.
+The older `control --issue <number>` command opens the same independent owner conversation once the
+owner has been set up; it does not start that Issue. It uses the recorded owner UI port. If the owner
+has not been set up, start it with `owner --ui-action start`; an explicit `--ui-port` can avoid a port
+already used by a worker Canvas. Prior worker-hosted control records are preserved and are not reattached
+or deleted.
+A new start or resume is refused while an earlier worker backend is running or its delivery is
+unresolved. After publication the watcher stops the finished worker backend; published worker sessions
+cannot be restarted. Existing live older workers must be inspected and stopped before another admission.
+These mechanisms do not yet establish delegated-process cancellation. Roll back to the existing CLI
+if needed; retain recorded sessions and draft PRs.
+
+The CLI remains available directly. Replace the example paths and explicitly authorized Issue:
+
+```sh
+/absolute/install/root/bin/openhands start --issue 123 --port 8765
+```
+
+Use the same entry point with `status`, `cancel`, `resume`, or `stop` in place of `start`. The `status`
+command also reads current GitHub checks for a recorded draft when its PR and commit identity can be
+verified. This is a point-in-time observation, not a merge decision; unavailable or changed readback
+is reported as unknown. It does not restart the worker or watcher.
+The owner control process uses the existing GitHub CLI login in its home directory; it does not
+forward GitHub token or configuration environment variables. A login available only through those
+variables can work in a direct CLI but remains unavailable in the owner view.
+The entry point derives its pinned ACP and isolated service configuration; model selection stays on
+`gpt-6.1-terra` with subscription authentication, with no provider or model fallback. `cancel`
+interrupts the conversation; it does not establish that delegated processes have stopped. If the
+run is still admitting input, cancellation can return without sending an interrupt: use `status`
+and retry when admission finishes. For a
+previously interrupted delivery, `resume` currently refuses continuation because native and
+delegated execution cannot yet be proven stopped. `status` reports available task-scoped observations
+of the recorded service, worktree and publication, with unknowns retained; a paused conversation is
+not proof that the underlying work has ended. New worker backends refuse further delivery inputs
+after interruption and prove possession of the recorded session key on the same connection before
+the factory sends it. This is
+a partial mitigation, not a verified recovery procedure, and does not retrofit a backend that is
+already running. Event-history reads and new worker event connections are also refused after
+interruption because OpenHands can reload an unloaded runtime while handling them. Preserve the
+recorded state and inspect it rather than replaying the task.
+For a legacy worker without the identity challenge, the factory will not send its session key to
+an unverified listener. Inspect the exact recorded service with
+`python3 -m app.builderops.openhands_service --state-dir <recorded-run>/server status`; an explicit
+legacy shutdown can use the same command with `stop`. This stops only the identity-checked service
+process. It does not prove native or delegated work has stopped, so retain the run as unresolved
+and do not start conflicting work solely because the service stopped.
+For a
+new run, `start` also authorizes a draft PR and requests a detached, single-run host watcher. Test
+targets use the separately prepared, hash-locked test environment on macOS arm64 with Python 3.12.
+Setup downloads only hash-verified binary wheels, then installs and checks them without network access.
+Before admission the factory checks the default branch's runtime project dependencies and the two
+requirements files against that lock;
+uncovered dependencies stop the task before claim. An interrupted preparation is retained for inspection,
+not silently replaced. The lock is specific to this host platform and does not resolve new dependencies.
+It does not install the optional `dev` or `browser` extras from `pyproject.toml`; tasks needing
+packages outside the two locked requirements files need a separately prepared environment.
+Older recorded runs retain their original test interpreter. The
+worker is instructed to leave a private ignored `.codex-tmp/openhands-finish.json` with its proposed
+title, body fields, risk classification and exact changed paths. After observing the finished
+conversation and children, the watcher checks the claim, branch/worktree gate, handoff and actual
+change set, commits the scoped changes locally with hooks and signing disabled, and invokes the
+existing `finish` verification, independent review and draft publication path. The review assesses
+the declared risk against the actual change. Worker claims are not test or review evidence.
+
+For one actionable test failure or structured review finding, the watcher can send bounded actual
+feedback to the same recorded conversation. The worker updates the private handoff with only the
+repair paths, which must be a subset of the originally recorded paths. It must preserve the Issue's
+exclusions and existing behavior outside the authorized fix, choose the smallest in-scope fix,
+and leave a required contract expansion unresolved. Review and repair assess the Issue's acceptance
+examples and regressions without making unchanged, out-of-scope improvements blockers by themselves.
+After checking the message,
+session and finished conversation, the watcher commits the additive repair through the same gates
+and reruns verification and independent review. A second failure, an unavailable or non-actionable
+review, unresolved test targets, or an out-of-scope repair stops for inspection. If message delivery
+is ambiguous, the recorded `repair_sending` phase is pending and is never automatically resent.
+
+For a canonical document-writeback Verify target, `finish` requires the target to be a changed
+regular file in the exact candidate and an explicit semantic pass from the independent reviewer.
+The file or heading alone is not a pass; unsupported targets and uncertain assessments remain
+unresolved. Review evidence is stored in private host state outside the worker workspace. As with
+the existing publication path, manually supplied host evidence is trusted and is not authenticated
+against a malicious user on the same host. Automatic repair of document-bearing review findings is
+not yet supported.
+
+`status` includes the watcher's `running`, `finished`, `pending` or `failed` state; a launch request
+alone is not proof it started. Status reads the atomically retained delivery state without waiting
+for a long-running review; if that state changes during live readback it reports the new state and
+asks for a retry. A healthy active task has no fixed delivery deadline. The watcher
+retries an unavailable conversation readback at most three times. It independently checks the live
+Issue and recorded claim and renews the same unexpired dispatcher lease and worktree registration
+while watching, testing, reviewing and publishing. Renewal runs at most 30 minutes apart and sooner
+when the observed remaining lease time requires it. Dispatcher-backed renewal uses the existing
+holder heartbeat and checks its result against the recorded claim; a label-only fallback has no
+dispatcher lease and keeps its existing weaker
+coordination semantics. The heartbeat status and expiry are visible through `status`; a failed or
+uncertain renewal stops subsequent guarded commands and leaves the run pending. An effect already
+in flight requires the existing readback and reconciliation. A lost process or uncertain
+publication is retained as pending. After inspection, `watch` with the same Issue and roots can
+restart a stopped watcher; a kernel lock prevents concurrent watcher effects, and publication uses the existing
+reconciliation. An interruption while staging or committing is always pending for manual index and
+branch inspection and is not automatically repeated. Older runs without the recorded automatic
+authorization remain manual. The watcher does not restart itself after a host reboot; an expired
+dispatcher lease cannot be revived by its heartbeat. Preserve state and reconcile an interrupted or uncertain
+start before retrying.
+
+After publishing, the watcher waits for GitHub checks and independently re-reads the draft PR and
+its current head. It reports a failure as failed, a genuinely incomplete or unavailable result as
+pending, and success only when the recorded current head has passed the check wait. It does not
+yet automatically diagnose or repair a CI-only failure. Enter `watch #456` in the control
+conversation to recheck a pending or rerun CI result while the original delivery lease is active;
+this reuses the same draft instead of publishing another one. After lease expiry, inspect current
+checks directly on the draft PR. A recorded passing result includes the head it covered and is not
+a live status for a subsequently changed head.
+
+`stop` first checks that the recorded conversation is finished or has been interrupted through
+`cancel`, then records the existing ACP session and service settings privately and stops the
+recorded Canvas (if present) and backend while retaining session data. It does not verify
+delegated-process cancellation. To restore that backend for conversation readback or publication,
+use `start` again with the same Issue, installation, repository and roots. It reuses the recorded
+workspace, port, key and session; it does not claim the Issue again or resume an agent turn.
+`resume` currently refuses an interrupted turn: paused conversation status alone does not establish
+that the earlier native command and delegated work have stopped or that their effects are reconciled.
+Keep the recorded workspace and session for inspection; no continuation prompt or replay is sent.
+For an interrupted run, `status` reports a point-in-time view of visible descendants, the worktree
+and matching draft PRs where available. The process view can omit detached work and does not prove
+termination; conversation status, an empty process snapshot and a clean worktree are not recovery
+approval. GitHub or local readback failures remain unknown. The retained recovery settings contain
+a sensitive ACP session identifier and must remain private.
+
+For a finished conversation on a clean committed worktree, use `verify` with the same Issue and
+roots. It rereads the recorded Issue contract and runs concrete `tests/...py` pytest targets in the
+retained Codex sandbox profile, capturing output and exit status in a private verification
+directory. The JSON result binds the evidence to `HEAD` and lists passing, failing and unresolved
+targets. Canonical document-writeback targets remain pending independent review; other document
+anchors, arbitrary commands and unmapped targets remain unresolved. Standalone `verify` exits
+nonzero unless verification passes, including when document review is pending. This is test
+evidence, not independent review or publication authority. Some tests need facilities excluded by the
+sandbox, such as network access; their actual results remain visible in the private logs.
+
+Use `review` with the same Issue and roots to run an independent native Codex review of the
+finished, committed candidate. The separate reviewer uses the guarded ChatGPT/Terra preflight and
+a read-only workspace profile; it records the structured verdict and actual response privately,
+bound to the exact candidate SHA. Refusals, failures, changed candidates and ambiguous output are
+unresolved. The separate `verify` and `review` commands remain available for diagnosis.
+
+For an explicitly authorized publication, `finish` runs both steps for the finished, clean committed
+candidate, assembles their exact-head evidence and invokes the existing `publish-full` draft workflow:
+
+```sh
+/absolute/install/root/bin/openhands finish --issue 123 --authorize-publication \
+  --title 'Describe the change' --body-input-json /absolute/host/pr-body-inputs.json \
+  --risk-surface auth
+```
+
+Provide the existing PR body generator's implementation-lane JSON inputs, including its SBS impact,
+owner-doc and BuilderOps fields and `final_review_rounds: 1`. The recorded claim supplies the Issue
+and pickup receipt. Supply every applicable `--risk-surface`; omit it when no listed surface applies.
+The independent reviewer checks the risk assessment even when no surfaces are declared. This route
+still uses the existing review and publication gates for the candidate's actual paths and risks.
+When the existing review gate requires a workflow review receipt, pass its host-side path with
+`--workflow-review-receipt`. Finish derives the candidate paths from committed history, preserves
+its private assembled receipt, and delegates claim, risk, issue, draft, check readback and ambiguous
+effect reconciliation to the existing publisher. A retry of an already recorded `publish-full`
+publication uses its original private host-side evidence, including when it was created outside
+`finish`; changed inputs or uncertain effects may require reconciliation. Failed or unresolved
+tests or review refuse publication. This does not establish passing CI, qualification,
+or completion of review-repair and mechanism-convergence obligations.
+
+The separate manual `finish` route still requires the operator to supply title, body inputs and risk
+classification. Automatic runs stop for malformed or missing handoffs, unsupported Verify targets,
+missing special review evidence, repeated or non-actionable failures, and uncertain effects.
+Finish does not assemble the stateful-fallback matrix; use the existing full publication
+route when that exception is required. Host-reboot recovery remains manual, so this is not yet
+unattended end to end.
+
+The launcher reads the applicable host and planned-worktree Codex TOML configuration to disable
+inherited MCP servers and plugins by name; it does not copy their configuration values. The service
+uses the `HOME`-based Codex configuration, and its effective-configuration preflight still refuses
+an enabled external tool or an unverified subscription/model before a worker turn. If configuration
+cannot be inspected, start fails and the operator must resolve the local configuration first.
+
+For a new run, the launcher also inspects the installed Python interpreter's `_sqlite3` and `_ssl`
+extensions. It uses `otool` on macOS or `ldd` on Linux to identify linked SQLite, SSL and crypto
+libraries, and grants their non-system library directories read-only access in the worker, verifier
+and reviewer profiles. Both the linked directory and its resolved directory are included when they
+differ; system libraries remain under the minimal profile. Missing inspection tools, unresolved
+library paths or inaccessible dependencies fail start rather than broadening access. For a macOS
+Python framework in a Homebrew `Cellar`, the profile also includes that Python version's package
+directory and the same Homebrew prefix's `opt` directory when present, for interpreter and library
+symlink traversal. Other Python layouts do not receive those Homebrew traversal roots. A stopped
+run retains its original settings and does not silently gain new sandbox roots on restart.
+The worker, test verifier and independent reviewer run Git with global and system configuration
+disabled; repository-local Git configuration remains in effect.
+
+For the owner interface, install the independently reviewed `scripts/openhands_canvas.py` from
+the source merged in #6602 as `/absolute/install/root/bin/openhands_canvas.py`, retaining its source
+and commit receipt. The merge does not establish that the launcher is installed or the live service
+is qualified. Start the installed official
+Agent Canvas against the recorded service using the same paths and Issue:
+
+```sh
+/absolute/install/root/bin/openhands ui --issue 123 --ui-port 3001 --open
+```
+
+`--open` is optional; omit it to use the returned loopback URL manually. The UI port defaults to
+3001 and must differ from the backend port. Use `ui --ui-action status` or `ui --ui-action stop`
+with the same Issue and roots to inspect or stop Canvas without stopping the backend. The command
+passes the private session-key file path to the launcher; never print or copy its contents into
+logs or PRs.
+
+## OpenHands owner access on BOB-1
+
+The bounded #6630 owner interface uses upstream Agent Canvas 1.40.0 (updated 2026-11-15) at
+<https://builder-system.tailcfb3a1.ts.net:9443/conversations/5f3b0e85-dbf6-4666-b650-95728a551601>.
+Connect the iPad to the existing Tailscale network under the owner's personal account. On a new
+browser, keep the prefilled backend URL, give it a name, leave API Key empty and select **Next**;
+select **Skip for now** on agent setup. No provider key, OpenHands Cloud account or SSH is needed.
+If the anonymous-analytics prompt appears, turn it off and confirm. Repeat that browser setup once
+for the separate sandbox origin when first opening it.
+
+In the existing owner conversation, send `status` (or `status #6615`). The model-free ACP bridge
+reads the existing epic run-state, joins Issue, worker, branch and conversation identities, and
+uses the pinned controller's exact endpoint guard for bounded live observations. Recorded next
+actions can lag the active owner's latest comment; follow the linked Issue and PR #6628 for
+current blockers, review, CI and delivery. Stopped/busy/unreachable observations remain unavailable;
+monitoring never starts, loads or stops the existing epic workers. Native descendants are opaque.
+An active or finished conversation is not accepted progress, a merged PR or completed delivery.
+Existing issue ownership and retained workspaces remain with their owning workflows.
+
+Use `sandbox start` in the owner conversation for a separate owner scratch workspace, then follow
+**Open sandbox Canvas** to <https://builder-system.tailcfb3a1.ts.net:9444>. Open the existing admitted
+conversation and send the next bounded read-only/scratch task there. Browser **New Chat** creation
+is refused: one controller-reserved conversation owns that checkout. The selected native engine
+is Codex `gpt-6.1-terra` using the existing ChatGPT subscription, without paid API/provider fallback.
+The native login directory is a single shared slot; start refuses while another worker mounts it.
+Do not interrupt existing epic work to make room. Repository-wide automatic delivery, issue pickup,
+review/repair/merge and control of the existing epic workers remain with their owning workflows;
+this sandbox is not a second factory coordinator.
+
+Within a live sandbox conversation, **Stop** interrupts it; a subsequent message can continue it.
+That UI state does not prove native descendants stopped. For a verified contained stop, return to
+the owner conversation and send `sandbox stop`. The existing controller checks actual container
+absence and retains the workspace/history/checkpoint. `sandbox status` reads the sandbox state.
+A later explicit `sandbox start` runs the existing takeover/preservation checks and creates a new
+OpenHands conversation; it does not replay the last task. Uncertain creation is reconciled by its
+reserved ID; unavailable or failed engine execution must not be presented as ready.
+
+The new user units are `openhands-owner-backend` (model-free server 1.62.0, loopback 18812),
+`openhands-owner-canvas` (static UI, loopback 18821), and `openhands-owner-primary-gateway` /
+`openhands-owner-sandbox-gateway` (loopback 18820 / 18822). Their private configuration, pinned Node
+24.22.2 executable and Canvas assets live under `~/epic-sandbox/owner-access/`. The owner-requested
+`npm install -g @openhands/agent-canvas@latest` installs under the BOB-1 user's `~/.local` prefix;
+the user-owned npm launcher is under `owner-access/tooling/bin`. The static unit serves a versioned
+snapshot under `owner-access/canvas-releases` through the `owner-access/canvas` link, using Node's
+`--preserve-symlinks-main` flag so the upstream entrypoint runs through that link. The previous
+1.37.0 snapshot is retained for rollback. Activation restarts only `openhands-owner-canvas`;
+the backend, gateways and active epic workers keep running. Tailscale
+Serve adds only HTTPS 9443 and 9444; the previous 443/8443 routes remain intact. The gateway admits
+only the configured owner identity from the loopback Serve hop, checks browser Origin, injects
+session keys only upstream and exposes no generic host Bash/file/secret or settings-write API.
+The sole settings mutation supported is disabling anonymous analytics. This follows
+[Tailscale Serve identity-header guidance](https://tailscale.com/docs/features/tailscale-serve#identity-headers).
+The owner backend has its own fixed custom ACP profile and conversation, separate from trusted
+control 18811 and Automation 18810; neither existing service is proxied or restarted.
+
+The sandbox is epic/workspace 6630, worker `owner-sandbox`, with ports 18840–18847, separate from
+existing epic work. Owner commands call the frozen `9fa8001484e5` controller with the already
+approved native image `epic-worker@sha256:3c3c2472b35ea3ccb0df57df7cc9d2303f582dcb2987b259124c9df946d56644`.
+The frozen CLI's upstream 1.60.1 default image is insufficient for this native path; the wrapper
+passes the reviewed image and the existing approved `epicws-6615-egress-20261114` network explicitly. The old default `epicws` bridge cannot reach the provider; a local CLI login-status result alone does not prove working provider access. The recovery `runner/current` remains `c68dd18db4dc`.
+No active controller/image was hot-replaced. Runtime evidence and per-capability acceptance are
+recorded on #6630; a fresh status response on the physical iPad remains unverified until the owner
+opens the URL and sends `status` from Chrome with Tailscale connected. Chrome is the owner's
+preferred browser.
+
+## Persistent epic workspace on TARS (experimental)
+
+Epic #6615 runs a persistent, per-epic workspace on BOB-1 (VM 102, guest `builder-system`). It is a
+bootstrap baseline (#6616), not a qualified factory. The trusted controller is
+`app/builderops/epic_workspace.py`, installed read-only as a pinned release under
+`~ygg/epic-sandbox/runner/<sha>/` with `current` pointing at the active release. Its only entry
+point is `~ygg/epic-sandbox/bin/epicws`, which fixes the workspace root to
+`~ygg/epic-sandbox/workspaces` and the engine to the default Docker engine. Neither path is mounted
+into a worker. The dedicated BuilderOps engine and its services are not used.
+
+The new PR evidence adapter emits repository-specific requests; it is not yet wired to automatic
+merge. Since 2026-11-13 (owner bootstrap receipt on #6618, comment 6840611036) the existing
+upstream Automation definition `35aca793-3940-48be-8139-f8513d589b8c` and its same SQLite state run
+under two enabled user units of the lingering `ygg` user: `epicws-6615-control.service` (upstream
+agent-server, SDK and tools 1.62.0; trusted control API on loopback port 18811) and
+`epicws-6615-automation.service` (Automation 1.30.1 with its required SDK 1.60.1 in a separate
+environment, loopback port 18810; server 1.62 and SDK 1.60.1 cannot share one environment). The former
+Docker automation container (image `sha256:b36bb669cf50846c3fa6c5157397dd47526721334a7a544b7df449d9b62f523d`)
+is stopped and preserved with its original environment; its state was backed up to
+`~/epic-sandbox/automation/state-pre-native-20261113T005031Z`. The definition's `*/5` cron runs the
+already-merged `8fe1df054` read-only contract and review collector from its uploaded tarball
+(`python3 collector.py`); a manual run and successive cron runs completed (comment 6841477071). The
+current owner continuation (comment 6842687488) reports both units running, the `c68` recovery
+controller unchanged and only these read-only scans active: completion, review, repair, merge and the
+other delivery effects of the source candidate below are not activated. Status: `ssh bob-1-builder-system
+'python3 ~/epic-sandbox/automation/status.py'`.
+
+`python -m app.builderops.openhands_pr_observation` is the read-only, unauthenticated collector for that
+adapter: it reads open PRs, reviews and the exactly-one `Governing-Issue` Issue through bounded public
+REST calls to the pinned repository and prints a JSON report. It writes no run state and does not call
+`intake`; a trusted caller decides separately whether to pass the observations on. Failures, closed
+PRs, an incomplete inventory, oversize or too deeply nested responses and HTTP refusals (including the
+unauthenticated limit of about 60 requests per hour, roughly 3 per open PR) are reported explicitly as
+an incomplete scan with exit code 1. The transport timeout applies per socket operation and the
+120-second deadline is only checked between requests, so a scan is not a hard wall-clock bound.
+Owner, route, review, Verify, CI, closure and effect evidence have no trusted source there and stay
+`unknown`, so every PR waits and nothing can be reserved from this report. The standalone CLI never
+repeats a scan. The scheduled trusted wrapper is distinct: it calls the collector core through
+authenticated host `gh` GET reads restricted to the same path allowlist, so the unauthenticated rate
+limit above applies only to the standalone CLI.
+
+The source candidate also has a one-shot host controller, `python -m
+app.builderops.openhands_pr_cycle --once --root <workspace-root> --epic 6615 --config
+<admission.json>`. Its controller-owned JSON contains an `admissions` array, initially empty;
+one trial entry names `number`, exact `head_sha`, dedicated pre-existing `worker`, `engine`,
+`model`, `native_session_owned: true`, `claimant`, `lease_id`, `session`, `owner_worktree`,
+`lifecycle_repo`, and explicit pytest
+`verify_targets`, and `test_venv`, an absolute host path to a secret-free test environment. The
+controller configuration must be owned by the controller and protected from other writers. The
+venv path and its contents must satisfy the ownership, mode, symlink and credential-shaped filename
+preflight; that filename check cannot prove arbitrary file contents are secret-free. It must be a
+controller-owned path outside the configured model workspace root (`--root`) and must not be that root
+or one of its ancestors: a venv in a worker checkout or home could fake passing tests, and an
+enclosing directory would mount the whole workspace. An agent-local test venv is never admissible as
+the independent verifier environment. A venv's Python
+symlink may point to the supported system Python path in the pinned container. The source reads the host GitHub identity, dispatcher claim and verification
+history, and uses the existing OpenHands lifecycle and a separate credential-free test container.
+That container mounts the configured host venv read-only at `/opt/pr-cycle-venv` and refuses to run tests
+when its in-container interpreter and pytest preflight fails. The source includes guarded native
+merge and PR-specific post-merge continuation. Review evidence binds the observed diff, exact closing
+contracts and check configuration; every closing criterion needs a review assessment. The native
+metadata reader connects the exact retained OpenHands conversation and live ACP session to that
+session's bounded Codex or Claude log, retaining only model, effort, timestamps and session identities.
+It requires the observed model to match the selected model; a Codex effort must be `high` or stronger
+(`xhigh`, `max`, `ultra`) and equal the API-selected `current_effort`. A session keeps one effort; a
+supported escalation starts a new conversation rather than changing effort mid-task. These are
+native-provided observations, not tamper-proof attestation. Missing, mixed or mismatched observations
+stop the review. Subscription authentication also requires the native login check; no model call is
+needed for this metadata read.
+
+`lifecycle_repo` is an absolute, controller-owned host checkout of the existing worktree lifecycle
+registry, outside every model workspace; it must expose the candidate's actual registered worktree,
+branch, session and generation. The controller reads that authority before binding it to the current
+coordination record. It refuses missing, expired, contradictory or model-controlled registrations.
+Admission fields alone are not current ownership proof. The default authority route requires a locally
+verifiable dispatcher claim; a claim on another host is not proof in this controller. For a genuinely unavailable dispatcher, the existing pickup wrapper and
+closure degraded-coordination reader provide the GitHub receipt route. To select it, the admission
+supplies `coordination_mode: github-label-only-fallback`, `owner_worktree`, `claimant`, `session`,
+`fallback_reason`, and `coordination_evidence` (`github-comment:<id>`). The receipt must match the
+live PR branch and exact owner worktree as well as the other caller fields. Any existing remote lease
+and worktree ownership must first be transferred and read back through their normal recovery procedure.
+A fallback receipt must not be fabricated or used to bypass an available dispatcher. The native
+controller binds the active registry owner to the unique current dispatcher claim event's Builder
+`session`; an ACP engine session is execution evidence and does not own the claim. The pickup wrapper
+passes that Builder session and a unique attempt identity into the claim transaction, then reads back
+the task, lease and exact event. A lost reply is reconciled from that attempt without a second claim
+or an unfenced release. Native claims without a bound session refuse. A rightful unchanged legacy
+owner may establish a bound claim through a fresh normal pickup when the registry proves that owner
+was continuously registered before the old release; a new claim cannot prove an earlier
+unknown transfer. Use the existing owner or maintenance route to re-establish missing predecessor
+authority and perform the normal handoff.
+
+A changed Builder session requires the existing authenticated handoff. Dispatcher events identify
+the latest session change and its predecessor, even when the current session subsequently reclaims
+its own expired lease. An atomic `release --expected-lease-id <observed-id>` fences the predecessor
+release and pickup cleanup; same-agent stale takeover is only a self-resume when the old claim event
+and live registry establish the same Builder session. The registry retains the branch's last ended
+owner (released, completed or merely expired) with its path, branch, generation, continuous-validity
+window and transfer anchor across re-registration or a proven path move. Only a release records a
+release time: an expired or completed owner, including one replaced when an earlier session
+returns, is never a handoff predecessor and needs owner or maintenance reconciliation. Equally
+recent ended registrations cannot establish their order, even for the same session, and require
+reconciliation. A heartbeat after expiry begins a new window; it does not fill the gap. The receipt must be
+written during both the predecessor's live claim window (including recorded heartbeats) and its
+continuous registration window. Equal dispatcher timestamps do not establish order. GitHub comments
+have second precision, so the entire receipt second must precede the release or successor pickup;
+the acknowledgment must follow successor registration and the candidate readbacks while the
+successor's pickup lease remains live. A later same-session reclaim preserves that handoff. The pending and
+acknowledged comments must carry identical receipt fields apart from the acknowledgment and must not
+show edits. Same-second edits cannot be distinguished by GitHub timestamps. The ordering relies on
+trusted GitHub and controller clocks and authorized actors; predecessor stop and live readback remain
+separate obligations.
+
+A historical fallback origin must identify an actual authenticated Issue pickup comment with the
+matching Issue, owner, session, path, branch and reason, without requiring the dispatcher still to be
+unavailable. When a same-session predecessor has multiple matching pickups, both handoff comments
+carry `predecessor_pickup_comment_id` naming its uniquely latest matching comment; tied or newer
+conflicting pickups remain unresolved. From the original claim through the current owner, each
+authenticated pickup must be the original receipt, the successor pickup bound to a valid handoff,
+or match the agent, session, branch and worktree of the proven owner for a complete GitHub comment
+second within that registration interval. Dispatcher claims
+must match the proven owner or the handoff's successor claim. A later pickup, mode change, return to
+an earlier session or subsequent handoff cannot resolve a competing claimant by itself. Review
+preparation and native authority both check that history; missing or conflicting evidence requires
+the existing owner or maintenance reconciliation. When the origin is a dispatcher claim, a fallback
+comment is outside that history only when its entire GitHub timestamp second predates the proven
+claim. A comment in the claim second remains ambiguous and is checked. The registration
+history uses the continuously valid epoch, including across same-session
+re-registration; it does not extend through an expiry or release gap. The whole comment second
+must fit within that epoch. The bounded registry predecessor search includes removed and
+removal-pending generations in actual end-time order;
+removal never turns expiry or completion into a release. A path retaining another branch's owner
+history cannot be re-registered for a different branch: move that checkout to a replacement path
+and register it, or use existing maintenance reconciliation, preserving the old row and any unique work.
+For dispatcher-to-fallback across hosts, the receiving host authenticates its actual
+current fallback comment and the existing handoff's predecessor release/readback; it does not claim
+to inspect a nonlocal dispatcher database. That remote readback is the immediate predecessor: the
+receiving host's own last registry owner is older history only if it was released before the remote
+claim, the transfer proof does not record it as the predecessor, and unreleased or overlapping local
+history refuses. The coordinator must establish the remote predecessor's
+stop, exact lease release and worktree release before acknowledging. For this cross-host case, both
+handoff comments also carry the same `predecessor_registration` mapping (`path`, `owner`, `branch`,
+`generation`, `status: active`, numeric `observed_at` and `expires_at`) and
+`predecessor_dispatcher` mapping (`task_id`, `lease_id`, `holder`, Builder `session`, and RFC3339
+`claimed_at`, `observed_at` and `expires_at`, plus `history_reconciled: true` only after the
+coordinator has reconciled earlier transfers). These are the trusted coordinator's actual remote
+readbacks before the receipt; the observations must remain live for the full receipt second. The
+acknowledgment's `prior_coordination_release.released_at` is the RFC3339 release event time, and
+`prior_worktree_release.released_at` is the numeric registry release time. The former must follow the
+receipt and precede the TARS pickup; the latter must follow the pickup and precede the new
+registration. The former session and the exact path, branch and generation must agree with the
+predecessor readback. A legacy remote claim's session is the trusted coordinator's observation, not
+a retroactive dispatcher event binding. The coordinator must reconcile any earlier session transfer
+before recording that observation; a fresh claim cannot establish missing transfer history. An older
+PR pickup is provenance and need not be rewritten when the coordinator's current readback names a
+later same-session lease. If neither an initial pickup nor a local predecessor is known, the normal
+authenticated handoff and remote readbacks are required; otherwise use maintenance to re-establish
+authority. On 2026-11-13 the owner reported
+that the approved TARS publication checkout had no dispatcher DB and that the existing #6618 Mac
+lease `54616511`, holder `codex-6618-pr-completion`, session `codex-6618-20261112`, had not been
+transferred. The coordinator must re-read those facts, release the exact old lease, establish readiness,
+perform the real TARS fallback pickup, release/register the worktrees and compare the candidate before
+the separate acknowledgment. No new dispatcher DB or invented TARS lease is needed. Ambiguous or
+contradictory history stops the affected merge and routes to ordinary owner/maintenance reconciliation.
+
+For the native controller, the existing handoff is two authenticated Issue or PR comments in the
+canonical order, each a YAML or JSON mapping under `lifecycle_handoff_receipt.v1` (optionally in one
+fenced code block). The current owner posts the receipt, without `successor_acknowledgment`, before its
+coordination release. After its own claim, registration and readbacks, the successor posts the
+acknowledgment as a new comment: the same receipt plus `successor_acknowledgment`. Editing the receipt
+comment instead does not count. The existing fields in `BUILDER_SUBAGENT_ROLES.md :: Handoff receipt`
+remain authoritative. Encode `current_lifecycle_owner` and `successor` as `{agent, session}`; use the
+exact branch, base (`main` or its current SHA), worktree, candidate HEAD and sorted changed-file paths,
+identical in the latest receipt and the acknowledgment. Include validation and review evidence,
+blockers, residual risk and the next authorized action. The `successor_acknowledgment` has the
+successor's `agent` and `session` and these readback mappings:
+
+- `prior_coordination_release`: `status: released` and, for a dispatcher predecessor, its exact
+  `task_id`, `lease_id` and `holder`, plus `readback` with `status: ready` or `blocked` and null
+  `claimed_by` and `lease_id`.
+- `successor_pickup`: `mode`, `agent`, `session`, and the current dispatcher `lease_id` or fallback
+  `evidence` (`github-comment:<id>`).
+- `prior_worktree_release`: `status: released`, `path`, former session as `owner`, `branch`, and
+  `generation`.
+- `successor_registration`: the `path`, `owner`, `branch`, `generation`, registration `epoch`, and
+  numeric `observed_at` returned by the preparation command below.
+- `candidate_readback`: the preparation command's `branch`, `base`, immutable `base_sha`, `head`,
+  sorted `changed_files`, `clean: true`, and numeric `observed_at`.
+
+Before posting the acknowledgment, the trusted coordinator reads the pending comment and the actual
+clean registered checkout using the normal lifecycle registry. Supply the exact transfer-time base
+SHA and the pending Issue or PR comment ID; include `--pr <number>` when either comment is on the
+PR. The output supplies the two acknowledgment mappings above:
+
+```bash
+python3 scripts/agent_worktree.py --cwd <host-repo> prepare-transfer \
+  --worktree <successor-worktree> --owner <successor-session> --workspace-root <model-workspace-root> --issue <number> \
+  --pending-comment-id <id> --base-sha <sha> [--pr <number>]
+```
+
+After posting the separate acknowledgment, wait until its complete GitHub timestamp second has
+elapsed and execute the following readback with the actual comment IDs. It pins the two comment
+digests and observed interval in the same existing registry row only if the same epoch remained live
+throughout that second. A release, expiry, path or generation change starts a new epoch; it cannot
+make an earlier gap valid. Repeating an exact completed pin reads back the existing proof.
+
+```bash
+python3 scripts/agent_worktree.py --cwd <host-repo> pin-transfer \
+  --worktree <successor-worktree> --owner <successor-session> --workspace-root <model-workspace-root> --issue <number> \
+  --pending-comment-id <id> --ack-comment-id <id> [--pr <number>]
+```
+
+These are technical readbacks in the existing handoff, not a per-PR approval. The historical pin is
+retained through same-session registration, reclaim and verified path moves. A new transfer retains
+the predecessor's bounded proof and move snapshots within the same registry record. When a path is
+reused and its row replaced, the consumer accepts the move only if the preserved snapshot proves
+the earlier released pinned interval. Snapshot and transfer nesting is limited to 32 levels; exceeding the bound
+or encountering incomplete older evidence refuses the affected continuation and requires the owner
+or maintenance workflow to reconcile the preserved registry and authenticated handoffs. A later
+pickup cannot manufacture past proof. The controller
+independently checks current live ownership and the clean current PR head. The transfer head must be
+an ancestor of the current head; the existing current-head scope review receives the intervening
+diff to assess dropped obligations and reverts along with intended fixes and refactors. Tests and CI
+remain bound to the current head. The controller never runs host Git against a model-owned checkout.
+Only a comment from the existing authenticated GitHub identity with OWNER, MEMBER or COLLABORATOR
+association is considered.
+
+
+The reviewer uses the public final response for its exact finished conversation. One bounded JSON
+report may be enclosed between `<BEGIN_PR_CYCLE_REPORT>` and `<END_PR_CYCLE_REPORT>` after plain
+public closeout text. The controller binds the report to the native execution observation, persists
+both before stopping the exact reviewer assignment, and reconciles an uncertain stop through the
+ID-bound stop and checkpoint path. The stop intent binds a new stop ID and the previously observed
+stop generation before removal. A retry completes that same stop's checkpoint; a changed assignment
+or newer stop refuses reconciliation. A saved stop receipt and verifier admission require the current
+stop ID and its completed checkpoint to match. The verification receipt carries that stop ID, which
+is checked again under the worker lifecycle lock before a merge intent or effect. An older intent
+without a stop ID is ambiguous and requires trusted reconciliation; an absence readback alone does
+not replace preservation. Findings return to the existing repair owner after reviewer capacity is
+released.
+Exact closing Issue holds are checked again immediately before merge; a non-closing parent remains
+open. Dispatcher recovery records each reclaim and completion intent and reads back the actual lease
+and ordered events before proceeding. Older ambiguous effect records remain unknown. A recorded
+merge intent is reconciled even when the PR is absent from the open inventory. If fresh readback
+shows the PR open and unmerged, the old intent remains in the run-state. The same identity waits;
+a changed identity can be reviewed, but an unknown merge for the same head is never retried blindly.
+Only a freshly observed different head can proceed to merge independently of that old head's intent.
+Sandbox verification creates a uniquely named, inert container, records its immutable ID and the
+existing worker lifecycle hold before starting it, and removes that exact scoped ID before retry.
+The worker lifecycle lock prevents concurrent starts while verification is running; after a crash,
+the retained hold prevents a worker start until the ID is settled. An interrupted create with no ID
+cannot have issued a start and a retry uses a different name. Before a different review identity uses
+the same worker, it settles that worker's earlier verification intent by the same exact-ID protocol.
+An unrelated unresolved checkpoint writer refuses before a new verifier container is created.
+Legacy ambiguous run intents remain blocked for reconciliation. Engine errors or mismatched identity
+remain unknown, without host fallback.
+It is not installed
+or qualified by its tests. Do not schedule delivery until independent source review and actual host
+qualification have passed.
+
+Each epic directory holds a controller-owned bare mirror, one separate clone and home per worker,
+an integration checkout and the existing `epic_run_state` record (worker, branch, container,
+engine, model, budget and next action per Issue). Containers are replaceable; checkouts and
+run-state are unique work and survive container removal. The mirror is seeded from a git bundle.
+The trusted host has its existing GitHub CLI authentication; worker containers do not receive it.
+Publication stays with the coordinator, which fetches the
+worker branch and uses `publish-pr`.
+
+OpenHands is the normal execution and session-control surface. The default image in this source is
+the pinned upstream agent-server (`ghcr.io/openhands/agent-server:1.60.1-python`, by digest; it bundles
+claude-agent-acp 0.63.0 and codex-acp 2.2.2). The installed controller and image require separate
+runtime readback. The recorded #6618 exception is worker `w-6618`, stopped and replaced between runs
+(not hot-swapped) with the pinned upstream 1.62.0 image (`bd35862a…`, bundling native Claude Code
+2.1.312), per #6618 comments 6837205144 and 6842687488. Each worker gets a loopback-only
+port in 18700–18799 and a per-worker session key in the controller-only `control/` directory.
+Conversation history is kept in the worker's persistent home. `conversation-start --engine
+claude-code|codex [--model M]` creates the conversation through upstream `agent_settings`
+(`acp_server`, `acp_model`), tagged with epic, Issue and worker. The default is Claude Code with
+`claude-sonnet-5-5`; Codex accepts only `gpt-6.1-terra`, and Astra is refused. The conversation id
+is recorded before the request. A lost response is reconciled by reading that id and is never
+retried as a create. In this source candidate, `conversation-status` reads the newest bounded
+upstream event page (default 50) and classifies only the latest `ConversationErrorEvent` as
+`quota_exhausted`, `authentication`, `context_exhausted`, `transient_network` or `task_failure`.
+The classifier recognizes the observed native session and weekly quota phrases; tool and message
+text cannot trigger a handoff. Upstream 1.60.1 already supports the newest-first event ordering.
+Only quota exhaustion may trigger the engine handoff (#6618). The running pinned controller has
+not been hot-upgraded with this correction, and automatic handoff remains unqualified.
+`worker-start` runs a
+plain container and is recorded as `native-exception`: it is for bootstrap, diagnostics and recovery
+only and never counts as OpenHands-delivered work.
+
+The boundary rules below apply to both. `worker-start` mounts only the worker's checkout (`/workspace`) and home (`/home/worker`). It
+enforces CPU, memory and pids budgets, drops all capabilities, sets `no-new-privileges`, uses a
+read-only root, runs as uid 1000 and joins the owned `epicws` bridge. It refuses before any engine
+effect for: other mounts, Docker or host paths, host or container network modes, invalid budgets, a
+credential env file inside the workspace root or readable by others, and an existing container for
+the same worker. If the engine is unavailable, it refuses: there is no host fallback. `worker-stop`
+removes the container. It records `stopped_verified` only after engine readback shows the container
+is absent, together with the checkout's uncommitted, ignored and unpublished work.
+
+Stop and recovery, from outside any worker:
+
+```sh
+ssh bob-1-builder-system '~/epic-sandbox/bin/epicws --epic <N> status'
+ssh bob-1-builder-system '~/epic-sandbox/bin/epicws --epic <N> worker-stop --worker <W> --reason <why>'
+ssh bob-1-builder-system 'docker rm -f $(docker ps -aq --filter label=epic-workspace.epic=<N>)'
+ssh bob-1-builder-system 'ln -sfn <previous-sha> ~/epic-sandbox/runner/current'
+```
+
+The third command is the emergency stop for every container of one epic. The fourth restores the
+previous controller release. Workers must not hot-replace the active release. A candidate controller
+is installed as a new `<sha>` directory between reconciled runs.
+
+Preservation, takeover and retirement are implemented in the #6617 source merged in #6627. The
+running pinned controller has not been upgraded or qualified by this source change. After that source
+is installed and verified, these commands run from outside any worker:
+
+- `worker-stop` removes the container, reads absence back from the engine, then captures unique work
+  in a controller-owned checkpoint repository under `control/checkpoints/<worker>.git`. The checkout
+  is mounted read-only in a networkless inspection container; a separate index and configuration
+  keep worker filters from running. Controller-owned Git attributes override worktree conversions, and
+  a contained CRLF round-trip must pass before inspection or checkpointing. Paired checkpoint refs
+  hold the worktree and the worker's staged index tree; retained refs hold objects from the worker's
+  refs, both object IDs in every reflog entry, stash history and linked-worktree HEADs. The common
+  Git directory and each registered linked worktree's reflogs are inspected; each raw record must
+  have a complete committer identity and date, including the name, email delimiters, nonzero
+  timestamp and timezone.
+  Malformed, missing, unreadable or oversized reflog evidence keeps the checkout. A connectivity check without the checkout's object
+  directory must pass before the checkpoint is recorded. An unmerged or unreadable index is kept as
+  unreadable work.
+- Unique work is: staged edits, uncommitted or untracked files, ignored files, commits reachable from any worker
+  ref, reflog, stash history or linked-worktree HEAD that are not
+  reachable from a controller-owned `source.git` ref or a coordinator-recorded published head, and
+  unreadable evidence. Worker remote-tracking and checkpoint-looking refs never prove publication.
+  Cache-looking names do not prove that their contents are disposable. A nested Git repository is
+  treated as unreadable work and kept intact because a gitlink does not capture its worktree.
+- `takeover --worker W --reason R [--readback-file F]` is the only way to continue a replaced worker.
+  It removes any remaining container and proves absence by engine readback (a lease or timeout proves
+  nothing), checkpoints the files, checks the post-checkpoint content and refs, validates the recorded
+  mapping and reconciles publication attempts from coordinator-supplied readback. If the actual named
+  branch differs, or HEAD is detached, takeover checkpoints even a clean checkout and records the
+  actual execution identity under the existing worker and generation. Detached HEAD and its work are
+  independently retained in the controller checkpoint. Takeover compares HEAD, branch, staged tree,
+  raw index, worktree, refs and reflog identity after checkpointing and again before authorization; start checks that
+  identity and checkpoint again. If the checkout changed, start refuses and a new takeover records
+  the new work before continuation. A legacy authorization lacking that identity also requires a new
+  takeover. The original publisher/claim branch remains separate; this reconciliation neither changes
+  a claim nor authorizes publication. Unreadable evidence, unmerged indices and unsettled Git
+  metadata lock files remain fenced and preserved.
+  It reads engine absence again while recording exactly one continuation. Per-worker controller locks fence overlapping
+  starts, stops, checkpoints and takeovers. The successor's `worker-start` or `openhands-start` consumes
+  that authorization; a repeated takeover before a start returns the same continuation only while
+  its checkout, checkpoint and engine checks still match. Worker
+  launches create an unstarted container first and record its full ID before sending a start for
+  that ID. A timed-out create can leave an unstarted container; `worker-stop` or `takeover` verifies
+  the exact name and labels before removing it. A timed-out start is settled by removing the recorded
+  ID and reading back its absence. A late start for that removed ID cannot start a replacement.
+  Checkpoint writers use the same create, record, start and ID-bound removal sequence; their
+  outstanding ID is recorded before the write starts. If cleanup or readback is unavailable, the
+  checkpoint and continuation remain blocked. Retry `worker-stop`, `worker-checkpoint`, or `takeover`
+  after the engine recovers; the checkpoint is then retried or an existing partial result adopted.
+  Read-only inspection uses disposable scratch. Its timeout cleanup checks exact name and inspection
+  scope; an already absent `--rm` container does not create a false cleanup failure. A late create
+  can leave an unstarted container that occupies its name until a later scoped stop removes it.
+  A legacy unresolved `docker run` without an ID or a legacy checkpoint-cleanup marker has no such
+  proof and is refused; engine absence alone cannot prove that its old request will not run later.
+  OpenHands port selection and credential-home admission are serialized within the workspace root;
+  a conflicting bind from outside that root is settled through the same stop and takeover path.
+- `continuation-brief` rebuilds the next authorized action, checkpoints, blocked operations and the
+  engine-neutral successor prompt from run-state alone, so a Codex worker can continue a Claude
+  worker's task (and back) without the predecessor writing a summary.
+- Publication goes through `publication-begin` (intent recorded before the effect), then
+  `publication-complete` or `publication-reconcile`. The coordinator supplies
+  the independently established full intended commit as `--expect-sha` when beginning every new
+  `branch_push`. Legacy pushes without a target remain quarantined on generic branch readback unless
+  operation-specific positive completion settles the original request. The coordinator reads GitHub;
+  completion supplies
+  the observed `branch` and `sha`, plus a PR `number` for PR creation. Reconciliation supplies a complete
+  branch readback with its `name`, `exists` and, when present, `sha`, or the queried `branch` with a
+  complete `pull_requests` list whose sole match includes `number`, `branch` and `sha`. An unknown
+  outcome is quarantined for that operation only and is never replayed. A missing branch or empty PR
+  list does not establish that an old request has finished. Older `absent_confirmed` records from
+  such readbacks remain unresolved. This controller has no authenticated no-effect settlement receipt;
+  a later matching positive readback can confirm the original operation when no other create attempt
+  could have produced that PR. A confirmed push keeps its
+  evidence, and a different, explicitly specified head can use a new push intent after all prior pushes
+  on that branch have settled. Normal parent publisher and branch gates still apply.
+- `worker-retire` removes only the container carrying this epic/worker label pair, then the checkout
+  only when nothing unique remains. It refuses while unique work, unreadable evidence, an unreleased
+  checkpoint or an unresolved publication exists. Unlike takeover, retirement does not checkpoint a
+  clean detached or drifted checkout only to retain its identity, because it authorizes no
+  continuation. Such a checkout retires once its earlier checkpoints are released. This requires
+  that its HEAD, refs, reflogs and stash are reachable from controller-held publication evidence, and that
+  no uncommitted or ignored content remains. Worker refs never count as that evidence. An
+  unpublished detached or reflog-only commit is unique work, so retirement checkpoints it and refuses.
+  Registered linked checkouts share the common Git directory and cannot be inspected through this
+  checkout's mount, so retirement retains the common checkout while any remain registered.
+  `checkpoint-release` supersedes a checkpoint only
+  when paths from both captured trees match a controller-proven published commit and its retained
+  commits are reachable from controller-held publication evidence. Different staged and worktree
+  bytes for the same path cannot both match one published commit, so the checkpoint remains preserved.
+  Older checkpoint records without staged-index or reflog coverage evidence also remain preserved;
+  a previously released record without that reflog proof likewise blocks checkout retirement.
+- `worker-create` on an existing checkout reads the actual branch back and refuses a mismatch with the
+  requested or reconciled execution branch instead of recording it. For an authorized detached checkout,
+  the existing publisher branch is supplied as `--branch` and the bound detached identity is checked.
+  It does not alter the publisher branch.
+
+Claude Code authenticates with a subscription token from `claude setup-token`. The token is stored
+as `CLAUDE_CODE_OAUTH_TOKEN` in `~ygg/.config/epic-workspace/claude.env` (mode 0600, outside the
+workspace root) and passed with `--env-file` (`openhands-start --claude-env-file`). Upstream OpenHands
+lets this token take precedence and strips `ANTHROPIC_API_KEY`. The Terra reserve uses one ChatGPT
+subscription login in `~ygg/.config/epic-workspace/codex`, created once by the owner with
+`ssh -t bob-1-builder-system '~/epic-sandbox/runner/current/config/builderops/epic-workspace/codex-device-login.sh'`.
+`openhands-start --codex-home` mounts it at `/run/codex-home` for one worker at a time, because
+refresh tokens rotate. No API key and no host credential store is used.
+
+Known limits: on the 3915 MiB, no-swap trial VM, native workers hit OOM at both 1000 and 1200 MiB;
+the current trial uses 1500 MiB and serial execution pending peak-memory and concurrency
+qualification. Test runs use an owned disk-backed temporary directory for `TMPDIR` and a separate
+pytest base directory per run to avoid accumulating temporary files in memory. These are trial
+observations, not a global worker budget minimum. The default engine's `docker0` bridge is missing,
+which is why the owned `epicws` bridge is used.
+An agent-server worker uses about 0.5 GB at rest. A checkpoint containing ignored files or stash commits
+can remain unreleasable when publication cannot prove their captured content or reachability.
+The reflog inspection requires the main and registered linked worktree HEAD logs, accepts up to
+32 MiB of reflog bytes and 5,000 distinct retained objects, and does not reconstruct expired or
+deleted entries or arbitrary unreachable Git objects. A checkout with a `.git` file instead of the
+supported plain common Git directory remains unreadable and retained.
+A worker stopped inside a Git operation can leave a `*.lock` file under `.git`, such as `index.lock`
+or a ref lock. The controller treats any such lock as an unsettled Git transaction and therefore as unreadable unique
+work. Checkout and lock bytes are retained, no checkpoint is taken, takeover and retirement refuse,
+and the next action remains `takeover`, so no successor starts. The controller never deletes,
+clears or applies a lock and has no general Git or rebase recovery. An ordinary readable file-level
+partial write outside a Git operation is checkpointed and continued normally. The next technical
+action belongs to the owning workflow: reconcile the stopped Git transaction from the retained
+checkout and lock, then rerun `takeover`, which inspects again from the start. Until then the
+work is retained but not continued or reclaimed. Nothing
+reclaims a workspace that may hold unique work until #6617 qualifies
+preservation (KD-B5F8B2D2F2BB, KD-FE5EDF575D1E). The engine handoff and the disconnect-safe
+coordinator are #6618; non-progress handling is #6619 (source candidate below).
+
+
+### Coordinator progress judgement (#6619, source candidate)
+
+`epicws --epic <N> coordinate --tick <id> [--stall-limit 3] [--apply]` runs one bounded pass of
+`app/builderops/epic_coordination.py` on the trusted controller. It uses the existing run-state and
+OpenHands worker identities; it does not add a scheduler or give the model container host control or
+GitHub credentials. This is an enabling source candidate, not an installed or qualified controller.
+
+- **Evidence and isolation.** It checks the assigned checkout against the recorded worker path, reads
+  the checkout through contained Git, inspects the exact recorded container and compares test, PR and
+  error observations. Heartbeats, event counts, delivery, error-text churn and narration are not progress. A pytest last-failed
+  cache is only a partial test observation. Existing `validation_status` result or pytest outcomes
+  provide additional test evidence; unsupported shapes are an evidence gap, and command, summary
+  and head metadata do not count as progress. An applied pass also reads the public open-PR inventory and matches the worker's
+  branch, repository, governing Issue and unique closing child. It does not establish CI or review outcomes. An incomplete inventory,
+  unreachable event stream or mismatched checkout is an evidence gap for the affected item.
+- **Bounded judgement.** Repeated equivalent evidence on an inactive conversation records
+  `change_approach`, one `bounded_diagnosis` (helper budget 0), `handoff`, then a no-progress stop.
+  Changed checkout, supported validation result, test or PR evidence resets the ladder. A fresh
+  no-progress decision waits for at least 60 seconds without such evidence, and accepted sends have
+  a 60-second interval before another directive. **Replay limit (KD-4B9E44394285):** after an
+  interrupted pass, do not replay its latest tick with `--apply`; use a fresh tick to judge new
+  checkout, test and PR evidence. The send-boundary recheck below also applies to replay and refuses
+  an observed mismatch, but does not establish that every replay/recovery sequence is safe. This
+  limitation remains an obligation for full #6618 activation. The diagnosis is
+  executed in the same pass, read-only and without interrupting the
+  writer: the conversation, a bounded event page, the checkout and test evidence are read and the
+  finding is recorded on the decision. An active conversation with unchanged evidence is diagnosed
+  first. Conversation errors do not identify the current tool call or operation, and may be nonfatal.
+  Matching errors while a conversation runs therefore lead to a recorded investigation through the
+  owning workflow, without automatically superseding the writer. Only exact, identifiable error
+  observations are compared; a later operation, missing event history or new work invalidates the
+  series. The coordinator stores a keyed digest rather than error text. An inactive stalled worker
+  can still receive the bounded changed-approach directive. An event alone and a 30-minute operation
+  are not evidence of a loop. After 30 minutes without changed work
+  evidence, the coordinator records an active-work investigation stop without interrupting the
+  writer. Event activity is diagnosis input only, never progress. Quota, authentication, context, transient network and policy errors retain separate
+  next actions; they are not silently treated as task failures or a license to switch engines. A
+  locally OOM-killed or exited container holds its unfinished assignment, recorded owner when known,
+  checkout and remaining action, while eligible peers continue. No cleanup, worker stop, successor
+  or takeover is performed by this pass; preservation and one-writer qualification remain required.
+- **Blocker authority.** A worker can declare `.codex-tmp/worker-blocker.json` using schema
+  `worker_blocker.v1` and a `summary`; its text is not authority. The controller reads current Issue
+  labels and the latest blocker-action receipt independently of declarations. This public read accepts a matching
+  receipt only from a GitHub `OWNER`-associated comment; other or unverifiable authors leave authority
+  unknown for trusted reconciliation. Every valid live receipt remains a hold, including a
+  builder-owned dependency. Its recorded owner and next action remain intact; a builder can
+  investigate and resolve technical validity through the owning workflow without a new human approval.
+  An unsupported worker-declared dependency without a canonical hold is routed to `issue-maintenance-change-control`; the
+  trusted coordinator retains any GitHub write. `--no-observe-github` skips public Issue and PR reads;
+  directives then remain fenced because current source authority is unknown.
+- **Optional directive application.** With `--apply`, only `change_approach` and
+  `repair_technical_dependency` are sent as user messages to the current OpenHands conversation via
+  its existing controller-only session endpoint. The attempt, Issue, worker, container, conversation,
+  tick, action and random marker are recorded before the request. The controller checks the actual
+  container ID, published loopback port, checkout mount, existing session key, and conversation ID,
+  tags and working directory before contacting or directing a worker. It rechecks identity and
+  current Issue and PR authority after reservation. It then rereads the actual conversation, checkout,
+  test cache and validation evidence and compares them with the decision, including on replay. Missing
+  or changed evidence, a new event, or active execution refuses the affected send. These observations
+  are not atomic with the worker or GitHub, so changes after the final read remain outside the fence.
+  In this candidate, coordination compares the unfiltered event count with the count under the
+  supported wide-time filter, then checks the unfiltered count again after the bounded newest page.
+  The selected 1.62 reader counts indexed entries without parsing them in the unfiltered case, but
+  skips unreadable payloads in the filtered case. Unequal, unavailable, invalid or changing counts,
+  or a short page when the history fits, hold the directive. The filtered scan is admitted only for
+  at most 2,000 indexed events and uses a ten-second client timeout; larger histories hold with an
+  explicit scan-limit gap. An event outside the wide-time filter can cause a conservative hold.
+  Concurrent appends may increase server work after admission, and a client timeout cannot cancel the
+  upstream scan. Changes invisible to the server's index or cache, and changes after the final read,
+  remain outside the check. No actual event damage is implied.
+  The upstream message endpoint
+  can supersede a running ACP prompt or goal loop; callers must intend that effect. A user event with
+  the marker must be read back before delivery is reported. A lost reply or missing event is unknown,
+  never proof of absence: the original attempt is reconciled by marker and is not resent, even on a
+  later tick. A visible event alone cannot complete an in-flight or lost POST. The unknown effect
+  holds that issue's subsequent directives while peers continue. A 429
+  can mean the message was saved but run capacity was full; use the existing conversation `/run`
+  endpoint only after checking the conversation. An observed message is not work progress: a later
+  checkout, test or PR change is recorded separately and is not proof of causal model compliance.
+- **Assignment and endpoint fence.** An observation, decision, reservation, POST outcome,
+  conversation create/reconcile and readiness result belong to one full assignment tuple (worker,
+  runtime, state, container ID, port, checkout, branch, start time, conversation ID and status).
+  Each write is a compare-and-set on that tuple under the run-state lock. A late, lost or error
+  outcome for an older tuple stays in its own effect record with its obligations; it never replaces
+  a newer stop, conversation or next action. Decisions carry the tuple and a tuple-tagged ID, so a
+  successor never inherits or receives a predecessor's directive. The session key and loopback
+  port are used only inside an endpoint session. That session holds the worker lifecycle lock and a
+  shared hold on the OpenHands start (port-selection) lock, which is the same fence that serializes
+  `worker-stop`, starts and conversation operations. A coordinator item holds that worker's
+  lifecycle for its bounded duration. All locks are non-blocking, so a busy worker is reported as
+  `held_lifecycle_busy` without contact and peers continue. An unsafe or unavailable individual
+  lifecycle lock holds that worker without contact; unreadable shared run-state fails the pass. A stop or start requested meanwhile is
+  refused and can be retried. Every request keeps its finite timeout. An unresolved effect whose
+  conversation ended with a verified stop is preserved but no longer blocks a successor.
+- **Replay and obligations.** Every previously applied tick remains idempotent even out of order;
+  a replay still observes current authority. Decisions,
+  effects and remaining actions live in the existing `dispatch_decisions` and `stop_conditions`;
+  GitHub Issues, PRs and CI remain authoritative. Issue maintenance, handoff and lifecycle actions
+  remain explicit coordinator obligations and are not performed by `coordinate`. A fresh authorized
+  judgment can follow a refused zero-attempt blocker decision with a new linked decision; the old
+  decision and refusal remain as evidence. A reserved, unknown, delivered or run-deferred attempt
+  cannot be rebound or resent. A refusal containing conflicting POST or marker evidence holds the
+  writer as an unknown effect until reconciled. Three successive known-not-sent refusals trigger a
+  bounded owning-workflow investigation; new work evidence or a changed blocker permits renewed judgment.
+
+The source tests use simulated engine, GitHub and agent-server boundaries; they do not demonstrate a
+real model's reaction. After independent review and trusted integration, an operator can create a
+separate, single-worker synthetic epic and use `scripts/epic_coordination_live_fixture.py` (`prompt`,
+`baseline`, `apply`, `verify`) to collect a bounded real-directive observation. The script requires an owned
+fixture root, synthetic epic and Issue numbers at least 9000000, and a `fixture-` worker; it never
+starts or stops the worker or contacts GitHub. Its Issue and PR authority is an explicitly simulated
+port, not a GitHub readback. It is read before every session contact and before any success result.
+A stopped or unavailable authority refuses with no contact. An actual OpenHands, model, event and
+work response still has to be shown by the live run. Supply the same random hexadecimal `--token` to each
+phase and use the printed prompt when starting the fixture conversation. On the trusted controller,
+after creating the fixture epic and worker with the usual `epicws` commands:
+
+```sh
+python3 scripts/epic_coordination_live_fixture.py prompt --token <hex-token> > <owned-prompt-file>
+# Start the fixture conversation using the owned prompt file, then:
+python3 scripts/epic_coordination_live_fixture.py baseline --token <hex-token> --root <fixture-root> --epic <fixture-epic> --issue <fixture-issue> --worker <fixture-worker>
+# Wait at least 60 seconds with the conversation inactive, then:
+python3 scripts/epic_coordination_live_fixture.py apply --token <hex-token> --root <fixture-root> --epic <fixture-epic> --issue <fixture-issue> --worker <fixture-worker>
+python3 scripts/epic_coordination_live_fixture.py verify --token <hex-token> --root <fixture-root> --epic <fixture-epic> --issue <fixture-issue> --worker <fixture-worker>
+```
+
+The prompt does not disclose the unpredictable marker created for the later POST. Verification
+requires that marker in the designated non-ignored result, the actual server event, and checkout
+evidence ordered after the event. Review the result alongside runtime evidence. This fixture is not
+broader activation or acceptance.
+
+
 ## Planning vocabulary and lightweight breakdown
 
 Use these terms consistently across specifications, skills, and issues:
@@ -178,9 +1065,39 @@ python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <
 The root
 `conftest.py` provisions and validates a unique `PYTEST_DEBUG_TEMPROOT` namespace
 before collection for every invocation. An inherited debug root supplies the parent
-directory; each process still receives a fresh child namespace. Setup failure aborts
-before tests execute, with no shared-root fallback. Namespaces are retained for
-diagnosis; the harness does not delete another run's temporary artifacts.
+directory; each process still receives a fresh direct child namespace. Without an
+inherited root, the harness uses a stable UID-owned private directory beneath the
+system temporary directory. Setup failure aborts before tests execute, with no
+shared-root fallback. Each new namespace records its
+owner and keeps a shared lifetime lock, including locks on marked parent namespaces
+for nested pytest runs. On normal completion it records the end time; a nested run
+also extends the retention of its marked ancestors. On a later invocation the harness
+may remove only its marked direct-child namespaces at least seven days after completion,
+when the owner is absent and the exclusive cleanup lock is available. Missing or
+malformed markers, interrupted runs without a complete end record, uncertain child runs,
+live or unknown owners, symlinks, and failed checks are preserved. Existing unmarked
+namespaces are not migrated or removed; cleanup is best effort and leaves uncertain
+evidence intact. Automatic cleanup is limited to UID-owned 0700 parents on qualified
+ownership-enforcing mounts and uses a common parent lock shared by cooperating harnesses
+around namespace changes. macOS `noowners` and unknown filesystem semantics are not
+qualified; mount identity is rechecked before moving or deleting a candidate. A
+candidate with another mount, special files, or uninspectable entries is preserved. The
+parent listing and each candidate scan have a limit of 100,000 entries and share a
+five-second pre-rename budget; an unfinished root requires separately qualified
+maintenance. This does not interrupt a stalled filesystem call or
+bound deletion after rename. An
+unqualified default mount fails setup; an inherited unqualified parent remains available
+for isolated tests without pruning. A same-UID
+or root process deliberately bypassing that advisory lock is outside this boundary;
+an inherited parent that cannot be qualified still supports isolated tests but is
+never pruned. Markers on confirmed `noowners` enclosing mounts are left untouched;
+qualified enclosing namespaces retain lifetime fences. If an enclosing marker exists
+but its mount probe is inconclusive, setup fails rather than dropping its fence. On a qualified mount, a marked enclosing
+namespace whose owner marker cannot be safely opened and pinned fails setup rather
+than being treated as unmarked legacy.
+A valid busy lock is waited on for at most 30 seconds, then setup fails
+loudly; cleanup holds it only for final identity checks and the rename, not recursive
+deletion. A malformed default-parent lock also fails setup before collection.
 
 ### Validation-readiness diagnostic
 
@@ -645,6 +1562,105 @@ Enforcement surfaces:
 - Consumption: `issue-to-code` gates on `Verify:` presence and reuses meaningful behavioral coverage and performs non-behavioral writeback.
 
 ## Multi-Agent Workspace Guardrails
+
+For an explicitly authorized local legacy task whose predecessor claim has no recorded Builder
+session, the trusted host operator may use the separate operator reconciliation path. First record
+the exact user mandate, successor agent and actual current Builder session, predecessor claim and
+registry history, candidate, writer/delegation and restart observations, attempted effects and
+current PR in an immutable `operator_reconciliation.v1` Issue comment under the authenticated
+owner account. The comment identifies the accountable operator's observations; it does not claim
+the old owner signed or released anything, or that a human personally authored the account comment.
+Name the sources used for execution, delegation, restart, attempted effects and GitHub readback.
+An active or genuinely uncertain competing writer, automatic restart or relevant external effect
+must remain unknown and blocks the corresponding conflicting work.
+
+For the qualified post-reboot, stopped runs #6601 and #6597 only, the host operator can prepare an
+intentionally incomplete read-only receipt draft using `python -m scripts.legacy_operator_evidence
+--issue <issue> --pr <pr> --worktree <absolute-path> --base <full-base-sha> --agent <successor>`
+with the actual `CODEX_SESSION_ID`. The operator must fill the missing explicit mandate and sourced
+writer, delegation, restart and publication observations from real evidence; nulls are not proof.
+Before admission establish that the reboot followed the recorded activity, inspect the exact run's
+restart configuration and observe that no identified post-reboot writer or delegated work remains.
+Coordinate no new direct starts or Git configuration changes during the transition. Before the
+wrapper's first Git command, the host checks its qualified Git binary and existing global, common
+and linked-worktree configuration without following config includes; unsupported includes, filters,
+helpers or worktree config are refused. A qualified worktree config may contain only one nonempty,
+single-line `codex.localEnvironmentConfigPath` metadata entry. Its regular file must belong to the
+current user, not be group- or world-writable, and retain its identity and metadata while read.
+This permits the observed Git metadata; it does not attest what Codex may do with its value. The
+qualified GitHub credential helper remains unchanged.
+This is a coordinated host check, not a fence against uncoordinated file writers. Other legacy runs
+except the separately scoped #6560 and #6561 procedures below, and any unknown active work, remain unresolved.
+
+Use the pickup wrapper with `--takeover-stale`, the explicit target worktree,
+`--operator-comment-id`, `--operator-pr`, `--operator-workspace-root` and
+`--legacy-run-state-root <absolute-factory-state-root>`. The host takes the existing watcher lock
+when present, issue lock and server lock in that order, checks the run and scoped factory/service
+processes, and retains the locks through claim, prepared registration and ACK readback. It checks
+successor claim and registration and the run status again before unlocking. A busy lock, matching or
+ambiguous process, or inconsistent state refuses the transition. This directed check and the
+operator's no-new-start coordination do not prove the absence of arbitrary renamed or in-process
+commands. The wrapper compares exact predecessor and branch history, claims as the new agent/session,
+registers a prepared successor, and pins a separate account-read-back ACK. A
+prepared registration is not worker or publication authority. If a response is lost, use the same
+wrapper and arguments with `--operator-resume`: it reads the exact new claim and, when an ACK may
+have been sent, searches for one matching existing ACK instead of posting another. The existing
+registry records an ACK intent before POST: when no intent exists, resume may complete that first
+attempt; after an intent exists, absence of a matching ACK remains unknown and is never permission
+to repost. Missing or ambiguous readback remains unresolved; do not release another owner's claim
+or retry a write blindly.
+The operator pickup and resume preflight does not require the historical candidate to contain current
+`origin/main`; the guarded host recovery still requires the exact clean candidate and authority.
+Integrate current main after transfer before the normal commit and publication gates.
+Immediately before the claim, the host refreshes Issue authority after the final run check; this
+is a check followed by a dispatcher write, not an atomic GitHub/SQLite lock. The native successor
+proof refreshes its dispatcher and worktree authority after its external lineage reads; a later
+change still requires the consuming delivery gate to revalidate authority.
+Before claiming, the host applies the same registered and live checkout workspace screen used by
+the native successor proof. The supplied model workspace root must reflect actual access; this
+screen does not establish that a controller or its shared authority is protected from model access.
+The original candidate and claim remain historical provenance. A reviewed descendant can proceed
+only through the ordinary current-head scope, review, CI, native or executor merge and closure gates.
+
+For the separately qualified dirty Codex recovery #6560 and its existing PR #6565, provide an
+explicit JSON file containing exactly `index_blobs`, `file_sha256`, `patch_sha256` and absolute
+`backup` for the two designated tracked files. The blob and content maps use the same two paths;
+the backup is independently preserved and hash-verified. Use the same read-only draft command above
+with `--issue 6560 --pr 6565 --dirty-material-json <absolute-contract.json>` to produce an
+intentionally incomplete candidate-bound receipt. It does not make a claim or attest the operator's
+unknown fields. On isolated fixtures this producer is exercised through pickup, acknowledgment and
+publication proof. The operator must independently establish and cite the identified app child and
+delegate projections, SQLite parent links, available journal and publication attempts, rejected
+postboot resume, host boot, scoped process and restart observations, and current PR/ref. Missing or
+unreconciled identified work stays unknown, including a postboot interrupted tool; failed or
+interrupted historical delegates are not relabeled completed. The operator must explicitly
+coordinate no new manual starts and no Git configuration changes during the transition. This is a
+bounded, source-backed observation; it does not mechanically prevent app starts or arbitrary writers.
+The identified historical publication commands must use their full execution IDs. Their terminal
+statuses and the current PR/ref may be observed without knowing the exact historical push outputs
+or edited body bytes: those two fields remain `unknown`, not asserted equal to the current PR.
+The Issue, ACK, registry and dispatcher are point-in-time readbacks, not a distributed atomic lock.
+The named #6560 first-commit stage and commit checks in `_shared/BRANCH_TRUTH_GATE.md` qualify the
+acknowledged two-file index against its original parent before integrating current main. They do not
+authorize a stale-base push or replace the ordinary integration and pre-push checks.
+Follow the #6560 full-path publication proof in `publish-pr/FULL_PATH.md` for each subsequent PR effect.
+
+For the separately qualified clean Codex recovery #6561 / #6562, the same draft producer emits an
+incomplete `writer.codex_custody` section. The operator must fill it from the named child and parent
+journals, a read-only consistent Codex state snapshot of the named session relations, host boot,
+identified processes and restart configuration, and the reconciled current PR and historical
+terminal commands. The 2026-11-15 inventory occurred after boot: it is not a rejected start and
+was not stopped by the preceding reboot. Its eight registered commands must have terminal zero
+results and the identified PIDs must be absent. Record the parent journal prefix length and hash,
+observation times, exact source and relation list, and coordinated no-new-manual-start window.
+The earlier push output, earlier body, historical PPIDs and unrecorded effects remain unknown.
+The narrow host reader rechecks only the named registered target relations in fresh read-only SQLite
+snapshots; it does not prove all processes, unregistered children, future activity, or a lock. A
+missing or contradictory source refuses the transition. The guard runs before claim, prepare, ACK,
+pin and resume, alongside the existing claim, registration and publication checks. Use only the
+interactive native continuation; an observed earlier executor or in-flight action must retain that
+executor's own authority and recovery gates. Follow `publish-pr/FULL_PATH.md` for PR effects and
+`verification-and-closure/FULL_PATH.md` for the current-head native proof.
 
 - Preflight before claim/integration:
   - `scripts/agent_workspace_preflight.sh --expected-branch "$(git branch --show-current)" --expected-worktree "$(git rev-parse --show-toplevel)"`

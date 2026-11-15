@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.dispatcher.events import JsonlEventWriter
+from app.dispatcher.events import JsonlEventWriter, claim_event_digest, event_history_digest
 from app.dispatcher.leases import (
     _observe_expired_leases,
     _reclaim_observed_leases,
@@ -16,7 +16,7 @@ from app.dispatcher.leases import (
     reclaim_expired_leases,
     release,
 )
-from app.dispatcher.models import LeaseRecord, TaskRecord
+from app.dispatcher.models import EventRecord, LeaseRecord, TaskRecord
 from app.dispatcher.store import SqliteStore
 
 
@@ -55,6 +55,108 @@ def test_claim_creates_active_lease(store: SqliteStore) -> None:
     assert claimed_task.status == "claimed"
     assert lease.holder == "agent-1"
     assert lease.ttl_seconds == 3600
+
+
+def test_bound_claim_and_stale_release_fence_same_agent_takeover(store: SqliteStore) -> None:
+    """An old release cannot clear the replacement, even with the same actor."""
+    store.upsert_task(_task())
+    _, old = claim(store, "task-1", "agent-1", ttl_minutes=60, session="builder-s1", claim_id="attempt-1")
+    first = store.list_events("task-1")[-1]
+    assert first.payload == {"ttl_minutes": 60, "session": "builder-s1", "claim_id": "attempt-1"}
+    _expire_lease(store, old.lease_id)
+    _, new = claim(store, "task-1", "agent-1", takeover_stale=True, expected_lease_id=old.lease_id,
+                   session="builder-s1", claim_id="attempt-2")
+    with pytest.raises(ValueError, match="expected lease changed"):
+        release(store, "task-1", "agent-1", expected_lease_id=old.lease_id)
+    assert store.get_task("task-1").lease_id == new.lease_id
+    assert store.get_lease(new.lease_id).released_at is None
+    assert not [event for event in store.list_events("task-1") if event.event_type == "task.released"]
+    release(store, "task-1", "agent-1", expected_lease_id=new.lease_id)
+    assert store.get_task("task-1").lease_id is None
+
+
+def test_exact_predecessor_comparison_preserves_old_claim_and_detects_reexpiry(store: SqliteStore) -> None:
+    store.upsert_task(_task(repo="RasmusTho/agentic-pkm-mvp"))
+    _, old = claim(store, "task-1", "old-agent")
+    old_event = store.list_events("task-1")[-1]
+    observed_history = event_history_digest([event.to_dict() for event in store.list_events("task-1")])
+    observed_expiry = _expire_lease(store, old.lease_id)
+    old_lease = store.get_lease(old.lease_id)
+    assert old_lease is not None
+    old_lease.expires_at = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(timespec="microseconds")
+    store.upsert_lease(old_lease)
+    task = store.get_task("task-1")
+    assert task is not None
+    task.lease_expires_at = old_lease.expires_at
+    store.upsert_task(task)
+
+    with pytest.raises(ValueError, match="observed predecessor changed"):
+        claim(store, "task-1", "new-agent", takeover_stale=True, expected_lease_id=old.lease_id,
+              expected_lease_holder="old-agent", expected_lease_expires_at=observed_expiry,
+              expected_claim_event_id=old_event.event_id, expected_claim_event_digest=claim_event_digest(old_event.to_dict()),
+              expected_history_digest=observed_history, expected_repo="RasmusTho/agentic-pkm-mvp", expected_issue_number=623,
+              session="new-session", claim_id="new-attempt")
+    assert store.get_task("task-1").lease_id == old.lease_id
+    assert store.list_events("task-1")[-1] == old_event
+
+    _, new = claim(store, "task-1", "new-agent", takeover_stale=True, expected_lease_id=old.lease_id,
+                   expected_lease_holder="old-agent", expected_lease_expires_at=old_lease.expires_at,
+                   expected_claim_event_id=old_event.event_id, expected_claim_event_digest=claim_event_digest(old_event.to_dict()),
+                   expected_history_digest=observed_history, expected_repo="RasmusTho/agentic-pkm-mvp", expected_issue_number=623,
+                   session="new-session", claim_id="new-attempt")
+    events = store.list_events("task-1")
+    assert events[0] == old_event
+    assert "session" not in events[0].payload
+    assert events[-1].lease_id == new.lease_id
+    assert events[-1].actor == "new-agent"
+    assert events[-1].payload["session"] == "new-session"
+    assert events[-1].payload["takeover"]["previous_holder"] == "old-agent"
+
+
+def test_exact_predecessor_comparison_rejects_partial_inputs(store: SqliteStore) -> None:
+    store.upsert_task(_task())
+    with pytest.raises(ValueError, match="requires repo, issue, holder"):
+        claim(store, "task-1", "new-agent", takeover_stale=True, expected_lease_id="old",
+              expected_lease_holder="old-agent")
+    assert store.get_task("task-1").lease_id is None
+
+
+def test_exact_predecessor_comparison_rejects_intervening_history(store: SqliteStore) -> None:
+    store.upsert_task(_task(repo="RasmusTho/agentic-pkm-mvp"))
+    _, old = claim(store, "task-1", "old-agent")
+    old_event = store.list_events("task-1")[-1]
+    expiry = _expire_lease(store, old.lease_id)
+    task = store.get_task("task-1")
+    assert task is not None
+    task.lease_expires_at = expiry
+    store.upsert_task(task)
+    history_digest = event_history_digest([event.to_dict() for event in store.list_events("task-1")])
+    store.append_event(EventRecord(event_id="unexpected-release", timestamp=datetime.now(timezone.utc).isoformat(),
+                                   task_id="task-1", event_type="task.released", actor="old-agent",
+                                   lease_id=old.lease_id, payload={"reason": "manual"}))
+    before = store.list_events("task-1")
+
+    with pytest.raises(ValueError, match="observed predecessor changed"):
+        claim(store, "task-1", "new-agent", takeover_stale=True, expected_lease_id=old.lease_id,
+              expected_lease_holder="old-agent", expected_lease_expires_at=expiry,
+              expected_claim_event_id=old_event.event_id, expected_claim_event_digest=claim_event_digest(old_event.to_dict()),
+              expected_history_digest=history_digest, expected_repo="RasmusTho/agentic-pkm-mvp",
+              expected_issue_number=623, session="new-session", claim_id="new-attempt")
+    assert store.get_task("task-1").lease_id == old.lease_id
+    assert store.get_lease(old.lease_id).released_at is None
+    assert store.list_events("task-1") == before
+
+
+def test_legacy_unfenced_release_preserves_holder_compatibility(store: SqliteStore) -> None:
+    store.upsert_task(_task())
+    _, lease = claim(store, "task-1", "agent-1")
+    task = store.get_task("task-1")
+    assert task is not None
+    task.claimed_by = None  # Old task rows could lack this projection.
+    store.upsert_task(task)
+    with pytest.raises(ValueError, match="task holder changed"):
+        release(store, "task-1", "agent-1", expected_lease_id=lease.lease_id)
+    assert release(store, "task-1", "agent-1").lease_id is None
 
 
 def test_duplicate_claim_rejected(store: SqliteStore) -> None:
@@ -104,6 +206,28 @@ def test_heartbeat_renews_lease_expiry(
     assert persisted_lease.ttl_seconds == 3600
     assert persisted_task.lease_expires_at == updated_lease.expires_at
     assert persisted_lease.expires_at == updated_lease.expires_at
+
+
+def test_heartbeat_samples_time_after_waiting_for_write_lock(store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    store.upsert_task(_task())
+    clock = ["2026-04-25T10:00:00+00:00"]
+    monkeypatch.setattr("app.dispatcher.leases._utc_now", lambda: clock[0])
+    claim(store, "task-1", "agent-1", ttl_minutes=1)
+    clock[0] = "2026-04-25T10:00:30+00:00"
+    connect = store._connect
+    class DelayedConnection:
+        def __enter__(self):
+            self.connection = connect().__enter__()
+            return self
+        def __exit__(self, *args):
+            self.connection.close()
+        def execute(self, sql, *args):
+            if sql == "BEGIN IMMEDIATE":
+                clock[0] = "2026-04-25T10:02:00+00:00"
+            return self.connection.execute(sql, *args)
+    monkeypatch.setattr(store, "_connect", lambda: DelayedConnection())
+    with pytest.raises(ValueError, match="lease has expired"):
+        heartbeat(store, "task-1", "agent-1")
 
 
 def test_heartbeat_renewal_controls_reclaim_boundary(

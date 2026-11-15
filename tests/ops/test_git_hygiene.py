@@ -6612,6 +6612,242 @@ def test_local_retirement_preserves_live_branch_lease(tmp_path, monkeypatch):
     assert result["deleted"] == 0
 
 
+def _retirement_live_issue_rows():
+    expiry = "2099-01-01T00:00:00Z"
+    return [
+        {"kind": "task", "record": {
+            "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-6618",
+            "repo": "RasmusTho/agentic-pkm-mvp", "issue_number": 6618,
+            "status": "in_progress", "lease_id": "live-6618",
+            "claimed_by": "active-worker", "lease_expires_at": expiry,
+            "linked_pr": None, "source_anchor_refs": "[]", "sync_state": None,
+        }},
+        {"kind": "lease", "record": {
+            "lease_id": "live-6618", "holder": "active-worker",
+            "released_at": None, "expires_at": expiry, "resource": "issue:6618",
+        }},
+    ]
+
+
+@pytest.mark.parametrize("tracking", [False, True])
+@pytest.mark.parametrize("selective", [False, True])
+@pytest.mark.parametrize("linked_open_pr", [False, True])
+def test_ref_retirement_scopes_only_explicitly_authorized_issue_leases(
+    tmp_path, monkeypatch, tracking, selective, linked_open_pr,
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    rows = _retirement_live_issue_rows()
+    if linked_open_pr:
+        rows[0]["record"]["linked_pr"] = "#99"
+        monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", lambda *_: {"99:busy": "a" * 40})
+    before = json.dumps(rows, sort_keys=True)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: rows)
+    if tracking:
+        ref = "refs/remotes/origin/old"
+        git_hygiene.run_git(["update-ref", ref, sha], repo)
+        monkeypatch.setattr(git_hygiene, "_tracking_sources_absent", lambda *_: True)
+    retire = (git_hygiene.retire_absent_remote_tracking_refs if tracking
+              else git_hygiene.retire_inactive_local_branches)
+
+    result = retire(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="retire only refs unrelated to ongoing Issue 6618",
+        allow_unrelated_issue_leases=selective,
+    )
+
+    assert result["deleted"] == int(selective)
+    assert git_hygiene.run_git_result(["show-ref", "--verify", "--quiet", ref], repo).returncode == int(selective)
+    assert json.dumps(rows, sort_keys=True) == before
+    receipt = json.loads((tmp_path / "rescue" / "retirement.json").read_text())
+    assert receipt["allow_unrelated_issue_leases"] is selective
+    assert sha in json.loads((tmp_path / "rescue" / "manifest.json").read_text())["verified_objects"]
+
+
+@pytest.mark.parametrize("tracking", [False, True])
+@pytest.mark.parametrize("binding", ["refs/heads/old", "refs/remotes/origin/old", "branch:old", "head"])
+def test_selective_ref_retirement_preserves_live_issue_artifact_bindings(
+    tmp_path, monkeypatch, tracking, binding,
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    rows = _retirement_live_issue_rows()
+    if binding == "head":
+        rows[0]["record"]["head"] = sha
+    else:
+        rows[0]["record"]["source_anchor_refs"] = json.dumps([binding])
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: rows)
+    if tracking:
+        ref = "refs/remotes/origin/old"
+        git_hygiene.run_git(["update-ref", ref, sha], repo)
+        monkeypatch.setattr(git_hygiene, "_tracking_sources_absent", lambda *_: True)
+    retire = (git_hygiene.retire_absent_remote_tracking_refs if tracking
+              else git_hygiene.retire_inactive_local_branches)
+
+    result = retire(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="preserve every source alias owned by ongoing work",
+        allow_unrelated_issue_leases=True,
+    )
+
+    assert result["deleted"] == 0
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+@pytest.mark.parametrize("problem", [
+    "orphan", "unknown_resource", "different_holder", "different_repo",
+    "duplicate_task", "duplicate_lease", "expiry_disagreement", "missing_identity",
+    "closed_linked_pr",
+])
+def test_selective_ref_retirement_preserves_unscoped_live_claims(
+    tmp_path, monkeypatch, problem,
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    rows = _retirement_live_issue_rows()
+    task, lease = rows[0]["record"], rows[1]["record"]
+    if problem == "orphan":
+        rows.pop(0)
+    elif problem == "unknown_resource":
+        lease["resource"] = "repository:shared"
+    elif problem == "different_holder":
+        lease["holder"] = "other-worker"
+    elif problem == "different_repo":
+        task.update(repo="Other/Repo", task_id="github-Other--Repo-issue-6618")
+    elif problem == "duplicate_task":
+        rows.append({"kind": "task", "record": dict(task)})
+    elif problem == "duplicate_lease":
+        rows.append({"kind": "lease", "record": dict(lease)})
+    elif problem == "expiry_disagreement":
+        task["lease_expires_at"] = "2098-01-01T00:00:00Z"
+    elif problem == "missing_identity":
+        lease["lease_id"] = None
+    elif problem == "closed_linked_pr":
+        task["linked_pr"] = "#29"
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: rows)
+
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="never infer unrelatedness from an ambiguous live lease",
+        allow_unrelated_issue_leases=True,
+    )
+
+    assert result["deleted"] == 0
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+@pytest.mark.parametrize("tracking", [False, True])
+@pytest.mark.parametrize("protection", ["checked_out", "open_pr", "missing_preserved", "issue_name"])
+def test_selective_ref_retirement_keeps_existing_artifact_protections(
+    tmp_path, monkeypatch, tracking, protection,
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    rows = _retirement_live_issue_rows()
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: rows)
+    branch = "old"
+    if protection == "checked_out":
+        git_hygiene.run_git(["worktree", "add", str(tmp_path / "active"), branch], repo)
+    elif protection == "open_pr":
+        rows[0]["record"]["linked_pr"] = "#27"
+        monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", lambda *_: {"27:old": "a" * 40})
+    elif protection == "missing_preserved":
+        _record_missing_preserved_binding(repo, branch, sha, tmp_path / "lost-checkout")
+    elif protection == "issue_name":
+        branch = "codex/issue-6618-resume"
+        ref = "refs/heads/" + branch
+        git_hygiene.run_git(["update-ref", ref, sha], repo)
+    if tracking:
+        ref = "refs/remotes/origin/" + branch
+        git_hygiene.run_git(["update-ref", ref, sha], repo)
+        monkeypatch.setattr(git_hygiene, "_tracking_sources_absent", lambda *_: True)
+    retire = (git_hygiene.retire_absent_remote_tracking_refs if tracking
+              else git_hygiene.retire_inactive_local_branches)
+
+    result = retire(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="preserve checked-out, open, retained and active-Issue refs",
+        allow_unrelated_issue_leases=True,
+    )
+
+    assert result["deleted"] == 0
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+@pytest.mark.parametrize("tracking", [False, True])
+def test_selective_ref_retirement_preserves_live_prior_lifecycle_binding(
+    tmp_path, monkeypatch, tracking,
+):
+    from scripts import agent_worktree
+
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    path = str((tmp_path / "live-generation").resolve())
+    record = {
+        "path": path, "branch": "codex/issue-6618-live", "owner": "active-worker",
+        "generation": "b" * 32, "status": "active",
+        "registered_at": 1, "heartbeat_at": 2, "expires_at": 4102444800,
+        "prior_bindings": [{"branch": "old", "removed_at": 1}],
+    }
+    agent_worktree._validate_authority_record(path, record)
+    agent_worktree._write_registry(agent_worktree._default_registry_path(repo), {
+        "schema": agent_worktree.REGISTRY_SCHEMA, "worktrees": {path: record},
+    })
+    rows = _retirement_live_issue_rows()
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: rows)
+    if tracking:
+        ref = "refs/remotes/origin/old"
+        git_hygiene.run_git(["update-ref", ref, sha], repo)
+        monkeypatch.setattr(git_hygiene, "_tracking_sources_absent", lambda *_: True)
+    retire = (git_hygiene.retire_absent_remote_tracking_refs if tracking
+              else git_hygiene.retire_inactive_local_branches)
+
+    result = retire(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="preserve prior branch names of an active lifecycle generation",
+        allow_unrelated_issue_leases=True,
+    )
+
+    assert result["deleted"] == 0
+    assert result["retained"][ref] == "live_or_resumable_activity"
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+@pytest.mark.parametrize("kind, selective", [
+    ("local_branch", "yes"), ("local_branch", 1), ("remote_tracking", None),
+    ("auxiliary_ref", True), ("legacy_archive", True),
+])
+def test_selective_ref_retirement_rejects_implicit_or_foreign_scope(tmp_path, kind, selective):
+    with pytest.raises(ValueError, match="selective_issue_lease_scope_invalid"):
+        git_hygiene._retire_inactive_ref_phase(
+            tmp_path, targets={"refs/heads/old": "a" * 40},
+            snapshot_directory=tmp_path / "rescue", owner_discard="owner request",
+            kind=kind, allow_unrelated_issue_leases=selective,
+        )
+    assert not (tmp_path / "rescue").exists()
+
+
+def test_selective_ref_retirement_compensates_concurrent_worktree_creation(
+    tmp_path, monkeypatch,
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    rows = _retirement_live_issue_rows()
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: rows)
+    original = git_hygiene._open_cleanup_pr_heads
+    created = tmp_path / "new-work"
+    def concurrent(*args):
+        if git_hygiene.run_git_result(["show-ref", "--verify", "--quiet", ref], repo).returncode == 1:
+            git_hygiene.run_git(["worktree", "add", "--detach", str(created), sha], repo)
+        return original(*args)
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", concurrent)
+
+    with pytest.raises(RuntimeError, match="archive_worktree_activity_drift"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="compensate when another checkout appears during retirement",
+            allow_unrelated_issue_leases=True,
+        )
+
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+    assert created.is_dir()
+    assert json.loads((tmp_path / "rescue" / "retirement.json").read_text())["state"] == "compensated"
+
+
 def test_local_retirement_ignores_historical_dispatcher_delivery_sha(
     tmp_path, monkeypatch
 ):
@@ -7124,6 +7360,57 @@ def test_local_retirement_ignores_narrative_binding_words(
         owner_discard="discard inactive work after narrative-only reference check",
     )
     assert result["deleted"] == 1
+
+
+@pytest.mark.parametrize("suffix, retained", [
+    ("", False),
+    ("Preserved worktree: /tmp/old; branch: old; base HEAD: {sha}", True),
+    ("`Preserved worktree: /tmp/old; branch: old; base HEAD: {sha}`", False),
+    ("Dedicated worktree /tmp/old is still dirty on branch old at head invalid", None),
+])
+def test_local_retirement_maps_empty_gfm_header_to_original_source(
+    tmp_path, monkeypatch, suffix, retained,
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    body = (
+        "| | |\n"
+        "| --- | --- |\n"
+        "| Result | `passed` |\n\n"
+        + suffix.format(sha=sha)
+    )
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-2143",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 2143,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({"comments": [{"body": body}]}),
+            },
+        }
+    ])
+
+    def retire():
+        return git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard only inactive work after table source mapping",
+        )
+
+    if retained is None:
+        with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+            retire()
+        assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+        return
+
+    result = retire()
+
+    assert result["deleted"] == (0 if retained else 1)
+    assert git_hygiene.run_git_result(
+        ["show-ref", "--verify", "--quiet", ref], repo
+    ).returncode == (0 if retained else 1)
 
 
 def test_local_retirement_ignores_completed_dedicated_worktree_lifecycle_prose(

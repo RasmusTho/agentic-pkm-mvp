@@ -11,6 +11,8 @@ point and captured at the connection, never constructed by the test.
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
@@ -434,6 +436,34 @@ def _episode_closed(h: Harness) -> None:
     )
 
 
+def _binding_reactivation(h: Harness) -> None:
+    from app.instance import binding_removal
+    from app.instance.instance_state import InstanceStateLayout
+    from app.instance.runtime import InstanceRegistryRuntime
+    from app.workers import outbox_worker
+
+    registry_path = Path(os.environ["INSTANCE_VAULT_REGISTRY_PATH"])
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout(
+            root=registry_path.parent,
+            channel_id=os.environ["PKM_ENVIRONMENT"],
+            registry_path=registry_path,
+        ),
+        Path(os.environ["INSTANCE_OWNERSHIP_ROOT"]),
+        initialize_layout=False,
+    )
+    (h.root / "reactivated-note.md").write_text("rebuilt\n", encoding="utf-8")
+    h.mp.setattr(outbox_worker, "drain_binding_outbox", lambda **_k: {"terminal_row_ids": []})
+    h.mp.setattr(binding_removal, "_rebuild_vault_projections", lambda *_a: [])
+    binding_removal._production_rebuild(
+        runtime,
+        binding_id=h.binding,
+        root=h.root,
+        content_epoch=2,
+        reactivation_id="reactivation-recipe",
+    )
+
+
 def _episode_debrief_trigger(h: Harness) -> None:
     from app.episode_debrief import trigger
 
@@ -492,6 +522,7 @@ RECIPES: dict[str, Callable[[Harness], None]] = {
     "shared.settings.write_receipt": _settings_write_receipt,
     "shared.index.embedding_requested": _index_embedding_requested,
     "shared.episodes.closed": _episode_closed,
+    "shared.instance.binding_reactivation": _binding_reactivation,
     "shared.episode_debrief.trigger": _episode_debrief_trigger,
     "shared.eval.disposition_receipt": _eval_disposition_receipt,
 }

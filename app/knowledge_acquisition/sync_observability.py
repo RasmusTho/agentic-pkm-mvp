@@ -378,10 +378,11 @@ def collect_youtube_sync_status(
     if dead_lettered:
         reason_codes.append("dead_letters_present")
     if (
-        isinstance(health_contract.get("dead_lettered_count"), int)
-        and health_contract["dead_lettered_count"] > 0
+        health_contract.get("dead_letter_status") == "warn"
         and "dead_letters_present" not in reason_codes
     ):
+        # The count is historical context; the existing health contract owns
+        # whether it currently breaches its configured threshold.
         reason_codes.append("dead_letters_present")
     for error in source_errors:
         code = error.get("reason_code")

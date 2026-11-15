@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
+from app.builderops import legacy_codex_6560_guard
 from app.dispatcher.verification_contract import (
     MAX_CLOSING_ISSUES,
     has_closing_issue_attempt,
@@ -559,6 +560,11 @@ def apply_publication_plan(
 def _validate_request(request: PublicationRequest) -> None:
     if not REPOSITORY_RE.fullmatch(request.repository):
         raise PublicationRefusal("unsupported", "repository must be owner/name")
+    if (request.repository == "RasmusTho/agentic-pkm-mvp"
+            and (request.governing_issue == 6560 or 6560 in (request.closing_issues or ())
+                 or request.existing_pr_number == 6565
+                 or str(request.worktree.resolve()) == legacy_codex_6560_guard.WORKTREE)):
+        raise PublicationRefusal("unsupported", "#6560 requires its qualified full-path publication proof")
     if request.lane not in SUPPORTED_LANES:
         raise PublicationRefusal("unsupported", "lane is outside the normal publication path")
     if request.tier not in SUPPORTED_TIERS:
@@ -1200,6 +1206,16 @@ def _validated_plan(plan: Mapping[str, Any], expected_hash: str) -> dict[str, An
         or actual_hash != expected_hash
     ):
         raise PublicationRefusal("drift", "publication plan hash mismatch")
+    issue_row = normalized.get("governing_issue")
+    closing_rows = normalized.get("closing_issues")
+    existing_pr = normalized.get("pr", {}).get("existing") if isinstance(normalized.get("pr"), dict) else None
+    if (normalized.get("repository") == "RasmusTho/agentic-pkm-mvp"
+            and ((isinstance(issue_row, dict) and issue_row.get("number") == 6560)
+                 or (isinstance(closing_rows, list) and any(isinstance(row, dict) and row.get("number") == 6560 for row in closing_rows))
+                 or (isinstance(existing_pr, dict) and existing_pr.get("number") == 6565)
+                 or (isinstance(normalized.get("worktree"), str) and str(Path(normalized["worktree"]).resolve())
+                     == legacy_codex_6560_guard.WORKTREE))):
+        raise PublicationRefusal("unsupported", "#6560 requires its qualified full-path publication proof")
     if normalized.get("risk_surfaces"):
         raise PublicationRefusal("unsupported", "high-risk publication is outside the normal path")
     if normalized.get("risk_assessment_complete") is not True:

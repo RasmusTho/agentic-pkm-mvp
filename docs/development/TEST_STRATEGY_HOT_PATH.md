@@ -8,6 +8,7 @@ Source of truth: code, workflow files, and repo-local skill docs
 Last reviewed: 2026-10-31 UTC (Issue #6504 exact Panel CLI test ownership)
 Last verified against: `scripts/dev_delivery_liveness.py`, `tests/governance/test_dev_delivery_liveness_workflow.py`, `tests/scripts/test_select_pr_tests.py::test_liveness_checker_source_selects_its_contract_tests`, `.github/workflows/ci-smoke.yaml`, `.github/workflows/import-linter.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/plan_full_suite_node_shards.py`, `tests/scripts/test_select_pr_tests.py`, `tests/governance/test_issue_pr_governance.py`, `tests/governance/test_governed_vault_profile_contract.py`, `tests/governance/test_governed_vault_profile_proposals.py`, `tests/agents/test_reviewer.py`, `tests/agents/test_reviewer_single_note.py`, `scripts/docs_guard_logic.py`, `tests/scripts/test_docs_guard.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`, `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`, Issues #5820 / PR #5838, #6498 and #6504 selector coverage using `tests/scripts/test_select_pr_tests.py::test_product_embedding_adapters_select_their_regression_coverage` and `tests/scripts/test_select_pr_tests.py::test_cli_rejects_an_unowned_path`, `scripts/await_pr_checks.sh`, `tests/scripts/test_await_pr_checks.py`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md :: Rules`
 Last verified against (reasoning_expansion UAT selector): Issue #6293, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py::test_expansion_uat_paths_are_owned`, and the scoped Expansion runner suite; selector routing verified, live TEST remains opt-in and separate.
+Last verified against (worker subsystem selector ownership): Issue #3864, `scripts/select_pr_tests.py`, `app/services/outbox_producers.py`; the outbox producer inventory selects the worker and service outbox targets.
 
 # Test Strategy for the Hot Path
 
@@ -529,6 +530,13 @@ effort improved before adopting further changes.
   before packing other targets. Sibling units of either module never share a process; with four
   available processes all four long units start in different processes. This preserves the selected
   inventory and existing bounds; an actual current-head CI result remains the timing evidence.
+  [PR #6565 partition 1](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41424311217/job/125207364182)
+  timed out after 5400 seconds with source RPC, deploy-channel nodes and large dispatcher modules
+  together. The placement rule also keeps each preplanned deploy-channel unit in a distinct
+  process, while retaining the four-process cap, 120-second ordinary watchdog, admitted
+  case-specific watchdogs, 5400-second partition ceiling, 120-minute step and 135-minute waiter.
+  The mixed-workload regression proves placement and exact node accounting deterministically;
+  this PR's CI exercises its own selection, while consumer runtime remains unmeasured until rerun.
   A later [#6522 run 41310399802](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/41310399802)
   reached the previous 3300-second partition limit at 99%, leaving the serial boundary unrun.
   The 5400-second per-partition limit within a 120-minute scoped step adds finite execution margin;

@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
+import stat
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -459,6 +461,89 @@ def _validate_canonical_verification_row(row: sqlite3.Row) -> None:
     from app.dispatcher.verification_dispatch import _validated_row_request
 
     _validated_row_request(row)
+
+
+class DispatcherSnapshotError(ValueError):
+    """A read-only dispatcher recovery snapshot could not be trusted."""
+
+
+def dispatcher_db_identity(path: Path) -> tuple[int, int]:
+    """Read an exact regular DB pathname without following symlinks."""
+    try:
+        value = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise DispatcherSnapshotError("dispatcher database identity is unavailable") from exc
+    if not stat.S_ISREG(value.st_mode):
+        raise DispatcherSnapshotError("dispatcher database identity is unavailable")
+    return value.st_dev, value.st_ino
+
+
+def read_recovery_snapshot(
+    *, path: Path, task_id: str, expected_identity: tuple[int, int] | None = None
+) -> tuple[dict, list, dict]:
+    """Read the existing current-schema rollback-journal DB without initialization."""
+    fd: int | None = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        identity = os.fstat(fd)
+        if not stat.S_ISREG(identity.st_mode):
+            raise DispatcherSnapshotError("dispatcher database is not a regular file")
+        identity_pair = (identity.st_dev, identity.st_ino)
+        header = os.read(fd, 100)
+        if (expected_identity is not None and identity_pair != expected_identity):
+            raise DispatcherSnapshotError("dispatcher database identity changed")
+        if (len(header) != 100 or header[:16] != b"SQLite format 3\x00"
+                or header[18:20] != b"\x01\x01"
+                or any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))):
+            raise DispatcherSnapshotError("dispatcher database requires unsupported recovery or journal")
+        if dispatcher_db_identity(path) != identity_pair:
+            raise DispatcherSnapshotError("dispatcher database identity changed")
+        connection = sqlite3.connect(f"file:/dev/fd/{fd}?mode=ro", uri=True)
+        try:
+            with connection as conn:
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA query_only=ON")
+                conn.execute("BEGIN")
+                version = conn.execute("SELECT value FROM dispatcher_meta WHERE key='schema_version'").fetchone()
+                if version is None or version[0] != str(SCHEMA_VERSION):
+                    raise DispatcherSnapshotError("dispatcher schema is not current; read-only proof refused")
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
+                schema_error = verification_v6_schema_error(conn)
+                if "repo" not in columns or schema_error is not None:
+                    raise DispatcherSnapshotError("dispatcher schema is incomplete; read-only proof refused")
+                for verification_row in conn.execute("SELECT * FROM verification_runs"):
+                    _, inert = _verification_authority_migration(verification_row)
+                    if inert:
+                        if not _legacy_verification_row_is_quarantined(verification_row):
+                            raise DispatcherSnapshotError("dispatcher authority requires quarantine; read-only proof refused")
+                    else:
+                        if verification_row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS:
+                            raise DispatcherSnapshotError("dispatcher authority quarantine is malformed")
+                        _validate_canonical_verification_row(verification_row)
+                task_row = conn.execute("SELECT * FROM dispatcher_tasks WHERE task_id=?", (task_id,)).fetchone()
+                if task_row is None:
+                    raise DispatcherSnapshotError("dispatcher task is unavailable")
+                task = dict(task_row)
+                event_rows = conn.execute("SELECT * FROM dispatcher_events WHERE task_id=? ORDER BY timestamp,event_id", (task_id,)).fetchall()
+                events = [{**dict(row), "payload": json.loads(row["payload"]) if row["payload"] is not None else None}
+                          for row in event_rows]
+                lease_row = conn.execute("SELECT * FROM dispatcher_leases WHERE lease_id=?", (task.get("lease_id"),)).fetchone()
+                if lease_row is None:
+                    raise DispatcherSnapshotError("dispatcher lease is unavailable")
+                lease = dict(lease_row)
+                if (dispatcher_db_identity(path) != identity_pair
+                        or any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))):
+                    raise DispatcherSnapshotError("dispatcher database identity or journal changed")
+        finally:
+            connection.close()
+        return task, events, lease
+    except DispatcherSnapshotError:
+        raise
+    except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+        raise DispatcherSnapshotError("read-only dispatcher snapshot is unavailable") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 class SqliteStore:

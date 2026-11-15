@@ -10,6 +10,7 @@ shrink the allowlist and never edit this test.
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 import pytest
 
@@ -512,3 +513,144 @@ def test_vault_bound_outbox_producers_cannot_emit_legacy_envelopes() -> None:
         assert meta["idempotency"] == {"legacy_key": key, "binding_scoped_key": params[0]}
         assert meta["producer_context"]["kind"] == "no_binding_runtime"
         assert meta["outbox_producer"] == producer
+
+
+# --------------------------------------------------------------------------- #
+# MVR-06D (#3866): background consumers use the lifecycle seam.
+# --------------------------------------------------------------------------- #
+
+#: Production background consumer modules (watcher, worker, settings, queue).
+_BACKGROUND_CONSUMER_MODULES = (
+    "app/workers/outbox_worker.py",
+    "app/workers/many_binding_dispatch.py",
+    "app/workers/outbox_binding_gate.py",
+    "app/watcher/registry.py",
+    "app/watcher/settings_rebind.py",
+    "app/settings/ingestion.py",
+    "app/instance/background_supervisor.py",
+    "app/instance/scalar_binding_runtime.py",
+    "app/instance/many_binding_activation.py",
+    "app/services/outbox_claims.py",
+)
+_PRE_HANDOFF_BOOTSTRAP = (
+    "pre-handoff bootstrap adapter: before the MVR-06B handoff (or with no instance "
+    "registry) the boot-time env root is the only binding; after it every caller resolves "
+    "the supervisor's ActiveContextSet lifecycle instead (retired by MVR-07A)"
+)
+#: The named bootstrap adapters that may still read a process-global vault root.
+_BACKGROUND_BOOTSTRAP_ADAPTERS: dict[tuple[str, str], frozenset[str]] = {
+    ("app/workers/outbox_worker.py", "_resolve_optional_vault_root"): frozenset(
+        {"env:VAULT_ROOT", "env:WATCHER_VAULT_PATH"}
+    ),
+    ("app/watcher/registry.py", "RegistryConfig.from_env"): frozenset({"env:WATCHER_VAULT_PATH"}),
+    ("app/watcher/registry.py", "_adopt_idle_selected_binding"): frozenset(
+        {"env:WATCHER_VAULT_PATH"}
+    ),
+    ("app/instance/scalar_binding_runtime.py", "_configured_root"): frozenset(
+        {"env:VAULT_ROOT", "env:WATCHER_VAULT_PATH"}
+    ),
+    ("app/settings/ingestion.py", "_selected_settings_source_dir"): frozenset(
+        {"resolve_optional_vault_root"}
+    ),
+    ("app/watcher/settings_rebind.py", "DormantSettingsRebindReconciler._rearm_configured_watcher"): (
+        frozenset({"env:WATCHER_VAULT_PATH"})
+    ),
+}
+#: MVR-06D modules: no bootstrap adapter at all.
+_LIFECYCLE_ONLY_MODULES = (
+    "app/workers/many_binding_dispatch.py",
+    "app/instance/many_binding_activation.py",
+    "app/instance/background_supervisor.py",
+    "app/services/outbox_claims.py",
+)
+#: Background types carrying a binding and a generation. Only the supervisor's lifecycle
+#: (which holds the full ActiveContextSetV1), its redacted cross-process projection, and
+#: the lease observation (lock state, not a context) may exist.
+_ALLOWED_BACKGROUND_BINDING_GENERATION_TYPES = frozenset(
+    {
+        ("app/instance/background_supervisor.py", "BackgroundLifecycle"),
+        ("app/instance/background_supervisor.py", "BackgroundContextHandoff"),
+        ("app/instance/binding_effect_lease.py", "BindingEffectLeaseObservation"),
+    }
+)
+
+
+def _function_names(relative: str, scope: str) -> set[str]:
+    tree = ast.parse((ROOT / relative).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == scope:
+            names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            return names | {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+    raise AssertionError(f"{scope} not found in {relative}")
+
+
+def test_background_consumers_use_lifecycle_seam() -> None:
+    """Watcher/worker/settings callers consume the lifecycle ActiveContextSet; only named
+    pre-handoff bootstrap adapters read a global root, and no parallel context type exists."""
+
+    measured: dict[tuple[str, str], frozenset[str]] = {}
+    for module in _BACKGROUND_CONSUMER_MODULES:
+        for scope, symbols in scan_source((ROOT / module).read_text(encoding="utf-8"), module).items():
+            measured[(module, scope)] = symbols
+    unlisted = sorted(f"{key}: {sorted(value)}" for key, value in measured.items()
+                      if _BACKGROUND_BOOTSTRAP_ADAPTERS.get(key) != value)
+    stale = sorted(str(key) for key in _BACKGROUND_BOOTSTRAP_ADAPTERS if key not in measured)
+    assert not unlisted, (
+        "background consumer resolves a vault globally outside the named bootstrap "
+        "adapters; consume the supervisor lifecycle instead:\n" + "\n".join(unlisted)
+    )
+    assert not stale, "stale bootstrap adapter entries (the list may only shrink):\n" + "\n".join(stale)
+    assert _PRE_HANDOFF_BOOTSTRAP
+    for module in _LIFECYCLE_ONLY_MODULES:
+        assert not [key for key in measured if key[0] == module], module
+
+    # The many-binding consumers run every effect through the lifecycle seam.
+    tick = _function_names("app/workers/many_binding_dispatch.py", "tick")
+    assert {"reconcile_all", "effect", "background_effect_runtime", "frozen_binding_effect"} <= tick
+    cycle = _function_names("app/watcher/registry.py", "_run_many_binding_watcher_cycle")
+    assert {"reconcile_all", "_MANY_BINDING_TARGET", "_run_registry_cycle"} <= cycle
+    fence = _function_names("app/watcher/registry.py", "_enter_background_lifecycle_fence")
+    assert {"effect", "_MANY_BINDING_TARGET", "background_effect_runtime"} <= fence
+    assert {"start_all", "health"} <= _function_names(
+        "app/instance/background_supervisor.py", "aggregate_background_health"
+    )
+
+    # The lifecycle's context is the one ActiveContextSet type.
+    from app.instance import background_supervisor
+    from app.instance.background_supervisor import BackgroundLifecycle
+
+    assert BackgroundLifecycle.__annotations__["context"] == "ActiveContextSetV1 | None"
+    assert "from app.vault.active_context_v1 import ActiveContextSetV1" in (
+        Path(background_supervisor.__file__).read_text(encoding="utf-8")
+    )
+
+    # No parallel binding-plus-generation context type in the background modules.
+    found: set[tuple[str, str]] = set()
+    background_roots = ("app/workers", "app/watcher")
+    background_files = {
+        "app/instance/background_supervisor.py",
+        "app/instance/background_intent.py",
+        "app/instance/background_authority.py",
+        "app/instance/scalar_binding_runtime.py",
+        "app/instance/binding_effect_lease.py",
+        "app/instance/many_binding_activation.py",
+        "app/services/outbox_claims.py",
+    }
+    paths = {p for root in background_roots for p in (ROOT / root).rglob("*.py")}
+    paths |= {ROOT / item for item in background_files}
+    for path in sorted(paths):
+        relative = str(path.relative_to(ROOT))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            fields = {
+                item.target.id
+                for item in node.body
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+            }
+            if any("generation" in name for name in fields) and any(
+                name in fields
+                for name in ("binding_id", "vault_binding_id", "binding_ids", "source_bindings")
+            ):
+                found.add((relative, node.name))
+    assert found == _ALLOWED_BACKGROUND_BINDING_GENERATION_TYPES, sorted(found)

@@ -210,6 +210,22 @@ background-role, delegation, intent, or compatibility field. Compatibility postu
   `background-runtime-role.json` (ignored before the floor and reused or refused by the next
   cutover); that restore is an explicit operator recovery, not a rollback path.
 
+**MVR-06D many-binding dispatch floor (MVR-06D, #3866, shipped; operator-run).** A channel
+advances to `minimumRuntimeSchema=mvr-06d` only through `background-many-binding-activate`
+inside a proved stopped window; deploying a capable image never does. The same generation
+qualifies the registry schema to `agentic-pkm.instance-vault-registry.v4`, before the first
+recoverable-claim or reconciliation write and before any many-binding enrollment or start.
+
+- **Compatible images:** an image containing `app/services/outbox_claims.py` (MVR-06D or later)
+  understands claim fencing tokens, `effect_pending`, `effect_reconciliation_required`, and
+  binding/global claim dispatch; it is the only valid rollback or roll-forward target for a
+  channel at this floor.
+- **Older images are refused:** every MVR-06A–06C image (MVR-06C `6da6e2342` and earlier) accepts
+  only registry schemas v1–v3 and stops at its consumer-preflight schema gate, so it never
+  reinterprets claim or reconciliation state with 06A–06C semantics.
+- **Floor lowering:** none. No compensation exists for this floor and the claim migration is
+  forward-only; no lossless downgrade contract is defined.
+
 ## Invariants (MUST hold)
 
 These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Environment Invariants](../ENVIRONMENTS.md) with channel-scoped isolation rules.
@@ -501,6 +517,7 @@ Currently recorded floors:
 | --- | --- | --- | --- |
 | `minimumRuntimeSchema` | `mvr-05` | MVR-05A8 (#4582), on the MVR-01B/01C floor mechanism | scalar API/worker startup before binding-keyed DB/outbox authority |
 | `minimumRuntimePrincipal` | `mvr-03` | MVR-03 (#3857) | a credential-only image with no delegated-principal producer |
+| `minimumRuntimeSchema` | `mvr-06` / `mvr-06d` | MVR-06A (#3863) / MVR-06D (#3866), opt-in per channel | pre-MVR-06 images / every MVR-06A–06C image (registry v3 → v4) |
 
 `minimumRuntimeSchema` is written only inside the proved host-global deployment window. The
 wrapper resolves the effective channel Compose graph, requires a DB-role declaration for every

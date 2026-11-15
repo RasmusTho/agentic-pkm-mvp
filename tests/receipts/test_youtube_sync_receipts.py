@@ -325,3 +325,53 @@ def test_deferred_sync_event_is_a_source_level_compatibility_diagnostic() -> Non
             "run_id": "future:run-1",
         },
     )
+
+
+@pytest.mark.parametrize(
+    ("failed", "expected"),
+    [
+        ({"requests"}, ("requests",)),
+        ({"source_registry"}, ("source_registry",)),
+        ({"requests", "source_registry"}, ("requests", "source_registry")),
+        (set(), ()),
+    ],
+)
+def test_join_source_failures_are_not_reported_as_complete(monkeypatch, failed, expected) -> None:
+    from app.knowledge_acquisition.acquisition_requests import AcquisitionRequests
+    from app.knowledge_acquisition.source_registry import SourceRegistry
+
+    def store(name):
+        def list_all():
+            if name in failed:
+                raise RuntimeError("secret-provider-error")
+            return []
+        return SimpleNamespace(list_all=list_all)
+
+    monkeypatch.setattr(AcquisitionRequests, "for_runtime", lambda: store("requests"))
+    monkeypatch.setattr(SourceRegistry, "for_runtime", lambda: store("source_registry"))
+    result = query_youtube_sync_receipts(records=[])
+
+    assert result.source_available is (not failed)
+    assert result.unavailable_sources == expected
+    assert result.rows == ()
+    assert "secret-provider-error" not in json.dumps(result.as_dict())
+
+
+def test_unavailable_join_never_becomes_complete_no_match(monkeypatch) -> None:
+    from app.knowledge_acquisition.acquisition_requests import AcquisitionRequests
+    from app.receipts.youtube_sync_receipts import (
+        YouTubeSyncReceiptUnavailableError,
+        project_youtube_sync_receipt,
+    )
+
+    def unavailable():
+        raise RuntimeError("secret-provider-error")
+
+    monkeypatch.setattr(AcquisitionRequests, "for_runtime", unavailable)
+    result = query_youtube_sync_receipts(item_ref="missing", records=[], sources=[])
+    assert not result.source_available
+    assert result.unavailable_sources == ("requests",)
+    with pytest.raises(YouTubeSyncReceiptUnavailableError, match="sources unavailable") as exc:
+        project_youtube_sync_receipt("missing", records=[], sources=[])
+    assert "secret-provider-error" not in str(exc.value)
+    assert project_youtube_sync_receipt("missing", records=[], requests=[], sources=[]) is None

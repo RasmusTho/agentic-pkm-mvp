@@ -58,7 +58,8 @@ from app.instance.settings_rebind import SettingsRebindRecord
 from app.instance.vault_registry import (
     MINIMUM_RUNTIME_SCHEMA_KEY,
     MVR05_MINIMUM_RUNTIME_SCHEMA,
-    MVR06_MINIMUM_RUNTIME_SCHEMA,
+    MVR06_FAMILY_RUNTIME_SCHEMAS,
+    many_binding_dispatch_enabled,
     RegistrySnapshot,
     VaultRegistryStore,
 )
@@ -478,7 +479,7 @@ def mvr06_floor_recorded(snapshot: RegistrySnapshot) -> bool:
     floors = snapshot.extensions.get("runtimeFloors") or {}
     return (
         isinstance(floors, dict)
-        and floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) == MVR06_MINIMUM_RUNTIME_SCHEMA
+        and floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) in MVR06_FAMILY_RUNTIME_SCHEMAS
     )
 
 
@@ -592,7 +593,7 @@ def run_background_authority_cutover(
     before = registry.load()
     floors = before.extensions.get("runtimeFloors") or {}
     minimum = floors.get(MINIMUM_RUNTIME_SCHEMA_KEY) if isinstance(floors, dict) else None
-    if minimum not in {MVR05_MINIMUM_RUNTIME_SCHEMA, MVR06_MINIMUM_RUNTIME_SCHEMA}:
+    if minimum not in {MVR05_MINIMUM_RUNTIME_SCHEMA, *MVR06_FAMILY_RUNTIME_SCHEMAS}:
         raise BackgroundAuthorityFloorError(
             "the MVR-06 floor requires the recorded MVR-05 channel fence"
         )
@@ -714,7 +715,13 @@ class BackgroundIntentAdminService:
             "intent_revision": intent.revision if intent else None,
             "registry_revision": snapshot.revision,
             "legacy_bridge": _bridge_view(snapshot),
-            "intent_mutations": BackgroundIntentNotReadyError.error_code,
+            "intent_mutations": (
+                BackgroundIntentNotReadyError.error_code
+                if intent is None or not intent.handoff_complete
+                else "many"
+                if many_binding_dispatch_enabled(snapshot)
+                else "singleton_or_empty"
+            ),
         }
 
     def inspect(self, vault_binding_id: str) -> dict[str, Any]:
@@ -758,10 +765,43 @@ class BackgroundIntentAdminService:
         )
 
     def add(self, vault_binding_id: str) -> dict[str, Any]:
-        raise self._sealed("add")
+        return self._mutate("add", vault_binding_id)
 
     def remove(self, vault_binding_id: str) -> dict[str, Any]:
-        raise self._sealed("remove")
+        return self._mutate("remove", vault_binding_id)
+
+    def _mutate(self, command: Literal["add", "remove"], vault_binding_id: str) -> dict[str, Any]:
+        """MVR-06B: governed singleton/explicit-empty producers (sealed before handoff).
+
+        Add validates live membership and content authority; remove needs only the
+        instance-administrative boundary that admitted this call and the stored id.
+        Both commit one durable revision and publish its idempotent wake-up hint.
+        """
+
+        from app.instance.background_supervisor import apply_governed_intent_mutation
+
+        snapshot, intent = self._read()
+        if intent is None or not intent.handoff_complete:
+            raise self._sealed(command)
+        before = intent.revision
+        try:
+            committed = apply_governed_intent_mutation(
+                self._registry, command=command, vault_binding_id=vault_binding_id
+            )
+        except CapabilityNotReadyError as exc:
+            raise BackgroundIntentNotReadyError(str(exc)) from exc
+        after = staged_background_intent(committed)
+        assert after is not None
+        return {
+            "command": command,
+            "vault_binding_id": vault_binding_id,
+            "changed": after.revision != before,
+            "mode": after.mode,
+            "background_vault_binding_ids": list(after.background_vault_binding_ids),
+            "explicit_empty": after.explicit_empty,
+            "intent_revision": after.revision,
+            "registry_revision": committed.revision,
+        }
 
 
 __all__ = [

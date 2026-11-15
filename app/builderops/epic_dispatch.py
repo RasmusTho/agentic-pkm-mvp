@@ -263,7 +263,7 @@ class CodexIssueSessionLauncher:
     ) -> Mapping[str, Any]:
         if effect_gate is not None:
             sources = context_pack.get("delivery_sources")
-            if sources is not None and (not isinstance(sources, Mapping) or sources.get("contract_version") not in {"fca-issue-delivery.v2", "fca-issue-delivery.v3"}):
+            if sources is not None and (not isinstance(sources, Mapping) or sources.get("contract_version") not in {"fca-issue-delivery.v2", "fca-issue-delivery.v3", "fca-issue-delivery.v4"}):
                 raise EpicDispatchError("unsupported Issue-delivery source version")
             issue = context_pack.get("issue_contract")
             destination = context_pack.get("branch_worktree_plan")
@@ -273,7 +273,7 @@ class CodexIssueSessionLauncher:
                 "repository_worktree",
                 target={
                     "repository": (context_pack["delivery_sources"]["repository"]
-                                   if context_pack.get("delivery_sources", {}).get("contract_version") in {"fca-issue-delivery.v2", "fca-issue-delivery.v3"}
+                                   if context_pack.get("delivery_sources", {}).get("contract_version") in {"fca-issue-delivery.v2", "fca-issue-delivery.v3", "fca-issue-delivery.v4"}
                                    else issue.get("repository")),
                     "issue_number": issue.get("number"),
                     "checkout": str(self.effect_gate_checkout_root),
@@ -535,6 +535,7 @@ def build_dispatch_plan(
     runtime_targets: Iterable[str] = (ACTIVE_WORKER_RUNTIME,),
     active_leases: Iterable[int | str | Mapping[str, Any]] = (),
     run_state: Mapping[str, Any] | None = None,
+    carrier_target: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a dry-run worker dispatch plan without external mutations.
 
@@ -566,6 +567,8 @@ def build_dispatch_plan(
         )
     normalized_max = min(requested_max, MAX_NON_ROOT_AGENT_SLOTS)
     runtimes = _normalize_runtime_targets(runtime_targets)
+    if "claude" in runtimes and (runtimes != ["claude"] or not isinstance(carrier_target, Mapping) or set(carrier_target) != {"capability", "model", "reasoning_effort"}):
+        raise EpicDispatchError("Codex-only default; Claude planning requires one explicit carrier target")
     lease_issues = _normalize_active_leases(active_leases)
     normalized_candidates = [_normalize_candidate(item) for item in candidates]
     _validate_phase2_canary_plan_bound(
@@ -605,6 +608,7 @@ def build_dispatch_plan(
             runtimes,
             lease_issues,
             provider_census=provider_census,
+            carrier_target=carrier_target,
         )
         selected_for_dispatch = False
         context_pack_id = None
@@ -775,7 +779,11 @@ def dispatch_issue_sessions(
                 "frozen dispatch plan does not match the independently preserved hash"
             )
 
-    run_id, ordered = _validated_session_contexts(plan)
+    from app.builderops.issue_delivery_operation import IssueDeliveryOperationAdapter
+    carrier = ("claude" if type(launcher) is IssueDeliveryOperationAdapter
+               and launcher.require_protected_composition
+               and launcher.approval.get("contract_version") == "fca-issue-delivery.v4" else "codex")
+    run_id, ordered = _validated_session_contexts(plan, expected_runtime=carrier)
     sessions: list[dict[str, Any]] = []
     seen_session_ids: set[str] = set()
 
@@ -837,7 +845,7 @@ def dispatch_issue_sessions(
                     "launch_result.fresh_session must be a boolean",
                     session_id=session_id,
                 )
-            candidate_version = context_pack.get("delivery_sources", {}).get("contract_version") == "fca-issue-delivery.v3"
+            candidate_version = context_pack.get("delivery_sources", {}).get("contract_version") in {"fca-issue-delivery.v3", "fca-issue-delivery.v4"}
             final_state = worker_receipt["status"] if candidate_version else worker_receipt["final_state"]
             session_record: dict[str, Any] = {
                 "issue_number": issue_number,
@@ -1133,7 +1141,7 @@ def _launch_canary(
 
 
 def _validated_session_contexts(
-    plan: Mapping[str, Any],
+    plan: Mapping[str, Any], *, expected_runtime: str = "codex",
 ) -> tuple[str, list[tuple[dict[str, Any], dict[str, Any]]]]:
     if not isinstance(plan, Mapping):
         raise EpicDispatchError("dispatch plan must be an object")
@@ -1226,7 +1234,7 @@ def _validated_session_contexts(
             or issue_contract.get("number") != issue_number
             or matching_context.get("dispatch_slot") != decision.get("dispatch_slot")
             or not isinstance(runtime, Mapping)
-            or runtime.get("runtime") != "codex"
+            or runtime.get("runtime") != expected_runtime
         ):
             raise EpicDispatchError("context pack does not match its selected decision")
         _validate_execution_routing_context(decision, matching_context)
@@ -1241,6 +1249,7 @@ def validate_issue_delivery_plan(
     context_pack_id: str,
     channel: str = "dev",
     repo_root: Path | None = None,
+    expected_carrier: str = "codex",
 ) -> Mapping[str, Any]:
     """Validate the complete, single-Issue output admitted by FCA-ID-A.
 
@@ -1253,7 +1262,7 @@ def validate_issue_delivery_plan(
     try:
         expected_issue = _normalize_positive_int(issue_number, "issue_number")
         expected_context = _normalize_string(context_pack_id, "context_pack_id")
-        run_id, ordered = _validated_session_contexts(plan)
+        run_id, ordered = _validated_session_contexts(plan, expected_runtime=expected_carrier)
     except (TypeError, ValueError) as exc:
         if isinstance(exc, EpicDispatchError):
             raise
@@ -1263,7 +1272,7 @@ def validate_issue_delivery_plan(
         raise EpicDispatchError("Issue delivery plan must contain one decision and context pack")
     if len(ordered) != 1 or plan.get("selected_count") != 1:
         raise EpicDispatchError("Issue delivery plan must select exactly one dispatch")
-    if plan.get("runtime_targets") != [ACTIVE_WORKER_RUNTIME]:
+    if expected_carrier not in {"codex", "claude"} or plan.get("runtime_targets") != [expected_carrier]:
         raise EpicDispatchError("Issue delivery plan must target the active Codex runtime")
     if plan.get("run_id") != run_id or not isinstance(plan.get("run_state_seen"), bool):
         raise EpicDispatchError("Issue delivery plan must preserve run identity and run-state observation")
@@ -1433,8 +1442,8 @@ def validate_issue_delivery_plan(
     runtime = context_pack.get("runtime")
     if (
         not isinstance(runtime, Mapping)
-        or runtime.get("runtime") != ACTIVE_WORKER_RUNTIME
-        or runtime.get("carrier") != ACTIVE_WORKER_RUNTIME
+        or runtime.get("runtime") != expected_carrier
+        or runtime.get("carrier") != expected_carrier
         or runtime.get("selection_intent") != "general_delivery"
         or runtime.get("capability") not in {"luna", "terra", "sol"}
         or not isinstance(runtime.get("model_class"), str)
@@ -1442,6 +1451,15 @@ def validate_issue_delivery_plan(
         or not isinstance(runtime.get("reasoning_effort"), str)
     ):
         raise EpicDispatchError("Issue delivery runtime must bind the complete Codex target")
+    if expected_carrier == "claude":
+        from app.builderops.claude_issue_delivery import validate_claude_model
+        try:
+            validate_claude_model(runtime["model"])
+        except ValueError as exc:
+            raise EpicDispatchError("Claude target model is invalid") from exc
+        if runtime["reasoning_effort"] not in {"low", "medium", "high", "xhigh", "max"}:
+            raise EpicDispatchError("Claude target is incomplete")
+        return plan
     try:
         CodexIssueSessionLauncher(
             repo_root=(repo_root or Path.cwd()).resolve(), builder_channel=channel
@@ -1649,9 +1667,9 @@ def _validated_worker_receipt(
     session_id: str,
     contract_version: str | None = None,
 ) -> dict[str, Any]:
-    if contract_version not in {None, "fca-issue-delivery.v1", "fca-issue-delivery.v2", "fca-issue-delivery.v3"}:
+    if contract_version not in {None, "fca-issue-delivery.v1", "fca-issue-delivery.v2", "fca-issue-delivery.v3", "fca-issue-delivery.v4"}:
         raise IssueSessionLaunchError("unsupported Issue-delivery result version", session_id=session_id)
-    if contract_version == "fca-issue-delivery.v3":
+    if contract_version in {"fca-issue-delivery.v3", "fca-issue-delivery.v4"}:
         from app.builderops.control_plane.issue_delivery import validate_content_result
         return validate_content_result(receipt)
     if not isinstance(receipt, Mapping):
@@ -1712,12 +1730,15 @@ def _build_tcd_decision(
     active_leases: set[int],
     *,
     provider_census: ProviderCensus,
+    carrier_target: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     issue_number = candidate["issue_number"]
     skip_reason = _claimability_skip_reason(candidate, active_leases)
     selected_path = "skip" if skip_reason is not None else _selected_path(candidate)
     runtime_target = candidate["runtime_hint"] or runtimes[0]
     if runtime_target not in runtimes:
+        if runtime_target == "claude" or "claude" in runtimes:
+            raise EpicDispatchError("runtime_hint must be codex for a Codex plan; Claude carrier selection cannot fall back")
         runtime_target = runtimes[0]
     risk = candidate["risk"]
 
@@ -1726,14 +1747,19 @@ def _build_tcd_decision(
     elif selected_path == "script":
         skip_reason = skip_reason or "script-deterministic"
 
-    selection_intent = candidate["selection_intent"] or _selection_intent_for_risk(risk)
+    if runtime_target == "claude":
+        selection_intent = candidate["selection_intent"] or "general_delivery"
+        if selection_intent != "general_delivery":
+            raise EpicDispatchError("Claude Issue delivery requires general_delivery selection intent")
+    else:
+        selection_intent = candidate["selection_intent"] or _selection_intent_for_risk(risk)
     runtime_model_hint = {
         "runtime": runtime_target,
         "carrier": runtime_target,
         "model_class": _model_class_for(risk),
         "selection_intent": selection_intent,
         "capability": _capability_for_selection_intent(
-            selection_intent,
+            cast(SelectionIntent, selection_intent),
             provider_census=provider_census,
         ),
         "runtime_difference": "invocation-hint-only",
@@ -1745,17 +1771,23 @@ def _build_tcd_decision(
     model_override = candidate.get("model_override")
     if model_override is not None:
         runtime_model_hint["model"] = model_override
-    resolved_target = resolve_execution_target(
-        provider_census,
-        channel="dev",
-        capability=cast(CapabilityTier, runtime_model_hint["capability"]),
-        model_id=model_override,
-        selection_intent=(
-            None if capability_override is not None else cast(SelectionIntent, selection_intent)
-        ),
-    )
-    runtime_model_hint["model"] = resolved_target.model
-    runtime_model_hint["reasoning_effort"] = resolved_target.reasoning_effort
+    if runtime_target == "claude":
+        if carrier_target is None or carrier_target.get("capability") not in {"luna", "terra", "sol"} or not isinstance(carrier_target.get("model"), str) or not carrier_target["model"] or carrier_target.get("reasoning_effort") not in {"low", "medium", "high", "xhigh", "max"} or model_override is not None or capability_override is not None:
+            raise EpicDispatchError("Claude planning target is invalid")
+        from app.builderops.claude_issue_delivery import validate_claude_model
+        try:
+            validate_claude_model(carrier_target["model"])
+        except ValueError as exc:
+            raise EpicDispatchError("Claude target model is invalid") from exc
+        runtime_model_hint.update(carrier_target)
+    else:
+        resolved_target = resolve_execution_target(
+            provider_census, channel="dev", capability=cast(CapabilityTier, runtime_model_hint["capability"]),
+            model_id=model_override,
+            selection_intent=(None if capability_override is not None else cast(SelectionIntent, selection_intent)),
+        )
+        runtime_model_hint["model"] = resolved_target.model
+        runtime_model_hint["reasoning_effort"] = resolved_target.reasoning_effort
 
     return {
         "issue_number": issue_number,
@@ -1826,6 +1858,8 @@ def _build_context_pack(
         },
         "return_schema": HANDOFF_RECEIPT_SCHEMA,
     }
+    if candidate.get("delivery_sources") is not None:
+        pack["delivery_sources"] = dict(candidate["delivery_sources"])
     pack["context_cost_baseline"] = {
         "measurement": "actual",
         "context_pack_bytes_excluding_baseline": len(
@@ -1959,7 +1993,7 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             "issue_local_helper_budget=1 requires an explicit issue_local_helper_rationale"
         )
     runtime_hint = _normalize_optional_string(candidate.get("runtime_hint"))
-    if runtime_hint is not None and runtime_hint != ACTIVE_WORKER_RUNTIME:
+    if runtime_hint is not None and runtime_hint not in {ACTIVE_WORKER_RUNTIME, "claude"}:
         raise EpicDispatchError(
             "active Builder worker runtime is Codex-only; runtime_hint must be codex"
         )
@@ -1986,9 +2020,18 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             _SELECTION_INTENTS,
         )
     repository = _normalize_optional_string(candidate.get("repository"))
+    sources = candidate.get("delivery_sources")
+    if sources is not None:
+        source_fields = {"contract_version", "repository", "source_revision", "issue_repository", "workflow_repository", "workflow_source_revision"}
+        if (not isinstance(sources, Mapping) or set(sources) != source_fields
+            or sources.get("contract_version") != "fca-issue-delivery.v4"
+            or any(not isinstance(value, str) or not value.strip() for value in sources.values())):
+            raise EpicDispatchError("candidate delivery sources are incomplete")
+        sources = dict(sources)
     return {
         "issue_number": issue_number,
         "repository": repository,
+        "delivery_sources": sources,
         "title": _normalize_string(candidate.get("title"), "title"),
         "url": _normalize_optional_string(candidate.get("url")),
         "state": _normalize_string(candidate.get("state", "OPEN"), "state").upper(),
@@ -2339,7 +2382,7 @@ def _normalize_runtime_targets(values: Iterable[str]) -> list[str]:
     if not runtimes:
         raise EpicDispatchError("runtime_targets must not be empty")
     normalized = list(dict.fromkeys(runtimes))
-    unsupported = [runtime for runtime in normalized if runtime != ACTIVE_WORKER_RUNTIME]
+    unsupported = [runtime for runtime in normalized if runtime not in {ACTIVE_WORKER_RUNTIME, "claude"}]
     if unsupported:
         raise EpicDispatchError(
             "active Builder worker runtime is Codex-only; unsupported runtime target(s): "

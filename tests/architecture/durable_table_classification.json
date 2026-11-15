@@ -98,6 +98,12 @@
       "binding_column": "vault_binding_id",
       "producers": [
         {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
+        {
           "module": "app/stores/pg.py",
           "operations": [
             "delete"
@@ -189,6 +195,12 @@
       "binding_column": "vault_binding_id",
       "producers": [
         {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
+        {
           "module": "app/stores/pg.py",
           "operations": [
             "delete"
@@ -261,6 +273,12 @@
             "insert",
             "update"
           ]
+        },
+        {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
         }
       ],
       "rebuild_mechanism": "row-scoped",
@@ -280,6 +298,12 @@
       "binding_column": "vault_binding_id",
       "producers": [
         {
+          "module": "app/episode_debrief/store.py",
+          "operations": [
+            "insert"
+          ]
+        },
+        {
           "module": "app/episodes/engine_state.py",
           "operations": [
             "delete",
@@ -287,9 +311,9 @@
           ]
         },
         {
-          "module": "app/episode_debrief/store.py",
+          "module": "app/instance/binding_removal.py",
           "operations": [
-            "insert"
+            "delete"
           ]
         }
       ],
@@ -328,6 +352,12 @@
           ]
         },
         {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
+        {
           "module": "app/jobs/episodes_projection.py",
           "operations": [
             "insert",
@@ -350,6 +380,12 @@
       "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
+        {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
         {
           "module": "app/services/vault_sync.py",
           "operations": [
@@ -836,6 +872,12 @@
       "binding_column": "vault_binding_id",
       "producers": [
         {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
+        {
           "module": "app/store/membership_store.py",
           "operations": [
             "insert"
@@ -866,6 +908,12 @@
       "binding_column": "vault_binding_id",
       "producers": [
         {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
+        {
           "module": "app/services/vault_sync.py",
           "operations": [
             "insert",
@@ -892,11 +940,12 @@
     },
     "outbox": {
       "classification": "binding-scoped",
-      "reason": "MVR-05A7 revision f6a05a7b0001 adds `outbox.vault_binding_id` and preserves pre-cutover idempotency lineage in `legacy_key`. `app/services/outbox.py` resolves the scalar binding before insert, and both producer and worker reject the stale global shape, so durable effects cannot be dispatched across vault bindings.",
+      "reason": "MVR-05A7 revision f6a05a7b0001 adds `outbox.vault_binding_id` and preserves pre-cutover idempotency lineage in `legacy_key`. `app/services/outbox.py` resolves the scalar binding before insert, and both producer and worker reject the stale global shape, so durable effects cannot be dispatched across vault bindings. MVR-06D revision fa06d0c00001 adds the recoverable claim/lease, effect-outcome, consumer-context, and quarantine columns written only by `app/services/outbox_claims.py`, which claims, fences, acknowledges, and quarantines rows strictly within one `vault_binding_id` scope (or the singleton global scope) and never retargets a row to another binding.",
       "owning_revision": "f3a1c9d2e4b7",
       "declaring_revisions": [
         "f3a1c9d2e4b7",
-        "f6a05a7b0001"
+        "f6a05a7b0001",
+        "fa06d0c00001"
       ],
       "binding_key": "keyed",
       "binding_column": "vault_binding_id",
@@ -905,6 +954,12 @@
           "module": "app/services/outbox.py",
           "operations": [
             "insert",
+            "update"
+          ]
+        },
+        {
+          "module": "app/services/outbox_claims.py",
+          "operations": [
             "update"
           ]
         }
@@ -924,6 +979,12 @@
       "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
+        {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
         {
           "module": "app/stores/pg.py",
           "operations": [
@@ -945,6 +1006,12 @@
       "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
+        {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
         {
           "module": "app/stores/pg.py",
           "operations": [
@@ -968,6 +1035,12 @@
       "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
+        {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
         {
           "module": "app/standing_questions/projection.py",
           "operations": [
@@ -999,6 +1072,12 @@
           ]
         },
         {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
+        {
           "module": "app/stores/pg.py",
           "operations": [
             "delete",
@@ -1026,6 +1105,12 @@
       "binding_column": "vault_binding_id",
       "producers": [
         {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
+        {
           "module": "app/stores/pg.py",
           "operations": [
             "delete",
@@ -1049,6 +1134,12 @@
       "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
+        {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
         {
           "module": "app/stores/pg.py",
           "operations": [
@@ -1080,6 +1171,12 @@
           ]
         },
         {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
+        {
           "module": "app/stores/pg.py",
           "operations": [
             "delete",
@@ -1104,6 +1201,12 @@
       "binding_key": "keyed",
       "binding_column": "vault_binding_id",
       "producers": [
+        {
+          "module": "app/instance/binding_removal.py",
+          "operations": [
+            "delete"
+          ]
+        },
         {
           "module": "app/stores/pg.py",
           "operations": [

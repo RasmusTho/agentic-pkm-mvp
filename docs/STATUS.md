@@ -157,6 +157,62 @@ explicit gaps. Builder Vault carries the operational handoff and private evidenc
 a descriptive status view; application deployment, release eligibility and capability acceptance
 remain with their existing owners.
 
+**Builder epic workspace trial (2026-11-13).** The owner reports that the TARS baseline controller
+remains `c68dd18db4dc`. An isolated trial qualified worker image
+`sha256:3c3c2472b35ea3ccb0df57df7cc9d2303f582dcb2987b259124c9df946d56644` with official
+OpenHands 1.62.0 and Python 3.12, including native `gpt-6.1-terra` execution, ChatGPT subscription
+authentication and persistence. On the same pinned image, the epic coordinator also qualified native
+Claude Opus 5.5 execution with a scoped subscription OAuth token, no paid API key, UID 1000 and the
+workspace mount boundary. These results qualify the carrier trial, not the recovery implementation,
+engine handoff, disconnect-safe coordinator or [epic #6615](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6615).
+The [#6617](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6617) recovery was delivered and the
+Issue closed via [#6626](https://github.com/RasmusTho/agentic-pkm-mvp/pull/6626) (merge
+`318281e27c87c219bdb7ab637f713fc75e8fe60f`). Independently fetched GitHub readback supplied by the
+controller records independent fresh-workspace verification, CI and an actual contained recovery
+fixture. This bounded verification does not establish a live controller upgrade or whole-epic
+acceptance. #6618, #6619, #6620 and full automatic PR activation remain unfinished. The
+[epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental)
+owns the operating boundary.
+Last reviewed (#6617 delivery): 2026-11-14 UTC. Last verified against: controller-supplied independent
+GitHub readback for #6617 and #6626.
+
+**#6619 coordinator source candidate (2026-11-14).** The [#6619](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6619) integration candidate adds bounded progress judgment and assignment-fenced OpenHands directives on the #6627 source tree `73be38919b26269ac07497d02d7234e7d40e3da4`. It also composes the #6618 PR-cycle source repairs described below. The [epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental) owns the behavior and its limits.
+Before-publication verification snapshot (2026-11-14, source `4903b406c820378c398b28e614d79c648e2d8e40`; delivery status lives in the live Issue and its receipts, not here): independent Opus convergence found no P0/P1; a current-head independent scope refresh, full Ruff, 330 affected tests (0 failed, 0 skipped) and exact verify passed. Real owned coordinator, OpenHands and Claude runs covered the no-progress and unsupported-dependency/held-peer cases with the authority input explicitly SIMULATED; worker, action, file and checkpoint evidence were real. An initially failed format fixture and a validator correction are disclosed in the [public receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6619#issuecomment-6872271808). Full mypy was killed by the container memory limit, so no passing full typecheck is claimed; current-head CI and guarded delivery remain required. This implies no running-baseline or controller upgrade, automatic activation or whole-epic qualification. #6618, #6620 and full parent acceptance are unfinished, and #6619 closure and future CI results are not asserted here. The hosting controller and image remain frozen. The real quota recovery is external bootstrap evidence, not the separate controlled autonomous-handoff acceptance.
+
+**#6618 PR-cycle source candidate (2026-11-14).** The
+[#6618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6618) repair is composed into this
+repository candidate. It covers OpenHands PR intake and evidence binding, a one-shot PR-cycle controller with
+explicit admission, and claimant-history fencing for dispatcher and fallback handoffs. It also adds
+review preparation bound to the exact head, contracts and native model metadata, and guarded merge
+mechanisms. Review repair is not automated; it is routed back to the current owner. The limits of
+these mechanisms, and the refusal conditions for missing or conflicting authority, are in the
+[epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental),
+which remains the normative owner. The running baseline controller `c68dd18db4dc` and worker image
+`sha256:3c3c2472b35ea3ccb0df57df7cc9d2303f582dcb2987b259124c9df946d56644` are untouched by this
+candidate. No runtime release, activation or child completion is claimed. Automatic PR activation,
+controlled quota handoff, disconnect-safe operation and whole-epic acceptance remain unfinished.
+The source repair retains pre-origin, continuous-registration and predecessor chronology, preserves
+ownership on cross-branch path reuse, and adds bounded merge and sandbox-verification recovery. It
+still needs current-head CI and the parent's guarded delivery; see the #6619 snapshot above for
+dated review evidence.
+
+**Scoped legacy Builder recovery repository candidate (2026-11-15).** Issue #6637 adds an
+operator-led path for the two recorded stopped OpenHands runs #6601 and #6597, preserving their
+predecessor claims and existing PR identities while admitting a verified successor. This is a
+bounded repository capability. Coordinated native successors transferred #6601 and #6597 with
+separate authenticated acknowledgments ([#6601](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6601#issuecomment-6900957351),
+[#6597](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6597#issuecomment-6901207434));
+their existing PRs #6602 and #6603 subsequently merged. These observations do not qualify the
+whole #6600 factory, activate a service, or cover dirty candidates. The supported
+host, evidence and limits are in [Multi-Agent Workspace Guardrails](development/DEV_WORKFLOW.md#multi-agent-workspace-guardrails).
+The follow-up source merged in #6645 refreshes Issue authority before the claim and successor authority after
+lineage reads; its GitHub and dispatcher checks are not an atomic cross-system transaction.
+It also refuses the native proof's workspace overlaps before claiming. A source-backed protected
+controller boundary for the recorded host remains unverified.
+Last reviewed: 2026-11-15 UTC. Last verified against: `app/builderops/legacy_owner_recovery.py`,
+`app/builderops/legacy_run_fence.py`, the focused synthetic recovery tests, and the two authenticated
+transfer acknowledgments and merged PRs; live environment acceptance remains unverified.
+
 The August 22 baseline formerly here and the dated October 5 observations above are historical.
 Do not infer an Ollama-only Mac, an absent TEST host or unknown current API identity from those
 older paragraphs. Infrastructure-reference review on 2026-10-21 does not revalidate the other

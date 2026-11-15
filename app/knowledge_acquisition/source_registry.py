@@ -1031,7 +1031,11 @@ def _row_to_binding(row: tuple[Any, ...]) -> SourceBinding:
 
 
 class _PgSourceRegistryBackend:
-    def __init__(self) -> None:
+    def __init__(self, *, bootstrap: bool = True) -> None:
+        # ``bootstrap=False`` is the read-only path: no connection and no DDL
+        # here; every read still asserts the migration-owned schema itself.
+        if not bootstrap:
+            return
         conn = _pg_connect()
         try:
             _bootstrap_pg(conn)
@@ -1477,6 +1481,18 @@ class SourceRegistry:
     def for_runtime(cls) -> "SourceRegistry":
         if _resolve_backend() == "pg":
             return cls(_PgSourceRegistryBackend())
+        return cls(_MEMORY_REGISTRY)
+
+    @classmethod
+    def for_runtime_read_only(cls) -> "SourceRegistry":
+        """Runtime registry for read-only callers: never bootstraps schema.
+
+        Unlike :meth:`for_runtime`, this never runs the opt-in
+        ``STORE_SCHEMA_AUTOCREATE`` DDL; a missing schema surfaces from the
+        read as :class:`SourceRegistrySchemaMissingError`.
+        """
+        if _resolve_backend() == "pg":
+            return cls(_PgSourceRegistryBackend(bootstrap=False))
         return cls(_MEMORY_REGISTRY)
 
     def register(

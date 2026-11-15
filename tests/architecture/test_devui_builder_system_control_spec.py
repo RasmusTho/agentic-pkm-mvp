@@ -7,6 +7,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC_PATH = REPO_ROOT / "docs" / "DEVUI_BUILDER_SYSTEM_CONTROL" / "README.md"
+DEVUI_PATH = REPO_ROOT / "docs" / "DEVUI.md"
+PLAN_PATH = REPO_ROOT / "docs" / "plans" / "DEVUI_IMPLEMENTATION.md"
+PROCESS_MAP_PATH = REPO_ROOT / "docs" / "development" / "BUILDER_SYSTEM_PROCESS_MAP.md"
 
 
 def _spec() -> str:
@@ -47,6 +50,16 @@ def test_spec_preserves_source_authority_and_lifecycle() -> None:
     assert "owning_workflow_refs:" in spec
     assert "A skill is never the policy owner." in spec
     assert "A capability is never the policy or workflow owner." in normalized
+
+
+def test_spec_preserves_builderops_record_operational_dispositions() -> None:
+    normalized = _normalized_spec()
+
+    for record_type in ("LearningSignal", "PromotionIntent", "BuilderOpsReceipt"):
+        assert record_type in normalized
+    assert "retain the operational authority assigned by their own contracts" in normalized
+    assert "may render those source-owned dispositions" in normalized
+    assert "cannot create, override, or reinterpret them" in normalized
 
 
 def test_spec_requires_correlated_deviation_and_existing_route() -> None:
@@ -117,3 +130,51 @@ def test_spec_records_bsc03_as_delivered_nonvisual_partial_input() -> None:
     assert "BSC-04 — governed visual design handoff" in spec
     assert "BSC-05 — route previews over existing workflows" in spec
     assert "BSC-01 through BSC-03 are nonvisual" in normalized
+
+
+def test_unified_builder_ui_maps_all_process_layers_without_joining_authority() -> None:
+    devui = DEVUI_PATH.read_text(encoding="utf-8")
+    process_map = PROCESS_MAP_PATH.read_text(encoding="utf-8")
+
+    assert "### Nine-layer Builder System experience map" in devui
+    assert "### devUI projection of the nine process layers" in process_map
+    for layer in (
+        "Intent",
+        "Docs/spec authority",
+        "Contract/backlog",
+        "Routing/claim",
+        "Execution",
+        "Verification/evidence",
+        "Closure/spec feedback",
+        "Learning/improvement",
+        "Human Exception",
+    ):
+        assert f"**{layer}**" in devui
+        assert f"**{layer}**" in process_map
+
+    assert "navigation-only sibling root" in devui
+    assert "does not copy process state or authority into devUI" in process_map
+
+
+def test_unified_builder_ui_handoff_is_truthful_about_current_gaps_and_design_gate() -> None:
+    devui = DEVUI_PATH.read_text(encoding="utf-8")
+    plan = PLAN_PATH.read_text(encoding="utf-8")
+    spec = _spec()
+    normalized = " ".join((devui + "\n" + plan + "\n" + spec).split())
+
+    assert "### Governed unified-journey interaction handoff" in devui
+    assert "stable subject context" in normalized
+    assert "read-only regions" in normalized
+    assert "terminal receipt" in normalized
+    assert "200% zoom" in normalized
+    assert "JavaScript-off" in normalized
+    assert "print" in normalized
+    assert "mixed" in normalized
+    assert "token parity **pass**" in normalized
+    assert "owner pilot remain unverified" in normalized
+    assert "#4693" in normalized
+    assert "#4695" in normalized
+    assert "#4697" in normalized
+    assert "#4741" in normalized
+    assert "#4746" in normalized
+    assert "#4980" in normalized

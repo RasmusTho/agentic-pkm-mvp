@@ -18,6 +18,7 @@ This contract follows:
 - Fallback is not implicit. It is explicitly policy-controlled.
 - Startup must fail fast when strict mode is enabled and Obsidian dependencies are not healthy.
 - The bootstrap script and runtime health gate must agree on strict-vs-nonstrict behavior; a strict startup setting is not a warning-only mode.
+- DEV/TEST may explicitly select `fs_vault` as the primary adapter with fallback disabled. In that posture, health checks the selected filesystem adapter and does not probe inactive Obsidian dependencies; this does not change production defaults or enable implicit fallback.
 
 ## Interface surface (domain-level)
 - `read_note(locator)`

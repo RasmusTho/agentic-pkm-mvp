@@ -114,6 +114,13 @@ Authority and downstream boundaries:
 - The panel can also surface system-generated suggested actions as unchecked checkbox proposals when the runtime has a plausible action but should keep the human-facing approval step visible. That suggestion path is for proposal quality, not a blanket requirement that every low-risk action wait for manual review.
 - Receipts live in the AI status callout (foldable) to acknowledge outcomes without bloating the panel history.
 - The AI status callout is a bounded receipt surface, not the same thing as the metadata mirror.
+- Panel scans treat the complete `agent_maintained: true`, `read_only: true`,
+  `authority_role: derived` policy as composer-owned bytes. The production
+  `panel.scan.requested` handler therefore returns a terminal no-op before
+  profile checks, UUID healing, retry emission, or panel execution, leaving the
+  derived bytes and historical audit records unchanged. This exclusion is
+  limited to panel-scan ingress; broader read-only writer paths remain outside
+  this baseline and are tracked separately in #4172.
 - Panel writeback uses a two-phase acknowledgement boundary. The note-update service and both
   direct watcher paths derive Markdown/events without persisting executed IDs or dispatching/
   emitting events; watcher policy first resolves the path against the canonical vault root,

@@ -11,6 +11,8 @@ Title: [ModelAccessRouter] model-access-router: shared Product and Builder acces
 Issue: #5618 (open, agent:blocked).
 Initial state: agent:blocked; the parent waits on child work and host acceptance and is never agent:ready. MARR-06 host acceptance is complete; this does not satisfy the separate parent-level integration or release-rollout gates.
 
+The independent DEV/TEST certificate-continuity acceptance hub is [#6575](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6575). It tracks signed renewal, actual consumer adoption and recovery; it does not expand or replace #5618's original rollout contract.
+
 ## Validation Hub Responsibilities
 
 - Keep the child issue ledger and dependencies aligned with README.md.
