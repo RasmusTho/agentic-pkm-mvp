@@ -193,3 +193,65 @@ def test_pinned_resume_refuses_changed_readbacks(operator_case, monkeypatch, dri
                         lambda *_args, **_kwargs: pytest.fail('unexpected pin'))
     with pytest.raises(recovery.RecoveryEvidenceError):
         recovery.resume_operator_pickup(**_fixture_module._args(case))
+
+
+@pytest.mark.parametrize('drift', ['body', 'head', 'ref'])
+def test_pr_drift_after_ack_stays_prepared_and_resume_never_reposts(operator_case, monkeypatch, drift):
+    case = operator_case
+    read_ack = recovery._read_unique_operator_ack
+    github_read = recovery._github_read
+    original_body = case['pr_data']['body']
+    original_head = case['pr_data']['head']['sha']
+
+    def drift_after_ack(**kwargs):
+        comment = read_ack(**kwargs)
+        if drift == 'body':
+            case['pr_data']['body'] = original_body + '\nchanged after ACK\n'
+        elif drift == 'head':
+            case['pr_data']['head']['sha'] = 'f' * 40
+        else:
+            def changed_ref(args, *, cwd):
+                if any('/git/ref/heads/' in arg for arg in args):
+                    return json.dumps({'ref': 'refs/heads/codex/example', 'object': {'sha': 'f' * 40}})
+                return github_read(args, cwd=cwd)
+            monkeypatch.setattr(recovery, '_github_read', changed_ref)
+        return comment
+
+    monkeypatch.setattr(recovery, '_read_unique_operator_ack', drift_after_ack)
+    with pytest.raises(recovery.RecoveryEvidenceError):
+        recovery.execute_operator_pickup(**_fixture_module._args(case))
+    row = agent_worktree._locked_lifecycle_snapshot(
+        agent_worktree._default_registry_path(case['cwd']))[str(case['worktree'])]
+    assert 2 in case['comments'] and row['operator_registration']['state'] == 'prepared'
+    with pytest.raises(agent_worktree.WorktreeLifecycleError, match='unpinned'):
+        agent_worktree.assert_operator_registration_pinned(row)
+    monkeypatch.setattr(recovery, '_read_unique_operator_ack', read_ack)
+    case['pr_data']['body'] = original_body
+    case['pr_data']['head']['sha'] = original_head
+    monkeypatch.setattr(recovery, '_github_read', github_read)
+    delegate = recovery.subprocess.run
+
+    def no_post(args, **kwargs):
+        assert not (args[0] == 'gh' and 'POST' in args)
+        return delegate(args, **kwargs)
+
+    monkeypatch.setattr(recovery.subprocess, 'run', no_post)
+    assert recovery.resume_operator_pickup(**_fixture_module._args(case))['state'] == 'pinned'
+    assert len(case['comments']) == 2
+
+
+def test_pinned_readback_refuses_pr_drift_during_ack_readback(operator_case, monkeypatch):
+    case = operator_case
+    recovery.execute_operator_pickup(**_fixture_module._args(case))
+    read_ack = recovery._read_unique_operator_ack
+
+    def drift_after_ack(**kwargs):
+        comment = read_ack(**kwargs)
+        case['pr_data']['body'] += '\nchanged during readback\n'
+        return comment
+
+    monkeypatch.setattr(recovery, '_read_unique_operator_ack', drift_after_ack)
+    monkeypatch.setattr(agent_worktree, 'pin_operator_registration',
+                        lambda *_args, **_kwargs: pytest.fail('unexpected pin'))
+    with pytest.raises(recovery.RecoveryEvidenceError, match='publication changed'):
+        recovery.resume_operator_pickup(**_fixture_module._args(case))

@@ -824,6 +824,18 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
                 if proof.get("pending_comment_id") != comment_id or proof.get("pending_digest") != pending_digest:
                     raise RecoveryEvidenceError("operator decision changed; retain prepared registration")
                 predecessor = pending["predecessor"]
+                current_candidate = read_clean_candidate(cwd=cwd, worktree=worktree)
+                current_publication = read_live_publication(cwd=cwd, pr=pr, branch=current_candidate["branch"])
+                recorded_publication = pending.get("publication")
+                if not isinstance(recorded_publication, dict):
+                    raise RecoveryEvidenceError("operator publication evidence is unavailable; retain state")
+                comparable_publication = {k: v for k, v in recorded_publication.items()
+                                          if k not in {"state", "sources"}}
+                if (current_candidate != pending.get("candidate")
+                        or {k: v for k, v in current_publication.items() if k != "state"} != comparable_publication):
+                    raise RecoveryEvidenceError("candidate or publication changed before admission; retain state")
+                _verify_pr_origin(cwd=cwd, issue=issue, pr=pr, worktree=worktree, candidate=current_candidate,
+                                  predecessor=predecessor, publication=current_publication)
                 task_id = predecessor["task_id"]
                 events = _read_task_events(cwd=cwd, task_id=task_id)
                 claims = [event for event in events if event.get("event_type") == "task.claimed"
