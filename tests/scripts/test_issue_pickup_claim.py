@@ -378,11 +378,11 @@ def _run(
     )
 
 
-def _stale_operator_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], list[str]]:
+def _stale_operator_fixture(tmp_path: Path, issue_number: int = 3301, pr: int = 34) -> tuple[Path, dict[str, str], list[str]]:
     """Real Git, preflight and host entry; isolate GitHub and host config."""
     sandbox = tmp_path / "harness"
     sandbox.mkdir()
-    issue = json.dumps({"number": 3301, "state": "open", "labels": [
+    issue = json.dumps({"number": issue_number, "state": "open", "labels": [
         {"name": "type:task"}, {"name": "prio:high"}, {"name": "lane:governance"},
         {"name": "agent:in-progress"}], "body": VALID_READY_BODY})
     _, env = _make_harness(sandbox, status_json="{}", issue_json=issue)
@@ -420,15 +420,17 @@ def _stale_operator_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], list[
     git("update-ref", "refs/remotes/origin/main", "HEAD")
     git("update-ref", "refs/heads/main", base)
     args = ["--takeover-stale", "--target-worktree", str(worktree),
-            "--operator-comment-id", "12", "--operator-pr", "34",
+            "--operator-comment-id", "12", "--operator-pr", str(pr),
             "--operator-workspace-root", str(tmp_path / "model-workspaces"),
             "--legacy-run-state-root", str(tmp_path / "runs")]
     return worktree, env, args
 
 
 @pytest.mark.parametrize("resume", [False, True])
-def test_operator_pickup_accepts_clean_stale_base_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resume: bool) -> None:
-    worktree, env, args = _stale_operator_fixture(tmp_path)
+@pytest.mark.parametrize("issue_number,pr", [(6601, 6602), (6597, 6603)])
+def test_operator_pickup_accepts_clean_stale_base_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resume: bool,
+                                                       issue_number: int, pr: int) -> None:
+    worktree, env, args = _stale_operator_fixture(tmp_path, issue_number, pr)
     from app.builderops import legacy_git_config
     from app.builderops.legacy_owner_recovery import RecoveryEvidenceError, read_clean_candidate
     from scripts import agent_worktree
@@ -438,7 +440,7 @@ def test_operator_pickup_accepts_clean_stale_base_only(tmp_path: Path, monkeypat
     agent_worktree.register_worktree(worktree, worktree=worktree, owner="fixture")
     clean = read_clean_candidate(cwd=worktree, worktree=worktree)
     assert clean["branch"] == "codex/candidate"
-    result = _run(worktree, env, *args, *(["--operator-resume"] if resume else []))
+    result = _run(worktree, env, *args, *(["--operator-resume"] if resume else []), issue=str(issue_number))
     assert result.returncode != 0
     assert '"status": "not_checked"' in result.stdout
     assert '"ok": false' in result.stdout
@@ -449,7 +451,7 @@ def test_operator_pickup_accepts_clean_stale_base_only(tmp_path: Path, monkeypat
 
     Path(env["COMMAND_LOG"]).write_text("")
     (worktree / "untracked").write_text("dirty")
-    result = _run(worktree, env, *args, *(["--operator-resume"] if resume else []))
+    result = _run(worktree, env, *args, *(["--operator-resume"] if resume else []), issue=str(issue_number))
     assert result.returncode != 0
     assert '"dirty_tree": true' in result.stdout
     assert f"-m app.builderops.legacy_owner_recovery {action} " in Path(env["COMMAND_LOG"]).read_text()
