@@ -272,7 +272,7 @@ logs or PRs.
 
 ## OpenHands owner access on BOB-1
 
-The bounded #6630 owner interface uses upstream Agent Canvas 1.37.0 at
+The bounded #6630 owner interface uses upstream Agent Canvas 1.40.0 (updated 2026-11-15) at
 <https://builder-system.tailcfb3a1.ts.net:9443/conversations/5f3b0e85-dbf6-4666-b650-95728a551601>.
 Connect the iPad to the existing Tailscale network under the owner's personal account. On a new
 browser, keep the prefilled backend URL, give it a name, leave API Key empty and select **Next**;
@@ -287,7 +287,7 @@ actions can lag the active owner's latest comment; follow the linked Issue and P
 current blockers, review, CI and delivery. Stopped/busy/unreachable observations remain unavailable;
 monitoring never starts, loads or stops the existing epic workers. Native descendants are opaque.
 An active or finished conversation is not accepted progress, a merged PR or completed delivery.
-The ongoing #6618/#6619 owners retain their claims and workspaces.
+Existing issue ownership and retained workspaces remain with their owning workflows.
 
 Use `sandbox start` in the owner conversation for a separate owner scratch workspace, then follow
 **Open sandbox Canvas** to <https://builder-system.tailcfb3a1.ts.net:9444>. Open the existing admitted
@@ -310,7 +310,13 @@ reserved ID; unavailable or failed engine execution must not be presented as rea
 The new user units are `openhands-owner-backend` (model-free server 1.62.0, loopback 18812),
 `openhands-owner-canvas` (static UI, loopback 18821), and `openhands-owner-primary-gateway` /
 `openhands-owner-sandbox-gateway` (loopback 18820 / 18822). Their private configuration, pinned Node
-24.22.2 executable and copied Canvas assets live under `~/epic-sandbox/owner-access/`. Tailscale
+24.22.2 executable and Canvas assets live under `~/epic-sandbox/owner-access/`. The owner-requested
+`npm install -g @openhands/agent-canvas@latest` installs under the BOB-1 user's `~/.local` prefix;
+the user-owned npm launcher is under `owner-access/tooling/bin`. The static unit serves a versioned
+snapshot under `owner-access/canvas-releases` through the `owner-access/canvas` link, using Node's
+`--preserve-symlinks-main` flag so the upstream entrypoint runs through that link. The previous
+1.37.0 snapshot is retained for rollback. Activation restarts only `openhands-owner-canvas`;
+the backend, gateways and active epic workers keep running. Tailscale
 Serve adds only HTTPS 9443 and 9444; the previous 443/8443 routes remain intact. The gateway admits
 only the configured owner identity from the loopback Serve hop, checks browser Origin, injects
 session keys only upstream and exposes no generic host Bash/file/secret or settings-write API.
@@ -325,8 +331,9 @@ approved native image `epic-worker@sha256:3c3c2472b35ea3ccb0df57df7cc9d2303f582d
 The frozen CLI's upstream 1.60.1 default image is insufficient for this native path; the wrapper
 passes the reviewed image and the existing approved `epicws-6615-egress-20261114` network explicitly. The old default `epicws` bridge cannot reach the provider; a local CLI login-status result alone does not prove working provider access. The recovery `runner/current` remains `c68dd18db4dc`.
 No active controller/image was hot-replaced. Runtime evidence and per-capability acceptance are
-recorded on #6630; physical iPad use remains unverified until the owner opens the URL and sends
-`status` from Safari with Tailscale connected.
+recorded on #6630; a fresh status response on the physical iPad remains unverified until the owner
+opens the URL and sends `status` from Chrome with Tailscale connected. Chrome is the owner's
+preferred browser.
 
 ## Persistent epic workspace on TARS (experimental)
 
