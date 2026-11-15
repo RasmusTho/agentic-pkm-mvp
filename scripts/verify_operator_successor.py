@@ -11,6 +11,7 @@ import os
 import time
 import sys
 from pathlib import Path
+from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -31,7 +32,8 @@ def _readonly_dispatcher(*, cwd: Path, task_id: str) -> tuple[dict, list, dict]:
 
 
 def _readonly_lifecycle(*, cwd: Path, worktree: Path, workspace_root: Path,
-                        branch: str, session: str) -> tuple[dict, dict]:
+                        branch: str, session: str,
+                        while_locked: Callable[[], None] | None = None) -> tuple[dict, dict]:
     """Use the existing registry lock and an identity-bound no-follow reader."""
     try:
         common = recovery.legacy_git_config._common(recovery.legacy_git_config._gitdir(cwd))
@@ -65,6 +67,10 @@ def _readonly_lifecycle(*, cwd: Path, worktree: Path, workspace_root: Path,
                     or active[0]["expires_at"] <= time.time()
                     or not agent_worktree._valid_generation(active[0].get("registration_epoch"))):
                 raise cycle.CycleError("current lifecycle successor is unavailable")
+            if while_locked is not None:
+                while_locked()
+                if read_registry(registry) != payload:
+                    raise cycle.CycleError("lifecycle registry changed during dispatcher read")
             return active[0], records
     except (OSError, ValueError, recovery.legacy_git_config.ConfigError, agent_worktree.WorktreeLifecycleError) as exc:
         raise cycle.CycleError("existing lifecycle registry or lock is unavailable") from exc
@@ -133,12 +139,14 @@ def verify(*, issue: int, pr: int, worktree: Path, workspace_root: Path,
     recovery._verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
     # Re-read authority after the network/lineage work; a heartbeat may renew
     # expiry without changing the claimant or the registration's identity.
+    fresh_dispatcher: list[tuple[dict, list, dict]] = []
     fresh_registration, _ = _readonly_lifecycle(
-        cwd=cwd, worktree=worktree, workspace_root=workspace_root, branch=head["ref"], session=session)
+        cwd=cwd, worktree=worktree, workspace_root=workspace_root, branch=head["ref"], session=session,
+        while_locked=lambda: fresh_dispatcher.append(_readonly_dispatcher(cwd=cwd, task_id=task_id)))
     if ({k: v for k, v in fresh_registration.items() if k not in {"heartbeat_at", "expires_at"}}
             != {k: v for k, v in registration.items() if k not in {"heartbeat_at", "expires_at"}}):
         raise cycle.CycleError("lifecycle successor changed during operator proof")
-    fresh_task, fresh_events, fresh_lease = _readonly_dispatcher(cwd=cwd, task_id=task_id)
+    fresh_task, fresh_events, fresh_lease = fresh_dispatcher[0]
     fresh_owner = cycle.closure._dispatcher_lease_snapshot(
         fresh_task, task_id, repository=repo, issue_number=issue, lease=fresh_lease)
     cycle.closure._validate_claimant_history(fresh_events, fresh_owner)

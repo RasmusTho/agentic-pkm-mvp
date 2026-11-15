@@ -5,7 +5,7 @@ import hashlib
 import json
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -489,6 +489,62 @@ def test_operator_successor_proof_rechecks_authority_after_lineage(production_pa
     else:
         with pytest.raises((cycle.CycleError, cycle.closure.ClosureError)):
             adapter.verify(**args)
+    assert calls == 2
+
+
+def test_operator_successor_refuses_registry_drift_during_final_dispatcher_read(production_path, monkeypatch):
+    from scripts import verify_operator_successor as adapter
+
+    f = production_path
+    case = f['case']
+    monkeypatch.setattr(recovery_module, '_verify_current_issue', lambda **kw: None)
+    original = adapter._readonly_dispatcher
+    calls = 0
+
+    def drift_during_read(**kwargs):
+        nonlocal calls
+        calls += 1
+        result = original(**kwargs)
+        if calls == 2:
+            registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+            payload = json.loads(registry.read_text())
+            payload['worktrees'][str(case['worktree'])]['owner'] = 'other-session'
+            registry.write_text(json.dumps(payload))
+        return result
+
+    monkeypatch.setattr(adapter, '_readonly_dispatcher', drift_during_read)
+    with pytest.raises(cycle.CycleError):
+        adapter.verify(issue=case['issue'], pr=case['pr'], cwd=case['cwd'], worktree=case['worktree'],
+                       workspace_root=f['layout'].root, agent=case['agent'], session=case['session'])
+    assert calls == 2
+
+
+def test_operator_successor_refuses_lease_expiry_during_final_registry_read(production_path, monkeypatch):
+    from scripts import verify_operator_successor as adapter
+
+    f = production_path
+    case = f['case']
+    monkeypatch.setattr(recovery_module, '_verify_current_issue', lambda **kw: None)
+    original = adapter._readonly_lifecycle
+    calls = 0
+
+    class FutureDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) + timedelta(hours=2)
+
+    def advance_after_read(**kwargs):
+        nonlocal calls
+        result = original(**kwargs)
+        calls += 1
+        if calls == 2:
+            monkeypatch.setattr(cycle.closure, 'datetime', FutureDatetime)
+        return result
+
+    monkeypatch.setattr(adapter, '_readonly_lifecycle', advance_after_read)
+    with pytest.raises(cycle.closure.ClosureError, match='expired'):
+        adapter.verify(issue=case['issue'], pr=case['pr'], cwd=case['cwd'], worktree=case['worktree'],
+                       workspace_root=f['layout'].root, agent=case['agent'], session=case['session'])
     assert calls == 2
 
 
