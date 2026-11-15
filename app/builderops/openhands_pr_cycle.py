@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
-from app.builderops import closure, epic_run_state, epic_workspace as workspace, legacy_owner_recovery
+from app.builderops import closure, epic_run_state, epic_workspace as workspace, legacy_git_config, legacy_owner_recovery
 from app.builderops import openhands_pr_completion as completion
 from app.builderops import openhands_pr_observation as observation
 from app.builderops.publication import SubprocessExecutor
@@ -356,22 +356,74 @@ def _lifecycle_owner(layout: workspace.Layout, entry: Mapping[str, Any], branch:
     if str(source.resolve()) != value or not source.is_dir() or workspace._is_within(source, layout.root):
         raise CycleError("host lifecycle repository must be outside the worker workspace")
     try:
-        # Hold the existing lifecycle fence while screening paths and binding
-        # generations: the authority reader itself invokes git -C on them.
-        with agent_worktree.locked_lifecycle_authority(source, candidate_branch=branch,
-                                                       allow_released_history=True) as read_authority:
-            records = agent_worktree.load_lifecycle_records(source)
+        # Locate the registry without invoking source Git, then hold its existing
+        # fence across classification, checkout screening and generation reads.
+        common = legacy_git_config._common(legacy_git_config._gitdir(source))
+        registry = common / "agent-worktrees.json"
+        with agent_worktree._registry_lock(registry):
+            if registry.is_symlink():
+                raise CycleError("worktree lifecycle registry is invalid")
+            payload = agent_worktree._read_registry(registry)
+            raw_records = payload["worktrees"]
+            snapshot = agent_worktree._lifecycle_records(payload)
+            candidate_path = str(entry.get("owner_worktree"))
+            candidate = snapshot.get(candidate_path)
+            operator_rows = []
+            malformed_relevance = False
+            try:
+                agent_worktree._select_authority_records(
+                    raw_records, candidate_branch=branch, candidate_paths={candidate_path})
+            except (agent_worktree.WorktreeLifecycleError, TypeError, ValueError):
+                malformed_relevance = True
+            for path, row in raw_records.items():
+                if not isinstance(path, str) or not isinstance(row, dict):
+                    malformed_relevance = True
+                    continue
+                prior = row.get("prior_bindings", [])
+                if not isinstance(prior, list) or any(not isinstance(item, dict) or not isinstance(item.get("branch"), str)
+                                                     for item in prior):
+                    malformed_relevance = True
+                    continue
+                relevant = (path == candidate_path or row.get("path") == candidate_path or row.get("branch") == branch
+                            or any(item["branch"] == branch for item in prior))
+                if relevant and "operator_registration" in row:
+                    operator_rows.append(row)
+            uncertain = (malformed_relevance or not isinstance(candidate, dict) or candidate.get("branch") != branch
+                         or candidate.get("path") != entry.get("owner_worktree")
+                         or candidate.get("owner") != entry.get("session")
+                         or candidate.get("status") != "active"
+                         or not agent_worktree._valid_authority_timestamp(candidate.get("expires_at"))
+                         or candidate["expires_at"] <= time.time()
+                         or not agent_worktree._valid_generation(candidate.get("registration_epoch"))
+                         or any(key in candidate and (not isinstance(candidate[key], dict)
+                                or candidate[key].get("released_at") is None)
+                                for key in ("prior_owner", "previous_registration")))
+            if operator_rows or uncertain:
+                legacy_git_config.check_host_config()
+                legacy_git_config.check(cwd=source, worktree=Path(str(entry.get("owner_worktree"))))
+            if malformed_relevance:
+                raise CycleError("worktree lifecycle registry is malformed")
+            if operator_rows and (len(operator_rows) != 1 or operator_rows[0] != candidate):
+                raise CycleError("operator worktree registration is ambiguous")
+            records = snapshot
             live = agent_worktree.git_hygiene._parse_worktrees(
                 agent_worktree.git_hygiene.run_git(["worktree", "list", "--porcelain"], source))
             paths = [*records, *(row.get("worktree") for row in live)]
             if any(not isinstance(path, str) or workspace._is_within(Path(path).resolve(), layout.root) for path in paths):
                 raise CycleError("lifecycle authority includes a model-controlled checkout")
-            authority = read_authority()
+            if operator_rows:
+                selected = agent_worktree._select_authority_records(
+                    raw_records, candidate_branch=branch, candidate_paths={candidate_path})
+                if any(path != candidate_path for path in selected):
+                    raise CycleError("operator branch history is ambiguous")
+            authority = agent_worktree._lifecycle_authority_under_registry_lock(
+                source, registry, candidate_branch=branch, allow_released_history=True,
+                permitted_probe_paths={candidate_path} if operator_rows or uncertain else None)
             candidate_paths = {row.get("worktree") for row in live
                                if row.get("branch", "").removeprefix("refs/heads/") == branch}
             if len(candidate_paths) != 1:
                 raise CycleError("candidate worktree registration is ambiguous")
-    except (agent_worktree.WorktreeLifecycleError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+    except (agent_worktree.WorktreeLifecycleError, legacy_git_config.ConfigError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
         raise CycleError("host worktree lifecycle authority is unavailable") from exc
     active = [dict(row) for row in authority.values() if row.get("branch") == branch and row.get("status") == "active"]
     if len(active) != 1:
@@ -793,6 +845,14 @@ def _operator_lineage(*, events: Sequence[Mapping[str, Any]], owner: Mapping[str
         rows.append((receipt, at))
     pending, pending_at = rows[0]
     acknowledged, ack_at = rows[1]
+    try:
+        selected_ack = legacy_owner_recovery._select_unique_operator_ack(
+            comments=list(comments), issue=issue, pr=pr_number, pending=pending,
+            expected_ack=acknowledged.get("successor_acknowledgment"))
+    except legacy_owner_recovery.RecoveryEvidenceError as exc:
+        raise CycleError("operator acknowledgment is ambiguous") from exc
+    if selected_ack.get("id") != proof.get("ack_comment_id"):
+        raise CycleError("operator acknowledgment differs from its pin")
     predecessor, successor = pending["predecessor"], pending["successor"]
     candidate = proof.get("candidate_readback")
     ack = acknowledged.get("successor_acknowledgment")

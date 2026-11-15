@@ -41,8 +41,8 @@ def test_draft_reads_real_git_and_leaves_authority_unknown(tmp_path, monkeypatch
     monkeypatch.setattr(recovery, "read_expired_registration", lambda **kw: registration)
     monkeypatch.setattr(recovery, "read_live_publication", lambda **kw: publication)
     monkeypatch.setattr(recovery, "_verify_pr_origin", lambda **kw: None)
-    monkeypatch.setattr(evidence.agent_worktree, "_locked_lifecycle_snapshot", lambda path: {str(root): prior})
-    monkeypatch.setattr(evidence.agent_worktree, "_branch_history_digest", lambda snapshot, name: "c" * 64)
+    monkeypatch.setattr(recovery, "_locked_raw_branch_snapshot", lambda *args, **kwargs: {str(root): prior})
+    monkeypatch.setattr(evidence.agent_worktree, "_operator_branch_history_digest", lambda *args, **kwargs: "c" * 64)
     draft = evidence.build_draft(cwd=root, issue=1, pr=10, worktree=root, base=base,
                                  agent="agent", session="successor")["operator_reconciliation.v1"]
     assert draft["changed_files"] == ["file"]

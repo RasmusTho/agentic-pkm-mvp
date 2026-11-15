@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import subprocess
+import sys
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -423,3 +424,423 @@ def test_successor_body_rejects_unbound_authority(production_path, drift):
     updated.update(route='native', check_config={})
     with pytest.raises(cycle.CycleError):
         cycle.native_authority(f['layout'], updated, f['entry'])
+
+
+def test_operator_successor_proof_adapter_reads_actual_pinned_lineage(production_path, monkeypatch):
+    from scripts import verify_operator_successor as adapter
+    f = production_path
+    case = f['case']
+    monkeypatch.setattr(recovery_module, '_verify_current_issue', lambda **kw: None)
+    result = adapter.verify(issue=case['issue'], pr=case['pr'], cwd=case['cwd'], worktree=case['worktree'],
+        workspace_root=f['layout'].root, agent=case['agent'], session=case['session'])
+    assert result['head'] == f['pr']['head_sha']
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    with cycle.agent_worktree._locked_registry(registry) as payload:
+        payload['worktrees'][str(case['worktree'])]['operator_registration']['state'] = 'prepared'
+    with pytest.raises(cycle.CycleError):
+        adapter.verify(issue=case['issue'], pr=case['pr'], cwd=case['cwd'], worktree=case['worktree'],
+            workspace_root=f['layout'].root, agent=case['agent'], session=case['session'])
+
+
+@pytest.mark.parametrize('consumer', ['native', 'review', 'adapter'])
+def test_operator_consumers_refuse_poisoned_config_before_source_git(production_path, monkeypatch, consumer):
+    from scripts import verify_operator_successor as adapter
+    f = production_path
+    case = f['case']
+    config = case['cwd'].parent / 'agentic-pkm-mvp' / '.git/config'
+    with config.open('a') as output:
+        output.write('\n[include]\n  path = /tmp/unsupported-config\n')
+    calls = []
+    def source_git(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError('source Git ran before configuration screening')
+    monkeypatch.setattr(cycle.agent_worktree.git_hygiene, 'run_git', source_git)
+    with pytest.raises(cycle.CycleError):
+        if consumer == 'native':
+            cycle.native_authority(f['layout'], f['pr'], f['entry'])
+        elif consumer == 'review':
+            cycle._add_transfer_review_context(f['layout'], f['entry'], f['pr'])
+        else:
+            adapter.verify(issue=case['issue'], pr=case['pr'], cwd=case['cwd'], worktree=case['worktree'],
+                workspace_root=f['layout'].root, agent=case['agent'], session=case['session'])
+    assert not calls
+
+
+@pytest.mark.parametrize('failure', ['none', 'red_ci', 'head', 'stale_ack'])
+def test_native_operator_proof_then_existing_merge_gates(production_path, monkeypatch, failure):
+    from scripts import verify_operator_successor as adapter
+    f = production_path
+    case = f['case']
+    monkeypatch.setattr(recovery_module, '_verify_current_issue', lambda **kw: None)
+    if failure == 'head':
+        f['live']['head']['sha'] = '0' * 40
+    if failure == 'stale_ack':
+        case['comments'][2]['body'] += ' '
+    if failure == 'red_ci':
+        f['controls']['ci'] = 1
+    args = dict(issue=case['issue'], pr=case['pr'], cwd=case['cwd'], worktree=case['worktree'],
+                workspace_root=f['layout'].root, agent=case['agent'], session=case['session'])
+    if failure in ('head', 'stale_ack'):
+        with pytest.raises(cycle.CycleError):
+            adapter.verify(**args)
+    else:
+        assert adapter.verify(**args)['head'] == f['pr']['head_sha']
+        if failure == 'red_ci':
+            with pytest.raises(cycle.CycleError, match='current-head CI'):
+                cycle._premerge(f['layout'], f['pr'], f['entry'], f['saved'])
+        else:
+            assert cycle._premerge(f['layout'], f['pr'], f['entry'], f['saved'])['head_sha'] == f['pr']['head_sha']
+
+
+@pytest.mark.parametrize('drift', ['valid', 'forged', 'stale', 'other_pr'])
+def test_operator_cli_real_unlinked_dispatcher_snapshot(production_path, monkeypatch, capsys, drift):
+    from scripts import verify_operator_successor as adapter
+    f = production_path
+    case = f['case']
+    task_id = case['receipt']['predecessor']['task_id']
+    assert case['store'].get_task(task_id).linked_pr is None
+    if drift == 'forged':
+        case['comments'][2]['body'] += ' '
+    if drift == 'stale':
+        f['live']['head']['sha'] = '0' * 40
+    if drift == 'other_pr':
+        task = case['store'].get_task(task_id)
+        task.linked_pr = '999999'
+        case['store'].upsert_task(task)
+    monkeypatch.chdir(case['cwd'])
+    monkeypatch.setattr(sys, 'argv', ['verify_operator_successor', '--issue', str(case['issue']),
+        '--pr', str(case['pr']), '--worktree', str(case['worktree']), '--workspace-root', str(f['layout'].root),
+        '--agent', case['agent'], '--session', case['session']])
+    status = adapter.main()
+    output = json.loads(capsys.readouterr().out)
+    assert status == (0 if drift == 'valid' else 1)
+    assert output['ok'] is (drift == 'valid')
+    if drift == 'valid':
+        assert output['head'] == f['pr']['head_sha']
+        assert output['task_pr_projection'] is None
+        assert case['store'].get_task(task_id).linked_pr is None
+
+
+def test_operator_proof_does_not_upgrade_old_database(tmp_path, monkeypatch):
+    import sqlite3
+    from types import SimpleNamespace
+    from scripts import verify_operator_successor as adapter
+    database = tmp_path / 'old.sqlite3'
+    with sqlite3.connect(database) as conn:
+        conn.execute('CREATE TABLE dispatcher_meta (key TEXT PRIMARY KEY, value TEXT)')
+        conn.execute("INSERT INTO dispatcher_meta VALUES ('schema_version', '1')")
+    before = database.read_bytes()
+    monkeypatch.setattr(recovery_module, '_operator_dispatcher_paths', lambda *a, **k: SimpleNamespace(db_path=database))
+    with pytest.raises(cycle.CycleError, match='schema is not current'):
+        adapter._readonly_dispatcher(cwd=tmp_path, task_id='task')
+    assert database.read_bytes() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['old.sqlite3']
+
+
+def test_operator_proof_does_not_create_registry_lock(production_path):
+    from scripts import verify_operator_successor as adapter
+    case = production_path['case']
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    lock = registry.with_suffix(registry.suffix + '.lock')
+    lock.unlink()
+    before = registry.read_bytes()
+    with pytest.raises(cycle.CycleError, match='registry or lock'):
+        adapter._readonly_lifecycle(cwd=case['cwd'], worktree=case['worktree'], workspace_root=production_path['layout'].root,
+                                    branch='codex/example', session=case['session'])
+    assert not lock.exists()
+    assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize('problem', ['missing_registry', 'missing_row', 'malformed_row', 'branch_drift'])
+def test_operator_uncertain_registry_is_screened_before_source_git(production_path, monkeypatch, problem):
+    f = production_path
+    case = f['case']
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    if problem == 'missing_registry':
+        registry.unlink()
+    else:
+        with cycle.agent_worktree._locked_registry(registry) as payload:
+            rows = payload['worktrees']
+            if problem == 'missing_row': rows.pop(str(case['worktree']))
+            elif problem == 'malformed_row': rows[str(case['worktree'])] = 'invalid'
+            else: rows[str(case['worktree'])]['branch'] = 'other'
+    config = case['cwd'].parent / 'agentic-pkm-mvp' / '.git/config'
+    with config.open('a') as output:
+        output.write('\n[include]\n  path = /tmp/unsupported-config\n')
+    calls = []
+    def source_git(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError('source Git ran before configuration screening')
+    monkeypatch.setattr(cycle.agent_worktree.git_hygiene, 'run_git', source_git)
+    with pytest.raises(cycle.CycleError):
+        cycle.native_authority(f['layout'], f['pr'], f['entry'])
+    assert not calls
+
+
+@pytest.mark.parametrize('location', ['outside', 'model', 'prior_binding'])
+def test_native_cli_refuses_extra_checkout_before_any_git_in_it(production_path, tmp_path, monkeypatch, capsys, location):
+    from scripts import verify_operator_successor as adapter
+    f = production_path
+    case = f['case']
+    extra = (f['layout'].root if location == 'model' else tmp_path) / 'foreign-checkout'
+    extra.mkdir(parents=True)
+    subprocess.run(['git', 'init', '-q', str(extra)], check=True)
+    with (extra / '.git/config').open('a') as output:
+        output.write('\n[include]\n  path = /tmp/unsupported-config\n')
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    with cycle.agent_worktree._locked_registry(registry) as payload:
+        current = payload['worktrees'][str(case['worktree'])]
+        payload['worktrees'][str(extra)] = {key: current[key] for key in
+            ('branch', 'expires_at', 'generation', 'heartbeat_at', 'owner', 'registered_at', 'status')}
+        payload['worktrees'][str(extra)]['path'] = str(extra)
+        if location == 'prior_binding':
+            payload['worktrees'][str(extra)]['branch'] = 'other'
+            payload['worktrees'][str(extra)]['prior_bindings'] = [{'branch': 'codex/example', 'removed_at': 1.0}]
+    delegate = cycle.agent_worktree.git_hygiene.run_git
+    extra_calls = []
+    def observed(args, cwd):
+        if '-C' in args and args[args.index('-C') + 1] == str(extra):
+            extra_calls.append(args)
+            raise AssertionError('Git ran in the unqualified checkout')
+        return delegate(args, cwd)
+    monkeypatch.setattr(cycle.agent_worktree.git_hygiene, 'run_git', observed)
+    monkeypatch.chdir(case['cwd'])
+    monkeypatch.setattr(sys, 'argv', ['verify_operator_successor', '--issue', str(case['issue']),
+        '--pr', str(case['pr']), '--worktree', str(case['worktree']), '--workspace-root', str(f['layout'].root),
+        '--agent', case['agent'], '--session', case['session']])
+    assert adapter.main() == 1
+    assert json.loads(capsys.readouterr().out)['ok'] is False
+    assert extra_calls == []
+
+
+
+def test_native_cli_refuses_registry_symlink_before_read(production_path, monkeypatch, capsys):
+    from scripts import verify_operator_successor as adapter
+    f = production_path
+    case = f['case']
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    target = registry.with_name('symlink-target.json')
+    registry.rename(target)
+    registry.symlink_to(target)
+    before = target.read_bytes()
+    def forbidden(*args, **kwargs):
+        pytest.fail('path-based registry reader was invoked')
+    monkeypatch.setattr(cycle.agent_worktree, '_read_registry', forbidden)
+    monkeypatch.chdir(case['cwd'])
+    monkeypatch.setattr(sys, 'argv', ['verify_operator_successor', '--issue', str(case['issue']),
+        '--pr', str(case['pr']), '--worktree', str(case['worktree']), '--workspace-root', str(f['layout'].root),
+        '--agent', case['agent'], '--session', case['session']])
+    assert adapter.main() == 1
+    assert json.loads(capsys.readouterr().out)['ok'] is False
+    assert registry.is_symlink() and target.read_bytes() == before
+
+
+@pytest.mark.parametrize('owner_state', ['old_owner', 'expired_same_owner'])
+def test_native_cycle_qualifies_legacy_predecessor_before_git(production_path, monkeypatch, owner_state):
+    f = production_path
+    case = f['case']
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    with cycle.agent_worktree._locked_registry(registry) as payload:
+        row = copy.deepcopy(case['old_record'])
+        if owner_state == 'expired_same_owner':
+            row['owner'] = case['session']
+        payload['worktrees'][str(case['worktree'])] = row
+    config = case['cwd'].parent / 'agentic-pkm-mvp' / '.git/config'
+    with config.open('a') as output:
+        output.write('\n[include]\n  path = /tmp/unsupported-config\n')
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError('source Git ran before config qualification')
+    monkeypatch.setattr(cycle.agent_worktree.git_hygiene, 'run_git', forbidden)
+    with pytest.raises(cycle.CycleError):
+        cycle.native_authority(f['layout'], f['pr'], f['entry'])
+    assert not calls
+
+
+def test_native_cycle_regular_current_owner_does_not_require_legacy_config(production_path, monkeypatch):
+    f = production_path
+    case = f['case']
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    with cycle.agent_worktree._locked_registry(registry) as payload:
+        row = payload['worktrees'][str(case['worktree'])]
+        for key in ('operator_registration', 'prior_owner', 'previous_registration'):
+            row.pop(key, None)
+    monkeypatch.setattr(cycle.legacy_git_config, 'check', lambda **kwargs: pytest.fail('ordinary owner screened as legacy'))
+    record, _ = cycle._lifecycle_owner(f['layout'], f['entry'], 'codex/example')
+    assert record['owner'] == case['session']
+
+
+@pytest.mark.parametrize('problem', ['missing_schema', 'pending_quarantine'])
+def test_readonly_dispatcher_refuses_v6_reconciliation_without_writes(tmp_path, monkeypatch, problem):
+    import sqlite3
+    from types import SimpleNamespace
+    from scripts import verify_operator_successor as adapter
+    from tests.dispatcher.verification_helpers import ledger
+    from tests.dispatcher.test_verification_dispatch import _write_deployed_v1_run
+    state = ledger(tmp_path)
+    if problem == 'pending_quarantine':
+        _write_deployed_v1_run(state, supporting_issues=[])
+    else:
+        state.store.initialize()
+        with sqlite3.connect(state.store.db_path) as conn:
+            conn.execute('DROP TABLE verification_runs')
+    database = state.store.db_path
+    before = database.read_bytes()
+    files = sorted(p.name for p in tmp_path.iterdir())
+    monkeypatch.setattr(recovery_module, '_operator_dispatcher_paths', lambda *a, **k: SimpleNamespace(db_path=database))
+    with pytest.raises(cycle.CycleError, match='schema is incomplete|requires quarantine'):
+        adapter._readonly_dispatcher(cwd=tmp_path, task_id='task')
+    assert database.read_bytes() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == files
+
+
+def _add_unrelated_operator_history(case, tmp_path):
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    with cycle.agent_worktree._locked_registry(registry) as payload:
+        original = payload['worktrees'][str(case['worktree'])]
+        for index, status in enumerate(('active', 'released', 'complete')):
+            row = copy.deepcopy(original)
+            row['path'] = str(tmp_path / f'unrelated-{index}')
+            row['branch'] = f'codex/unrelated-{index}'
+            row['status'] = status
+            payload['worktrees'][row['path']] = row
+
+
+def test_native_operator_siblings_and_terminal_history_do_not_collide(production_path, tmp_path):
+    f = production_path
+    _add_unrelated_operator_history(f['case'], tmp_path)
+    authority = cycle.native_authority(f['layout'], f['pr'], f['entry'])
+    assert authority['head_sha'] == f['pr']['head_sha']
+    cycle._add_transfer_review_context(f['layout'], f['entry'], f['pr'])
+    assert cycle._premerge(f['layout'], f['pr'], f['entry'], f['saved'])['head_sha'] == f['pr']['head_sha']
+
+
+def test_unrelated_native_owner_is_not_treated_as_operator(production_path, tmp_path, monkeypatch):
+    f = production_path
+    case = f['case']
+    _add_unrelated_operator_history(case, tmp_path)
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    with cycle.agent_worktree._locked_registry(registry) as payload:
+        row = payload['worktrees'][str(case['worktree'])]
+        for key in ('operator_registration', 'prior_owner', 'previous_registration'):
+            row.pop(key, None)
+    monkeypatch.setattr(cycle.legacy_git_config, 'check', lambda **kwargs: pytest.fail('ordinary owner screened as legacy'))
+    result, _ = cycle._lifecycle_owner(f['layout'], f['entry'], 'codex/example')
+    assert result['owner'] == case['session']
+
+
+def test_same_candidate_operator_conflict_refuses_before_checkout_git(production_path, tmp_path, monkeypatch):
+    f = production_path
+    case = f['case']
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    extra = tmp_path / 'conflicting-checkout'
+    extra.mkdir()
+    with cycle.agent_worktree._locked_registry(registry) as payload:
+        row = copy.deepcopy(payload['worktrees'][str(case['worktree'])])
+        row['path'] = str(extra)
+        payload['worktrees'][str(extra)] = row
+    calls = []
+    delegate = cycle.agent_worktree.git_hygiene.run_git
+    def observed(args, cwd):
+        if '-C' in args and args[args.index('-C') + 1] == str(extra):
+            calls.append(args)
+            raise AssertionError('Git ran in conflicting checkout')
+        return delegate(args, cwd)
+    monkeypatch.setattr(cycle.agent_worktree.git_hygiene, 'run_git', observed)
+    with pytest.raises(cycle.CycleError):
+        cycle.native_authority(f['layout'], f['pr'], f['entry'])
+    assert calls == []
+
+
+def test_native_owner_keeps_registry_lock_through_classification_and_binding(production_path, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    f = production_path
+    case = f['case']
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    entered, allow, writer_started, writer_entered = (threading.Event() for _ in range(4))
+    original = cycle.legacy_git_config.check
+    def paused_check(**kwargs):
+        original(**kwargs)
+        entered.set()
+        if not allow.wait(10):
+            raise AssertionError('test did not release classifier')
+    monkeypatch.setattr(cycle.legacy_git_config, 'check', paused_check)
+    def writer():
+        writer_started.set()
+        with cycle.agent_worktree._locked_registry(registry) as payload:
+            writer_entered.set()
+            payload['worktrees'][str(case['worktree'])]['owner'] = 'different-successor'
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner = pool.submit(cycle._lifecycle_owner, f['layout'], f['entry'], 'codex/example')
+        try:
+            assert entered.wait(10)
+            competing = pool.submit(writer)
+            assert writer_started.wait(10)
+            assert not writer_entered.wait(0.25)
+        finally:
+            allow.set()
+        assert owner.result(timeout=10)[0]['owner'] == case['session']
+        competing.result(timeout=10)
+    assert writer_entered.is_set()
+
+
+@pytest.mark.parametrize('problem', [
+    'prior_owner', 'previous_registration', 'transfer_registration',
+    'generation', 'registered_at', 'heartbeat_at', 'authority_since',
+    'prior_binding_empty_branch', 'prior_binding_bad_time',
+    'raw_sibling', 'sibling_empty_branch', 'released_incomplete',
+])
+def test_native_malformed_registry_qualifies_config_before_any_source_git(production_path, tmp_path, monkeypatch, problem):
+    f = production_path
+    case = f['case']
+    registry = cycle.agent_worktree._default_registry_path(case['cwd'])
+    with cycle.agent_worktree._locked_registry(registry) as payload:
+        row = payload['worktrees'][str(case['worktree'])]
+        for key in ('operator_registration', 'prior_owner', 'previous_registration'):
+            row.pop(key, None)
+        sibling = str(tmp_path / 'malformed-sibling')
+        if problem == 'raw_sibling':
+            payload['worktrees'][sibling] = 'not-a-record'
+        elif problem == 'sibling_empty_branch':
+            payload['worktrees'][sibling] = {'path': sibling, 'branch': ''}
+        elif problem == 'released_incomplete':
+            payload['worktrees'][sibling] = {'path': sibling, 'branch': 'codex/example', 'status': 'released'}
+        elif problem == 'prior_binding_empty_branch':
+            row['prior_bindings'] = [{'branch': '', 'removed_at': 1.0}]
+        elif problem == 'prior_binding_bad_time':
+            row['prior_bindings'] = [{'branch': 'another-branch', 'removed_at': 'not-a-time'}]
+        elif problem in {'generation', 'registered_at', 'heartbeat_at', 'authority_since'}:
+            row[problem] = 'not-valid'
+        else:
+            row[problem] = 'not-a-predecessor'
+    config = case['cwd'].parent / 'agentic-pkm-mvp' / '.git/config'
+    with config.open('a') as output:
+        output.write('\n[include]\n  path = /tmp/unsupported-config\n')
+    source_git = []
+    checks = []
+    original_check = cycle.legacy_git_config.check
+    def checked(**kwargs):
+        checks.append(1)
+        return original_check(**kwargs)
+    def forbidden(*args, **kwargs):
+        source_git.append(args)
+        raise AssertionError('source Git ran before config qualification')
+    monkeypatch.setattr(cycle.legacy_git_config, 'check', checked)
+    monkeypatch.setattr(cycle.agent_worktree.git_hygiene, 'run_git', forbidden)
+    with pytest.raises(cycle.CycleError):
+        cycle.native_authority(f['layout'], f['pr'], f['entry'])
+    assert checks == [1] and source_git == []
+
+
+def test_pinned_native_refuses_conflicting_authenticated_ack(recovery):
+    data = copy.deepcopy(recovery)
+    duplicate = copy.deepcopy(data['comments'][1])
+    duplicate['id'] = 3
+    body = json.loads(duplicate['body'])
+    body['operator_reconciliation.v1']['successor_acknowledgment']['ack_attempt_id'] = '0' * 32
+    duplicate['body'] = json.dumps(body)
+    data['comments'].append(duplicate)
+    with pytest.raises(cycle.CycleError, match='ambiguous'):
+        cycle._operator_lineage(**data)

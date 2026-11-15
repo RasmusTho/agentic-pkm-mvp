@@ -14,6 +14,8 @@ import argparse
 import os
 from pathlib import Path
 import re
+import sqlite3
+import stat
 import json
 import subprocess
 import sys
@@ -23,12 +25,160 @@ from typing import Any
 
 from scripts import agent_worktree
 from app.builderops import legacy_git_config
-from app.dispatcher.config import load_paths as load_dispatcher_paths
+from app.dispatcher.config import (DEFAULT_DB_NAME, DEFAULT_EVENTS_NAME, DEFAULT_STATE_DIR,
+                                   DispatcherPaths, discover_primary_worktree)
 from app.dispatcher.events import claim_event_digest, event_history_digest
 
 
 class RecoveryEvidenceError(ValueError):
     """A recovery observation is missing, contradictory or unauthenticated."""
+
+
+def _operator_dispatcher_paths(*, cwd: Path) -> DispatcherPaths:
+    """Require the qualified primary's absolute dispatcher paths, never fallback."""
+    try:
+        legacy_git_config.check_host_config()
+        legacy_git_config.check(cwd=cwd, worktree=cwd)
+        primary = discover_primary_worktree(cwd=cwd)
+        expected = legacy_git_config.QUALIFIED_COMMON.resolve(strict=True).parent
+        if (primary is None or not primary.is_absolute() or primary != primary.resolve(strict=True)
+                or primary != expected):
+            raise RecoveryEvidenceError("qualified dispatcher primary worktree is unavailable")
+    except (OSError, legacy_git_config.ConfigError) as exc:
+        raise RecoveryEvidenceError("qualified dispatcher primary worktree is unavailable") from exc
+    state_dir = primary / DEFAULT_STATE_DIR
+    try:
+        if (state_dir.resolve(strict=True) != state_dir or not state_dir.is_dir()
+                or (state_dir / DEFAULT_DB_NAME).resolve(strict=False) != state_dir / DEFAULT_DB_NAME
+                or (state_dir / DEFAULT_EVENTS_NAME).resolve(strict=False) != state_dir / DEFAULT_EVENTS_NAME):
+            raise RecoveryEvidenceError("qualified dispatcher paths are unavailable")
+    except OSError as exc:
+        raise RecoveryEvidenceError("qualified dispatcher paths are unavailable") from exc
+    return DispatcherPaths(state_dir=state_dir, db_path=state_dir / DEFAULT_DB_NAME,
+                           events_path=state_dir / DEFAULT_EVENTS_NAME)
+
+
+def _dispatcher_db_identity(path: Path) -> tuple[int, int]:
+    """Read an exact regular DB pathname without following symlinks."""
+    try:
+        value = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise RecoveryEvidenceError("dispatcher database identity is unavailable") from exc
+    if not stat.S_ISREG(value.st_mode):
+        raise RecoveryEvidenceError("dispatcher database identity is unavailable")
+    return value.st_dev, value.st_ino
+
+
+def _readonly_dispatcher(*, cwd: Path, task_id: str,
+                         expected_identity: tuple[int, int] | None = None) -> tuple[dict, list, dict]:
+    """Read the existing current-schema rollback-journal DB without initialization."""
+    from app.dispatcher.schema import SCHEMA_VERSION, LEGACY_UNTRUSTED_VERIFICATION_STATUS, verification_v6_schema_error
+    from app.dispatcher.store import (_legacy_verification_row_is_quarantined,
+                                      _validate_canonical_verification_row, _verification_authority_migration)
+
+    path = _operator_dispatcher_paths(cwd=cwd).db_path
+    fd: int | None = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        identity = os.fstat(fd)
+        if not stat.S_ISREG(identity.st_mode):
+            raise RecoveryEvidenceError("dispatcher database is not a regular file")
+        identity_pair = (identity.st_dev, identity.st_ino)
+        header = os.read(fd, 100)
+        if (expected_identity is not None and identity_pair != expected_identity):
+            raise RecoveryEvidenceError("dispatcher database identity changed")
+        if (len(header) != 100 or header[:16] != b"SQLite format 3\x00"
+                or header[18:20] != b"\x01\x01"
+                or any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))):
+            raise RecoveryEvidenceError("dispatcher database requires unsupported recovery or journal")
+        if _dispatcher_db_identity(path) != identity_pair:
+            raise RecoveryEvidenceError("dispatcher database identity changed")
+        try:
+            connection = sqlite3.connect(f"file:/dev/fd/{fd}?mode=ro", uri=True)
+        except sqlite3.Error:
+            raise
+        try:
+            with connection as conn:
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA query_only=ON")
+                conn.execute("BEGIN")
+                version = conn.execute("SELECT value FROM dispatcher_meta WHERE key='schema_version'").fetchone()
+                if version is None or version[0] != str(SCHEMA_VERSION):
+                    raise RecoveryEvidenceError("dispatcher schema is not current; read-only proof refused")
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
+                schema_error = verification_v6_schema_error(conn)
+                if "repo" not in columns or schema_error is not None:
+                    raise RecoveryEvidenceError("dispatcher schema is incomplete; read-only proof refused")
+                for verification_row in conn.execute("SELECT * FROM verification_runs"):
+                    _, inert = _verification_authority_migration(verification_row)
+                    if inert:
+                        if not _legacy_verification_row_is_quarantined(verification_row):
+                            raise RecoveryEvidenceError("dispatcher authority requires quarantine; read-only proof refused")
+                    else:
+                        if verification_row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS:
+                            raise RecoveryEvidenceError("dispatcher authority quarantine is malformed")
+                        _validate_canonical_verification_row(verification_row)
+                task_row = conn.execute("SELECT * FROM dispatcher_tasks WHERE task_id=?", (task_id,)).fetchone()
+                if task_row is None:
+                    raise RecoveryEvidenceError("dispatcher task is unavailable")
+                task = dict(task_row)
+                event_rows = conn.execute("SELECT * FROM dispatcher_events WHERE task_id=? ORDER BY timestamp,event_id", (task_id,)).fetchall()
+                events = [{**dict(row), "payload": json.loads(row["payload"]) if row["payload"] is not None else None}
+                          for row in event_rows]
+                lease_row = conn.execute("SELECT * FROM dispatcher_leases WHERE lease_id=?", (task.get("lease_id"),)).fetchone()
+                if lease_row is None:
+                    raise RecoveryEvidenceError("dispatcher lease is unavailable")
+                lease = dict(lease_row)
+                if (_dispatcher_db_identity(path) != identity_pair
+                        or any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))):
+                    raise RecoveryEvidenceError("dispatcher database identity or journal changed")
+        finally:
+            connection.close()
+        return task, events, lease
+    except RecoveryEvidenceError:
+        raise
+    except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+        raise RecoveryEvidenceError("read-only dispatcher snapshot is unavailable") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _raw_branch_under_lock(registry: Path, *, branch: str, worktree: Path,
+                           allow_prepared: bool = False,
+                           registry_reader: Callable[[Path], dict[str, Any]]) -> dict[str, Any]:
+    """Validate the unfiltered branch history while the registry fence is held."""
+    try:
+        records = registry_reader(registry)["worktrees"]
+        agent_worktree._select_authority_records(
+            records, candidate_branch=branch, candidate_paths={str(worktree)},
+            allow_prepared_operator=allow_prepared)
+        row = records.get(str(worktree))
+        proof = row.get("operator_registration") if isinstance(row, dict) else None
+        if allow_prepared and isinstance(proof, dict):
+            predecessor = proof.get("predecessor")
+            if not isinstance(predecessor, dict):
+                raise RecoveryEvidenceError("operator predecessor history is unavailable")
+            prior = dict(records)
+            prior[str(worktree)] = predecessor
+            observed = agent_worktree._operator_branch_history_digest(prior, branch=branch, worktree=worktree)
+            if observed != proof.get("branch_history_digest"):
+                raise RecoveryEvidenceError("operator predecessor history changed")
+        else:
+            agent_worktree._operator_branch_history_digest(records, branch=branch, worktree=worktree)
+        return records
+    except (agent_worktree.WorktreeLifecycleError, KeyError, TypeError, ValueError) as exc:
+        raise RecoveryEvidenceError("worktree raw branch history is invalid") from exc
+
+
+def _locked_raw_branch_snapshot(registry: Path, *, branch: str, worktree: Path,
+                                allow_prepared: bool = False) -> dict[str, Any]:
+    try:
+        with agent_worktree._locked_existing_registry(registry) as reader:
+            return _raw_branch_under_lock(registry, branch=branch, worktree=worktree,
+                                          allow_prepared=allow_prepared, registry_reader=reader)
+    except agent_worktree.WorktreeLifecycleError as exc:
+        raise RecoveryEvidenceError("worktree raw branch history is unavailable") from exc
 
 
 def read_expired_registration(*, cwd: Path, candidate: Mapping[str, Any]) -> dict[str, Any]:
@@ -47,9 +197,9 @@ def read_expired_registration(*, cwd: Path, candidate: Mapping[str, Any]) -> dic
     if not registry.is_file():
         raise RecoveryEvidenceError("worktree registry is unavailable")
     try:
-        before = agent_worktree._locked_lifecycle_snapshot(registry)
+        before = _locked_raw_branch_snapshot(registry, branch=branch, worktree=Path(path))
         actual_generation = agent_worktree._worktree_generation(cwd, Path(path), create=False)
-        after = agent_worktree._locked_lifecycle_snapshot(registry)
+        after = _locked_raw_branch_snapshot(registry, branch=branch, worktree=Path(path))
     except (OSError, RuntimeError, agent_worktree.WorktreeLifecycleError) as exc:
         raise RecoveryEvidenceError("worktree registration readback is unavailable") from exc
     record = before.get(path)
@@ -77,7 +227,7 @@ def read_expired_registration(*, cwd: Path, candidate: Mapping[str, Any]) -> dic
             continue
         raise RecoveryEvidenceError("worktree successor history is ambiguous")
     try:
-        branch_history_digest = agent_worktree._branch_history_digest(before, branch)
+        branch_history_digest = agent_worktree._operator_branch_history_digest(before, branch=branch, worktree=Path(path))
     except agent_worktree.WorktreeLifecycleError as exc:
         raise RecoveryEvidenceError("worktree branch history is invalid") from exc
     return {"path": path, "branch": branch, "generation": generation, "owner": record["owner"],
@@ -88,7 +238,8 @@ def read_expired_registration(*, cwd: Path, candidate: Mapping[str, Any]) -> dic
             "branch_history_digest": branch_history_digest}
 
 
-def read_live_predecessor(*, cwd: Path, issue: int) -> dict[str, Any]:
+def read_live_predecessor(*, cwd: Path, issue: int,
+                          expected_identity: tuple[int, int] | None = None) -> dict[str, Any]:
     """Read one expired dispatcher predecessor and its claim in one snapshot.
 
     A verified expired lease is not itself a writer fence or a transfer. The
@@ -97,20 +248,7 @@ def read_live_predecessor(*, cwd: Path, issue: int) -> dict[str, Any]:
     if type(issue) is not int or issue <= 0:
         raise RecoveryEvidenceError("predecessor issue is invalid")
     task_id = f"github-RasmusTho--agentic-pkm-mvp-issue-{issue}"
-    paths = load_dispatcher_paths({}, cwd=cwd)
-    if not paths.db_path.is_file():
-        raise RecoveryEvidenceError("dispatcher readback is unavailable")
-    env = {"PATH": os.defpath, "HOME": "/dev/null", "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
-           "DISPATCHER_STATE_DIR": str(paths.state_dir)}
-    try:
-        result = subprocess.run([sys.executable, "-m", "app.dispatcher", "show", task_id, "--events", "--json"],
-                                cwd=cwd, env=env, capture_output=True, text=True, timeout=30, check=False)
-        data = json.loads(result.stdout) if result.returncode == 0 and len(result.stdout) <= 1_000_000 else None
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        raise RecoveryEvidenceError("dispatcher readback is unavailable") from exc
-    if not isinstance(data, dict) or data.get("ok") is not True:
-        raise RecoveryEvidenceError("dispatcher readback is unavailable")
-    task, lease, events = data.get("task"), data.get("lease"), data.get("events")
+    task, events, lease = _readonly_dispatcher(cwd=cwd, task_id=task_id, expected_identity=expected_identity)
     if (not isinstance(task, dict) or not isinstance(lease, dict) or not isinstance(events, list)
             or any(not isinstance(event, dict) for event in events)):
         raise RecoveryEvidenceError("dispatcher predecessor is incomplete")
@@ -150,7 +288,7 @@ def read_live_predecessor(*, cwd: Path, issue: int) -> dict[str, Any]:
 def _git_read(worktree: Path, *args: str) -> bytes:
     # Do not run a repository-configured fsmonitor or external diff helper.
     env = {"PATH": os.defpath, "HOME": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
-           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_OPTIONAL_LOCKS": "0"}
+           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_REPLACE_OBJECTS": "1"}
     try:
         result = subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", str(worktree), *args],
                                 env=env, capture_output=True, timeout=30, check=False)
@@ -214,6 +352,17 @@ def _github_read(args: list[str], *, cwd: Path) -> str:
     if result.returncode or len(result.stdout.encode()) > 1_000_000:
         raise RecoveryEvidenceError("authenticated GitHub readback is unavailable")
     return result.stdout
+
+
+def _verify_current_issue(*, cwd: Path, issue: int, worktree: Path) -> None:
+    """Read and validate the exact current issue before an operator effect."""
+    from scripts.validate_issue_readiness import validate_in_progress_issue
+
+    try:
+        data = json.loads(_github_read([f"repos/RasmusTho/agentic-pkm-mvp/issues/{issue}"], cwd=cwd))
+        validate_in_progress_issue(data, issue_number=issue, repo_root=worktree)
+    except (ValueError, TypeError) as exc:
+        raise RecoveryEvidenceError(f"current issue validation failed: {exc}") from exc
 
 
 def read_live_publication(*, cwd: Path, pr: int, branch: str) -> dict[str, Any]:
@@ -347,18 +496,9 @@ def read_operator_reconciliation(
     )
 
 
-def _read_task_events(*, cwd: Path, task_id: str) -> list[dict[str, Any]]:
-    paths = load_dispatcher_paths({}, cwd=cwd)
-    try:
-        result = subprocess.run([sys.executable, "-m", "app.dispatcher", "show", task_id, "--events", "--json"],
-                                 cwd=cwd, env={**os.environ, "DISPATCHER_STATE_DIR": str(paths.state_dir)},
-                                 capture_output=True, text=True, timeout=30, check=False)
-        payload = json.loads(result.stdout) if result.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        raise RecoveryEvidenceError("dispatcher event history is unavailable") from exc
-    events = payload.get("events") if isinstance(payload, dict) and payload.get("ok") is True else None
-    if not isinstance(events, list) or any(not isinstance(row, dict) for row in events):
-        raise RecoveryEvidenceError("dispatcher event history is unavailable")
+def _read_task_events(*, cwd: Path, task_id: str,
+                      expected_identity: tuple[int, int] | None = None) -> list[dict[str, Any]]:
+    _, events, _ = _readonly_dispatcher(cwd=cwd, task_id=task_id, expected_identity=expected_identity)
     return events
 
 
@@ -378,8 +518,10 @@ def preflight_operator_pickup(
         raise RecoveryEvidenceError("current Builder successor session is unavailable")
     try:
         agent_worktree._screen_transfer_workspace(cwd, worktree, workspace_root)
-    except agent_worktree.WorktreeLifecycleError as exc:
-        raise RecoveryEvidenceError("operator workspace boundary is invalid") from exc
+        legacy_git_config.check_host_config()
+        legacy_git_config.check(cwd=cwd, worktree=worktree)
+    except (agent_worktree.WorktreeLifecycleError, legacy_git_config.ConfigError) as exc:
+        raise RecoveryEvidenceError("operator workspace or Git configuration is invalid") from exc
     try:
         comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
         receipt, pending_at, _ = agent_worktree._transfer_comment(
@@ -390,8 +532,10 @@ def preflight_operator_pickup(
     if _github_read(["user", "--jq", ".login"], cwd=cwd).strip() != "RasmusTho":
         raise RecoveryEvidenceError("operator account is not the authenticated repository owner")
     successor = {"agent": agent, "session": session}
-    predecessor = read_live_predecessor(cwd=cwd, issue=issue)
-    events = _read_task_events(cwd=cwd, task_id=predecessor["task_id"])
+    dispatcher_paths = _operator_dispatcher_paths(cwd=cwd)
+    dispatcher_identity = _dispatcher_db_identity(dispatcher_paths.db_path)
+    predecessor = read_live_predecessor(cwd=cwd, issue=issue, expected_identity=dispatcher_identity)
+    events = _read_task_events(cwd=cwd, task_id=predecessor["task_id"], expected_identity=dispatcher_identity)
     claims = [row for row in events if row.get("event_type") == "task.claimed"]
     if (predecessor.get("session") is not None or len(claims) != 1
             or claims[0].get("lease_id") != predecessor["lease_id"]
@@ -446,18 +590,20 @@ def preflight_operator_pickup(
     if not transfer_fields <= receipt.keys() or "successor_acknowledgment" in receipt:
         raise RecoveryEvidenceError("pending operator transfer fields are missing")
     try:
-        snapshot = agent_worktree._locked_lifecycle_snapshot(agent_worktree._default_registry_path(cwd))
+        snapshot = _locked_raw_branch_snapshot(agent_worktree._default_registry_path(cwd),
+                                               branch=candidate["branch"], worktree=worktree)
     except agent_worktree.WorktreeLifecycleError as exc:
         raise RecoveryEvidenceError("predecessor registration readback is unavailable") from exc
     if snapshot.get(str(worktree)) != receipt.get("predecessor_registration"):
         raise RecoveryEvidenceError("predecessor registration changed after the operator observation")
-    if agent_worktree._branch_history_digest(snapshot, candidate["branch"]) != registration["branch_history_digest"]:
+    if agent_worktree._operator_branch_history_digest(snapshot, branch=candidate["branch"], worktree=worktree) != registration["branch_history_digest"]:
         raise RecoveryEvidenceError("branch history changed after the operator observation")
     checked, created_at, digest = validate_operator_reconciliation(
         comment, issue=issue, pr=pr, github_login="RasmusTho", successor=successor,
         predecessor=predecessor, registration=registration, candidate=candidate,
         writer=writer, publication=publication,
     )
+    _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=checked)
     try:
         agent_worktree._operator_candidate(cwd, worktree=worktree, receipt=checked,
                                            base_sha=checked["base"], observed_at=time.time())
@@ -465,22 +611,14 @@ def preflight_operator_pickup(
         raise RecoveryEvidenceError("operator candidate or base is unavailable before claim") from exc
     return {"pending_comment": comment, "pending_digest": digest, "pending_created_at": created_at,
             "receipt": checked, "predecessor": predecessor, "registration": registration,
-            "candidate": candidate, "publication": publication_live}
+            "candidate": candidate, "publication": publication_live,
+            "dispatcher_paths": dispatcher_paths, "dispatcher_identity": dispatcher_identity}
 
 
 def _successor_claim_readback(*, cwd: Path, task_id: str, issue: int, agent: str, session: str,
-                              claim_id: str, predecessor: Mapping[str, Any]) -> str:
-    paths = load_dispatcher_paths({}, cwd=cwd)
-    env = {**os.environ, "DISPATCHER_STATE_DIR": str(paths.state_dir)}
-    try:
-        result = subprocess.run([sys.executable, "-m", "app.dispatcher", "show", task_id, "--events", "--json"],
-                                cwd=cwd, env=env, capture_output=True, text=True, timeout=30, check=False)
-        payload = json.loads(result.stdout) if result.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        raise RecoveryEvidenceError("successor claim readback is unavailable; retain claim") from exc
-    if not isinstance(payload, dict) or payload.get("ok") is not True:
-        raise RecoveryEvidenceError("successor claim readback is unavailable; retain claim")
-    task, lease, events = payload.get("task"), payload.get("lease"), payload.get("events")
+                              claim_id: str, predecessor: Mapping[str, Any],
+                              expected_identity: tuple[int, int] | None = None) -> str:
+    task, events, lease = _readonly_dispatcher(cwd=cwd, task_id=task_id, expected_identity=expected_identity)
     if (not isinstance(task, dict) or not isinstance(lease, dict) or not isinstance(events, list)
             or any(not isinstance(event, dict) for event in events)):
         raise RecoveryEvidenceError("successor claim readback is incomplete; retain claim")
@@ -526,36 +664,64 @@ def _successor_claim_readback(*, cwd: Path, task_id: str, issue: int, agent: str
     return lease_id
 
 
-def _read_unique_operator_ack(*, cwd: Path, issue: int, pr: int, pending: Mapping[str, Any],
-                              expected_ack: Mapping[str, Any]) -> dict[str, Any]:
-    try:
-        pages = json.loads(_github_read(["--method", "GET", "--paginate", "--slurp",
-                   f"repos/RasmusTho/agentic-pkm-mvp/issues/{issue}/comments", "-f", "per_page=100"], cwd=cwd))
-    except (ValueError, TypeError) as exc:
-        raise RecoveryEvidenceError("ACK readback is unavailable; retain prepared registration") from exc
-    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
-        raise RecoveryEvidenceError("ACK readback is unavailable; retain prepared registration")
-    matches = []
-    for comment in (item for page in pages for item in page):
+def _operator_ack_candidates(*, comments: list[Any], issue: int, pr: int,
+                             pending: Mapping[str, Any]) -> list[tuple[dict[str, Any], Any]]:
+    candidates = []
+    for comment in comments:
         try:
             ack, _, _ = agent_worktree._transfer_comment(comment, issue=issue, pr=pr,
                                                           receipt_key="operator_reconciliation.v1")
         except agent_worktree.WorktreeLifecycleError:
             continue
-        if ({k: v for k, v in ack.items() if k != "successor_acknowledgment"} == pending
-                and ack.get("successor_acknowledgment") == expected_ack):
-            matches.append(comment)
-    if len(matches) != 1 or type(matches[0].get("id")) is not int:
+        if ("successor_acknowledgment" in ack
+                and {k: v for k, v in ack.items() if k != "successor_acknowledgment"} == pending):
+            candidates.append((comment, ack["successor_acknowledgment"]))
+    return candidates
+
+
+def _select_unique_operator_ack(*, comments: list[Any], issue: int, pr: int, pending: Mapping[str, Any],
+                                expected_ack: object) -> dict[str, Any]:
+    """Refuse every competing authenticated ACK for the exact pending decision."""
+    candidates = _operator_ack_candidates(comments=comments, issue=issue, pr=pr, pending=pending)
+    if (len(candidates) != 1 or not isinstance(candidates[0][0], dict)
+            or type(candidates[0][0].get("id")) is not int or candidates[0][1] != expected_ack):
         raise RecoveryEvidenceError("ACK outcome is unknown or ambiguous; retain prepared registration")
+    return candidates[0][0]
+
+
+def _operator_comments(*, cwd: Path, issue: int, pr: int) -> list[Any]:
+    comments: list[Any] = []
+    for number in dict.fromkeys((issue, pr)):
+        try:
+            pages = json.loads(_github_read(["--method", "GET", "--paginate", "--slurp",
+                               f"repos/RasmusTho/agentic-pkm-mvp/issues/{number}/comments", "-f", "per_page=100"], cwd=cwd))
+        except (ValueError, TypeError) as exc:
+            raise RecoveryEvidenceError("ACK comment readback is unavailable; retain prepared registration") from exc
+        if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+            raise RecoveryEvidenceError("ACK comment readback is unavailable; retain prepared registration")
+        comments.extend(item for page in pages for item in page)
+    return comments
+
+
+def _assert_no_operator_ack(*, cwd: Path, issue: int, pr: int, pending: Mapping[str, Any]) -> None:
+    comments = _operator_comments(cwd=cwd, issue=issue, pr=pr)
+    if _operator_ack_candidates(comments=comments, issue=issue, pr=pr, pending=pending):
+        raise RecoveryEvidenceError("a prior ACK exists; reconcile it without reposting")
+
+
+def _read_unique_operator_ack(*, cwd: Path, issue: int, pr: int, pending: Mapping[str, Any],
+                              expected_ack: Mapping[str, Any]) -> dict[str, Any]:
+    selected = _select_unique_operator_ack(comments=_operator_comments(cwd=cwd, issue=issue, pr=pr),
+                                           issue=issue, pr=pr, pending=pending, expected_ack=expected_ack)
     try:
-        fresh = agent_worktree._read_github_transfer_comment(matches[0]["id"], cwd=cwd)
+        fresh = agent_worktree._read_github_transfer_comment(selected["id"], cwd=cwd)
         _, _, digest = agent_worktree._transfer_comment(fresh, issue=issue, pr=pr,
                                                         receipt_key="operator_reconciliation.v1")
-        _, _, listed_digest = agent_worktree._transfer_comment(matches[0], issue=issue, pr=pr,
+        _, _, listed_digest = agent_worktree._transfer_comment(selected, issue=issue, pr=pr,
                                                                receipt_key="operator_reconciliation.v1")
     except agent_worktree.WorktreeLifecycleError as exc:
         raise RecoveryEvidenceError("ACK changed during readback; retain prepared registration") from exc
-    if (fresh.get("id") != matches[0]["id"] or fresh.get("created_at") != matches[0].get("created_at")
+    if (fresh.get("id") != selected["id"] or fresh.get("created_at") != selected.get("created_at")
             or digest != listed_digest):
         raise RecoveryEvidenceError("ACK changed during readback; retain prepared registration")
     return fresh
@@ -565,40 +731,49 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
                                workspace_root: Path, pending_comment: dict[str, Any],
                                receipt: dict[str, Any], prepared: dict[str, Any],
                                before_pin: Callable[..., str]) -> tuple[int, dict[str, Any]]:
-    try:
-        pages = json.loads(_github_read(["--method", "GET", "--paginate", "--slurp",
-                           f"repos/RasmusTho/agentic-pkm-mvp/issues/{issue}/comments", "-f", "per_page=100"], cwd=cwd))
-    except (ValueError, TypeError) as exc:
-        raise RecoveryEvidenceError("prior ACK readback is unavailable; retain prepared registration") from exc
-    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
-        raise RecoveryEvidenceError("prior ACK readback is unavailable; retain prepared registration")
-    for comment in (item for page in pages for item in page):
-        try:
-            prior_ack, _, _ = agent_worktree._transfer_comment(comment, issue=issue, pr=pr,
-                                                                receipt_key="operator_reconciliation.v1")
-        except agent_worktree.WorktreeLifecycleError:
-            continue
-        if ("successor_acknowledgment" in prior_ack
-                and {k: v for k, v in prior_ack.items() if k != "successor_acknowledgment"} == receipt):
-            raise RecoveryEvidenceError("a prior ACK exists; reconcile it without reposting")
+    _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
+    before_pin(prepared["successor_registration"]["epoch"])
+    def before_intent_write(payload: dict[str, Any]) -> None:
+        before_pin(prepared["successor_registration"]["epoch"], registry_reader=lambda _path: payload)
+        _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
     try:
         intent = agent_worktree.begin_operator_ack(cwd, worktree=worktree, owner=session, issue=issue,
-                    pr=pr, pending_comment=pending_comment, workspace_root=workspace_root)
+                    pr=pr, pending_comment=pending_comment, workspace_root=workspace_root,
+                    before_write=before_intent_write)
     except agent_worktree.WorktreeLifecycleError as exc:
         raise RecoveryEvidenceError("ACK intent could not be established; retain prepared registration") from exc
     prepared = {**prepared, "ack_attempt_id": intent["attempt_id"]}
     target_time = max(prepared["successor_registration"]["observed_at"], prepared["candidate_readback"]["observed_at"],
                       intent["intent_at"])
     time.sleep(max(0.0, int(target_time) + 1.1 - time.time()))
+    before_pin(prepared["successor_registration"]["epoch"])
     ack_body = json.dumps({"operator_reconciliation.v1": {**receipt, "successor_acknowledgment": prepared}}, sort_keys=True)
-    try:
-        posted = subprocess.run(["gh", "api", "--hostname", "github.com", "--method", "POST",
-                                 f"repos/RasmusTho/agentic-pkm-mvp/issues/{issue}/comments", "--input", "-"],
-                                cwd=cwd, input=json.dumps({"body": ack_body}), capture_output=True, text=True,
-                                timeout=30, check=False)
-        response = json.loads(posted.stdout) if posted.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError, ValueError):
-        response = None
+    registry = agent_worktree._default_registry_path(cwd)
+    with agent_worktree._locked_existing_registry(registry) as reader:
+        before_pin(prepared["successor_registration"]["epoch"], registry_reader=reader)
+        _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
+        records = _raw_branch_under_lock(registry, branch=receipt["branch"], worktree=worktree,
+                                         allow_prepared=True, registry_reader=reader)
+        row = records.get(str(worktree))
+        proof = row.get("operator_registration") if isinstance(row, dict) else None
+        if (reader(registry).get("worktrees") != records or not isinstance(row, dict)
+                or not isinstance(proof, dict) or row.get("owner") != session or proof.get("state") != "prepared"
+                or proof.get("epoch") != prepared["successor_registration"]["epoch"]
+                or proof.get("ack_intent") != intent):
+            raise RecoveryEvidenceError("operator ACK intent or branch history changed; retain state")
+        try:
+            posted = subprocess.run(["gh", "api", "--hostname", "github.com", "--method", "POST",
+                                     f"repos/RasmusTho/agentic-pkm-mvp/issues/{issue}/comments", "--input", "-"],
+                                    cwd=cwd, input=json.dumps({"body": ack_body}), capture_output=True, text=True,
+                                    timeout=30, check=False)
+            response = json.loads(posted.stdout) if posted.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError, ValueError):
+            response = None
+        try:
+            if reader(registry).get("worktrees") != records:
+                raise RecoveryEvidenceError("ACK outcome unknown after registry drift; retain state")
+        except (OSError, agent_worktree.WorktreeLifecycleError) as exc:
+            raise RecoveryEvidenceError("ACK outcome unknown after registry drift; retain state") from exc
     ack_id = response.get("id") if isinstance(response, dict) else None
     if type(ack_id) is not int or ack_id <= 0:
         raise RecoveryEvidenceError("ACK publication outcome unknown; retain claim and prepared registration")
@@ -606,19 +781,66 @@ def _post_and_pin_operator_ack(*, cwd: Path, issue: int, pr: int, worktree: Path
         ack_comment = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt, expected_ack=prepared)
         if ack_comment.get("id") != ack_id or ack_comment.get("body") != ack_body:
             raise RecoveryEvidenceError("ACK readback changed; retain prepared registration")
+        ack_identity = tuple(ack_comment.get(key) for key in ("id", "body", "created_at", "updated_at"))
         time.sleep(max(0.0, _timestamp(ack_comment.get("created_at")) + 1.1 - time.time()))
         before_pin(prepared["successor_registration"]["epoch"])
+        fresh = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt, expected_ack=prepared)
+        if tuple(fresh.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
+            raise RecoveryEvidenceError("ACK changed before pin; retain state")
+        def before_pin_write(payload: dict[str, Any]) -> None:
+            before_pin(prepared["successor_registration"]["epoch"], registry_reader=lambda _path: payload)
+            latest = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt, expected_ack=prepared)
+            if tuple(latest.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
+                raise RecoveryEvidenceError("ACK changed before pin; retain state")
         pinned = agent_worktree.pin_operator_registration(cwd, worktree=worktree, owner=session, issue=issue,
-                    pr=pr, pending_comment=pending_comment, ack_comment=ack_comment, workspace_root=workspace_root)
+                    pr=pr, pending_comment=pending_comment, ack_comment=fresh, workspace_root=workspace_root,
+                    before_write=before_pin_write)
     except agent_worktree.WorktreeLifecycleError as exc:
         raise RecoveryEvidenceError("operator ACK pin failed; retain claim and registration") from exc
     return ack_id, pinned
 
 
+def _before_operator_prepare(*, payload: dict[str, Any], cwd: Path, issue: int, pr: int,
+                             worktree: Path, agent: str, session: str, pending_comment: dict[str, Any],
+                             receipt: dict[str, Any], claim_id: str, lease_id: str,
+                             dispatcher_identity: tuple[int, int], check_run: Callable[[], None]) -> None:
+    """Refresh effect inputs under the registry write lock, without reacquiring it."""
+    _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
+    comment_id = pending_comment["id"]
+    if agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd) != pending_comment:
+        raise RecoveryEvidenceError("operator decision changed before prepare; retain claim")
+    candidate = read_clean_candidate(cwd=cwd, worktree=worktree)
+    if candidate != receipt.get("candidate"):
+        raise RecoveryEvidenceError("candidate changed before prepare; retain claim")
+    registry = agent_worktree._default_registry_path(cwd)
+    records = _raw_branch_under_lock(registry, branch=candidate["branch"], worktree=worktree,
+                                     registry_reader=lambda _path: payload)
+    registration = receipt["registration"]
+    if (records.get(str(worktree)) != receipt.get("predecessor_registration")
+            or agent_worktree._operator_branch_history_digest(
+                records, branch=candidate["branch"], worktree=worktree) != registration["branch_history_digest"]):
+        raise RecoveryEvidenceError("branch history changed before prepare; retain claim")
+    publication = read_live_publication(cwd=cwd, pr=pr, branch=candidate["branch"])
+    expected_publication = {k: v for k, v in receipt["publication"].items() if k not in {"state", "sources"}}
+    if {k: v for k, v in publication.items() if k != "state"} != expected_publication:
+        raise RecoveryEvidenceError("publication changed before prepare; retain claim")
+    predecessor = receipt["predecessor"]
+    _verify_pr_origin(cwd=cwd, issue=issue, pr=pr, worktree=worktree, candidate=candidate,
+                      predecessor=predecessor, publication=publication)
+    current_lease = _successor_claim_readback(cwd=cwd, task_id=predecessor["task_id"], issue=issue,
+                    agent=agent, session=session, claim_id=claim_id, predecessor=predecessor,
+                    expected_identity=dispatcher_identity)
+    if current_lease != lease_id:
+        raise RecoveryEvidenceError("successor lease changed before prepare; retain claim")
+    _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
+    check_run()
+
+
 def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, agent: str, session: str,
                             comment_id: int, workspace_root: Path,
-                            before_pin: Callable[..., str]) -> dict[str, Any]:
-    """Execute the supported operator transition after wrapper issue checks.
+                            before_pin: Callable[..., str], check_run: Callable[[], None],
+                            dispatcher_identity: tuple[int, int]) -> dict[str, Any]:
+    """Execute the supported operator transition after fenced issue checks.
 
     Failed or ambiguous writes are retained for reconciliation, never released
     or blindly retried. The caller must still apply all delivery consumers.
@@ -626,38 +848,82 @@ def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, 
     preflight = preflight_operator_pickup(cwd=cwd, issue=issue, pr=pr, worktree=worktree,
                                          agent=agent, session=session, comment_id=comment_id,
                                          workspace_root=workspace_root)
+    if preflight["dispatcher_identity"] != dispatcher_identity:
+        raise RecoveryEvidenceError("dispatcher database identity changed during preflight")
     prior, registration, candidate = preflight["predecessor"], preflight["registration"], preflight["candidate"]
     receipt, pending_comment = preflight["receipt"], preflight["pending_comment"]
     delay = max(0.0, preflight["pending_created_at"] + 1.05 - time.time())
     if delay:
         time.sleep(delay)
+    _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
     task_id, claim_id = prior["task_id"], uuid.uuid4().hex
     args = [sys.executable, "-m", "app.dispatcher", "claim", task_id, "--agent", agent, "--session", session,
             "--claim-id", claim_id, "--takeover-stale", "--expected-lease-id", prior["lease_id"],
             "--expected-lease-holder", prior["holder"], "--expected-lease-expires-at", prior["expires_at"],
             "--expected-claim-event-id", prior["claim_event_id"], "--expected-claim-event-digest", prior["claim_event_digest"],
             "--expected-history-digest", prior["history_digest"], "--expected-repo", prior["repo"],
-            "--expected-issue-number", str(issue), "--json"]
-    paths = load_dispatcher_paths({}, cwd=cwd)
-    try:
-        claim = subprocess.run(args, cwd=cwd, env={**os.environ, "DISPATCHER_STATE_DIR": str(paths.state_dir)},
-                               capture_output=True, text=True, timeout=30, check=False)
-        claim_exit = claim.returncode
-    except (OSError, subprocess.SubprocessError):
-        claim_exit = None
+            "--expected-issue-number", str(issue),
+            "--expected-db-device", str(preflight["dispatcher_identity"][0]),
+            "--expected-db-inode", str(preflight["dispatcher_identity"][1]), "--json"]
+    paths = preflight["dispatcher_paths"]
+    registry_path = agent_worktree._default_registry_path(cwd)
+    # Keep the same registry fence through the CAS claim: no cooperating
+    # lifecycle writer can introduce ambiguous history after this readback.
+    with agent_worktree._locked_existing_registry(registry_path) as reader:
+        records = _raw_branch_under_lock(registry_path, branch=candidate["branch"], worktree=worktree,
+                                         registry_reader=reader)
+        if (reader(registry_path).get("worktrees") != records
+                or records.get(str(worktree)) != receipt.get("predecessor_registration")
+                or agent_worktree._operator_branch_history_digest(records, branch=candidate["branch"], worktree=worktree) != registration["branch_history_digest"]):
+            raise RecoveryEvidenceError("worktree branch history changed before claim")
+        # The lock may have blocked. Refresh all effect inputs after acquiring it.
+        _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
+        current_comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
+        _, _, current_digest = agent_worktree._transfer_comment(current_comment, issue=issue, pr=pr,
+                                            receipt_key="operator_reconciliation.v1")
+        if (current_digest != preflight["pending_digest"]
+                or read_clean_candidate(cwd=cwd, worktree=worktree) != candidate
+                or read_live_predecessor(cwd=cwd, issue=issue, expected_identity=preflight["dispatcher_identity"]) != prior
+                or read_live_publication(cwd=cwd, pr=pr, branch=candidate["branch"]) != preflight["publication"]):
+            raise RecoveryEvidenceError("claim effect inputs changed while waiting for registry lock")
+        _verify_pr_origin(cwd=cwd, issue=issue, pr=pr, worktree=worktree, candidate=candidate,
+                          predecessor=prior, publication=preflight["publication"])
+        _assert_no_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=receipt)
+        check_run()
+        if (reader(registry_path).get("worktrees") != records
+                or _dispatcher_db_identity(paths.db_path) != preflight["dispatcher_identity"]):
+            raise RecoveryEvidenceError("claim effect identity changed before execution")
+        claim_env = {**os.environ, "DISPATCHER_STATE_DIR": str(paths.state_dir),
+                     "DISPATCHER_DB_PATH": str(paths.db_path), "DISPATCHER_EVENTS_PATH": str(paths.events_path)}
+        try:
+            claim = subprocess.run(args, cwd=cwd, env=claim_env, capture_output=True, text=True, timeout=30, check=False)
+            claim_exit = claim.returncode
+        except (OSError, subprocess.SubprocessError):
+            claim_exit = None
+        try:
+            if (reader(registry_path).get("worktrees") != records
+                    or _dispatcher_db_identity(paths.db_path) != preflight["dispatcher_identity"]):
+                raise RecoveryEvidenceError("claim outcome unknown after identity drift; retain state")
+        except (OSError, agent_worktree.WorktreeLifecycleError, RecoveryEvidenceError) as exc:
+            raise RecoveryEvidenceError("claim outcome unknown after identity drift; retain state") from exc
     lease_id = _successor_claim_readback(cwd=cwd, task_id=task_id, issue=issue, agent=agent, session=session,
-                                         claim_id=claim_id, predecessor=prior)
+                                         claim_id=claim_id, predecessor=prior, expected_identity=dispatcher_identity)
     # Re-read the operator decision and external state after claim, before the
     # registry write; a drift leaves the exact claim retained and unadmitted.
     if agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd) != pending_comment:
         raise RecoveryEvidenceError("operator decision changed after claim; retain claim")
     if read_live_publication(cwd=cwd, pr=pr, branch=candidate["branch"]) != preflight["publication"]:
         raise RecoveryEvidenceError("PR changed after claim; retain claim")
+    _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
     try:
         prepared = agent_worktree.prepare_operator_registration(
             cwd, worktree=worktree, owner=session, issue=issue, pr=pr, pending_comment=pending_comment,
             base_sha=receipt["base"], workspace_root=workspace_root,
-            expected_branch_history_digest=registration["branch_history_digest"])
+            expected_branch_history_digest=registration["branch_history_digest"],
+            before_write=lambda payload: _before_operator_prepare(
+                payload=payload, cwd=cwd, issue=issue, pr=pr, worktree=worktree, agent=agent,
+                session=session, pending_comment=pending_comment, receipt=receipt, claim_id=claim_id,
+                lease_id=lease_id, dispatcher_identity=dispatcher_identity, check_run=check_run))
     except agent_worktree.WorktreeLifecycleError as exc:
         raise RecoveryEvidenceError("operator registration failed; retain claim") from exc
     ack_id, pinned = _post_and_pin_operator_ack(cwd=cwd, issue=issue, pr=pr, worktree=worktree, session=session,
@@ -672,7 +938,8 @@ def _execute_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, 
 
 def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, agent: str, session: str,
                            comment_id: int, workspace_root: Path,
-                           before_pin: Callable[..., str]) -> dict[str, Any]:
+                           before_pin: Callable[..., str], check_run: Callable[[], None],
+                           dispatcher_identity: tuple[int, int]) -> dict[str, Any]:
     """Reconcile an existing claim and exact ACK without repeating a write."""
     if not session or session != os.environ.get("CODEX_SESSION_ID"):
         raise RecoveryEvidenceError("current Builder successor session is unavailable")
@@ -704,15 +971,7 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
             or {k: v for k, v in live_pr.items() if k != "state"} != comparable_publication):
         raise RecoveryEvidenceError("candidate or PR changed before operator continuation")
     task_id = pending["predecessor"]["task_id"]
-    paths = load_dispatcher_paths({}, cwd=cwd)
-    try:
-        current = subprocess.run([sys.executable, "-m", "app.dispatcher", "show", task_id, "--events", "--json"],
-                                 cwd=cwd, env={**os.environ, "DISPATCHER_STATE_DIR": str(paths.state_dir)},
-                                 capture_output=True, text=True, timeout=30, check=False)
-        payload = json.loads(current.stdout) if current.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        raise RecoveryEvidenceError("successor claim readback is unavailable; retain state") from exc
-    events = payload.get("events") if isinstance(payload, dict) else None
+    _, events, _ = _readonly_dispatcher(cwd=cwd, task_id=task_id, expected_identity=dispatcher_identity)
     claims = [row for row in events or [] if isinstance(row, dict) and row.get("event_type") == "task.claimed"
               and row.get("actor") == agent and isinstance(row.get("payload"), dict)
               and row["payload"].get("session") == session
@@ -722,19 +981,27 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
             or _timestamp(claims[0].get("timestamp")) < pending_at + 1):
         raise RecoveryEvidenceError("successor claim identity is ambiguous; retain state")
     lease_id = _successor_claim_readback(cwd=cwd, task_id=task_id, issue=issue, agent=agent, session=session,
-                    claim_id=claims[0]["payload"]["claim_id"], predecessor=pending["predecessor"])
+                    claim_id=claims[0]["payload"]["claim_id"], predecessor=pending["predecessor"],
+                    expected_identity=dispatcher_identity)
     registry = agent_worktree._default_registry_path(cwd)
-    row = agent_worktree._locked_lifecycle_snapshot(registry).get(str(worktree))
+    row = _locked_raw_branch_snapshot(registry, branch=candidate["branch"],
+                                      worktree=worktree, allow_prepared=True).get(str(worktree))
     proof = row.get("operator_registration") if isinstance(row, dict) else None
     if row == pending.get("predecessor_registration") and proof is None:
         registration = read_expired_registration(cwd=cwd, candidate=candidate)
         if registration != pending.get("registration"):
             raise RecoveryEvidenceError("predecessor registration changed; retain claim")
+        _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
         try:
             prepared = agent_worktree.prepare_operator_registration(
                 cwd, worktree=worktree, owner=session, issue=issue, pr=pr, pending_comment=pending_comment,
                 base_sha=pending["base"], workspace_root=workspace_root,
-                expected_branch_history_digest=registration["branch_history_digest"])
+                expected_branch_history_digest=registration["branch_history_digest"],
+                before_write=lambda payload: _before_operator_prepare(
+                    payload=payload, cwd=cwd, issue=issue, pr=pr, worktree=worktree, agent=agent,
+                    session=session, pending_comment=pending_comment, receipt=pending,
+                    claim_id=claims[0]["payload"]["claim_id"], lease_id=lease_id,
+                    dispatcher_identity=dispatcher_identity, check_run=check_run))
         except agent_worktree.WorktreeLifecycleError as exc:
             raise RecoveryEvidenceError("operator registration could not be resumed; retain claim") from exc
         ack_id, pinned = _post_and_pin_operator_ack(cwd=cwd, issue=issue, pr=pr, worktree=worktree,
@@ -802,10 +1069,20 @@ def _resume_operator_pickup(*, cwd: Path, issue: int, pr: int, worktree: Path, a
         ack_comment = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr,
                                                 pending=pending, expected_ack=expected_ack)
         ack_id = ack_comment["id"]
+        ack_identity = tuple(ack_comment.get(key) for key in ("id", "body", "created_at", "updated_at"))
         time.sleep(max(0.0, _timestamp(ack_comment.get("created_at")) + 1.1 - time.time()))
         before_pin(proof["epoch"])
+        fresh = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=pending, expected_ack=expected_ack)
+        if tuple(fresh.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
+            raise RecoveryEvidenceError("ACK changed before pin; retain state")
+        def before_pin_write(payload: dict[str, Any]) -> None:
+            before_pin(proof["epoch"], registry_reader=lambda _path: payload)
+            latest = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=pending, expected_ack=expected_ack)
+            if tuple(latest.get(key) for key in ("id", "body", "created_at", "updated_at")) != ack_identity:
+                raise RecoveryEvidenceError("ACK changed before pin; retain state")
         pinned = agent_worktree.pin_operator_registration(cwd, worktree=worktree, owner=session, issue=issue,
-                   pr=pr, pending_comment=pending_comment, ack_comment=ack_comment, workspace_root=workspace_root)
+                   pr=pr, pending_comment=pending_comment, ack_comment=fresh, workspace_root=workspace_root,
+                   before_write=before_pin_write)
     except agent_worktree.WorktreeLifecycleError as exc:
         raise RecoveryEvidenceError("operator pin could not be reconciled; retain state") from exc
     return {"task_id": task_id, "lease_id": lease_id, "holder": agent, "session": session,
@@ -832,10 +1109,20 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
         raise RecoveryEvidenceError("candidate Git configuration is unsupported") from exc
     try:
         with legacy_run_fence.hold(state_root=run_state_root, issue=issue, worktree=worktree):
+            dispatcher_identity = _dispatcher_db_identity(_operator_dispatcher_paths(cwd=cwd).db_path)
+            _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
+
             def before_pin(epoch: str, expected_state: str = "prepared",
-                           expected_row: dict[str, Any] | None = None) -> str:
-                row = agent_worktree._locked_lifecycle_snapshot(
-                    agent_worktree._default_registry_path(cwd)).get(str(worktree))
+                           expected_row: dict[str, Any] | None = None,
+                           registry_reader: Callable[[Path], dict[str, Any]] | None = None) -> str:
+                registry = agent_worktree._default_registry_path(cwd)
+                if registry_reader is None:
+                    with agent_worktree._locked_existing_registry(registry) as reader:
+                        return before_pin(epoch, expected_state, expected_row, registry_reader=reader)
+                pending_branch = read_clean_candidate(cwd=cwd, worktree=worktree)["branch"]
+                _verify_current_issue(cwd=cwd, issue=issue, worktree=worktree)
+                row = _raw_branch_under_lock(registry, branch=pending_branch, worktree=worktree,
+                    allow_prepared=True, registry_reader=registry_reader).get(str(worktree))
                 proof = row.get("operator_registration") if isinstance(row, dict) else None
                 if (not isinstance(row, dict) or not isinstance(proof, dict) or row.get("owner") != session
                         or proof.get("state") != expected_state or proof.get("epoch") != epoch
@@ -861,7 +1148,7 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
                 _verify_pr_origin(cwd=cwd, issue=issue, pr=pr, worktree=worktree, candidate=current_candidate,
                                   predecessor=predecessor, publication=current_publication)
                 task_id = predecessor["task_id"]
-                events = _read_task_events(cwd=cwd, task_id=task_id)
+                events = _read_task_events(cwd=cwd, task_id=task_id, expected_identity=dispatcher_identity)
                 claims = [event for event in events if event.get("event_type") == "task.claimed"
                           and event.get("actor") == agent and isinstance(event.get("payload"), dict)
                           and event["payload"].get("session") == session
@@ -870,14 +1157,45 @@ def _fenced_pickup(operation: Any, *, run_state_root: Path, cwd: Path, issue: in
                 if len(claims) != 1 or not isinstance(claims[0]["payload"].get("claim_id"), str):
                     raise RecoveryEvidenceError("successor claim identity changed; retain claim")
                 lease = _successor_claim_readback(cwd=cwd, task_id=task_id, issue=issue, agent=agent,
-                    session=session, claim_id=claims[0]["payload"]["claim_id"], predecessor=predecessor)
+                    session=session, claim_id=claims[0]["payload"]["claim_id"], predecessor=predecessor,
+                    expected_identity=dispatcher_identity)
                 legacy_run_fence.check_locked(state_root=run_state_root, issue=issue, worktree=worktree)
                 return lease
 
-            return operation(cwd=cwd, issue=issue, pr=pr, worktree=worktree, agent=agent,
-                             session=session, comment_id=comment_id, workspace_root=workspace_root,
-                             before_pin=before_pin)
-    except legacy_run_fence.RunFenceError as exc:
+            result = operation(cwd=cwd, issue=issue, pr=pr, worktree=worktree, agent=agent,
+                               session=session, comment_id=comment_id, workspace_root=workspace_root,
+                               before_pin=before_pin, dispatcher_identity=dispatcher_identity,
+                               check_run=lambda: legacy_run_fence.check_locked(
+                                   state_root=run_state_root, issue=issue, worktree=worktree))
+            epoch = result.get("registration_epoch")
+            branch = read_clean_candidate(cwd=cwd, worktree=worktree)["branch"]
+            row = _locked_raw_branch_snapshot(agent_worktree._default_registry_path(cwd),
+                                               branch=branch, worktree=worktree, allow_prepared=True).get(str(worktree))
+            proof = row.get("operator_registration") if isinstance(row, dict) else None
+            if (result.get("state") != "pinned" or not isinstance(epoch, str)
+                    or not isinstance(row, dict) or not isinstance(proof, dict)):
+                raise RecoveryEvidenceError("pinned successor readback is unavailable; retain state")
+            agent_worktree.assert_operator_registration_pinned(row)
+            comment = agent_worktree._read_github_transfer_comment(comment_id, cwd=cwd)
+            pending, _, digest = agent_worktree._transfer_comment(comment, issue=issue, pr=pr,
+                                                  receipt_key="operator_reconciliation.v1")
+            intent = proof["ack_intent"]
+            expected_ack = {"successor_registration": {"path": str(worktree), "branch": branch,
+                "owner": session, "generation": row["generation"], "epoch": epoch,
+                "observed_at": proof["registration_read_at"]}, "candidate_readback": proof["candidate_readback"],
+                "ack_attempt_id": intent["attempt_id"]}
+            ack = _read_unique_operator_ack(cwd=cwd, issue=issue, pr=pr, pending=pending, expected_ack=expected_ack)
+            _, ack_at, ack_digest = agent_worktree._transfer_comment(
+                ack, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
+            if (digest != proof.get("pending_digest") or ack.get("id") != result.get("ack_comment_id")
+                    or ack.get("id") != proof.get("ack_comment_id") or ack_digest != proof.get("ack_digest")
+                    or ack_at != proof.get("ack_at")):
+                raise RecoveryEvidenceError("pinned successor acknowledgment changed; retain state")
+            lease = before_pin(epoch, "pinned", row)
+            if lease != result.get("lease_id"):
+                raise RecoveryEvidenceError("pinned successor claim changed; retain state")
+            return result
+    except (legacy_run_fence.RunFenceError, agent_worktree.WorktreeLifecycleError) as exc:
         raise RecoveryEvidenceError(str(exc)) from exc
 
 

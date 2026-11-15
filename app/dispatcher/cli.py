@@ -296,6 +296,8 @@ def _cmd_show(args: argparse.Namespace, store: SqliteStore) -> int:
 
 def _cmd_claim(args: argparse.Namespace, store: SqliteStore) -> int:
     try:
+        if (args.expected_db_device is None) != (args.expected_db_inode is None):
+            raise ValueError("Both expected dispatcher database identity fields are required")
         task, lease = lease_module.claim(
             store,
             task_id=args.task_id,
@@ -310,6 +312,8 @@ def _cmd_claim(args: argparse.Namespace, store: SqliteStore) -> int:
             expected_history_digest=args.expected_history_digest,
             expected_repo=args.expected_repo,
             expected_issue_number=args.expected_issue_number,
+            expected_db_identity=(args.expected_db_device, args.expected_db_inode)
+                if args.expected_db_device is not None and args.expected_db_inode is not None else None,
             session=args.session,
             claim_id=args.claim_id,
         )
@@ -1468,6 +1472,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--expected-history-digest", default=None, help="Compare the observed task event history")
     p.add_argument("--expected-repo", default=None, help="Compare the observed task repository")
     p.add_argument("--expected-issue-number", type=int, default=None, help="Compare the observed task issue")
+    p.add_argument("--expected-db-device", type=int, default=None, help="Compare the observed dispatcher database device")
+    p.add_argument("--expected-db-inode", type=int, default=None, help="Compare the observed dispatcher database inode")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("heartbeat", help="Update lease heartbeat")

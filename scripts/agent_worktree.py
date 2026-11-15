@@ -224,6 +224,64 @@ def _registry_lock(path: Path) -> Iterator[None]:
 
 
 @contextmanager
+def _locked_existing_registry(path: Path, *, shared: bool = False) -> Iterator[Callable[[Path], dict[str, Any]]]:
+    """Lock the existing registry name and read its exact non-symlink inode."""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    try:
+        lock_fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            lock_identity = os.fstat(lock_fd)
+            if not stat.S_ISREG(lock_identity.st_mode):
+                raise WorktreeLifecycleError("registry lock is not a regular file")
+            fcntl.flock(lock_fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+            registry_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                identity = os.fstat(registry_fd)
+                if not stat.S_ISREG(identity.st_mode):
+                    raise WorktreeLifecycleError("registry is not a regular file")
+                def read_registry(requested: Path) -> dict[str, Any]:
+                    if requested != path:
+                        raise WorktreeLifecycleError("registry path changed")
+                    lock_name = os.stat(lock_path, follow_symlinks=False)
+                    name = os.stat(path, follow_symlinks=False)
+                    current = os.fstat(registry_fd)
+                    if (not stat.S_ISREG(lock_name.st_mode)
+                            or (lock_name.st_dev, lock_name.st_ino) != (lock_identity.st_dev, lock_identity.st_ino)
+                            or not stat.S_ISREG(name.st_mode) or not stat.S_ISREG(current.st_mode)
+                            or (name.st_dev, name.st_ino) != (identity.st_dev, identity.st_ino)
+                            or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino)):
+                        raise WorktreeLifecycleError("registry identity changed")
+                    os.lseek(registry_fd, 0, os.SEEK_SET)
+                    chunks = []
+                    while chunk := os.read(registry_fd, 65536):
+                        chunks.append(chunk)
+                    payload = json.loads(b"".join(chunks))
+                    if (not isinstance(payload, dict) or payload.get("schema") != REGISTRY_SCHEMA
+                            or not isinstance(payload.get("worktrees"), dict)):
+                        raise WorktreeLifecycleError("worktree lifecycle registry is invalid")
+                    return payload
+                yield read_registry
+            finally:
+                os.close(registry_fd)
+        finally:
+            os.close(lock_fd)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorktreeLifecycleError("existing registry or lock is unavailable or changed") from exc
+
+
+@contextmanager
+def _locked_operator_registry(path: Path) -> Iterator[dict[str, Any]]:
+    """Compare-and-write through the exact existing registry and its lock."""
+    with _locked_existing_registry(path) as read_registry:
+        original = read_registry(path)
+        payload = json.loads(json.dumps(original))
+        yield payload
+        if read_registry(path) != original:
+            raise WorktreeLifecycleError("worktree registry changed before operator write")
+        _write_registry(path, payload)
+
+
+@contextmanager
 def _locked_registry(path: Path) -> Iterator[dict[str, Any]]:
     with _registry_lock(path):
         payload = _read_registry(path)
@@ -956,6 +1014,14 @@ def _branch_history_digest(records: dict[str, Any], branch: str) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
+def _operator_branch_history_digest(records: dict[str, Any], *, branch: str, worktree: Path) -> str:
+    """Require the same raw relevance and checkout boundary as native admission."""
+    selected = _select_authority_records(records, candidate_branch=branch, candidate_paths={str(worktree)})
+    if any(key != str(worktree) for key in selected):
+        raise WorktreeLifecycleError("operator branch history is ambiguous")
+    return _branch_history_digest(records, branch)
+
+
 def _live_worktree_entries(cwd: Path) -> list[dict[str, str]]:
     entries = git_hygiene._parse_worktrees(
         git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
@@ -1017,6 +1083,7 @@ def _select_authority_records(
     *,
     candidate_branch: str | None,
     candidate_paths: set[str] | None = None,
+    allow_prepared_operator: bool = False,
 ) -> dict[str, dict[str, object]]:
     """Select records whose branch identity can affect one cleanup candidate.
 
@@ -1031,7 +1098,8 @@ def _select_authority_records(
         raise WorktreeLifecycleError("worktree lifecycle registry is invalid")
     selected: dict[str, dict[str, object]] = {}
     for key, value in raw_records.items():
-        if not isinstance(key, str) or not isinstance(value, dict):
+        if (not isinstance(key, str) or not isinstance(value, dict)
+                or value.get("path") != key or not Path(key).is_absolute()):
             raise WorktreeLifecycleError("worktree lifecycle record is invalid")
         branch = value.get("branch")
         prior = value.get("prior_bindings", [])
@@ -1053,7 +1121,7 @@ def _select_authority_records(
             or value.get("path") in (candidate_paths or set())
         )
         if relevant:
-            selected[key] = _validate_authority_record(key, value)
+            selected[key] = _validate_authority_record(key, value, allow_prepared_operator=allow_prepared_operator)
     return selected
 
 
@@ -1163,8 +1231,11 @@ def _lifecycle_authority_under_registry_lock(
     *,
     candidate_branch: str,
     allow_released_history: bool = False,
+    permitted_probe_paths: set[str] | None = None,
+    registry_reader: Callable[[Path], dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, object]]:
     """Read complete candidate authority while the caller holds the registry lock."""
+    read_registry = registry_reader or _read_registry
 
     if not path.is_file() or path.is_symlink():
         raise WorktreeLifecycleError("worktree lifecycle registry is missing")
@@ -1178,7 +1249,7 @@ def _lifecycle_authority_under_registry_lock(
         and entry.get("branch", "").removeprefix("refs/heads/") == candidate_branch
     }
     snapshot = _select_authority_records(
-        _read_registry(path).get("worktrees"),
+        read_registry(path).get("worktrees"),
         candidate_branch=candidate_branch,
         candidate_paths=candidate_paths,
     )
@@ -1212,6 +1283,11 @@ def _lifecycle_authority_under_registry_lock(
                         if any(row.get(field) != value for field, value in previous.items()):
                             raise WorktreeLifecycleError("released predecessor registration conflicts")
                     ignored_history.add(key)
+    if permitted_probe_paths is not None and any(
+        key not in permitted_probe_paths and row.get("status") not in {"removed", "missing_preserved"}
+        for key, row in snapshot.items() if key not in ignored_history
+    ):
+        raise WorktreeLifecycleError("lifecycle authority contains an unqualified checkout")
     bound = _bind_live_generations(cwd, {key: row for key, row in snapshot.items() if key not in ignored_history})
     if any(
         record.get("status") != "removed"
@@ -1242,7 +1318,7 @@ def _lifecycle_authority_under_registry_lock(
         ):
             raise WorktreeLifecycleError("worktree lifecycle identity is unavailable")
     current = _select_authority_records(
-        _read_registry(path).get("worktrees"),
+        read_registry(path).get("worktrees"),
         candidate_branch=candidate_branch,
         candidate_paths=current_candidate_paths,
     )
@@ -1258,6 +1334,7 @@ def locked_lifecycle_authority(
     candidate_branch: str,
     registry_path: Path | None = None,
     allow_released_history: bool = False,
+    permitted_probe_paths: set[str] | None = None,
 ) -> Iterator[Callable[[], dict[str, dict[str, object]]]]:
     """Fence lifecycle writers and yield a repeatable candidate authority reader."""
 
@@ -1268,6 +1345,7 @@ def locked_lifecycle_authority(
             path,
             candidate_branch=candidate_branch,
             allow_released_history=allow_released_history,
+            permitted_probe_paths=permitted_probe_paths,
         )
 
 
@@ -1324,12 +1402,14 @@ def _lifecycle_update_snapshot(
     owner: str,
     statuses: set[str],
     error: str,
+    operator: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     """Capture target authority under a short lock for optimistic revalidation."""
 
     requested = _canonical(worktree)
-    with _registry_lock(registry_path):
-        payload = _read_registry(registry_path)
+    lock = _locked_existing_registry(registry_path) if operator else _registry_lock(registry_path)
+    with lock as read_registry:
+        payload = read_registry(registry_path) if operator else _read_registry(registry_path)
         value = payload["worktrees"].get(str(requested))
         record = dict(value) if isinstance(value, dict) else None
         if (
@@ -1613,7 +1693,8 @@ def prepare_operator_registration(cwd: Path, *, worktree: Path, owner: str, issu
                                   pending_comment: dict[str, Any], base_sha: str,
                                   workspace_root: Path, expected_branch_history_digest: str,
                                   pr: int | None = None, now: float | None = None,
-                                  ttl_seconds: int = DEFAULT_TTL_SECONDS) -> dict[str, Any]:
+                                  ttl_seconds: int = DEFAULT_TTL_SECONDS,
+                                  before_write: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Atomically register an unacknowledged successor against observed history.
 
     This records comparisons only. The host must establish authority, claim and
@@ -1660,7 +1741,7 @@ def prepare_operator_registration(cwd: Path, *, worktree: Path, owner: str, issu
                "candidate_readback": candidate}
     record = register_worktree(cwd, worktree=canonical, owner=owner, ttl_seconds=ttl_seconds,
                                now=now, expected_branch_history_digest=expected_branch_history_digest,
-                               _operator_pending=pending)
+                               _operator_pending=pending, _operator_before_write=before_write)
     proof = record["operator_registration"]
     return {"successor_registration": {"path": str(canonical), "branch": branch, "owner": owner,
             "generation": generation, "epoch": proof["epoch"], "observed_at": proof["registration_read_at"]},
@@ -1669,7 +1750,8 @@ def prepare_operator_registration(cwd: Path, *, worktree: Path, owner: str, issu
 
 def begin_operator_ack(cwd: Path, *, worktree: Path, owner: str, issue: int,
                        pending_comment: dict[str, Any], workspace_root: Path,
-                       pr: int | None = None, now: float | None = None) -> dict[str, Any]:
+                       pr: int | None = None, now: float | None = None,
+                       before_write: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Record the sole ACK POST attempt before any external write.
 
     A committed intent is never permission to retry a POST: after an unknown
@@ -1678,9 +1760,9 @@ def begin_operator_ack(cwd: Path, *, worktree: Path, owner: str, issue: int,
     pending, pending_at, pending_digest = _transfer_comment(
         pending_comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
     _screen_transfer_workspace(cwd, worktree, workspace_root)
-    registry = _canonical(_default_registry_path(cwd))
+    registry = _default_registry_path(cwd)
     requested, snapshot = _lifecycle_update_snapshot(registry, worktree=worktree, owner=owner,
-                         statuses={"active"}, error="active successor registration is required")
+                         statuses={"active"}, error="active successor registration is required", operator=True)
     proof = snapshot.get("operator_registration")
     if (not isinstance(proof, dict) or proof.get("state") != "prepared"
             or "ack_intent" in proof or proof.get("issue") != issue
@@ -1703,13 +1785,15 @@ def begin_operator_ack(cwd: Path, *, worktree: Path, owner: str, issue: int,
                   base_sha=candidate["base_sha"], observed_at=candidate["observed_at"], verify_base_ref=False)
     if canonical != requested or readback != candidate:
         raise WorktreeLifecycleError("operator candidate changed before ACK intent")
-    with _locked_registry(registry) as payload:
+    with _locked_operator_registry(registry) as payload:
+        if before_write is not None:
+            before_write(payload)
         timestamp = time.time() if now is None else now
         record = payload["worktrees"].get(str(canonical))
         prior_history = dict(payload["worktrees"])
         prior_history[str(canonical)] = proof["predecessor"]
         if (not _valid_authority_timestamp(timestamp) or record != snapshot
-                or _branch_history_digest(prior_history, branch) != proof["branch_history_digest"]
+                or _operator_branch_history_digest(prior_history, branch=branch, worktree=canonical) != proof["branch_history_digest"]
                 or not isinstance(record, dict) or record.get("status") != "active"
                 or record.get("registration_epoch") != proof["epoch"] or record.get("generation") != generation
                 or record.get("branch") != branch or record.get("authority_since") != proof["authority_since"]
@@ -1726,16 +1810,17 @@ def begin_operator_ack(cwd: Path, *, worktree: Path, owner: str, issue: int,
 def pin_operator_registration(cwd: Path, *, worktree: Path, owner: str, issue: int,
                               pending_comment: dict[str, Any], ack_comment: dict[str, Any],
                               workspace_root: Path, pr: int | None = None,
-                              now: float | None = None) -> dict[str, Any]:
+                              now: float | None = None,
+                              before_write: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Pin a separate authenticated operator ACK in the same successor epoch."""
     pending, pending_at, pending_digest = _transfer_comment(
         pending_comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
     receipt, ack_at, ack_digest = _transfer_comment(
         ack_comment, issue=issue, pr=pr, receipt_key="operator_reconciliation.v1")
     _screen_transfer_workspace(cwd, worktree, workspace_root)
-    registry = _canonical(_default_registry_path(cwd))
+    registry = _default_registry_path(cwd)
     requested, snapshot = _lifecycle_update_snapshot(registry, worktree=worktree, owner=owner,
-                         statuses={"active"}, error="active successor registration is required")
+                         statuses={"active"}, error="active successor registration is required", operator=True)
     proof = snapshot.get("operator_registration")
     if (not isinstance(proof, dict) or proof.get("state") not in {"prepared", "pinned"}
             or not isinstance(proof.get("predecessor"), dict)
@@ -1773,12 +1858,14 @@ def pin_operator_registration(cwd: Path, *, worktree: Path, owner: str, issue: i
                          base_sha=candidate["base_sha"], observed_at=candidate["observed_at"], verify_base_ref=False)
     if canonical != requested or current_candidate != candidate:
         raise WorktreeLifecycleError("operator candidate changed before pin")
-    with _locked_registry(registry) as payload:
+    with _locked_operator_registry(registry) as payload:
+        if before_write is not None:
+            before_write(payload)
         timestamp = time.time() if now is None else now
         record = payload["worktrees"].get(str(canonical))
         prior_history = dict(payload["worktrees"])
         prior_history[str(canonical)] = proof["predecessor"]
-        if (record != snapshot or _branch_history_digest(prior_history, branch) != proof["branch_history_digest"]
+        if (record != snapshot or _operator_branch_history_digest(prior_history, branch=branch, worktree=canonical) != proof["branch_history_digest"]
                 or not isinstance(record, dict) or record.get("status") != "active"
                 or record.get("registration_epoch") != proof["epoch"] or record.get("generation") != generation
                 or record.get("branch") != branch or record.get("authority_since") != proof["authority_since"]
@@ -1809,6 +1896,7 @@ def register_worktree(
     now: float | None = None,
     expected_branch_history_digest: str | None = None,
     _operator_pending: dict[str, Any] | None = None,
+    _operator_before_write: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Register a worktree; an optional exact comparison does not grant authority."""
     if not owner.strip() or ttl_seconds < 1:
@@ -1817,10 +1905,12 @@ def register_worktree(
             and not re.fullmatch(r"[0-9a-f]{64}", expected_branch_history_digest)):
         raise WorktreeLifecycleError("expected branch history digest is invalid")
     timestamp = time.time() if now is None else now
-    path = _canonical(registry_path or _default_registry_path(cwd))
+    path = (_default_registry_path(cwd) if _operator_pending is not None
+            else _canonical(registry_path or _default_registry_path(cwd)))
     requested = _canonical(worktree)
-    with _registry_lock(path):
-        initial_payload = _read_registry(path)
+    initial_lock = _locked_existing_registry(path) if _operator_pending is not None else _registry_lock(path)
+    with initial_lock as initial_reader:
+        initial_payload = initial_reader(path) if _operator_pending is not None else _read_registry(path)
         _assert_no_missing_preserved_path_alias(
             initial_payload["worktrees"], requested
         )
@@ -1840,13 +1930,21 @@ def register_worktree(
             "move the checkout to a replacement path and register it, or reconcile the existing lifecycle record"
         )
     generation = _worktree_generation(cwd, canonical, create=True)
-    with _locked_registry(path) as payload:
+    write_lock = _locked_operator_registry(path) if _operator_pending is not None else _locked_registry(path)
+    with write_lock as payload:
+        if _operator_before_write is not None:
+            if _operator_pending is None:
+                raise WorktreeLifecycleError("operator write check requires operator registration")
+            _operator_before_write(payload)
         # Git and marker reads can block past expiry. Establish continuity at
         # the actual registry write, not at the earlier optimistic snapshot.
         timestamp = time.time() if now is None else now
         worktrees = payload["worktrees"]
+        observed_history = (_operator_branch_history_digest(worktrees, branch=branch, worktree=canonical)
+                            if _operator_pending is not None else
+                            _branch_history_digest(worktrees, branch)) if expected_branch_history_digest is not None else None
         if (expected_branch_history_digest is not None
-                and _branch_history_digest(worktrees, branch) != expected_branch_history_digest):
+                and observed_history != expected_branch_history_digest):
             raise WorktreeLifecycleError("observed branch history changed before registration")
         _assert_no_missing_preserved_path_alias(worktrees, canonical)
         existing = worktrees.get(str(canonical))

@@ -46,11 +46,12 @@ def build_draft(*, cwd: Path, issue: int, pr: int, worktree: Path, base: str,
         changed_files = sorted(set(item.decode("utf-8") for item in changed.split(b"\0") if item))
     except UnicodeDecodeError as exc:
         raise recovery.RecoveryEvidenceError("candidate paths are not UTF-8") from exc
-    snapshot = agent_worktree._locked_lifecycle_snapshot(agent_worktree._default_registry_path(cwd))
+    snapshot = recovery._locked_raw_branch_snapshot(agent_worktree._default_registry_path(cwd),
+                                                     branch=candidate["branch"], worktree=worktree)
     prior = snapshot.get(str(worktree))
     if (not isinstance(prior, dict)
             or hashlib.sha256(json.dumps(prior, sort_keys=True).encode()).hexdigest() != registration["history_digest"]
-            or agent_worktree._branch_history_digest(snapshot, candidate["branch"]) != registration["branch_history_digest"]
+            or agent_worktree._operator_branch_history_digest(snapshot, branch=candidate["branch"], worktree=worktree) != registration["branch_history_digest"]
             or recovery.read_clean_candidate(cwd=cwd, worktree=worktree) != candidate):
         raise recovery.RecoveryEvidenceError("candidate or registration changed during readback")
     return {"operator_reconciliation.v1": {

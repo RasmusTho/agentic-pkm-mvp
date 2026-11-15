@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
+import stat
 import uuid
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -14,7 +16,9 @@ from typing import Any, Iterator, Mapping
 
 from app.dispatcher.events import claim_event_digest, event_history_digest
 from app.dispatcher.models import EventRecord, LeaseRecord, TaskRecord
-from app.dispatcher.store import SqliteStore
+from app.dispatcher.schema import LEGACY_UNTRUSTED_VERIFICATION_STATUS, SCHEMA_VERSION, verification_v6_schema_error
+from app.dispatcher.store import (SqliteStore, _legacy_verification_row_is_quarantined,
+                                  _validate_canonical_verification_row, _verification_authority_migration)
 
 try:
     import fcntl
@@ -64,14 +68,14 @@ def _cleanup_guard_record_path(store: SqliteStore, task_id: str) -> Path:
 
 
 @contextmanager
-def _cleanup_guard_lock(store: SqliteStore) -> Iterator[None]:
+def _cleanup_guard_lock(store: SqliteStore, *, blocking: bool = True) -> Iterator[None]:
     """Serialize guard and claim operations across DB-missing transitions."""
     if fcntl is None:
         raise ValueError("cleanup guard requires POSIX file locking")
     lock_path = store.db_path.with_name(_CLEANUP_GUARD_LOCK_NAME)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "a+", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         try:
             yield
         finally:
@@ -320,6 +324,7 @@ def claim(
     expected_history_digest: str | None = None,
     expected_repo: str | None = None,
     expected_issue_number: int | None = None,
+    expected_db_identity: tuple[int, int] | None = None,
 ) -> tuple[TaskRecord, LeaseRecord]:
     """Claim a task by creating a lease and updating task state.
 
@@ -365,10 +370,49 @@ def claim(
     if claim_id is not None:
         event_payload["claim_id"] = claim_id
 
+    def check_db_identity() -> None:
+        if expected_db_identity is None:
+            return
+        try:
+            observed_db = os.stat(store.db_path, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError("Expected dispatcher database identity is unavailable") from exc
+        if (not stat.S_ISREG(observed_db.st_mode)
+                or (observed_db.st_dev, observed_db.st_ino) != expected_db_identity):
+            raise ValueError("Expected dispatcher database identity changed")
+
     with ExitStack() as stack:
-        stack.enter_context(_cleanup_guard_lock(store))
-        conn = stack.enter_context(store._connect())
+        check_db_identity()
+        stack.enter_context(_cleanup_guard_lock(store, blocking=expected_db_identity is None))
+        check_db_identity()
+        if expected_db_identity is None:
+            conn = stack.enter_context(store._connect())
+        else:
+            # The operator has already qualified the current schema read-only.
+            # Do not run schema migration while fencing an exact observed inode.
+            connection = sqlite3.connect(store.db_path, timeout=0)
+            stack.callback(connection.close)
+            conn = stack.enter_context(connection)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            check_db_identity()
         conn.execute("BEGIN IMMEDIATE")
+        check_db_identity()
+        if expected_db_identity is not None:
+            version = conn.execute("SELECT value FROM dispatcher_meta WHERE key='schema_version'").fetchone()
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
+            if version is None or version[0] != str(SCHEMA_VERSION) or "repo" not in columns or verification_v6_schema_error(conn):
+                raise ValueError("Expected dispatcher schema is not current")
+            for verification_row in conn.execute("SELECT * FROM verification_runs"):
+                _, inert = _verification_authority_migration(verification_row)
+                if inert:
+                    if not _legacy_verification_row_is_quarantined(verification_row):
+                        raise ValueError("Dispatcher authority requires reconciliation")
+                else:
+                    if verification_row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS:
+                        raise ValueError("Dispatcher authority quarantine is malformed")
+                    _validate_canonical_verification_row(verification_row)
+            store._schema_ensured = True
         now = _utc_now()
         expires = _expires_at(ttl_seconds, now=now)
         task_row = conn.execute(
@@ -446,6 +490,7 @@ def claim(
                     f"(current: {task_row['status']})"
                 )
 
+            check_db_identity()
             result = conn.execute(
                 """
                 UPDATE dispatcher_leases
@@ -524,7 +569,9 @@ def claim(
                 json.dumps(event.payload, sort_keys=True, ensure_ascii=False),
             ),
         )
+        check_db_identity()
         conn.commit()
+        check_db_identity()
 
     lease = LeaseRecord(
         lease_id=lease_id,

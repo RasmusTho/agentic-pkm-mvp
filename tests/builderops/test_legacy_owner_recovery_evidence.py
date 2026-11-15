@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -101,10 +102,14 @@ def test_operator_preflight_reads_current_sources_and_refuses_claim_drift(eviden
                     "changed_files": ["fixture.py"]})
     comment["body"] = json.dumps(raw)
     monkeypatch.setenv("CODEX_SESSION_ID", "new-session")
+    monkeypatch.setattr(recovery.legacy_git_config, "check_host_config", lambda: None)
+    monkeypatch.setattr(recovery.legacy_git_config, "check", lambda **kwargs: None)
+    monkeypatch.setattr(recovery, "_dispatcher_db_identity", lambda path: (1, 2))
+    monkeypatch.setattr(recovery, "_operator_dispatcher_paths", lambda **kwargs: SimpleNamespace(db_path=tmp_path / 'dispatcher.sqlite3'))
     monkeypatch.setattr(agent_worktree, "_read_github_transfer_comment", lambda _id, *, cwd: comment)
     monkeypatch.setattr(agent_worktree, "_default_registry_path", lambda cwd: tmp_path / "registry")
-    monkeypatch.setattr(agent_worktree, "_locked_lifecycle_snapshot", lambda _path: {prior["path"]: prior})
-    monkeypatch.setattr(agent_worktree, "_branch_history_digest", lambda _records, _branch: "9" * 64)
+    monkeypatch.setattr(recovery, "_locked_raw_branch_snapshot", lambda *args, **kwargs: {prior["path"]: prior})
+    monkeypatch.setattr(agent_worktree, "_operator_branch_history_digest", lambda *args, **kwargs: "9" * 64)
     monkeypatch.setattr(agent_worktree, "_operator_candidate", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(recovery, "_github_read", lambda args, *, cwd: "[[]]" if "--slurp" in args else "RasmusTho\n")
     monkeypatch.setattr(recovery, "read_live_predecessor", lambda **_kwargs: observed["predecessor"])
@@ -242,7 +247,7 @@ def test_clean_candidate_readback_preserves_dirty_work(tmp_path, monkeypatch):
     registry = agent_worktree._default_registry_path(primary)
     with agent_worktree._locked_registry(registry) as payload:
         payload["worktrees"][str(worktree)]["transfer_registration"] = None
-    with pytest.raises(RecoveryEvidenceError, match="not an exact expired record"):
+    with pytest.raises(RecoveryEvidenceError, match="raw branch history is invalid|not an exact expired record"):
         read_expired_registration(cwd=primary, candidate=clean)
     with agent_worktree._locked_registry(registry) as payload:
         del payload["worktrees"][str(worktree)]["transfer_registration"]
@@ -298,11 +303,15 @@ def test_registration_compares_observed_branch_history_under_lock(tmp_path, monk
 
 
 def test_dispatcher_readback_observes_sessionless_claim_without_changing_it(tmp_path, monkeypatch):
+    from app.builderops import legacy_owner_recovery as recovery
+
     subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
     state_dir = tmp_path / "runtime" / "dispatcher"
     state_dir.mkdir(parents=True)
     store = SqliteStore(state_dir / "dispatcher.sqlite3", JsonlEventWriter(state_dir / "events.jsonl"))
     store.initialize()
+    monkeypatch.setattr(recovery, '_operator_dispatcher_paths',
+                        lambda **kwargs: SimpleNamespace(db_path=store.db_path))
     task_id = "github-RasmusTho--agentic-pkm-mvp-issue-6601"
     store.upsert_task(TaskRecord(task_id=task_id, issue_number=6601, title="fixture", status="ready", priority="high",
                                  source_anchor_refs=[], created_at="2020-01-01T00:00:00Z",
@@ -405,3 +414,36 @@ def test_operator_comment_cannot_also_be_a_predecessor_handoff(evidence):
     comment["body"] = json.dumps(receipt)
     with pytest.raises(RecoveryEvidenceError, match="not authenticated"):
         validate_operator_reconciliation(comment, issue=6601, pr=6602, github_login="RasmusTho", **observed)
+
+
+def test_candidate_git_proof_ignores_replace_refs(tmp_path):
+    import subprocess
+    from app.builderops import legacy_owner_recovery as recovery
+    from scripts import git_hygiene
+
+    def git(*args):
+        return subprocess.run(['git', *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+    git('init', '-q')
+    git('config', 'user.name', 'Fixture')
+    git('config', 'user.email', 'fixture@example.invalid')
+    (tmp_path / 'file').write_text('base')
+    git('add', 'file')
+    git('commit', '-qm', 'base')
+    base = git('rev-parse', 'HEAD')
+    (tmp_path / 'file').write_text('lineage')
+    git('commit', '-qam', 'lineage')
+    ancestor = git('rev-parse', 'HEAD')
+    (tmp_path / 'file').write_text('descendant')
+    git('commit', '-qam', 'descendant')
+    replacement = git('rev-parse', 'HEAD')
+    git('checkout', '-q', '--detach', base)
+    (tmp_path / 'file').write_text('unrelated')
+    git('commit', '-qam', 'unrelated')
+    unrelated = git('rev-parse', 'HEAD')
+    git('replace', unrelated, replacement)
+    assert subprocess.run(['git', 'merge-base', '--is-ancestor', ancestor, unrelated], cwd=tmp_path).returncode == 0
+    with pytest.raises(recovery.RecoveryEvidenceError):
+        recovery._git_read(tmp_path, 'merge-base', '--is-ancestor', ancestor, unrelated)
+    assert git_hygiene.run_git_result(['merge-base', '--is-ancestor', ancestor, unrelated], tmp_path).returncode != 0
+    recovery._git_read(tmp_path, 'merge-base', '--is-ancestor', ancestor, replacement)
+    assert git_hygiene.run_git_result(['merge-base', '--is-ancestor', ancestor, replacement], tmp_path).returncode == 0

@@ -358,11 +358,21 @@ PY
 run_dispatcher() {
   (
     cd "$SCRIPT_REPO_ROOT"
+    if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+      unset DISPATCHER_STATE_DIR DISPATCHER_DB_PATH DISPATCHER_EVENTS_PATH
+    fi
     "$PYTHON_BIN" -m app.dispatcher "$@"
   )
 }
 
-read -r DETECTED_MODE DETECTED_REASON < <(detect_coordination_receipt)
+if [[ "$OPERATOR_PICKUP" -eq 1 ]]; then
+  # Route only: the operator host must qualify and read the exact dispatcher
+  # before any claim. Generic status could choose a relative fallback first.
+  DETECTED_MODE="dispatcher-backed"
+  DETECTED_REASON="none"
+else
+  read -r DETECTED_MODE DETECTED_REASON < <(detect_coordination_receipt)
+fi
 if [[ "$DETECTED_MODE" == "dispatcher-status-unavailable" || \
       "$DETECTED_MODE" == "dispatcher-state-unavailable" || \
       "$DETECTED_MODE" == "dispatcher-status-inconsistent" ]]; then
@@ -586,55 +596,18 @@ try:
 except (KeyError, json.JSONDecodeError):
     raise SystemExit("GitHub issue read is not valid JSON")
 
-if not isinstance(issue, dict):
-    raise SystemExit("GitHub issue read did not return an object")
-try:
-    expected_number = int(os.environ["ISSUE_NUMBER"])
-except (KeyError, ValueError):
-    raise SystemExit("requested issue number is invalid")
-if issue.get("number") != expected_number or isinstance(issue.get("number"), bool):
-    raise SystemExit("GitHub issue read returned a different issue number")
-if str(issue.get("state", "")).lower() != "open":
-    raise SystemExit("GitHub issue is not open")
-labels = issue.get("labels")
-if not isinstance(labels, list):
-    raise SystemExit("GitHub issue read did not include a labels list")
-names = []
-for label in labels:
-    name = label.get("name") if isinstance(label, dict) else label
-    if not isinstance(name, str):
-        raise SystemExit("GitHub issue read contained an invalid label")
-    names.append(name)
-if "agent:in-progress" not in names:
-    raise SystemExit("fresh GitHub issue read no longer contains agent:in-progress")
-agent_state_labels = {name for name in names if name.startswith("agent:")}
-if agent_state_labels != {"agent:in-progress"}:
-    raise SystemExit("fresh GitHub issue read contains conflicting agent-state labels")
-body = issue.get("body")
-if not isinstance(body, str):
-    body = ""
 validator_repository_root = os.environ.get("ISSUE_READINESS_REPO_ROOT")
-if not isinstance(validator_repository_root, str) or not validator_repository_root:
+verification_repository_root = os.environ.get("ISSUE_VERIFY_REPO_ROOT") or validator_repository_root
+if not validator_repository_root or not verification_repository_root:
     raise SystemExit("issue readiness validator path is unavailable")
-verification_repository_root = (
-    os.environ.get("ISSUE_VERIFY_REPO_ROOT") or validator_repository_root
-)
-if not verification_repository_root:
-    raise SystemExit("issue verification repository root is unavailable")
 sys.path.insert(0, validator_repository_root)
-from scripts.validate_issue_readiness import classify_issue_body
+from scripts.validate_issue_readiness import validate_in_progress_issue
+try:
+    validate_in_progress_issue(issue, issue_number=int(os.environ["ISSUE_NUMBER"]),
+                               repo_root=verification_repository_root)
+except (KeyError, ValueError) as exc:
+    raise SystemExit(str(exc))
 
-report = classify_issue_body(
-    body,
-    issue_number=expected_number,
-    labels=names,
-    repo_root=verification_repository_root,
-)
-if report.readiness_classification != "ready_candidate":
-    raise SystemExit(
-        "fresh GitHub issue failed strict readiness validation: "
-        + report.readiness_classification
-    )
 PY
 }
 

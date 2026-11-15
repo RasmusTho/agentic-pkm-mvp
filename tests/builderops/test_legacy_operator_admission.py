@@ -106,6 +106,7 @@ def test_operator_resume_requires_complete_operator_arguments(tmp_path):
 def test_wrapper_arguments_drive_real_host_cli_and_resume_existing_ack(tmp_path, monkeypatch, capsys):
     """The shell boundary is captured; real host CLI runs in-process on isolated state."""
     import importlib.util
+    import shutil
     import shlex
     import subprocess
     from app.builderops import legacy_owner_recovery as recovery
@@ -121,7 +122,7 @@ def test_wrapper_arguments_drive_real_host_cli_and_resume_existing_ack(tmp_path,
 
     pickup = load("pickup_synthetic", tests_dir / "scripts/test_issue_pickup_claim.py")
     host = load("recovery_synthetic", tests_dir / "scripts/test_legacy_successor_recovery.py")
-    case = host.operator_case.__wrapped__(tmp_path, monkeypatch)
+    case = host.operator_case.__wrapped__(tmp_path, monkeypatch, SimpleNamespace(param=(6601, 6602, "old-agent", 0)))
     sandbox = tmp_path / "wrapper"
     sandbox.mkdir()
     issue = json.dumps({"number": 6601, "state": "open", "labels": [
@@ -131,10 +132,23 @@ def test_wrapper_arguments_drive_real_host_cli_and_resume_existing_ack(tmp_path,
         "ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed",
         "fallback_reason": None}), issue_json=issue, target_branch="codex/example")
     env["FAKE_WORKTREE"] = str(case["worktree"])
+    foreign = tmp_path / "foreign-dispatcher"
+    foreign.mkdir()
+    foreign_db = foreign / "alternate.sqlite3"
+    foreign_events = foreign / "alternate-events.jsonl"
+    shutil.copy2(case["store"].db_path, foreign_db)
+    shutil.copy2(case["store"]._event_writer.path, foreign_events)
+    before_db, before_events = foreign_db.read_bytes(), foreign_events.read_bytes()
+    status_env = tmp_path / "status-env.txt"
+    env["STATUS_ENV_LOG"] = str(status_env)
+    for key, value in {"DISPATCHER_STATE_DIR": foreign, "DISPATCHER_DB_PATH": foreign_db,
+                       "DISPATCHER_EVENTS_PATH": foreign_events}.items():
+        env[key] = str(value)
+        monkeypatch.setenv(key, str(value))
     fake_python = Path(env["PYTHON"])
     content = fake_python.read_text().replace(
         'case "$*" in\n',
-        'case "$*" in\n  *"legacy_git_config.py "*) exit 0 ;;\n  *"-m app.builderops.legacy_owner_recovery "*) exit 0 ;;\n', 1)
+        'if [[ "$*" == *"-m app.dispatcher status --json"* ]]; then printf "%s|%s|%s" "${DISPATCHER_STATE_DIR-unset}" "${DISPATCHER_DB_PATH-unset}" "${DISPATCHER_EVENTS_PATH-unset}" > "$STATUS_ENV_LOG"; fi\ncase "$*" in\n  *"legacy_git_config.py "*) exit 0 ;;\n  *"-m app.builderops.legacy_owner_recovery "*) exit 0 ;;\n', 1)
     fake_python.write_text(content)
     monkeypatch.chdir(case["cwd"])
     delegate = recovery.subprocess.run
@@ -171,6 +185,9 @@ def test_wrapper_arguments_drive_real_host_cli_and_resume_existing_ack(tmp_path,
     receipt = [line for line in output if line.startswith("pickup-claim-complete ")]
     assert len(receipt) == 1 and f"issue=6601 branch=codex/example worktree={case['worktree']} " in receipt[0]
     assert "coordination_mode=dispatcher-backed" in receipt[0]
+    assert not status_env.exists()
+    assert foreign_db.read_bytes() == before_db and foreign_events.read_bytes() == before_events
+    assert sorted(path.name for path in foreign.iterdir()) == ["alternate-events.jsonl", "alternate.sqlite3"]
 
 
 @pytest.mark.parametrize("case", ["relative", "root", "target", "target_symlink", "target_nested", "script", "script_nested", "missing_target"])
