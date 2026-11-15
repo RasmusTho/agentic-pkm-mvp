@@ -11,7 +11,7 @@ from scripts import legacy_operator_evidence as evidence
 
 
 def test_draft_reads_real_git_and_leaves_authority_unknown(tmp_path, monkeypatch):
-    root = tmp_path / "repo"
+    root = tmp_path / "agentic-pkm-mvp"
     root.mkdir()
     def git(*args):
         return subprocess.check_output(["git", "-C", str(root), *args]).decode().strip()
@@ -34,6 +34,7 @@ def test_draft_reads_real_git_and_leaves_authority_unknown(tmp_path, monkeypatch
     publication = {"state": "open_pr_observed", "pr": 10, "branch": branch, "head": head}
     monkeypatch.setenv("CODEX_SESSION_ID", "successor")
     monkeypatch.setattr(evidence.legacy_git_config, "QUALIFIED_COMMON", (root / ".git").resolve())
+    monkeypatch.setattr(evidence.legacy_git_config, "_qualified_home", lambda: tmp_path)
     monkeypatch.setattr(evidence.legacy_git_config, "check_host_config", lambda: None)
     monkeypatch.setattr(recovery, "read_live_predecessor", lambda **kw: {"repo": "fixture/repo"})
     monkeypatch.setattr(recovery, "read_clean_candidate", lambda **kw: candidate)

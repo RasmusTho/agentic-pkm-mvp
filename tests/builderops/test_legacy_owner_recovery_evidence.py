@@ -217,11 +217,12 @@ def test_live_github_publication_readback_refuses_duplicate_or_drift(tmp_path, m
 
 
 def test_clean_candidate_readback_preserves_dirty_work(tmp_path, monkeypatch):
-    primary = tmp_path / "primary"
+    primary = tmp_path / "agentic-pkm-mvp"
     worktree = tmp_path / "checkout"
     subprocess.run(["git", "init", "-b", "main", str(primary)], check=True, capture_output=True)
     from app.builderops import legacy_git_config
     monkeypatch.setattr(legacy_git_config, "QUALIFIED_COMMON", (primary / ".git").resolve())
+    monkeypatch.setattr(legacy_git_config, "_qualified_home", lambda: tmp_path)
     monkeypatch.setattr(legacy_git_config, "check_host_config", lambda: None)
     (primary / "candidate.txt").write_text("original\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(primary), "add", "candidate.txt"], check=True, capture_output=True)

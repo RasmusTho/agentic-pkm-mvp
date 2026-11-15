@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import pwd
 import re
 import shutil
 from pathlib import Path
@@ -15,7 +16,7 @@ import subprocess
 import tempfile
 
 
-QUALIFIED_COMMON = Path('/Users/rasmus/agentic-pkm-mvp/.git')
+QUALIFIED_COMMON = Path.home() / 'agentic-pkm-mvp' / '.git'
 
 
 class ConfigError(ValueError):
@@ -143,11 +144,27 @@ def _check_environment() -> None:
         raise ConfigError('inherited Git environment is unsupported')
 
 
+def _qualified_home() -> Path:
+    """Bind HOME to the current account's physical home, without fallback."""
+    try:
+        home = Path.home()
+        account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        if (not home.is_absolute() or home != account_home or home != home.resolve(strict=True)
+                or not home.is_dir()):
+            raise ConfigError('host home is unsupported')
+        return home
+    except (KeyError, OSError, RuntimeError):
+        raise ConfigError('host home is unavailable') from None
+
+
 def check(*, cwd: Path, worktree: Path) -> None:
     """Screen both checkout configs; caller holds operator config quiescence."""
     _check_environment()
+    home = _qualified_home()
     try:
         common = QUALIFIED_COMMON
+        if common != home / 'agentic-pkm-mvp' / '.git':
+            raise ConfigError('qualified Git common directory is unavailable')
         if not common.is_absolute() or common != common.resolve(strict=True) or not common.is_dir():
             raise ConfigError('qualified Git common directory is unavailable')
         source, candidate = _gitdir(cwd), _gitdir(worktree)
@@ -177,18 +194,19 @@ def check_host_config() -> None:
     if git is None or Path(git).resolve() != Path('/usr/bin/git').resolve():
         raise ConfigError('host Git executable is unsupported')
     _check_environment()
-    if Path.home() != Path('/Users/rasmus') or os.environ.get('XDG_CONFIG_HOME'):
+    home = _qualified_home()
+    if os.environ.get('XDG_CONFIG_HOME'):
         raise ConfigError('host Git configuration environment is unsupported')
-    global_path = Path('/Users/rasmus/.gitconfig')
+    global_path = home / '.gitconfig'
     system_path = Path('/etc/gitconfig')
-    xdg_path = Path('/Users/rasmus/.config/git/config')
+    xdg_path = home / '.config' / 'git' / 'config'
     if _read(system_path, optional=True) is not None or _read(xdg_path, optional=True) is not None:
         raise ConfigError('host Git configuration has changed')
     data = _read(global_path)
     if data is None:
         raise ConfigError('host Git configuration is unavailable')
     _screen(data, global_config=True)
-    env = {'PATH': os.defpath, 'HOME': '/Users/rasmus', 'LC_ALL': 'C'}
+    env = {'PATH': os.defpath, 'HOME': str(home), 'LC_ALL': 'C'}
     with tempfile.TemporaryDirectory(prefix='legacy-host-config-') as temp:
         try:
             version = subprocess.run(['/usr/bin/git', '--version'], cwd=temp, env=env,
@@ -208,7 +226,7 @@ def check_host_config() -> None:
         fields = glob.stdout.split(b'\0')
         if not fields or fields[-1] != b'' or len(fields) % 2 != 1:
             raise ConfigError('host Git configuration is unsupported')
-        if any(origin != b'file:/Users/rasmus/.gitconfig' for origin in fields[:-1:2]):
+        if any(origin != b'file:' + os.fsencode(global_path) for origin in fields[:-1:2]):
             raise ConfigError('host Git configuration origin has changed')
 
 

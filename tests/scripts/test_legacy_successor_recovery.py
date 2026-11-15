@@ -38,7 +38,7 @@ def _comment(body, ident, timestamp):
 
 @pytest.fixture
 def operator_case(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
+    repo = tmp_path / "agentic-pkm-mvp"
     repo.mkdir()
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.name", "Fixture")
@@ -79,6 +79,7 @@ def operator_case(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_SESSION_ID", "new-session")
     from app.builderops import legacy_git_config
     monkeypatch.setattr(legacy_git_config, "QUALIFIED_COMMON", (repo / ".git").resolve())
+    monkeypatch.setattr(legacy_git_config, "_qualified_home", lambda: tmp_path)
     monkeypatch.setattr(legacy_git_config, "check_host_config", lambda: None)
     source_root = str(Path(recovery.__file__).resolve().parents[2])
     monkeypatch.setenv("PYTHONPATH", source_root)

@@ -7,7 +7,7 @@ from app.builderops.legacy_git_config import ConfigError, check
 
 @pytest.fixture
 def checkout(tmp_path: Path, monkeypatch):
-    root = tmp_path / 'root'
+    root = tmp_path / 'agentic-pkm-mvp'
     other = tmp_path / 'candidate'
     common = root / '.git'
     linked = common / 'worktrees' / 'candidate'
@@ -16,6 +16,7 @@ def checkout(tmp_path: Path, monkeypatch):
     (other / '.git').write_text(f'gitdir: {linked}\n')
     (linked / 'commondir').write_text('../..\n')
     monkeypatch.setattr('app.builderops.legacy_git_config.QUALIFIED_COMMON', common)
+    monkeypatch.setattr('app.builderops.legacy_git_config._qualified_home', lambda: tmp_path)
     (common / 'config').write_text('[core]\n repositoryformatversion = 0\n[remote "origin"]\n url = https://example.invalid/repo\n')
     return root, other, common, linked
 
@@ -191,7 +192,7 @@ def test_candidate_entrypoint_refuses_include_before_source_git(tmp_path, monkey
     import subprocess
     from app.builderops import legacy_git_config, legacy_owner_recovery
 
-    source = tmp_path / 'repo'
+    source = tmp_path / 'agentic-pkm-mvp'
     subprocess.run(['git', 'init', '-b', 'main', str(source)], check=True, capture_output=True)
     (source / '.gitignore').write_text('ignored-poison\n', encoding='utf-8')
     marker = source / 'ignored-poison'
@@ -200,6 +201,7 @@ def test_candidate_entrypoint_refuses_include_before_source_git(tmp_path, monkey
     with config.open('a', encoding='utf-8') as stream:
         stream.write(f'\n[include]\n path = {marker}\n')
     monkeypatch.setattr(legacy_git_config, 'QUALIFIED_COMMON', (source / '.git').resolve())
+    monkeypatch.setattr(legacy_git_config, '_qualified_home', lambda: tmp_path)
     monkeypatch.setattr(legacy_git_config, 'check_host_config', lambda: None)
     monkeypatch.setattr(legacy_owner_recovery, '_git_read',
                         lambda *_args, **_kwargs: pytest.fail('source Git ran before config refusal'))
@@ -218,3 +220,10 @@ def test_direct_candidate_read_refuses_inherited_config_before_git(checkout, mon
                         lambda *args, **kwargs: pytest.fail('Git ran before refusal'))
     with pytest.raises(legacy_owner_recovery.RecoveryEvidenceError, match='configuration'):
         legacy_owner_recovery.read_clean_candidate(cwd=root, worktree=other)
+
+
+def test_host_home_override_is_refused(tmp_path, monkeypatch):
+    from app.builderops.legacy_git_config import _qualified_home
+    monkeypatch.setenv('HOME', str(tmp_path))
+    with pytest.raises(ConfigError, match='host home'):
+        _qualified_home()
