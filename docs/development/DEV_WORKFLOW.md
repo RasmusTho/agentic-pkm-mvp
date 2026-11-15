@@ -400,6 +400,57 @@ The trusted owning workflow must hold the same lock for the entire admission rea
 replacement, including disposition revocation. A busy lock requires a later retry. Programmatic
 callers with file-backed admissions must pass the `Path` to `advance`, not an earlier file snapshot;
 the existing list argument is for admissions supplied directly by the caller.
+
+The source successor adds opt-in initial admission to that same one-shot controller. A protected
+configuration may start with `admissions: []` and one `automatic_native` object containing
+`claimant`, Builder `session`, `lifecycle_repo`, `test_venv`, `engine`, `model`, and optional `effort`.
+For example, the current owner-selected operating choice is `engine: codex`,
+`model: gpt-6.1-sol`, `effort: high`; these settings do not prove the executing model or authentication.
+The upstream caller invokes the same `--once --root ... --epic ... --config ...` command. No
+per-PR number, SHA, worker or target list needs to be supplied for initial admission.
+
+For every observed PR without an explicit entry, the controller derives its entry from the existing
+claim-Issue worker mapping, branch registration and existing coordination authority. It reads
+dispatcher status using the lifecycle repository for state resolution, retaining the normal explicit
+`DISPATCHER_*` path overrides. Dispatcher imports stay pinned to the running controller release;
+publisher-checkout Python code is not executed. Native ownership/verification reads use the same
+state source; new merge intents also retain that lifecycle repository for dispatcher reconciliation.
+With an available dispatcher, derivation requires the exact active lease. Only supported
+`db_exists: false`, `github-label-only-fallback`, `dispatcher_db_missing` status admits derivation
+from an existing authenticated pickup comment matching the registered agent, Builder session,
+branch, worktree and claim Issue. The native reader rechecks latest claimant, unedited receipt,
+continuous registration and complete original-pickup/transfer history. A fallback comment alone
+cannot replace another owner or an uncompleted cross-host handoff; an available or ambiguous
+dispatcher never silently becomes fallback. The configured
+claimant and Builder session must already own the work. It reuses the native authority reader to
+authenticate GitHub identity, live head/body/Issue contracts and closing references, claim-session
+events, registry generation, handoff history and absence of executor/fenced authority. Admission may
+use an idle running OpenHands worker or continue its already-recorded PR-cycle conversation; this
+read-purpose does not grant repair or merge authority and does not relax their stopped-writer gates.
+An unrelated conversation or another owner requires the normal `resume-work`/pickup/handoff path.
+Missing placement, local claim authority, credentials or a qualified verifier environment holds that
+PR. The controller does not claim, transfer ownership, provision a worker or invent fallback evidence.
+
+Generated entries live in the existing admission array, marked `_automatic_native`, and are written
+atomically under `.pr-cycle.lock`; no separate authority store is introduced. Each advancement
+rederives their current head and contract and checks fresh review material before reservation.
+Exact closing contracts supply pytest `Verify:` targets; with no closing Issues, the governing
+contract supplies them. A distinct unfinished parent is excluded when only children close.
+Non-pytest targets require the existing specialized owning workflow. Explicit entries retain their
+exact-head semantics and take precedence. Removing `automatic_native` holds generated entries.
+The owning workflow still supplies its substantive, bound `review_disposition` through the existing
+serialized configuration update; this is not a human approval or an initial-admission step.
+Regeneration retains that input only while its derived binding is unchanged. A confirmed publication
+uses the existing exact-head refresh and drops stale disposition/publication input; the next scan
+reauthenticates the new head automatically. An unsettled candidate/publication retains its original
+entry until the existing effect path reconciles it; observing a new head cannot replace that receipt.
+If its persisted entry is missing, that PR holds for normal `resume-work` restoration of the existing
+controller record instead of being admitted again from an empty array.
+Unknown effects and duplicate prevention continue to use
+the existing dispatch decisions, cycle receipts and publication/merge intents. A held peer does not
+prevent an unrelated eligible PR advancing. This is source behavior awaiting live qualification;
+the scheduled collector and hosting controller remain unchanged until separately authorized.
+
 The trusted workflow must also hold that same cycle lock throughout provisioning, updating or
 replacing an admitted test environment and its dependencies. If a test environment is shared by
 multiple epics, the writer must hold every affected epic's cycle lock in a consistent order for the

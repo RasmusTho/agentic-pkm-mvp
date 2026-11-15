@@ -1,4 +1,5 @@
 import json
+import copy
 import time
 from datetime import datetime, timezone
 
@@ -14,6 +15,7 @@ from tests.builderops.openhands_disposition_test_support import digest, syntheti
 HEAD = "a" * 40
 REAL_TEST_VENV_SOURCE = cycle._test_venv_source
 REAL_VENV_MINOR = cycle._venv_python_minor
+REAL_REVIEW_CONTEXT = cycle._review_context
 # Well-formed report fields for tests whose subject is not the report grammar itself.
 CONFORMING = {"report_contract": cycle.REPORT_CONTRACT, "covered_sources": ["app/example.py"],
               "scope_assessment": {"acceptance": "covered", "verify_coverage": "covered", "limitations": []},
@@ -397,24 +399,30 @@ def test_native_execution_reads_real_boundaries_and_rejects_paid_environment(tmp
         cycle.native_execution_proof(layout, "reviewer", operation, entry, http=http)
 
 
-def test_merge_intent_persists_before_effect_and_lost_response_never_repeats(tmp_path, monkeypatch):
-    layout, _, _ = setup(tmp_path, monkeypatch)
+@pytest.mark.parametrize('scoped', [False, True])
+def test_merge_intent_persists_before_effect_and_lost_response_never_repeats(tmp_path, monkeypatch, scoped):
+    layout, _, _ = setup(tmp_path / 'workspace', monkeypatch)
+    source = tmp_path / 'lifecycle'
+    source.mkdir()
+    entry = {'worker': 'reviewer', **({'lifecycle_repo': str(source)} if scoped else {})}
     saved = {"kind": "pr_cycle", "number": 10, "identity": "identity"}
     pr = {"number": 10, "head_sha": HEAD}
     calls = []
     monkeypatch.setattr(cycle, "_premerge", lambda *args: {"number": 10, "head_sha": HEAD})
     monkeypatch.setattr(cycle, "_review_verification_lineage", lambda *args: None)
     def lost(argv, *, timeout):
-        assert cycle._find(layout, 10, "identity")["merge_intent"]["head_sha"] == HEAD
+        intent = cycle._find(layout, 10, "identity")["merge_intent"]
+        assert intent["head_sha"] == HEAD
+        assert intent.get('lifecycle_repo') == (str(source) if scoped else None)
         calls.append(argv)
         raise cycle.CycleError("response lost")
     monkeypatch.setattr(cycle, "_command", lost)
     monkeypatch.setattr(cycle, "reconcile_native", lambda *args: (_ for _ in ()).throw(cycle.CycleError("unknown")))
     with pytest.raises(cycle.CycleError, match="unknown"):
-        cycle.merge_once(layout, pr, {"worker": "reviewer"}, saved)
+        cycle.merge_once(layout, pr, entry, saved)
     saved = cycle._find(layout, 10, "identity")
     with pytest.raises(cycle.CycleError, match="unknown"):
-        cycle.merge_once(layout, pr, {"worker": "reviewer"}, saved)
+        cycle.merge_once(layout, pr, entry, saved)
     assert len(calls) == 1
     assert "--match-head-commit" in calls[0] and "--admin" not in calls[0]
 
@@ -424,7 +432,7 @@ def test_host_authority_uses_real_contract_and_dispatcher_not_body_flags(tmp_pat
     ew._record_worker(layout, 6618, state="stopped_verified")
     monkeypatch.setattr(ew, "_container_state", lambda *args: None)
     entry = {**config[0], "claimant": "codex-6618-pr-completion", "lease_id": "lease-54616511",
-             "session": "sessioncodex-6618-20261112", "owner_worktree": str(tmp_path)}
+             "session": "sessioncodex-6618-20261112", "owner_worktree": str(tmp_path), "lifecycle_repo": str(tmp_path)}
     body = "Governing-Issue: #6618\nFixes #6618\nNative-Authority: pass\n"
     pr = {"number": 10, "head_sha": HEAD, "body": body, "title": "trial",
           "governing_issue": {"body": "issue"}}
@@ -723,7 +731,9 @@ def test_assembled_closing_fallback_reconciles_lost_merge_and_checks_each_criter
                                       "lost_replacement_completion", "already_completed", "conflict", "legacy_unknown",
                                       "legacy_missing_lineage"])
 def test_reconcile_dispatcher_closing_governor_uses_recorded_lease(tmp_path, monkeypatch, retained, scenario):
-    layout, _, _ = setup(tmp_path, monkeypatch)
+    layout, _, _ = setup(tmp_path / 'workspace', monkeypatch)
+    source = tmp_path / 'lifecycle'
+    source.mkdir()
     files = [{"filename": "app/example.py"}]
     issue = {"state": "closed", "title": "issue title", "body": "issue", "labels": []}
     receipt = "post-merge owner-doc check: PR #10; no owner-doc change implied."
@@ -738,6 +748,8 @@ def test_reconcile_dispatcher_closing_governor_uses_recorded_lease(tmp_path, mon
               "owner_doc_receipt": receipt}
     if not retained:
         intent["coordination_mode"] = "dispatcher-backed"
+        if scenario == 'original':
+            intent['lifecycle_repo'] = str(source)
     saved = {"kind": "pr_cycle", "number": 10, "identity": "id", "merge_intent": intent}
     if scenario == "legacy_unknown":
         saved["dispatcher_completion_intent"] = True
@@ -777,7 +789,10 @@ def test_reconcile_dispatcher_closing_governor_uses_recorded_lease(tmp_path, mon
             pass
         def run(self, argv, *, cwd, input_text=None):
             nonlocal lease
-            action = argv[3]
+            action = argv[argv.index('app.dispatcher') + 1]
+            if intent.get('lifecycle_repo'):
+                assert cwd == source and argv[1] == '-P'
+                assert str(cycle.Path(cycle.__file__).resolve().parents[2]) in argv
             if action == "show":
                 return cycle.subprocess.CompletedProcess(argv, 0, json.dumps({"task": task, "events": events, "lease": lease}), "")
             calls.append(action)
@@ -2061,3 +2076,420 @@ def test_explicit_sol_high_pr_admission_and_refusals():
     for model, effort in (("gpt-6.1-sol", None), ("gpt-6.1-sol", "ultra"), ("gpt-6.1-astra", "high")):
         with pytest.raises((cycle.CycleError, ew.LaunchRefused)):
             cycle._validate_admission([{**row, "model": model, "effort": effort}])
+
+
+def _automatic_cycle_fixture(tmp_path, monkeypatch):
+    """Existing real registry/Git and cycle; only GitHub, dispatcher and sandbox ports are doubles."""
+    f = _native_authority_fixture(tmp_path, monkeypatch)
+    layout = f["layout"]
+    cycle.agent_worktree.register_worktree(f["source"], worktree=f["worktree"],
+                                         owner="session-original", now=int(time.time()) - 800)
+    target = "tests/example.py::test_example"
+    (f["worktree"] / "tests").mkdir()
+    (f["worktree"] / "tests/example.py").write_text("def test_example():\n    assert True\n")
+    f["issue"] = {"number": 6618, "state": "open", "title": "issue title", "labels": [],
+                  "body": f"## Acceptance Criteria\n- [ ] Example works\n  - Verify: `{target}`\n"}
+    monkeypatch.setattr(cycle.closure, "_issue", lambda *args: f["issue"])
+    original_api = cycle.closure._api
+
+    def api(executor, cwd, repo, method, endpoint):
+        if endpoint.startswith("/issues/10/comments"):
+            return f["comments"]
+        if endpoint.startswith("/pulls/10/files"):
+            return [{"filename": "app/example.py", "patch": "+candidate"}]
+        if endpoint.startswith("/git/trees/"):
+            return {"truncated": False, "tree": [{"path": "pyproject.toml", "sha": "c" * 40, "mode": "100644", "type": "blob"}]}
+        if endpoint == "/branches/main/protection":
+            return {}
+        return original_api(executor, cwd, repo, method, endpoint)
+
+    monkeypatch.setattr(cycle.closure, "_api", api)
+    executor_type = cycle.SubprocessExecutor
+    f["dispatcher_status"] = {"ok": True, "db_exists": True, "coordination_mode": "dispatcher-backed",
+                              "fallback_reason": None}
+
+    class Executor(executor_type):
+        def run(self, argv, **kwargs):
+            if "app.dispatcher" in argv and "status" in argv:
+                return cycle.subprocess.CompletedProcess(argv, 0, json.dumps(f["dispatcher_status"]), "")
+            if "application/vnd.github.v3.diff" in argv:
+                return cycle.subprocess.CompletedProcess(argv, 0, "diff --git a/app/example.py b/app/example.py\n+candidate\n", "")
+            return super().run(argv, **kwargs)
+
+    monkeypatch.setattr(cycle, "SubprocessExecutor", Executor)
+    monkeypatch.setattr(cycle, "_review_context", REAL_REVIEW_CONTEXT)
+    monkeypatch.setattr(ew, "inspect_checkout", lambda *args, **kwargs:
+                        {"readable": True, "head": f["head"], "uncommitted_count": 0})
+    ew._record_worker(layout, 6618, branch="codex/example", owner="original", builder_session="session-original")
+    server = FakeAgentServer()
+    settings = {k: f["entry"][k] for k in ("claimant", "session", "lifecycle_repo", "test_venv")}
+    settings.update(engine="codex", model="gpt-6.1-sol", effort="high")
+    config = tmp_path / "controller.json"
+    config.write_text(json.dumps({"automatic_native": settings, "admissions": []}))
+    config.chmod(0o600)
+
+    def network(path, timeout):
+        if "/pulls?" in path:
+            value = [{"number": 9}, {"number": 10}]
+        elif path.endswith("/reviews?per_page=100&page=1"):
+            value = []
+        elif path.endswith("/pulls/10"):
+            value = f["live"]
+        elif path.endswith("/pulls/9"):
+            value = {**f["live"], "number": 9, "draft": True}
+        elif path.endswith("/issues/6618"):
+            value = f["issue"]
+        else:
+            raise AssertionError(path)
+        return 200, json.dumps(value).encode()
+
+    f.update(config=config, settings=settings, server=server, fetch=network, target=target)
+    return f
+
+
+def test_automatic_initial_admission_cli_and_restart_reuse_existing_records(tmp_path, monkeypatch, capsys):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    real_advance = cycle.advance
+    monkeypatch.setattr(cycle, "advance", lambda layout, config: real_advance(layout, config, fetch=f["fetch"], http=f["server"]))
+    argv = ["--once", "--root", str(f["layout"].root), "--epic", "6615", "--config", str(f["config"])]
+    assert cycle.main(argv) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert [r["action"] for r in first["results"]] == ["wait", "independent-review"]
+    assert cycle.main(argv) == 0
+    second = json.loads(capsys.readouterr().out)
+    assert second["results"][1]["action"] == "reconcile"
+    posts = [c for c in f["server"].calls if c[0] == "POST"]
+    assert len(posts) == 1
+    assert posts[0][3]["agent_settings"] == {"agent_kind": "acp", "acp_server": "codex",
+        "acp_model": "gpt-6.1-sol", "acp_effort": "high"}
+    state = ew._load_state(f["layout"])
+    assert len([r for r in state["compact_receipts"] if r.get("kind") == "pr_cycle"]) == 1
+    assert len([r for r in state["dispatch_decisions"] if r.get("operation_id")]) == 1
+    rows = json.loads(f["config"].read_text())["admissions"]
+    assert len(rows) == 1 and rows[0]["number"] == 10
+    assert rows[0]["verify_targets"] == [f["target"]]
+
+
+@pytest.mark.parametrize("drift", ["head", "body", "issue", "labels", "closing"])
+def test_automatic_stale_observation_is_rejected_before_dispatch(tmp_path, monkeypatch, drift):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    original_collect = cycle.observation.collect
+
+    def collect(fetch):
+        result = original_collect(fetch)
+        if drift == "head":
+            f["live"]["head"]["sha"] = "f" * 40
+        elif drift == "body":
+            f["live"]["body"] += "\nchanged"
+        elif drift == "issue":
+            f["issue"]["body"] += "\nchanged"
+        elif drift == "labels":
+            f["live"]["labels"] = [{"name": "hold"}]
+        else:
+            monkeypatch.setattr(cycle.closure, "_closing_issue_references", lambda *args: [])
+        return result
+
+    monkeypatch.setattr(cycle.observation, "collect", collect)
+    result = cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    assert result["results"][1]["action"] == "wait"
+    assert "automatic admission held" in result["results"][1]["reason"]
+    assert not f["server"].calls
+    assert not ew._load_state(f["layout"])["dispatch_decisions"]
+
+
+@pytest.mark.parametrize("blocker", ["claimant", "session", "worker-owner", "conversation", "executor", "draft", "hold", "body-hold", "missing-placement", "missing-session-proof", "parent"])
+def test_automatic_preserves_owners_routes_holds_and_unfinished_parent(tmp_path, monkeypatch, blocker):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    if blocker == "claimant":
+        f["task"]["claimed_by"] = f["lease"]["holder"] = "other-agent"
+    elif blocker == "session":
+        cycle.agent_worktree.release_worktree(f["source"], worktree=f["worktree"], owner="session-original")
+        cycle.agent_worktree.register_worktree(f["source"], worktree=f["worktree"], owner="other-session")
+    elif blocker == "worker-owner":
+        ew._record_worker(f["layout"], 6618, owner="another-owner")
+    elif blocker == "conversation":
+        ew._record_worker(f["layout"], 6618, conversation={"id": "foreign", "status": "running", "operation_id": "foreign"})
+    elif blocker == "executor":
+        f["comments"].append({"body": "verification_dispatch_request.v3"})
+    elif blocker == "draft":
+        f["live"]["draft"] = True
+    elif blocker == "hold":
+        f["issue"]["labels"] = [{"name": "agent:blocked"}]
+    elif blocker == "body-hold":
+        f["live"]["body"] += "\nmerge hold"
+    elif blocker == "missing-placement":
+        ew._record_worker(f["layout"], 6618, worker=None)
+    elif blocker == "missing-session-proof":
+        f["events"][0]["payload"].pop("session")
+    else:
+        f["issue"]["body"] += "- [ ] Parent validation missing\n  - Verify: runtime receipt: pending.v1\n"
+    before = copy.deepcopy(ew._load_state(f["layout"]))
+    result = cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    assert result["results"][1]["action"] == "wait"
+    assert "automatic admission held" in result["results"][1]["reason"]
+    assert not f["server"].calls
+    after = ew._load_state(f["layout"])
+    assert after["issue_mappings"] == before["issue_mappings"]
+    assert not after["dispatch_decisions"]
+
+
+def test_automatic_blocked_peer_does_not_suppress_eligible_pr(tmp_path, monkeypatch):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    original = f["fetch"]
+
+    def network(path, timeout):
+        if path.endswith("/pulls/9"):
+            # An open, non-draft peer in the same repository has a different claim/placement.
+            peer = copy.deepcopy(f["live"])
+            peer.update(number=9, body="Governing-Issue: #6619\nFixes #6619")
+            return 200, json.dumps(peer).encode()
+        if path.endswith("/issues/6619"):
+            return 200, json.dumps({**f["issue"], "number": 6619}).encode()
+        return original(path, timeout)
+
+    result = cycle.advance(f["layout"], f["config"], fetch=network, http=f["server"])
+    assert result["results"][0]["action"] == "wait"
+    assert "placement missing" in result["results"][0]["reason"]
+    assert result["results"][1]["action"] == "independent-review"
+    assert len([c for c in f["server"].calls if c[0] == "POST"]) == 1
+
+
+def test_automatic_unknown_old_contract_cannot_create_duplicate(tmp_path, monkeypatch):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    f["server"].lose_next_create = f["server"].create_not_applied = True
+    cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    f["issue"]["body"] += "\nContract revision"
+    result = cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    assert result["results"][1]["action"] == "reconcile"
+    assert len([c for c in f["server"].calls if c[0] == "POST"]) == 1
+    assert len([r for r in ew._load_state(f["layout"])["dispatch_decisions"] if r.get("operation_id")]) == 1
+
+
+def test_automatic_confirmed_publication_needs_no_per_pr_config_rewrite(tmp_path, monkeypatch):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    entry = json.loads(f["config"].read_text())["admissions"][0]
+    original = f["config"].read_bytes()
+    with cycle._single_advancement(f["layout"]):
+        cycle._refresh_published_admission(f["layout"], f["config"], entry, f["head"], "e" * 40)
+    updated = json.loads(f["config"].read_text())
+    assert updated["admissions"][0]["head_sha"] == "e" * 40
+    config = json.loads(original)
+    config["automatic_native"]["session"] = "changed"
+    f["config"].write_text(json.dumps(config))
+    with pytest.raises(cycle.CycleError, match="configuration changed"):
+        cycle._refresh_published_admission(f["layout"], f["config"], entry, f["head"], "e" * 40)
+
+
+def test_automatic_retains_owning_workflow_input_only_for_unchanged_binding(tmp_path, monkeypatch):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    config = json.loads(f["config"].read_text())
+    # These are trusted owning-workflow inputs, never read from a reviewer's answer.
+    config["admissions"][0]["review_disposition"] = {"identity": "bound-placeholder"}
+    f["config"].write_text(json.dumps(config))
+    cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    assert json.loads(f["config"].read_text())["admissions"][0]["review_disposition"] == {"identity": "bound-placeholder"}
+    f["issue"]["body"] += "\nContract changed"
+    cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    assert "review_disposition" not in json.loads(f["config"].read_text())["admissions"][0]
+    assert len([c for c in f["server"].calls if c[0] == "POST"]) == 1
+
+
+def test_automatic_contract_drift_between_derivation_and_advance_is_rejected(tmp_path, monkeypatch):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    real_context = cycle._review_context
+    count = 0
+
+    def context(pr):
+        nonlocal count
+        result = real_context(pr)
+        count += 1
+        if count > 1:
+            result[0]["check_config_digest"] = "drifted"
+        return result
+
+    monkeypatch.setattr(cycle, "_review_context", context)
+    result = cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    assert "contract changed before advancement" in result["results"][1]["reason"]
+    assert not f["server"].calls
+    assert not ew._load_state(f["layout"])["dispatch_decisions"]
+
+
+def test_automatic_config_does_not_override_explicit_stale_admission(tmp_path, monkeypatch):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    config = json.loads(f["config"].read_text())
+    config["admissions"] = [{**f["entry"], "head_sha": "f" * 40}]
+    f["config"].write_text(json.dumps(config))
+    result = cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    assert result["results"][1]["reason"] == "not admitted at this head"
+    assert json.loads(f["config"].read_text()) == config
+    assert not f["server"].calls
+
+
+def test_automatic_closing_child_does_not_admit_unfinished_parent_targets(tmp_path, monkeypatch):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    f["live"]["body"] = f["live"]["body"].replace("Governing-Issue: #6618", "Governing-Issue: #6615")
+    parent = {"number": 6615, "title": "Parent", "state": "open", "labels": [],
+              "body": "## Acceptance Criteria\n- [ ] Live qualification\n  - Verify: runtime receipt: pending.v1\n"}
+    monkeypatch.setattr(cycle.closure, "_issue", lambda *args: parent if args[-1] == 6615 else f["issue"])
+    network = f["fetch"]
+
+    def fetch_parent(path, timeout):
+        if path.endswith("/issues/6615"):
+            return 200, json.dumps(parent).encode()
+        return network(path, timeout)
+
+    result = cycle.advance(f["layout"], f["config"], fetch=fetch_parent, http=f["server"])
+    assert result["results"][1]["action"] == "independent-review"
+    entry = json.loads(f["config"].read_text())["admissions"][0]
+    assert entry["verify_targets"] == [f["target"]]
+    assert f["live"]["body"].count("Fixes #6618") == 1
+    assert "Fixes #6615" not in f["live"]["body"]
+
+
+def test_automatic_configuration_revocation_holds_generated_entry(tmp_path, monkeypatch):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    config = json.loads(f["config"].read_text())
+    del config["automatic_native"]
+    f["config"].write_text(json.dumps(config))
+    result = cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    assert result["results"][1]["reason"] == "automatic admission disabled or observation unavailable"
+    assert len([c for c in f["server"].calls if c[0] == "POST"]) == 1
+
+
+def test_automatic_confirmed_new_head_is_rederived_without_manual_admission(tmp_path, monkeypatch):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    entry = json.loads(f["config"].read_text())["admissions"][0]
+    with cycle._single_advancement(f["layout"]):
+        cycle._refresh_published_admission(f["layout"], f["config"], entry, f["head"], "e" * 40)
+    f["live"]["head"]["sha"] = "e" * 40
+    cycle.advance(f["layout"], f["config"], fetch=f["fetch"], http=f["server"])
+    refreshed = json.loads(f["config"].read_text())["admissions"][0]
+    assert refreshed["head_sha"] == "e" * 40
+    assert refreshed["_automatic_context"] != entry["_automatic_context"]
+    assert refreshed["verify_targets"] == [f["target"]]
+    # An earlier unresolved review is still reconciled, rather than duplicated at the new head.
+    assert len([c for c in f["server"].calls if c[0] == "POST"]) == 1
+
+
+def _automatic_fallback_fixture(tmp_path, monkeypatch):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    f['dispatcher_status'].update(db_exists=False, coordination_mode=cycle.closure.DEGRADED_MODE,
+                                  fallback_reason='dispatcher_db_missing')
+    at = int(time.time()) - 700
+    receipt = {'id': 7, 'user': {'login': 'RasmusTho'}, 'author_association': 'OWNER',
+        'created_at': _github_time(at), 'updated_at': _github_time(at),
+        'issue_url': f'https://api.github.com/repos/{cycle.completion.REPOSITORY}/issues/6618',
+        'body': f'Pickup intent receipt: agent=original session=session-original branch=codex/example worktree={f["worktree"]} '
+                'coordination_mode=github-label-only-fallback fallback_reason=dispatcher_db_missing issue=6618'}
+    f['comments'][:] = [receipt]
+    f['live']['body'] = ('Governing-Issue: #6618\nFixes #6618\n'
+        f'Pickup-Receipt: pickup-claim-complete issue=6618 branch=codex/example worktree={f["worktree"]} '
+        'coordination_mode=github-label-only-fallback fallback_reason=dispatcher_db_missing '
+        'agent=original session=session-original evidence=github-comment:7')
+    return f
+
+
+def test_automatic_fallback_initial_admission_uses_existing_authenticated_receipt(tmp_path, monkeypatch):
+    f = _automatic_fallback_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(cycle.closure, '_dispatcher_inspect', lambda *args:
+                        pytest.fail('missing dispatcher must use the existing authenticated fallback'))
+    result = cycle.advance(f['layout'], f['config'], fetch=f['fetch'], http=f['server'])
+    assert result['results'][1]['action'] == 'independent-review', result
+    entry = json.loads(f['config'].read_text())['admissions'][0]
+    assert entry['coordination_mode'] == cycle.closure.DEGRADED_MODE
+    assert entry['fallback_reason'] == 'dispatcher_db_missing'
+    assert entry['coordination_evidence'] == 'github-comment:7'
+    assert entry['session'] == 'session-original' and 'lease_id' not in entry
+    cycle.advance(f['layout'], f['config'], fetch=f['fetch'], http=f['server'])
+    assert len([c for c in f['server'].calls if c[0] == 'POST']) == 1
+    newer = _github_time(int(time.time()) - 500)
+    f['comments'].append({**f['comments'][0], 'id': 8, 'created_at': newer, 'updated_at': newer})
+    cycle.advance(f['layout'], f['config'], fetch=f['fetch'], http=f['server'])
+    assert json.loads(f['config'].read_text())['admissions'][0]['coordination_evidence'] == 'github-comment:8'
+    assert len([c for c in f['server'].calls if c[0] == 'POST']) == 1
+
+
+@pytest.mark.parametrize('fault', ['forged', 'edited', 'stale', 'wrong-owner', 'wrong-session',
+                                  'wrong-path', 'wrong-issue', 'registration-owner', 'unproven-transfer',
+                                  'dispatcher-available', 'dispatcher-ambiguous'])
+def test_automatic_fallback_preserves_receipt_registry_and_dispatcher_gates(tmp_path, monkeypatch, fault):
+    f = _automatic_fallback_fixture(tmp_path, monkeypatch)
+    receipt = f['comments'][0]
+    if fault == 'forged':
+        receipt['user']['login'] = 'not-the-owner'
+    elif fault == 'edited':
+        receipt['updated_at'] = _github_time(int(time.time()) - 600)
+    elif fault == 'stale':
+        f['comments'].append({**receipt, 'id': 8, 'created_at': _github_time(int(time.time()) - 500),
+                              'updated_at': _github_time(int(time.time()) - 500),
+                              'body': receipt['body'].replace('agent=original', 'agent=other')})
+    elif fault == 'wrong-owner':
+        receipt['body'] = receipt['body'].replace('agent=original', 'agent=other')
+    elif fault == 'wrong-session':
+        receipt['body'] = receipt['body'].replace('session=session-original', 'session=other')
+    elif fault == 'wrong-path':
+        receipt['body'] = receipt['body'].replace(str(f['worktree']), str(tmp_path / 'other'))
+    elif fault == 'wrong-issue':
+        receipt['issue_url'] = receipt['issue_url'].replace('/6618', '/6619')
+    elif fault == 'registration-owner':
+        cycle.agent_worktree.release_worktree(f['source'], worktree=f['worktree'], owner='session-original')
+        cycle.agent_worktree.register_worktree(f['source'], worktree=f['worktree'], owner='other')
+    elif fault == 'unproven-transfer':
+        # A current fallback receipt cannot erase the dispatcher's original pickup provenance.
+        f['live']['body'] = f['pr']['body']
+    elif fault == 'dispatcher-available':
+        f['dispatcher_status'].update(db_exists=True, coordination_mode=cycle.closure.DISPATCHER_MODE, fallback_reason=None)
+        def inspect(executor, cwd, task):
+            assert cwd == f['source']
+            raise cycle.CycleError('available dispatcher owns coordination; fallback cannot replace its claim')
+        monkeypatch.setattr(cycle.closure, '_dispatcher_inspect', inspect)
+    else:
+        f['dispatcher_status']['db_exists'] = True  # Contradictory missing-database fallback.
+    result = cycle.advance(f['layout'], f['config'], fetch=f['fetch'], http=f['server'])
+    assert result['results'][1]['action'] == 'wait', result
+    assert 'automatic admission held' in result['results'][1]['reason']
+    assert json.loads(f['config'].read_text())['admissions'] == []
+    assert not f['server'].calls
+    assert not cycle.workspace._load_state(f['layout'])['dispatch_decisions']
+
+
+@pytest.mark.parametrize('configured_state', [False, True])
+def test_dispatcher_scope_reads_real_lifecycle_state_with_pinned_controller_code(tmp_path, monkeypatch, configured_state):
+    from app.dispatcher.config import load_paths
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.store import SqliteStore
+    source = cycle.Path(_seed_repo(tmp_path))
+    runner_cwd = tmp_path / 'frozen-runner'
+    runner_cwd.mkdir()
+    # State placement must not make a publisher checkout the Python code authority.
+    (source / 'app').mkdir()
+    (source / 'app/__init__.py').write_text('raise RuntimeError("publisher code must not be imported")\n')
+    for key in ('DISPATCHER_STATE_DIR', 'DISPATCHER_DB_PATH', 'DISPATCHER_EVENTS_PATH',
+                'DISPATCHER_EXTRA_GITHUB_REPOS', 'BUILDEROPS_BOOTSTRAP_REPO'):
+        monkeypatch.delenv(key, raising=False)
+    if configured_state:
+        monkeypatch.setenv('DISPATCHER_STATE_DIR', str(source / 'configured-dispatcher-state'))
+    executor = cycle._LifecycleDispatcherExecutor(cycle.publication.SubprocessExecutor(timeout_seconds=30), source)
+    result = executor.run([cycle.sys.executable, '-m', 'app.dispatcher', 'status', '--json'], cwd=runner_cwd)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    paths = load_paths(cwd=source)
+    assert payload['db_path'] == str(paths.db_path)
+    assert payload['db_exists'] is False and payload['coordination_mode'] == cycle.closure.DEGRADED_MODE
+    assert not paths.db_path.exists()  # Status must not initialize a database or daemon.
+    store = SqliteStore(paths.db_path)
+    store.initialize()
+    task_id = cycle.github_issue_task_id(cycle.completion.REPOSITORY, 6618)
+    store.upsert_task(TaskRecord(task_id=task_id, issue_number=6618, title='synthetic task',
+        status='ready', priority='high', source_anchor_refs=[], created_at=_event_time(T0),
+        updated_at=_event_time(T0), repo=cycle.completion.REPOSITORY))
+    task, events, lease = cycle.closure._dispatcher_inspect(executor, runner_cwd, task_id)
+    assert task['task_id'] == task_id and task['repo'] == cycle.completion.REPOSITORY
+    assert events == [] and lease is None
+    result = executor.run([cycle.sys.executable, '-m', 'app.dispatcher', 'status', '--json'], cwd=runner_cwd)
+    assert json.loads(result.stdout)['db_exists'] is True
+    assert not (runner_cwd / 'runtime/dispatcher').exists()

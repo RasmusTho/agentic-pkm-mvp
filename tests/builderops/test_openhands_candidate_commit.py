@@ -69,7 +69,7 @@ def fixture(tmp_path, capsys, monkeypatch, *, directory_transition=False, config
     pr = {"number": 10, "head_sha": old, "title": "Repair", "body": body, "labels": [],
           "draft": False, "restrictions": [], "governing_issue": {"body": issue_body, "state": "open"}}
     entry = {"number": 10, "worker": "w-a", "claimant": "owner-6617", "session": "session-6617",
-             "lease_id": "lease-1", "owner_worktree": str(publisher.resolve())}
+             "lease_id": "lease-1", "owner_worktree": str(publisher.resolve()), "lifecycle_repo": str(main.resolve())}
     registration = {"path": str(publisher.resolve()), "branch": "b/a", "owner": "session-6617",
                     "generation": "1" * 32, "registration_epoch": "2" * 32,
                     "expires_at": 9999999999, "registered_at": 100.0}

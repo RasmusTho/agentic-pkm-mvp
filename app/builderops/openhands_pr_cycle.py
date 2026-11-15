@@ -56,6 +56,40 @@ CLAUDE_STATUS = (
 )
 
 
+class _LifecycleDispatcherExecutor:
+    """Pin dispatcher code to this controller, but resolve state from its lifecycle repo."""
+
+    def __init__(self, executor: publication.CommandExecutor, source: Path) -> None:
+        self.executor, self.source = executor, source
+
+    def run(self, argv: Sequence[str], *, cwd: Path,
+            input_text: str | None = None) -> publication.CommandResult:
+        if list(argv[:3]) == [sys.executable, "-m", "app.dispatcher"]:
+            bootstrap = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
+                         "runpy.run_module(sys.argv.pop(1),run_name='__main__')")
+            argv = [sys.executable, "-P", "-c", bootstrap, str(Path(__file__).resolve().parents[2]), *argv[2:]]
+            cwd = self.source
+        return self.executor.run(argv, cwd=cwd, input_text=input_text)
+
+
+def _dispatcher_mode(executor: publication.CommandExecutor, cwd: Path) -> str:
+    result = executor.run([sys.executable, "-m", "app.dispatcher", "status", "--json"], cwd=cwd)
+    if result.returncode != 0:
+        raise CycleError("dispatcher status failed; availability is ambiguous")
+    try:
+        value = json.loads(result.stdout)
+    except ValueError as exc:
+        raise CycleError("dispatcher status is malformed") from exc
+    if isinstance(value, dict) and value.get("ok") is True:
+        if (value.get("db_exists") is False and value.get("coordination_mode") == closure.DEGRADED_MODE
+                and value.get("fallback_reason") == "dispatcher_db_missing"):
+            return closure.DEGRADED_MODE
+        if (value.get("db_exists") is True and value.get("coordination_mode") == closure.DISPATCHER_MODE
+                and value.get("fallback_reason") is None):
+            return closure.DISPATCHER_MODE
+    raise CycleError("dispatcher is available or its status is ambiguous; no fallback authority")
+
+
 def _command(argv: Sequence[str], *, timeout: float = 30) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(list(argv), capture_output=True, text=True, check=False, timeout=timeout)
@@ -349,7 +383,7 @@ def ci_once(number: int, source_root: Path) -> dict[str, Any]:
             "output_sha256": hashlib.sha256((result.stdout + "\n" + result.stderr).encode()).hexdigest()}
 
 
-def _assert_review_threads_clear(executor: SubprocessExecutor, cwd: Path, number: int) -> None:
+def _assert_review_threads_clear(executor: publication.CommandExecutor, cwd: Path, number: int) -> None:
     query = """query($number:Int!){repository(owner:"RasmusTho",name:"agentic-pkm-mvp"){
       pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved isOutdated}
       pageInfo{hasNextPage}}}}}"""
@@ -1461,19 +1495,19 @@ def _claimant_history(*, registration: Mapping[str, Any], records: Mapping[str, 
 
 
 def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any], *,
-                     purpose: Literal["merge", "repair"] = "merge",
+                     purpose: Literal["merge", "repair", "admission"] = "merge",
                      repair_writer: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Read native ownership and scope; unresolved threads only exclude merge authority.
 
     A repair result does not authorize a writer, publication or merge by itself: the
     caller must also bind an actionable review and use the stopped-worker lifecycle.
     """
-    if purpose not in ("merge", "repair"):
+    if purpose not in ("merge", "repair", "admission"):
         raise CycleError("unknown native authority purpose")
     if repair_writer is not None and purpose != "repair":
         raise CycleError("a running repair writer cannot authorize merge")
     cwd = Path(__file__).resolve().parents[2]
-    executor = SubprocessExecutor(timeout_seconds=30)
+    executor: publication.CommandExecutor = SubprocessExecutor(timeout_seconds=30)
     user = executor.run(["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"], cwd=cwd)
     if user.returncode != 0 or user.stdout.strip() != "RasmusTho":
         raise CycleError("host GitHub identity is unavailable or differs from the authorized account")
@@ -1490,7 +1524,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                 or live.get("base", {}).get("ref") != "main" or body != pr["body"]
                 or live.get("title", "") != pr.get("title", "")):
             raise CycleError("live PR or native contract drifted")
-        if purpose == "repair":
+        if purpose != "merge":
             labels = live.get("labels")
             if (not isinstance(labels, list) or any(not isinstance(row, dict) or not isinstance(row.get("name"), str)
                                                    for row in labels)
@@ -1518,6 +1552,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
         if not isinstance(branch, str) or not branch:
             raise CycleError("head branch identity unavailable")
         registration, lifecycle_records = _lifecycle_owner(layout, entry, branch)
+        executor = _LifecycleDispatcherExecutor(executor, Path(entry["lifecycle_repo"]))
         issue_comments = _api_pages(executor, cwd, f"/issues/{claim}/comments")
         pr_comments = _api_pages(executor, cwd, f"/issues/{pr['number']}/comments")
         origin, fallback_origin_at = _pickup_origin(body or "", issue=claim,
@@ -1541,17 +1576,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
         prior_lease: str | None = None
         same_session_transfer: tuple[Mapping[str, Any], dict[str, Any], dict[str, Any]] | None = None
         if entry.get("coordination_mode", "dispatcher-backed") == "github-label-only-fallback":
-            status = executor.run([sys.executable, "-m", "app.dispatcher", "status", "--json"], cwd=cwd)
-            if status.returncode != 0:
-                raise CycleError("dispatcher status failed; availability is ambiguous")
-            try:
-                dispatcher = json.loads(status.stdout)
-            except ValueError as exc:
-                raise CycleError("dispatcher status is malformed") from exc
-            if (not isinstance(dispatcher, dict) or dispatcher.get("ok") is not True
-                    or dispatcher.get("db_exists") is not False
-                    or dispatcher.get("coordination_mode") != closure.DEGRADED_MODE
-                    or dispatcher.get("fallback_reason") != "dispatcher_db_missing"
+            if (_dispatcher_mode(executor, cwd) != closure.DEGRADED_MODE
                     or entry.get("fallback_reason") != "dispatcher_db_missing"):
                 raise CycleError("dispatcher is available or its status is ambiguous")
             owner_path = entry.get("owner_worktree")
@@ -1743,7 +1768,9 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             raise CycleError("PR has a verification or fenced authority receipt")
         state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
         reviewer = _mapping(layout, entry["worker"])
-        if repair_writer is None:
+        if purpose == "admission" and reviewer.get("state") == "running":
+            _automatic_review_worker(layout, pr, entry)
+        elif repair_writer is None:
             _assert_stopped(layout, entry["worker"], reviewer)
         else:
             takeover = workspace._takeover_of(reviewer)
@@ -1779,7 +1806,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
         raise CycleError(f"native authority unavailable: {exc.reason}") from exc
 
 
-def _api_pages(executor: SubprocessExecutor, cwd: Path, endpoint: str) -> list[Any]:
+def _api_pages(executor: publication.CommandExecutor, cwd: Path, endpoint: str) -> list[Any]:
     rows: list[Any] = []
     for page in range(1, 101):
         value = closure._api(executor, cwd, completion.REPOSITORY, "GET", f"{endpoint}?per_page=100&page={page}")
@@ -1856,13 +1883,14 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
     """Bind transfer-to-current changes to the ordinary review identity and material."""
     if not entry.get("lifecycle_repo"):
         return
-    executor = SubprocessExecutor(timeout_seconds=30)
+    executor: publication.CommandExecutor = SubprocessExecutor(timeout_seconds=30)
     cwd = Path(__file__).resolve().parents[2]
     live = closure._pr(executor, cwd, completion.REPOSITORY, int(pr["number"]))
     branch = live.get("head", {}).get("ref")
     if not isinstance(branch, str) or live.get("head", {}).get("sha") != pr["head_sha"]:
         raise CycleError("transfer review source is unavailable")
     registration, records = _lifecycle_owner(layout, entry, branch)
+    executor = _LifecycleDispatcherExecutor(executor, Path(entry["lifecycle_repo"]))
     proof = registration.get("transfer_registration")
     if proof is None and registration.get("prior_owner") is not None:
         raise CycleError("historical transfer registration is unproved; reconcile through maintenance")
@@ -2579,7 +2607,7 @@ def _assert_child_assessment(review: Mapping[str, Any], number: int, criteria: l
 
 
 def _dispatcher_after_merge(layout: workspace.Layout, saved: dict[str, Any], owner: Mapping[str, Any],
-                            executor: SubprocessExecutor, cwd: Path, governor: int, number: int) -> None:
+                            executor: publication.CommandExecutor, cwd: Path, governor: int, number: int) -> None:
     """Reconcile each native dispatcher effect against ordered events and durable intent."""
     keys = ("task_id", "repository", "issue_number", "lease_holder", "lease_id", "lease_expires_at", "linked_pr")
     if (any(not isinstance(owner.get(k), str) or not owner[k] for k in keys)
@@ -2772,7 +2800,15 @@ def reconcile_native(layout: workspace.Layout, saved: dict[str, Any]) -> dict[st
         if claim in intent["closing_issues"] and mode == "dispatcher-backed":
             if not isinstance(owner, dict):
                 raise CycleError("recorded dispatcher coordination is ambiguous")
-            _dispatcher_after_merge(layout, saved, owner, executor, cwd, claim, number)
+            scoped_executor: publication.CommandExecutor = executor
+            source = intent.get("lifecycle_repo")
+            if source is not None:
+                if (not isinstance(source, str) or not Path(source).is_absolute()
+                        or str(Path(source).resolve()) != source or not Path(source).is_dir()
+                        or workspace._is_within(Path(source), layout.root)):
+                    raise CycleError("recorded lifecycle repository is unavailable for dispatcher reconciliation")
+                scoped_executor = _LifecycleDispatcherExecutor(executor, Path(source))
+            _dispatcher_after_merge(layout, saved, owner, scoped_executor, cwd, claim, number)
         cleanup = saved.setdefault("label_cleanup", {})
         for target in intent["closing_issues"]:
             issue = closure._issue(executor, cwd, completion.REPOSITORY, target)
@@ -2810,7 +2846,8 @@ def merge_once(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str,
     worker = entry["worker"]
     with workspace._worker_lifecycle_lock(layout, worker):
         _review_verification_lineage(_mapping(layout, worker), saved)
-        saved["merge_intent"] = authority
+        saved["merge_intent"] = ({**authority, "lifecycle_repo": entry["lifecycle_repo"]}
+                                 if entry.get("lifecycle_repo") else authority)
         _save(layout, saved)
         try:
             result = _command(["gh", "pr", "merge", str(pr["number"]), "--repo", completion.REPOSITORY,
@@ -3167,7 +3204,7 @@ def _validate_admission(value: Any) -> dict[int, dict[str, Any]]:
     return admitted
 
 
-def _read_admissions(layout: workspace.Layout, path: Path) -> Any:
+def _read_configuration(layout: workspace.Layout, path: Path) -> dict[str, Any]:
     """Read controller-owned file authority while the advancement lock is held."""
     info = path.lstat()
     if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022
@@ -3176,7 +3213,147 @@ def _read_admissions(layout: workspace.Layout, path: Path) -> Any:
     config = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise CycleError("invalid configuration")
-    return config.get("admissions", [])
+    return config
+
+
+def _read_admissions(layout: workspace.Layout, path: Path) -> Any:
+    return _read_configuration(layout, path).get("admissions", [])
+
+
+def _write_configuration(path: Path, config: Mapping[str, Any], expected: str) -> None:
+    """Replace the existing admission file under the caller's cycle lock, fencing drift."""
+    descriptor, name = tempfile.mkstemp(prefix=".pr-cycle-admission-", dir=path.parent)
+    try:
+        os.fchmod(descriptor, stat.S_IMODE(path.stat().st_mode))
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(config, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.read_text(encoding="utf-8") != expected:
+            raise CycleError("admission changed during controller update")
+        os.replace(name, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def _automatic_settings(value: Any) -> dict[str, Any]:
+    """One controller-owned operating scope, never a PR/body/model assertion."""
+    required = {"claimant", "session", "lifecycle_repo", "test_venv", "engine", "model"}
+    if (not isinstance(value, dict) or not required <= value.keys()
+            or value.keys() - required - {"effort"}
+            or any(not isinstance(value[k], str) or not value[k].strip() for k in required)):
+        raise CycleError("automatic_native requires claimant/session, lifecycle repository, test venv and engine/model")
+    engine, model = workspace.resolve_engine(value["engine"], value["model"])
+    workspace.resolve_effort(engine, model, value.get("effort"))
+    return {**value, "engine": engine, "model": model}
+
+
+def _automatic_review_worker(layout: workspace.Layout, pr: Mapping[str, Any],
+                             entry: Mapping[str, Any]) -> dict[str, Any]:
+    mapping = _mapping(layout, entry["worker"])
+    if (any(mapping.get(k) is not None and mapping[k] != entry["claimant"] for k in ("owner", "lifecycle_owner"))
+            or mapping.get("builder_session") not in (None, entry["session"])):
+        raise CycleError("worker belongs to another lifecycle owner; resume-work/handoff required")
+    if mapping.get("state") == "running":
+        if mapping.get("runtime") != "openhands":
+            raise CycleError("automatic review requires the existing OpenHands placement")
+        _assert_live_container(layout, entry["worker"], mapping)
+        conversation = mapping.get("conversation")
+        if conversation is not None and (not isinstance(conversation, dict)
+                or conversation.get("status") != workspace.CONVERSATION_ENDED):
+            state = workspace._load_state(layout)
+            own = [r for r in state["compact_receipts"] if isinstance(r, dict) and r.get("kind") == "pr_cycle"
+                   and r.get("number") == pr["number"] and isinstance(conversation, dict)
+                   and conversation.get("operation_id") is not None
+                   and conversation["operation_id"] in (r.get("review_operation"), r.get("repair_operation"))]
+            if len(own) != 1:
+                raise CycleError("existing conversation may still write; resume-work/handoff required")
+    else:
+        _assert_stopped(layout, entry["worker"], mapping)
+    return {k: mapping.get(k) for k in ("lifecycle_owner", "owner", "builder_session")}
+
+
+def _automatic_admission(layout: workspace.Layout, pr: Mapping[str, Any],
+                         settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Derive an entry; existing records retain all ownership/effect authority."""
+    if (pr.get("draft") is not False or pr.get("restrictions") or pr.get("base_ref") != "main"
+            or pr.get("head_repository") != completion.REPOSITORY
+            or re.search(r"\b(?:draft[ -]only|do[ -]not[ -]merge|do not merge|merge hold)\b", pr["body"], re.I)):
+        raise CycleError("draft, hold or unsupported PR source")
+    _assert_unheld_issue({"labels": [{"name": label} for label in pr["labels"]]})
+    authority = resolve_native_issue_authority(pr["body"])
+    if authority is None:
+        raise CycleError("native Issue contract unavailable; preserve the owning route")
+    claim = _pickup_issue(pr["body"], governing=authority.governing_issue, closing=authority.closing_issues)
+    state = workspace._load_state(layout)
+    mapping = state["issue_mappings"].get(str(claim))
+    if not isinstance(mapping, dict) or not isinstance(mapping.get("worker"), str):
+        raise CycleError("existing worker placement missing; use normal resume-work/claim path")
+    cwd = Path(__file__).resolve().parents[2]
+    executor: publication.CommandExecutor = SubprocessExecutor(timeout_seconds=30)
+    live = closure._pr(executor, cwd, completion.REPOSITORY, int(pr["number"]))
+    branch = live.get("head", {}).get("ref")
+    source = Path(settings["lifecycle_repo"])
+    if (not source.is_absolute() or str(source.resolve()) != str(source) or not source.is_dir()
+            or workspace._is_within(source, layout.root) or not isinstance(branch, str) or not branch):
+        raise CycleError("controller lifecycle repository or PR branch unavailable")
+    # Registry rows are selection hints only; native_authority binds the live Git generation,
+    # claim events, authenticated receipts, transfer history and exact current contract below.
+    records = agent_worktree.load_lifecycle_records(source)
+    owners = [row for row in records.values() if row.get("branch") == branch
+              and row.get("status") == "active" and row.get("owner") == settings["session"]]
+    if len(owners) != 1:
+        raise CycleError("registered session does not own this branch; resume-work/handoff required")
+    executor = _LifecycleDispatcherExecutor(executor, source)
+    mode = _dispatcher_mode(executor, source)
+    coordination: dict[str, Any] = {"coordination_mode": mode}
+    if mode == closure.DISPATCHER_MODE:
+        task_id = github_issue_task_id(completion.REPOSITORY, claim)
+        task, _, lease = closure._dispatcher_inspect(executor, source, task_id)
+        owner = closure._dispatcher_snapshot_from_task(task, task_id, repository=completion.REPOSITORY,
+            issue_number=claim, pr_number=int(pr["number"]), lease=lease)
+        if owner["lease_holder"] != settings["claimant"]:
+            raise CycleError("another active claimant owns this PR; resume-work/handoff required")
+        coordination["lease_id"] = owner["lease_id"]
+    else:
+        # Select only an existing receipt for this registered owner. The normal native
+        # reader rechecks authentication, latest claimant, continuous ownership and handoff.
+        comments = _api_pages(executor, source, f"/issues/{claim}/comments")
+        matching = []
+        for comment in comments:
+            body = comment.get("body") if isinstance(comment, dict) else None
+            match = closure.PICKUP_RECEIPT_RE.fullmatch(body) if isinstance(body, str) else None
+            if match and match.groupdict() == {
+                    "agent": settings["claimant"], "session": settings["session"], "branch": branch,
+                    "worktree": owners[0]["path"], "mode": closure.DEGRADED_MODE,
+                    "reason": "dispatcher_db_missing", "issue": str(claim)}:
+                at = _fallback_comment(comments, comment_id=comment.get("id"), issue=claim,
+                    agent=settings["claimant"], session=settings["session"], branch=branch,
+                    path=owners[0]["path"], reason="dispatcher_db_missing")
+                matching.append((at, comment["id"]))
+        if not matching:
+            raise CycleError("existing authenticated fallback pickup for registered owner is missing; resume-work/handoff required")
+        coordination.update(fallback_reason="dispatcher_db_missing",
+                            coordination_evidence=f"github-comment:{max(matching)[1]}")
+    context, material = _review_context(pr)
+    issues = material["issues"] or {str(authority.governing_issue): pr["governing_issue"]}
+    targets = _contract_verify_targets(issues, Path(owners[0]["path"]))
+    entry = {**settings, "number": pr["number"], "head_sha": pr["head_sha"], "worker": mapping["worker"],
+             "native_session_owned": True, **coordination, "owner_worktree": owners[0]["path"],
+             "verify_targets": targets, "_automatic_native": dict(settings),
+             "_automatic_context": _digest({"observation": completion.work_identity(pr), "context": context})}
+    entry = _validate_admission([entry])[pr["number"]]
+    _test_venv_source(layout, entry["test_venv"])
+    entry["_automatic_owner_binding"] = _automatic_review_worker(layout, pr, entry)
+    native_authority(layout, pr, entry, purpose="admission")
+    return entry
 
 
 def _review_quota_candidate(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
@@ -4205,6 +4382,8 @@ def _refresh_published_admission(layout: workspace.Layout, path: Path, entry: Ma
     _read_admissions(layout, path)
     raw = path.read_text(encoding="utf-8")
     config = json.loads(raw)
+    if "_automatic_native" in entry and _automatic_settings(config.get("automatic_native")) != entry["_automatic_native"]:
+        raise CycleError("automatic admission configuration changed before confirmed head refresh")
     rows = config.get("admissions")
     if not isinstance(rows, list):
         raise CycleError("admissions unavailable for confirmed head refresh")
@@ -4219,26 +4398,7 @@ def _refresh_published_admission(layout: workspace.Layout, path: Path, entry: Ma
     row["head_sha"] = new_head
     row.pop("review_disposition", None)
     row.pop("repair_publication", None)
-    mode = stat.S_IMODE(path.stat().st_mode)
-    descriptor, name = tempfile.mkstemp(prefix=".pr-cycle-admission-", dir=path.parent)
-    try:
-        os.fchmod(descriptor, mode)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(config, handle, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        if path.read_text(encoding="utf-8") != raw:
-            raise CycleError("admission changed during confirmed head refresh")
-        os.replace(name, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
+    _write_configuration(path, config, raw)
 
 
 def _candidate_git(cwd: Path, *args: str) -> str:
@@ -4656,6 +4816,11 @@ def _candidate_verify_targets(layout: workspace.Layout, entry: Mapping[str, Any]
     issues = material.get("issues") if isinstance(material, Mapping) else None
     if not isinstance(issues, Mapping) or not issues:
         raise CycleError("exact closing Issue contracts are unavailable for Verify")
+    return _contract_verify_targets(issues, publisher, admitted=entry["verify_targets"])
+
+
+def _contract_verify_targets(issues: Mapping[str, Any], publisher: Path, *,
+                             admitted: list[str] | None = None) -> list[str]:
     targets: list[str] = []
     pattern = r"tests/[A-Za-z0-9_./-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*(?:\[[A-Za-z0-9_.-]+\])?)*"
     for issue in issues.values():
@@ -4665,8 +4830,8 @@ def _candidate_verify_targets(layout: workspace.Layout, entry: Mapping[str, Any]
             for raw in row["verify_targets"]:
                 target = raw.strip("`")
                 if (not re.fullmatch(pattern, target) or ".." in Path(target.split("::")[0]).parts
-                        or not any(target == admitted or target.startswith(admitted + "::")
-                                   for admitted in entry["verify_targets"])):
+                        or (admitted is not None and not any(target == allowed or target.startswith(allowed + "::")
+                                                            for allowed in admitted))):
                     raise CycleError("closing Issue Verify target needs the existing specialized owning workflow")
                 if target not in targets:
                     targets.append(target)
@@ -5350,8 +5515,9 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
             publisher_executor: publication.CommandExecutor | None = None) -> dict[str, Any]:
     """Advance with direct admissions, or read a controller-owned file under the cycle lock."""
     with _single_advancement(layout):
-        admitted = _validate_admission(_read_admissions(layout, admissions) if isinstance(admissions, Path)
-                                       else admissions)
+        config = _read_configuration(layout, admissions) if isinstance(admissions, Path) else {"admissions": admissions}
+        admitted = _validate_admission(config.get("admissions", []))
+        automatic = _automatic_settings(config["automatic_native"]) if "automatic_native" in config else None
         state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
         if state["epic_issue_number"] != layout.epic:
             raise CycleError("epic owner mismatch")
@@ -5360,6 +5526,50 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
         handoffs: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
         reconciling: dict[int, list[tuple[str, str, str] | None]] = {}
         observations = {pr["number"]: pr for pr in scan["observations"]}
+        admission_holds: dict[int, str] = {}
+        generated = {n: row for n, row in admitted.items() if "_automatic_native" in row}
+        for auto_number in generated:
+            del admitted[auto_number]
+            admission_holds[auto_number] = "automatic admission disabled or observation unavailable"
+        if automatic is not None:
+            original_config = admissions.read_text(encoding="utf-8") if isinstance(admissions, Path) else None
+            if original_config is not None and json.loads(original_config) != config:
+                raise CycleError("admission configuration changed before automatic derivation")
+            rows = list(config.get("admissions", []))
+            for pr in scan["observations"]:
+                auto_number = pr["number"]
+                if auto_number in admitted:  # Explicit entries retain their exact-head semantics.
+                    continue
+                try:
+                    previous = generated.get(auto_number)
+                    if previous is None and any(isinstance(r, dict) and r.get("kind") == "pr_cycle"
+                            and r.get("number") == auto_number and r.get("repair_publication") is not None
+                            for r in state["compact_receipts"]):
+                        raise CycleError("existing publication requires its persisted admission; restore through resume-work")
+                    candidates = [r for r in state["compact_receipts"] if isinstance(r, dict)
+                                  and r.get("kind") == "pr_cycle" and r.get("number") == auto_number
+                                  and isinstance(r.get("repair_candidate"), dict) and previous is not None
+                                  and r["repair_candidate"].get("old_head") == previous["head_sha"]]
+                    if candidates:
+                        if previous is None or previous["_automatic_native"] != automatic:
+                            raise CycleError("automatic scope changed during candidate reconciliation")
+                        # Preserve the old-head entry until the existing candidate/publication
+                        # path reconciles and refreshes it. A newly observed head is not a receipt.
+                        admitted[auto_number] = previous
+                        continue
+                    auto_entry = _automatic_admission(layout, pr, automatic)
+                    if previous is not None and all(previous.get(k) == value for k, value in auto_entry.items()):
+                        auto_entry = previous  # Retain the owning workflow's bound disposition/publication input.
+                    admitted[auto_number] = auto_entry
+                    rows = [r for r in rows if r["number"] != auto_number] + [auto_entry]
+                except (CycleError, closure.ClosureError, workspace.EpicWorkspaceError,
+                        agent_worktree.WorktreeLifecycleError, OSError, ValueError, KeyError,
+                        TypeError, RuntimeError) as exc:
+                    admission_holds[auto_number] = f"automatic admission held: {exc}"
+            if rows != config.get("admissions", []):
+                if not isinstance(admissions, Path) or original_config is None:
+                    raise CycleError("automatic admission requires the controller-owned configuration file")
+                _write_configuration(admissions, {**config, "admissions": rows}, original_config)
         for saved in state["compact_receipts"]:
             if (not isinstance(saved, dict) or saved.get("kind") != "pr_cycle"
                     or not isinstance(saved.get("candidate_review_dispatch"), dict)
@@ -5453,7 +5663,8 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
                 results.append(result)
                 continue
             if entry is None or entry["head_sha"] != pr["head_sha"]:
-                results.append({"number": number, "action": "wait", "reason": "not admitted at this head"})
+                results.append({"number": number, "action": "wait",
+                                "reason": admission_holds.get(number, "not admitted at this head")})
                 continue
             try:
                 pending = [(item[0], item[1]) for item in obligations if item is not None]
@@ -5689,6 +5900,7 @@ def _begin_reconciliation(layout: workspace.Layout, saved: dict[str, Any], gate:
 def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, Any], *,
                  http: Callable[..., tuple[int, Any]],
                  merge_obligations: Sequence[tuple[str, str]] = (), codex_home: Path | None = None) -> dict[str, Any]:
+    observation_identity = completion.work_identity(pr) if "_automatic_context" in entry else None
     # Until independently observed, route/owner are unknown. Explicit trial admission
     # selects native session-owned review only; it does not assert merge eligibility.
     if re.search(r"\b(?:draft[ -]only|do[ -]not[ -]merge|do not merge|merge hold)\b", pr["body"], re.I):
@@ -5696,6 +5908,9 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     pr.update(route="native", owner="unknown", effect_outcome="none", review_outcome="missing",
               check_config={"verify_targets": entry["verify_targets"], "test_venv": entry["test_venv"]})
     pr["review_context"], pr["review_material"] = _review_context(pr)
+    if "_automatic_context" in entry:
+        if _digest({"observation": observation_identity, "context": pr["review_context"]}) != entry["_automatic_context"]:
+            raise CycleError("automatic admission head or contract changed before advancement")
     _add_transfer_review_context(layout, entry, pr)
     identity = completion.work_identity(pr)
     if any(old_identity == identity for old_identity, _ in merge_obligations):
@@ -5884,7 +6099,8 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                 pending = None
             _save(layout, saved)
             started = start_or_reconcile_review(layout, entry["worker"], op, pr, identity, entry, http=http,
-                                                reconciliation=pending)
+                                                reconciliation=pending,
+                                                expected_owner_binding=entry.get("_automatic_owner_binding"))
             decision["reason"] = f"conversation {started.get('id')} {started.get('status')}"
     response = dict(decision)
     if exhausted is not None and response["action"] == "wait":

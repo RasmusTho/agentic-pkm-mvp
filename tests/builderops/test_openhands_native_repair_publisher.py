@@ -46,6 +46,11 @@ class Port:
     def run(self, argv, *, cwd, input_text=None):
         a = tuple(argv)
         self.calls.append(a)
+        if 'app.dispatcher' in a:
+            if 'status' in a:
+                return CommandResult(a, 0, '{"ok":true,"db_exists":true,"coordination_mode":"dispatcher-backed","fallback_reason":null}', '')
+            if 'verification-status' in a:
+                return CommandResult(a, 0, '{"ok":true,"runs":[]}', '')
         if Path(cwd) != self.host:
             if 'verification-status' in a:
                 return CommandResult(a, 0, '{"ok":true,"runs":[]}', '')
@@ -173,6 +178,7 @@ def prepare(tmp_path, monkeypatch, *, real_authority=False, parent_scope=False):
         return {**authority, 'head_sha': port.remote}
     if real_authority:
         config[0]['lease_id'] = 'lease'
+        config[0]['lifecycle_repo'] = str(host)
         task_id = cycle.github_issue_task_id(REPO, 6618)
         task = {'task_id': task_id, 'repo': REPO, 'issue_number': 6618, 'status': 'claimed',
                 'claimed_by': 'owner-6618', 'lease_id': 'lease',
@@ -337,6 +343,7 @@ def test_real_native_authority_rejects_foreign_claim_before_push(tmp_path, monke
     data = prepare(tmp_path, monkeypatch)
     layout, config, pr, _, port, _, authority = data[:7]
     config[0]['lease_id'] = 'lease'
+    config[0]['lifecycle_repo'] = str(port.host)
     class AuthorityPort:
         def __init__(self, **kwargs):
             pass
