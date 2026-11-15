@@ -20,7 +20,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterator, Literal, Mapping, Sequence
 
 from app.builderops import closure, epic_run_state, epic_workspace as workspace
 from app.builderops import openhands_pr_completion as completion
@@ -1452,8 +1452,18 @@ def _claimant_history(*, registration: Mapping[str, Any], records: Mapping[str, 
     return anchors
 
 
-def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any]) -> dict[str, Any]:
-    """Read native ownership, route and canonical scope from host authorities, not PR attestations."""
+def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any], *,
+                     purpose: Literal["merge", "repair"] = "merge",
+                     repair_writer: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Read native ownership and scope; unresolved threads only exclude merge authority.
+
+    A repair result does not authorize a writer, publication or merge by itself: the
+    caller must also bind an actionable review and use the stopped-worker lifecycle.
+    """
+    if purpose not in ("merge", "repair"):
+        raise CycleError("unknown native authority purpose")
+    if repair_writer is not None and purpose != "repair":
+        raise CycleError("a running repair writer cannot authorize merge")
     cwd = Path(__file__).resolve().parents[2]
     executor = SubprocessExecutor(timeout_seconds=30)
     user = executor.run(["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"], cwd=cwd)
@@ -1472,6 +1482,15 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                 or live.get("base", {}).get("ref") != "main" or body != pr["body"]
                 or live.get("title", "") != pr.get("title", "")):
             raise CycleError("live PR or native contract drifted")
+        if purpose == "repair":
+            labels = live.get("labels")
+            if (not isinstance(labels, list) or any(not isinstance(row, dict) or not isinstance(row.get("name"), str)
+                                                   for row in labels)
+                    or sorted(row["name"] for row in labels) != sorted(pr.get("labels", []))
+                    or {row["name"].strip().casefold() for row in labels} &
+                    {"wip", "work in progress", "do-not-merge", "do not merge", "agent:blocked",
+                     "agent:needs-human", "agent:needs-review", "hold"}):
+                raise CycleError("live PR labels are held, changed or unavailable")
         refs = closure._closing_issue_references(executor, cwd, completion.REPOSITORY, int(pr["number"]))
         if refs != list(authority.closing_issues):
             raise CycleError("GitHub closing references differ from the canonical contract")
@@ -1485,7 +1504,8 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             if claimed.get("state") != "open":
                 raise CycleError("claimed closing Issue is not open")
             _assert_unheld_issue(claimed)
-        _assert_review_threads_clear(executor, cwd, int(pr["number"]))
+        if purpose == "merge":
+            _assert_review_threads_clear(executor, cwd, int(pr["number"]))
         branch = live.get("head", {}).get("ref")
         if not isinstance(branch, str) or not branch:
             raise CycleError("head branch identity unavailable")
@@ -1715,7 +1735,22 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             raise CycleError("PR has a verification or fenced authority receipt")
         state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
         reviewer = _mapping(layout, entry["worker"])
-        _assert_stopped(layout, entry["worker"], reviewer)
+        if repair_writer is None:
+            _assert_stopped(layout, entry["worker"], reviewer)
+        else:
+            takeover = workspace._takeover_of(reviewer)
+            predecessor = repair_writer.get("predecessor_container")
+            if (not workspace._same_assignment(reviewer, repair_writer.get("assignment", {}))
+                    or reviewer.get("state") != "running" or reviewer.get("runtime") != "openhands"
+                    or not isinstance(predecessor, str) or not workspace._CONTAINER_ID.fullmatch(predecessor)
+                    or reviewer.get("container_id") == predecessor
+                    or takeover.get("status") != "consumed" or takeover.get("stop_id") != repair_writer.get("stop_id")
+                    or reviewer.get("stop_id") != repair_writer.get("stop_id")
+                    or reviewer.get("work_at_stop") != repair_writer.get("work_at_stop")):
+                raise CycleError("repair writer does not bind the stopped reviewer and takeover")
+            _assert_live_container(layout, entry["worker"], reviewer)
+            if workspace._id_present(predecessor, _worker_runner):
+                raise CycleError("reviewer container reappeared before repair")
         for issue_key, other in state["issue_mappings"].items():
             if not isinstance(other, dict) or other.get("worker") == entry["worker"]:
                 continue
@@ -2054,6 +2089,28 @@ def _explicit_review_blockers(review: Any) -> list[str]:
                 blocking.append(f"{where}: acceptance or Verify assessment is incomplete")
             limits(child.get("limitations"), where)
     return blocking
+
+
+def _bounded_repair_candidate(review: Mapping[str, Any], gate: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Identify an unambiguous P0/P1 report; this is evidence, not write authority."""
+    if gate.get("outcome") != "changes_requested" or gate.get("grammar"):
+        return None
+    findings = review.get("findings")
+    if not isinstance(findings, list):
+        return None
+    indexes = [index for index, item in enumerate(findings)
+               if isinstance(item, dict) and item.get("severity") in ("P0", "P1")]
+    if not indexes:
+        return None
+    # A protected finding also emits a separate blocking item; it remains in the
+    # selected P0/P1 finding. Other gaps or dispositions require their own workflow.
+    allowed = {f"finding {index}: {findings[index]['severity']}" for index in indexes}
+    allowed.update(f"finding {index}: protected {findings[index]['protected_class']} blocks regardless of severity"
+                   for index in indexes if findings[index].get("protected_class") in PROTECTED_CLASSES)
+    blockers = gate.get("blocking")
+    if not isinstance(blockers, list) or not blockers or any(item not in allowed for item in blockers):
+        return None
+    return {"report_sha256": _digest(review), "finding_indexes": indexes}
 
 
 def _review_gate(review: Any, expected: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -3129,6 +3186,171 @@ def _review_quota_candidate(layout: workspace.Layout, pr: Mapping[str, Any], ent
     return issue, worker, workspace.assignment_of(mapping)
 
 
+def _reserve_repair(layout: workspace.Layout, saved: dict[str, Any], entry: Mapping[str, Any],
+                    candidate: Mapping[str, Any], authority: Mapping[str, Any],
+                    mapping: Mapping[str, Any]) -> str:
+    """Reserve the one author attempt with the review and stopped assignment in one update."""
+    operation = "pr-completion-" + _digest({"identity": saved["identity"], "request": "repair-author",
+                                           "report_sha256": candidate["report_sha256"]})
+    def update(state: dict[str, Any]) -> dict[str, Any]:
+        issue = workspace._issue_for_worker(state, entry["worker"])
+        current = state["issue_mappings"][str(issue)]
+        if (not workspace._same_assignment(current, mapping) or current.get("stop_id") != mapping.get("stop_id")
+                or current.get("work_at_stop") != mapping.get("work_at_stop")):
+            raise CycleError("reviewer stop changed before repair reservation")
+        records = state["dispatch_decisions"]
+        related = [r for r in records if isinstance(r, dict) and r.get("kind") == "openhands_pr_completion"
+                   and r.get("number") == saved["number"] and r.get("repository") == completion.REPOSITORY]
+        if any(not isinstance(r.get("operation_id"), str) or not r["operation_id"] for r in related):
+            raise CycleError("an earlier PR effect has no usable operation identity")
+        if any(r.get("outcome") not in ("completed", "no_effect") for r in related):
+            raise CycleError("an earlier PR effect is unresolved; reconcile it before repair")
+        reviews = [r for r in related if r.get("operation_id") == saved.get("review_operation")
+                   and r.get("request") == "independent-review" and r.get("identity") == saved["identity"]
+                   and r.get("outcome") == "completed"]
+        if len(reviews) != 1:
+            raise CycleError("completed review reservation is unavailable or contradictory")
+        if any(r.get("operation_id") == operation for r in related):
+            raise CycleError("repair reservation already exists; reconcile it")
+        rows = [r for r in state["compact_receipts"] if isinstance(r, dict) and r.get("kind") == "pr_cycle"
+                and r.get("number") == saved["number"] and r.get("identity") == saved["identity"]]
+        if len(rows) != 1 or rows[0] != saved:
+            raise CycleError("review evidence changed before repair reservation")
+        rows[0]["repair_operation"] = operation
+        rows[0]["repair_authority_binding"] = dict(authority)
+        rows[0]["repair_review_sha256"] = candidate["report_sha256"]
+        rows[0]["repair_work_at_stop"] = mapping.get("work_at_stop")
+        rows[0]["repair_claim_issue"] = issue
+        rows[0]["repair_owner_binding"] = {field: mapping.get(field) for field in
+                                           ("lifecycle_owner", "owner", "builder_session")}
+        rows[0]["repair_engine"] = entry["engine"]
+        rows[0]["repair_model"] = entry["model"]
+        records.append({"kind": "openhands_pr_completion", "operation_id": operation,
+                        "repository": completion.REPOSITORY, "number": saved["number"],
+                        "identity": saved["identity"], "route": "native", "request": "repair-author",
+                        "attempt": 1, "outcome": "unknown", "review_sha256": candidate["report_sha256"]})
+        return state
+    epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=update,
+                                         expected_epic_issue_number=layout.epic)
+    return operation
+
+
+def _assert_repair_publications_settled(mapping: Mapping[str, Any]) -> None:
+    operations = mapping.get("publication_ops", [])
+    if not isinstance(operations, list):
+        raise CycleError("earlier publication remains unresolved; reconcile it before repair")
+    for op in operations:
+        result = op.get("result") if isinstance(op, Mapping) else None
+        sha = result.get("sha") if isinstance(result, Mapping) else None
+        if (not isinstance(op, Mapping) or op.get("status") != "confirmed" or op.get("kind") not in workspace.PUBLICATION_KINDS
+                or not isinstance(op.get("id"), str) or not op["id"] or op.get("branch") != mapping.get("branch")
+                or not isinstance(result, Mapping) or result.get("branch") != op.get("branch")
+                or not isinstance(sha, str) or not workspace._OID.fullmatch(sha)
+                or op.get("expect_sha") not in (None, sha)
+                or (op.get("kind") == "pr_create" and (type(result.get("number")) is not int or result["number"] <= 0))):
+            raise CycleError("earlier publication remains unresolved; reconcile it before repair")
+
+
+@workspace._serialized_worker
+def _advance_repair(layout: workspace.Layout, worker: str, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                    saved: dict[str, Any], *, candidate: Mapping[str, Any] | None,
+                    http: Callable[..., tuple[int, Any]], codex_home: Path | None) -> dict[str, Any]:
+    """Start or reconcile one repair author through the existing stopped-worker lifecycle."""
+    identity = saved["identity"]
+    mapping = _mapping(layout, worker)
+    op = saved.get("repair_operation")
+    if op is not None:
+        records = workspace._load_state(layout)["dispatch_decisions"]
+        matches = [r for r in records if isinstance(r, dict) and r.get("operation_id") == op]
+        report = saved.get("review")
+        expected_op = "pr-completion-" + _digest({"identity": identity, "request": "repair-author",
+                                                  "report_sha256": saved.get("repair_review_sha256")})
+        if (op != expected_op or not isinstance(report, dict) or _digest(report) != saved.get("repair_review_sha256")
+                or len(matches) != 1 or matches[0].get("request") != "repair-author"
+                or matches[0].get("repository") != completion.REPOSITORY or matches[0].get("number") != pr["number"]
+                or matches[0].get("route") != "native"
+                or matches[0].get("identity") != identity or matches[0].get("outcome") != "unknown"
+                or matches[0].get("review_sha256") != saved.get("repair_review_sha256")):
+            raise CycleError("repair reservation is unavailable or contradictory")
+        conversation = mapping.get("conversation")
+        if isinstance(conversation, Mapping) and conversation.get("operation_id") == op:
+            if conversation.get("status") in ("creating", "unknown"):
+                conversation = workspace._reconcile_worker_conversation_locked(layout, worker, http=http, runner=_worker_runner)
+            return {"number": pr["number"], "identity": identity, "action": "repair-author",
+                    "operation_id": op, "reason": f"conversation {conversation.get('id')} {conversation.get('status')}"}
+    else:
+        if candidate is None or entry["engine"] != "codex":
+            raise CycleError("a bound Codex repair candidate is required")
+        _review_stop_checkpoint(mapping, saved, require_receipt=True)
+        _assert_stopped(layout, worker, mapping)
+        authority = native_authority(layout, pr, entry, purpose="repair")
+        work = mapping.get("work_at_stop")
+        issue = workspace._issue_for_worker(workspace._load_state(layout), worker)
+        recorded_owner = mapping.get("lifecycle_owner") or mapping.get("owner")
+        if (authority.get("claim_issue") != issue or not isinstance(entry.get("claimant"), str)
+                or not isinstance(entry.get("session"), str)
+                or (recorded_owner is not None and recorded_owner != entry["claimant"])
+                or (mapping.get("builder_session") is not None and mapping.get("builder_session") != entry["session"])):
+            raise CycleError("repair worker does not bind the claimed Issue and Builder owner")
+        if (not isinstance(work, Mapping) or not isinstance(authority.get("branch"), str)
+                or mapping.get("branch") != authority.get("branch") or work.get("branch") != authority.get("branch")
+                or work.get("head") != pr.get("head_sha")):
+            raise CycleError("review checkpoint does not bind the authorized source branch and head")
+        _assert_repair_publications_settled(mapping)
+        op = _reserve_repair(layout, saved, entry, candidate, authority, mapping)
+        saved = _find(layout, pr["number"], identity)
+    if entry["engine"] != saved.get("repair_engine") or entry["model"] != saved.get("repair_model"):
+        raise CycleError("repair engine selection changed after reservation")
+    owner_binding = saved.get("repair_owner_binding")
+    issue = workspace._issue_for_worker(workspace._load_state(layout), worker)
+    if (issue != saved.get("repair_claim_issue") or not isinstance(owner_binding, dict)
+            or set(owner_binding) != {"lifecycle_owner", "owner", "builder_session"}
+            or any(mapping.get(field) != value for field, value in owner_binding.items())):
+        raise CycleError("repair worker owner, Issue or Builder session changed")
+    intent = saved.get("stop_intent")
+    if not isinstance(intent, Mapping) or not saved.get("stop_verified"):
+        raise CycleError("repair lacks the exact reviewer stop")
+    _assert_repair_publications_settled(mapping)
+    if mapping.get("state") == "stopped_verified":
+        _review_stop_checkpoint(mapping, saved, require_receipt=True)
+        if native_authority(layout, pr, entry, purpose="repair") != saved.get("repair_authority_binding"):
+            raise CycleError("repair authority changed after reservation")
+        budget = mapping.get("budget")
+        image, network = mapping.get("image"), mapping.get("network")
+        if (not isinstance(budget, Mapping) or not isinstance(image, str) or not isinstance(network, str)):
+            raise CycleError("repair worker launch configuration is unavailable")
+        workspace._takeover_locked(layout, worker, reason="bounded PR review repair", runner=_worker_runner,
+                                   stop_intent=intent, expected_container_id=intent.get("container_id"))
+        workspace._start_openhands_worker_locked(
+            layout, worker, budget=workspace.Budget(budget.get("cpus"), budget.get("memory"), budget.get("pids")),
+            codex_home=codex_home or Path.home() / ".config/epic-workspace/codex",
+            image=image, network=network, runner=_worker_runner, http=http)
+        mapping = _mapping(layout, worker)
+    if mapping.get("state") != "running":
+        raise CycleError("repair worker launch is unresolved; reconcile its exact container")
+    prior = mapping.get("conversation")
+    if (not isinstance(prior, Mapping) or prior.get("status") != workspace.CONVERSATION_ENDED
+            or prior.get("id") != saved.get("public_report_conversation")):
+        raise CycleError("repair predecessor conversation is not proven ended")
+    writer = {"assignment": workspace.assignment_of(mapping), "stop_id": intent.get("stop_id"),
+              "predecessor_container": intent.get("container_id"), "work_at_stop": saved.get("repair_work_at_stop")}
+    if native_authority(layout, pr, entry, purpose="repair", repair_writer=writer) != saved.get("repair_authority_binding"):
+        raise CycleError("repair authority changed before author conversation")
+    report = saved.get("review")
+    if not isinstance(report, dict) or _digest(report) != saved.get("repair_review_sha256"):
+        raise CycleError("repair review evidence changed")
+    prompt = (f"Repair the bounded P0/P1 findings for PR #{pr['number']} at {pr['head_sha']} "
+              f"and contract identity {identity}. Follow the existing Issue scope and builder workflow. "
+              "Make necessary in-scope source corrections and focused tests. Do not publish, push, create a PR, "
+              "change claims or access host credentials. Preserve unrelated work. Report changed paths and tests.\n"
+              f"Issue contract: {pr['governing_issue']['body']}\nReview: {json.dumps(report, sort_keys=True)}")
+    conversation = workspace._start_conversation_locked(layout, worker, engine=entry["engine"], model=entry["model"],
+                                                         prompt=prompt, operation_id=op, http=http, runner=_worker_runner,
+                                                         expected_owner_binding=owner_binding)
+    return {"number": pr["number"], "identity": identity, "action": "repair-author", "operation_id": op,
+            "reason": f"conversation {conversation.get('id')} {conversation.get('status')}"}
+
+
 def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *,
             fetch: observation.Fetch = github_fetch, http: Callable[..., tuple[int, Any]] = workspace._http,
             codex_home: Path | None = None) -> dict[str, Any]:
@@ -3175,10 +3397,11 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *
                 continue
             try:
                 pending = [(item[0], item[1]) for item in obligations if item is not None]
+                options = {"codex_home": codex_home} if codex_home is not None else {}
                 if pending:
-                    result = _advance_one(layout, pr, entry, http=http, merge_obligations=pending)
+                    result = _advance_one(layout, pr, entry, http=http, merge_obligations=pending, **options)
                 else:
-                    result = _advance_one(layout, pr, entry, http=http)
+                    result = _advance_one(layout, pr, entry, http=http, **options)
                 eligible_for_handoff = not obligations
             except (CycleError, closure.ClosureError, observation.ObservationError, workspace.EpicWorkspaceError,
                     OSError, ValueError, KeyError, AttributeError, TypeError, RecursionError) as exc:
@@ -3396,7 +3619,7 @@ def _begin_reconciliation(layout: workspace.Layout, saved: dict[str, Any], gate:
 
 def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, Any], *,
                  http: Callable[..., tuple[int, Any]],
-                 merge_obligations: Sequence[tuple[str, str]] = ()) -> dict[str, Any]:
+                 merge_obligations: Sequence[tuple[str, str]] = (), codex_home: Path | None = None) -> dict[str, Any]:
     # Until independently observed, route/owner are unknown. Explicit trial admission
     # selects native session-owned review only; it does not assert merge eligibility.
     if re.search(r"\b(?:draft[ -]only|do[ -]not[ -]merge|do not merge|merge hold)\b", pr["body"], re.I):
@@ -3411,6 +3634,12 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                 "reason": "merge outcome remains unknown; do not repeat"}
     same_head_merge_unknown = any(old_head == pr["head_sha"] for _, old_head in merge_obligations)
     saved = _find(layout, pr["number"], identity)
+    if saved.get("repair_operation"):
+        if merge_obligations:
+            return {"number": pr["number"], "identity": identity, "action": "wait",
+                    "reason": "earlier merge outcome remains unknown; reconcile before repair"}
+        return _advance_repair(layout, entry["worker"], pr, entry, saved, candidate=None,
+                               http=http, codex_home=codex_home)
     operation_id = saved.get("review_operation")
     worker_record = _mapping(layout, entry["worker"])
     handoff = worker_record.get("engine_handoff")
@@ -3424,6 +3653,7 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
         entry = {**entry, "engine": "codex", "model": "gpt-6.1-terra"}
     exhausted: dict[str, Any] | None = None
     owner_wait: str | None = None
+    repair_candidate: dict[str, Any] | None = None
     verified_this_advancement = False
     if operation_id:
         worker_record = _mapping(layout, entry["worker"])
@@ -3463,6 +3693,7 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
             gate = review_gate(review, expectations,
                                disposition=entry.get("review_disposition"),
                                reconciliation=bound_reconciliation)
+            repair_candidate = _bounded_repair_candidate(review, _review_gate(review, expectations))
             if gate["outcome"] == "changes_requested" and _review_gate(review, expectations)["outcome"] == "pass":
                 owner_wait = gate["blocking"][0]
                 try:
@@ -3536,6 +3767,22 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     decision = completion.intake([pr], run_id=layout.run_id, root=layout.run_state_dir,
                                  expected_run_id=layout.run_id, expected_root=layout.run_state_dir,
                                  expected_epic_issue_number=layout.epic)[0]
+    if (repair_candidate is not None and decision["action"] == "wait"
+            and decision["reason"] == "review repair belongs to current owner"):
+        # Evidence for the owning workflow only. It cannot authorize a successor
+        # or publication and is recomputed against the current report each pass.
+        decision["repair_candidate"] = {**repair_candidate, "identity": identity,
+                                        "head_sha": pr["head_sha"], "review_operation": operation_id}
+        try:
+            native_authority(layout, pr, entry, purpose="repair")
+        except (CycleError, OSError, ValueError, KeyError, TypeError) as exc:
+            decision["repair_authority"] = {"status": "unavailable", "reason": str(exc)[:300]}
+        else:
+            # This is a point-in-time read, not a lease or permission for a later effect.
+            decision["repair_authority"] = {"status": "observed", "reason": "recheck before any writer starts"}
+            if not merge_obligations:
+                return _advance_repair(layout, entry["worker"], pr, entry, saved,
+                                       candidate=repair_candidate, http=http, codex_home=codex_home)
     if (same_head_merge_unknown and pr["review_outcome"] == "pass" and decision["action"] == "wait"
             and decision["reason"] == "active or unknown writable owner"):
         return {"number": pr["number"], "action": "wait", "identity": identity,

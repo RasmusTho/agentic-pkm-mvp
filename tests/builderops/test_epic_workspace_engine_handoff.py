@@ -343,7 +343,8 @@ def test_new_activity_after_old_quota_error_does_not_stop_the_worker(tmp_path, c
     h.failure()
     h.server.streams[h.old_conversation].append({"id": "later-action", "kind": "ActionEvent"})
     result = h.tick(capsys)[ISSUE]
-    assert result["handoff"]["state"] == "held"
+    # Later activity removes the stale quota failure before a handoff is reserved.
+    assert result.get("action") != "engine_quota" and "handoff" not in result
     assert h.mapping()["container_id"] == h.old_id and len(h.posts()) == 1
 
 

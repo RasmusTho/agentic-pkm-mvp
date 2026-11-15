@@ -441,8 +441,22 @@ The existing immediate premerge CI, authority and fencing refreshes still apply.
 and native execution proof remain reusable under their existing bindings; identical reauthorization
 alone does not establish that otherwise applicable evidence became invalid.
 P0/P1, any protected finding at any severity, a P3 with a defect category, P2 without a verified
-Known Defects disposition, gaps and incomplete assessments all wait for the owning workflow. A legacy
-or non-conforming report is never edited and never passed. When it has no known blocker, the original
+Known Defects disposition, gaps and incomplete assessments all wait for the owning workflow. This
+source candidate identifies a grammar-conforming, identity-bound P0/P1 report after the reviewer's
+verified stop, provided no other blocker or intake hold applies. It records one repair-author reservation
+in the existing dispatch decisions before using the existing takeover, worker start and OpenHands
+conversation lifecycle. It binds the review, source branch and head, stopped reviewer and checkpoint,
+claim, registered worktree and Builder session. The repair-purpose authority check retains those
+ownership and stopped-writer checks while allowing unresolved review threads; after takeover it binds
+the exact running successor and rechecks authority before creating the conversation. Existing worker
+owner and Builder-session fields, when present, must match the claim; their exact values, including
+absence on older mappings, are fenced when the conversation is reserved and immediately before POST.
+A lost create
+is reconciled using the same recorded conversation ID; an unresolved earlier publication holds repair.
+The default merge-purpose check still requires review threads clear. This source candidate does not
+yet process the finished author's result, stop and checkpoint that author, publish its work, or continue
+through renewed review and closure. A legacy or
+non-conforming report is never edited and never passed. When it has no known blocker, the original
 report, proof and stop move verbatim into the record's `report_reconciliations` history, and one retry
 of the same identity is reserved. Once the reviewer runs again through the existing takeover/start lifecycle, that retry
 starts one new OpenHands conversation, which re-expresses the earlier analysis under the grammar. A

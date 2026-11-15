@@ -183,6 +183,65 @@ def test_review_finding_releases_reviewer_but_does_not_run_checks(tmp_path, monk
     assert result["results"][1]["reason"] == "review repair belongs to current owner"
 
 
+def test_cycle_identifies_bound_p1_only_after_reviewer_is_stopped(tmp_path, monkeypatch):
+    layout, config, server = setup(tmp_path, monkeypatch)
+    cycle.advance(layout, config, fetch=fetch, http=server)
+    state = ew._load_state(layout)
+    cid = state["issue_mappings"]["6618"]["conversation"]["id"]
+    saved = next(r for r in state["compact_receipts"] if r.get("kind") == "pr_cycle")
+    report = {**CONFORMING, "identity": saved["identity"], "head_sha": HEAD, "verdict": "findings",
+              "findings": [BLOCKING_FINDING], "verify_targets": config[0]["verify_targets"]}
+    server.conversations[cid]["execution_status"] = "finished"
+    server.final_responses[cid] = json.dumps(report)
+    monkeypatch.setattr(ew, "stop_worker", fake_completed_review_stop)
+    def unavailable(*args, **kwargs):
+        raise cycle.CycleError("claim readback unavailable")
+    monkeypatch.setattr(cycle, "native_authority", unavailable)
+    result = cycle.advance(layout, config, fetch=fetch, http=server)["results"][1]
+    assert result["action"] == "wait"
+    assert result["repair_candidate"] == {"identity": saved["identity"], "head_sha": HEAD,
+                                          "review_operation": saved["review_operation"],
+                                          "report_sha256": digest(report), "finding_indexes": [0]}
+    assert cycle._mapping(layout, "reviewer")["state"] == "stopped_verified"
+    assert result["repair_authority"]["status"] == "unavailable"
+    assert len([call for call in server.calls if call[0] == "POST"]) == 1
+    resumed = cycle.advance(layout, config, fetch=fetch, http=server)["results"][1]
+    assert resumed["repair_authority"] == {"status": "unavailable", "reason": "claim readback unavailable"}
+    assert len([call for call in server.calls if call[0] == "POST"]) == 1
+
+
+def test_repair_candidate_rejects_other_blockers_and_wrong_identity():
+    expected = {"identity": "identity", "head_sha": HEAD, "verify_targets": ["tests/example.py"],
+                "sources": ["app/example.py"], "paths": ["app/example.py"], "criteria": {}}
+    report = {**CONFORMING, "identity": "identity", "head_sha": HEAD, "verdict": "findings",
+              "findings": [BLOCKING_FINDING], "verify_targets": expected["verify_targets"]}
+    assert cycle._bounded_repair_candidate(report, cycle._review_gate(report, expected)) is not None
+    other = {**report, "findings": [BLOCKING_FINDING, {**BLOCKING_FINDING, "severity": "P2"}]}
+    assert cycle._bounded_repair_candidate(other, cycle._review_gate(other, expected)) is None
+    wrong = {**report, "identity": "other"}
+    assert cycle._bounded_repair_candidate(wrong, cycle._review_gate(wrong, expected)) is None
+
+
+def test_cycle_does_not_offer_candidate_if_reviewer_stop_is_unknown(tmp_path, monkeypatch):
+    layout, config, server = setup(tmp_path, monkeypatch)
+    cycle.advance(layout, config, fetch=fetch, http=server)
+    state = ew._load_state(layout)
+    cid = state["issue_mappings"]["6618"]["conversation"]["id"]
+    saved = next(r for r in state["compact_receipts"] if r.get("kind") == "pr_cycle")
+    report = {**CONFORMING, "identity": saved["identity"], "head_sha": HEAD, "verdict": "findings",
+              "findings": [BLOCKING_FINDING], "verify_targets": config[0]["verify_targets"]}
+    server.conversations[cid]["execution_status"] = "finished"
+    server.final_responses[cid] = json.dumps(report)
+    def unknown_stop(*args, **kwargs):
+        raise ew.EpicWorkspaceError("synthetic stop unknown")
+    monkeypatch.setattr(ew, "stop_worker", unknown_stop)
+    results = cycle.advance(layout, config, fetch=fetch, http=server)["results"]
+    assert results[0]["number"] == 9 and results[0]["action"] == "wait"
+    assert results[1]["reason"] == "synthetic stop unknown"
+    assert "repair_candidate" not in results[1]
+    assert len([call for call in server.calls if call[0] == "POST"]) == 1
+
+
 def test_real_sandbox_command_and_skipped_tests_do_not_pass(tmp_path, monkeypatch):
     layout, _, _ = setup(tmp_path, monkeypatch)
     ew._record_worker(layout, 6618, state="stopped_verified", image="agent-server@sha256:" + "c" * 64)
@@ -1335,9 +1394,9 @@ def _native_authority_fixture(tmp_path, monkeypatch):
             f"Pickup-Receipt: pickup-claim-complete issue=6618 branch=codex/example worktree={worktree} "
             f"coordination_mode=dispatcher-backed fallback_reason=none task_id={task_id} lease_id=old-lease "
             "holder=original evidence=verified-dispatcher-lease")
-    pr = {"number": 10, "head_sha": head, "body": body, "title": "trial", "governing_issue": {"body": "issue"}}
+    pr = {"number": 10, "head_sha": head, "body": body, "title": "trial", "labels": [], "governing_issue": {"body": "issue"}}
     live = {"number": 10, "state": "open", "draft": False, "title": "trial", "body": body, "created_at": "2099-01-01T00:00:00Z",
-            "head": {"sha": head, "ref": "codex/example", "repo": {"full_name": cycle.completion.REPOSITORY}},
+            "labels": [], "head": {"sha": head, "ref": "codex/example", "repo": {"full_name": cycle.completion.REPOSITORY}},
             "base": {"ref": "main", "sha": base}}
     task = {"task_id": task_id, "repo": cycle.completion.REPOSITORY, "issue_number": 6618, "status": "claimed",
             "claimed_by": "original", "lease_id": "old-lease", "lease_expires_at": "2099-01-01T00:00:00Z", "linked_pr": 10}
@@ -1396,6 +1455,55 @@ def _authority_transfer_fixture(tmp_path, monkeypatch, *, pin=True):
                         if pin else _two_phase(record, receipt_at=now - 700, ack_at=now - 100))
     f.update(now=now, old=old, new=new, record=record)
     return f
+
+
+def test_repair_authority_preserves_owner_and_stop_fences_with_open_review_threads(tmp_path, monkeypatch):
+    f = _native_authority_fixture(tmp_path, monkeypatch)
+    cycle.agent_worktree.register_worktree(f["source"], worktree=f["worktree"],
+                                          owner="session-original", now=int(time.time()) - 800)
+    def unresolved(*args):
+        raise cycle.CycleError("review threads are unresolved or incomplete")
+    monkeypatch.setattr(cycle, "_assert_review_threads_clear", unresolved)
+    with pytest.raises(cycle.CycleError, match="review threads"):
+        cycle.native_authority(f["layout"], f["pr"], f["entry"])
+    repair = cycle.native_authority(f["layout"], f["pr"], f["entry"], purpose="repair")
+    assert repair["owner"]["lease_id"] == "old-lease"
+    f["live"]["labels"] = [{"name": "hold"}]
+    with pytest.raises(cycle.CycleError, match="labels"):
+        cycle.native_authority(f["layout"], f["pr"], f["entry"], purpose="repair")
+    f["live"]["labels"] = []
+    with pytest.raises(cycle.CycleError):
+        cycle.native_authority(f["layout"], f["pr"], {**f["entry"], "session": "different"}, purpose="repair")
+    monkeypatch.setattr(cycle, "_assert_stopped", lambda *args: (_ for _ in ()).throw(cycle.CycleError("writer active")))
+    with pytest.raises(cycle.CycleError, match="writer active"):
+        cycle.native_authority(f["layout"], f["pr"], f["entry"], purpose="repair")
+    with pytest.raises(cycle.CycleError, match="unknown native authority purpose"):
+        cycle.native_authority(f["layout"], f["pr"], f["entry"], purpose="invalid")
+
+
+def test_repair_authority_fences_running_successor_to_stopped_reviewer(tmp_path, monkeypatch):
+    f = _native_authority_fixture(tmp_path, monkeypatch)
+    cycle.agent_worktree.register_worktree(f["source"], worktree=f["worktree"],
+                                          owner="session-original", now=int(time.time()) - 800)
+    stop_id = "1" * 32
+    work = {"stop_id": stop_id, "checkpoint": {"ref": "checkpoint"}}
+    ew._record_worker(f["layout"], 6618, state="running", runtime="openhands", container_id="e" * 64,
+                      stop_id=stop_id, work_at_stop=work,
+                      takeover={"status": "consumed", "stop_id": stop_id})
+    mapping = cycle._mapping(f["layout"], "reviewer")
+    writer = {"assignment": ew.assignment_of(mapping), "stop_id": stop_id,
+              "predecessor_container": "d" * 64, "work_at_stop": work}
+    monkeypatch.setattr(ew, "_id_present", lambda *args: False)
+    assert cycle.native_authority(f["layout"], f["pr"], f["entry"], purpose="repair",
+                                  repair_writer=writer)["owner"]["lease_id"] == "old-lease"
+    with pytest.raises(cycle.CycleError, match="stopped reviewer"):
+        cycle.native_authority(f["layout"], f["pr"], f["entry"], purpose="repair",
+                               repair_writer={**writer, "stop_id": "2" * 32})
+    monkeypatch.setattr(ew, "_id_present", lambda *args: True)
+    with pytest.raises(cycle.CycleError, match="reappeared"):
+        cycle.native_authority(f["layout"], f["pr"], f["entry"], purpose="repair", repair_writer=writer)
+    with pytest.raises(cycle.CycleError, match="cannot authorize merge"):
+        cycle.native_authority(f["layout"], f["pr"], f["entry"], repair_writer=writer)
 
 
 def test_native_authority_reads_registered_current_owner_and_migration_handoff(tmp_path, monkeypatch):

@@ -3053,6 +3053,11 @@ def _reserve_conversation(layout: Layout, issue: int, worker: str, record: Mappi
             raise LaunchRefused("worker assignment changed before conversation reservation")
         if mapping.get("worker") != worker or mapping.get("runtime") != "openhands" or mapping.get("state") != "running":
             raise LaunchRefused("worker has no running OpenHands agent-server")
+        owner_binding = record.get("owner_binding")
+        if owner_binding is not None and (not isinstance(owner_binding, Mapping)
+                or set(owner_binding) != {"lifecycle_owner", "owner", "builder_session"}
+                or any(mapping.get(field) != value for field, value in owner_binding.items())):
+            raise LaunchRefused("worker owner or Builder session changed before conversation reservation")
         prior = mapping.get("conversation")
         if isinstance(prior, Mapping) and prior.get("status") != CONVERSATION_ENDED:
             raise LaunchRefused(
@@ -3112,6 +3117,7 @@ def _start_conversation_locked(
     model: str | None,
     prompt: str,
     operation_id: str | None = None,
+    expected_owner_binding: Mapping[str, Any] | None = None,
     http: Callable[..., tuple[int, Any]] = _http,
     runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
@@ -3136,6 +3142,8 @@ def _start_conversation_locked(
         raise EpicWorkspaceError(str(exc)) from exc
     conversation_id = str(uuid.uuid4())
     record: dict[str, Any] = {"id": conversation_id, "engine": engine, "model": model, "status": "creating", "at": _now()}
+    if expected_owner_binding is not None:
+        record["owner_binding"] = dict(expected_owner_binding)
     if operation_id is not None:
         if not re.fullmatch(r"pr-completion-[0-9a-f]{64}", operation_id):
             raise LaunchRefused("invalid PR completion operation id")
@@ -3166,6 +3174,10 @@ def _start_conversation_locked(
         with _endpoint_session(layout, worker, issue, mapping, runner) as (port, key):
             if key != initial_key:
                 raise EndpointUnavailable("existing worker session key changed before creation")
+            current = _load_state(layout)["issue_mappings"][str(issue)]
+            if expected_owner_binding is not None and any(
+                    current.get(field) != value for field, value in expected_owner_binding.items()):
+                raise EndpointUnavailable("worker owner or Builder session changed before creation")
             try:
                 code, body = http("POST", port, key, "/conversations", payload, 120.0)
             except Exception:  # noqa: BLE001 - any transport/decode failure leaves the outcome unknown
