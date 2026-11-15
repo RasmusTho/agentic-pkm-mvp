@@ -372,6 +372,76 @@ def test_later_pr_body_update_requires_fresh_review_identity(production_path):
     assert cycle._premerge(f['layout'], updated, f['entry'], rereview)['head_sha'] == updated['head_sha']
 
 
+@pytest.fixture
+def recovered_child_scope(production_path, monkeypatch):
+    f = production_path
+    claim, parent = f['case']['issue'], 6615
+    # Recovery was produced and pinned with governing == claim. Only the later
+    # live PR contract changes; the original child-bound proof stays untouched.
+    assert cycle.native_authority(f['layout'], f['pr'], f['entry'])['claim_issue'] == claim
+    original_issue, original_fetch = cycle.closure._issue, cycle.github_fetch
+    parent_issue = copy.deepcopy(original_issue(None, None, None, claim))
+    parent_issue.update(number=parent, body=parent_issue['body'] + f'\nChild #{claim}\n',
+                        labels=[{'name': name} for name in
+                                ('type:epic', 'agent:blocked', 'action:wait-dependency')])
+    f['live']['body'] = f['pr']['body'].replace(f'Governing-Issue: #{claim}', f'Governing-Issue: #{parent}')
+    monkeypatch.setattr(cycle.closure, '_issue', lambda executor, cwd, repo, number:
+                        parent_issue if number == parent else original_issue(executor, cwd, repo, number))
+    monkeypatch.setattr(cycle, 'github_fetch', lambda path, timeout:
+                        (200, json.dumps(parent_issue).encode()) if path.endswith(f'/issues/{parent}')
+                        else original_fetch(path, timeout))
+    updated = cycle.observation._observe(cycle.observation._Reader(cycle.github_fetch, cycle.time.monotonic),
+                                         f['case']['pr'])
+    assert updated is not None
+    updated.update(route='native', check_config={})
+    updated['review_context'], updated['review_material'] = cycle._review_context(updated)
+    cycle._add_transfer_review_context(f['layout'], f['entry'], updated)
+    assert cycle.completion.work_identity(updated) != cycle.completion.work_identity(f['pr'])
+    return {**f, 'pr': updated, 'parent': parent}
+
+
+def test_recovered_operator_uses_child_claim_after_parent_contract_update(recovered_child_scope):
+    f = recovered_child_scope
+    assert f['pr']['review_material']['transfer_to_current']['current_head'] == f['pr']['head_sha']
+    for purpose in ('admission', 'repair', 'merge'):
+        authority = cycle.native_authority(f['layout'], f['pr'], f['entry'], purpose=purpose)
+        assert authority['governing_issue'] == f['parent']
+        assert authority['claim_issue'] == f['case']['issue']
+        assert authority['closing_issues'] == [f['case']['issue']]
+        assert authority['head_sha'] == f['pr']['head_sha']
+        assert authority['owner']['task_id'] == cycle.github_issue_task_id(cycle.completion.REPOSITORY, f['case']['issue'])
+        assert authority['owner']['lease_id'] == f['entry']['lease_id']
+        assert authority['worktree_owner']['owner'] == f['entry']['session']
+
+
+@pytest.mark.parametrize('foreign', ['issue', 'task', 'session'])
+def test_recovered_child_scope_refuses_foreign_operator_authority(recovered_child_scope, monkeypatch, foreign):
+    f = recovered_child_scope
+    if foreign == 'issue':
+        registry = cycle.agent_worktree._default_registry_path(f['case']['cwd'])
+        with cycle.agent_worktree._locked_registry(registry) as payload:
+            payload['worktrees'][str(f['case']['worktree'])]['operator_registration']['issue'] = f['parent']
+        expected = 'operator registration is missing or unpinned'
+    else:
+        original_inspect = cycle.closure._dispatcher_inspect
+        def inspect(*args):
+            task, events, lease = copy.deepcopy(original_inspect(*args))
+            if foreign == 'task':
+                task['task_id'] = task['task_id'].replace(str(f['case']['issue']), str(f['parent']))
+            else:
+                claims = [event for event in events if event['event_type'] == 'task.claimed']
+                claims[-1]['payload']['session'] = 'foreign-session'
+            return task, events, lease
+        monkeypatch.setattr(cycle.closure, '_dispatcher_inspect', inspect)
+        expected = 'dispatcher' if foreign == 'task' else 'operator takeover does not bind the legacy claim'
+    review_error = cycle.closure.ClosureError if foreign == 'task' else cycle.CycleError
+    with pytest.raises(review_error, match=expected):
+        cycle._add_transfer_review_context(f['layout'], f['entry'], f['pr'])
+    for purpose in ('admission', 'repair', 'merge'):
+        with pytest.raises(cycle.CycleError, match=expected):
+            cycle.native_authority(f['layout'], f['pr'], f['entry'], purpose=purpose)
+
+
 @pytest.mark.parametrize('failure', ['head', 'review', 'red_ci', 'pending_ci', 'executor_fence', 'inflight_fence',
                                      'stale_ack'])
 def test_operator_full_path_rejects_current_head_or_gate_drift(production_path, failure):

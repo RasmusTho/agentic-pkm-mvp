@@ -1904,7 +1904,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                     raise CycleError("candidate changed-file readback is unavailable")
                 _operator_lineage(events=events, owner=owner, origin=origin, registration=registration, records=lifecycle_records,
                     comments=[*issue_comments, *pr_comments], issue_comments=issue_comments,
-                    issue=authority.governing_issue, pr_number=int(pr["number"]), branch=branch,
+                    issue=claim, pr_number=int(pr["number"]), branch=branch,
                     head=pr["head_sha"], files=sorted(x["filename"] for x in changed_files),
                     entry={**entry, "base_sha": live.get("base", {}).get("sha")})
             elif same_session_transfer is None:
