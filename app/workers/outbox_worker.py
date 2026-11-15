@@ -79,7 +79,7 @@ from app.services.companion_note import (
     write_companion,
 )
 from app.settings.runtime import get_settings_bundle
-from app.services.note_uuid import ensure_note_uuid
+from app.services.note_uuid import ensure_note_uuid, is_read_only_derived_artifact
 from app.services.outbox import (
     ack_outbox,
     append_jsonl_outbox_event,
@@ -2005,6 +2005,10 @@ def handle_panel_scan_requested(
         return WorkerPanelSummary(emitted=0, deferred=True)
 
     frontmatter, _ = load_frontmatter(raw_text)
+    if isinstance(frontmatter, dict) and is_read_only_derived_artifact(frontmatter):
+        logger.info("panel scan skipped: read-only derived artifact")
+        return WorkerPanelSummary(emitted=0)
+
     note_uuid = _normalize_uuid_value(frontmatter.get("uuid") if isinstance(frontmatter, dict) else None)
     _assert_profile_ingestible(
         note_path,
