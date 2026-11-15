@@ -21,7 +21,7 @@ from typing import Any, cast
 import acp
 from acp.schema import AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse, PromptResponse
 
-COMMAND = re.compile(r"/?(start|status|cancel|resume|stop|watch)\s+#?([1-9][0-9]{0,8})(?:\s+([a-zA-Z0-9.-]+)\s+([a-zA-Z0-9-]+))?\s*", re.IGNORECASE)
+COMMAND = re.compile(r"/?(start|status|cancel|resume|stop|watch)[ \t]+#?([1-9][0-9]{0,8})(?:[ \t]+((?:gpt-|claude-)[a-zA-Z0-9.-]+)[ \t]+([a-zA-Z0-9-]+))?[ \t]*", re.IGNORECASE)
 HELP = ("Enter `start #123`, `status #123`, `cancel #123`, `resume #123`, `stop #123`, or `watch #123`. "
         "For Sol/high use `start #123 gpt-6.1-sol high`. Start authorizes only that Issue; the factory checks its contract and ownership.")
 

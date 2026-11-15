@@ -974,7 +974,7 @@ def test_verified_stop_requires_recorded_container_absence_and_live_engine(tmp_p
 def test_authority_failure_for_one_admitted_pr_does_not_abort_peer(tmp_path, monkeypatch):
     layout, config, server = setup(tmp_path, monkeypatch)
     config.append({**config[0], "number": 9})
-    def one(layout, pr, entry, *, http):
+    def one(layout, pr, entry, *, http, codex_home=None):
         if pr["number"] == 9:
             raise cycle.closure.ClosureError("unknown", "authority unavailable")
         return {"number": pr["number"], "action": "advanced"}

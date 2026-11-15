@@ -955,11 +955,18 @@ subscription login in `~ygg/.config/epic-workspace/codex`, created once by the o
 `openhands-start --codex-home` mounts it at `/run/codex-home` for one worker at a time, because
 refresh tokens rotate. No API key and no host credential store is used.
 
-Known limits: on the 3915 MiB, no-swap trial VM, native workers hit OOM at both 1000 and 1200 MiB;
-the current trial uses 1500 MiB and serial execution pending peak-memory and concurrency
-qualification. Test runs use an owned disk-backed temporary directory for `TMPDIR` and a separate
-pytest base directory per run to avoid accumulating temporary files in memory. These are trial
-observations, not a global worker budget minimum. The default engine's `docker0` bridge is missing,
+Known limits: the approved BOB-1 trial envelope is two CPUs and 3915 MiB without swap, with
+one 2g native worker running serially. Workers hit OOM at 1000 and 1200 MiB; a later 1500 MiB
+source writer also suffered OOM and required external preservation before a 2g successor continued.
+The successor source candidate raises the shared contained-Git inspection/checkpoint limit from
+256m to 768m for both read-only inspection and ID-bound checkpoint create/start, including repack
+and readback. The hosting controller remains frozen at `ffdee080` with image `3c3c2472`; recovery
+`c68dd18d`/`b5e7feac` remains separate. Actual recoveries and multiple production handoffs used a
+scoped 768m inspection override; the source candidate has not hot-replaced that running controller.
+These are demonstrated workload observations, not a global worker minimum or a capacity guarantee;
+adding the worker and inspection limits does not prove peak host memory use. Test runs use an owned
+disk-backed temporary directory for `TMPDIR` and a separate pytest base directory per run.
+The default engine's `docker0` bridge is missing,
 which is why the owned `epicws` bridge is used.
 An agent-server worker uses about 0.5 GB at rest. A checkpoint containing ignored files or stash commits
 can remain unreleasable when publication cannot prove their captured content or reachability.

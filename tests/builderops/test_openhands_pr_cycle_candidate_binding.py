@@ -23,7 +23,7 @@ def setup_candidate(tmp_path, monkeypatch):
                  'head_sha': HEAD, 'branch': 'codex/example', 'worktree_owner': registration}
     monkeypatch.setattr(cycle, 'native_authority', lambda *args, **kwargs: dict(authority))
     config[0]['owner_worktree'] = str(host)
-    assert cycle.advance(layout, config, fetch=fetch, http=server)['results'][1]['action'] == 'repair-author'
+    assert binding_tick(layout, config, server)['action'] == 'repair-author'
     author = cycle._mapping(layout, 'reviewer')['conversation']
     server.conversations[author['id']]['execution_status'] = 'finished'
     monkeypatch.setattr(cycle, 'native_execution_proof', lambda layout, worker, op, admission, **kwargs: {
@@ -71,16 +71,29 @@ def get_receipt(layout):
     return next(r for r in ew._load_state(layout)['compact_receipts'] if r.get('repair_operation'))
 
 
+def binding_tick(layout, config, server):
+    # These legacy fixtures exercise binding/rebinding an explicitly prepared publisher
+    # candidate, not the later automatic reviewer (covered by candidate_dispatch_v2).
+    # advance() now resumes that reviewer once repair_candidate exists; call the real
+    # original binding consumer so it re-observes publisher drift and invalidates old data.
+    pr = cycle.observation.collect(fetch)["observations"][1]
+    with cycle._single_advancement(layout):
+        try:
+            return cycle._advance_one(layout, pr, config[0], http=server)
+        except cycle.CycleError as exc:
+            return {"action": "wait", "reason": str(exc)}
+
+
 def test_candidate_is_bound_to_stopped_tree_and_waits_for_review(tmp_path, monkeypatch):
     layout, config, server, _, port = setup_candidate(tmp_path, monkeypatch)
-    row = cycle.advance(layout, config, fetch=fetch, http=server)['results'][1]
+    row = binding_tick(layout, config, server)
     assert row['action'] == 'awaiting-candidate-review', row
     receipt = get_receipt(layout)
     assert receipt['repair_candidate']['candidate_head'] == CANDIDATE
     assert receipt['repair_candidate']['tree'] == TREE
     assert receipt['repair_candidate']['stop_id'] == receipt['repair_stop_intent']['stop_id']
     assert not any(call[:2] in (('git', 'push'), ('gh', 'pr')) for call in port.calls)
-    again = cycle.advance(layout, config, fetch=fetch, http=server)['results'][1]
+    again = binding_tick(layout, config, server)
     assert again['action'] == 'awaiting-candidate-review'
     assert len([c for c in server.calls if c[0] == 'POST']) == 2
 
@@ -99,7 +112,7 @@ def test_changed_candidate_or_authority_holds_without_effect(tmp_path, monkeypat
                 return CommandResult(tuple(argv), 0, 'c' * 40 + '\n', '')
             return original(argv, **kwargs)
         port.run = run
-    row = cycle.advance(layout, config, fetch=fetch, http=server)['results'][1]
+    row = binding_tick(layout, config, server)
     assert row['action'] == 'wait'
     assert 'repair_candidate' not in get_receipt(layout)
     assert not any(call[:2] in (('git', 'push'), ('gh', 'pr')) for call in port.calls)
@@ -107,7 +120,7 @@ def test_changed_candidate_or_authority_holds_without_effect(tmp_path, monkeypat
 
 def test_prior_candidate_observation_is_invalidated_when_head_drifts(tmp_path, monkeypatch):
     layout, config, server, _, _ = setup_candidate(tmp_path, monkeypatch)
-    assert cycle.advance(layout, config, fetch=fetch, http=server)['results'][1]['action'] == 'awaiting-candidate-review'
+    assert binding_tick(layout, config, server)['action'] == 'awaiting-candidate-review'
     config[0]['repair_publication']['candidate_head'] = 'c' * 40
-    assert cycle.advance(layout, config, fetch=fetch, http=server)['results'][1]['action'] == 'wait'
+    assert binding_tick(layout, config, server)['action'] == 'wait'
     assert 'repair_candidate' not in get_receipt(layout)

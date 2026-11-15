@@ -24,7 +24,8 @@ def test_owner_distinguishes_fresh_ci_from_recorded_status():
     assert "Current GitHub checks are unavailable" in owner._summary("status", 42, {"live_ci": {"status": "unavailable"}})
 
 
-@pytest.mark.parametrize("message", ["start 1; start 2", "start 1 and 2", "start 0", "start -1", "delete 3", "start 4\nstatus 5"])
+@pytest.mark.parametrize("message", ["start 1; start 2", "start 1 and 2", "start 0", "start -1", "delete 3", "start 4\nstatus 5",
+                                           "start 4 gpt-6.1-sol\nhigh", "start 4\ngpt-6.1-sol high"])
 def test_owner_requires_one_explicit_issue_command(tmp_path, monkeypatch, message):
     monkeypatch.setattr(owner, "_invoke", lambda *args, **kwargs: pytest.fail("unexpected effect"))
     assert "one explicit Issue command" in owner.run_command(tmp_path / "entry", message)

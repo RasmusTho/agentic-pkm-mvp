@@ -157,7 +157,14 @@ def test_interrupted_stop_reuses_receipt_and_same_stop_without_endpoint(tmp_path
     assert saved["candidate_review_stop_intent"]["stop_id"] == stop_ids[0]
     calls = len(server.calls)
     monkeypatch.setattr(cycle, "_worker_runner", engine)
-    resumed = advance(data, fetch, server, home)
+    # Resume the real completed-review/stop consumer. advance() now also starts
+    # automatic Verify, which this review-only fixture deliberately does not admit.
+    with cycle._single_advancement(layout), ew._worker_lifecycle_lock(layout, data[5]["worker"]):
+        saved = cycle._find(layout, 10, identity)
+        pr = cycle.observation.collect(fetch)["observations"][0]
+        binding, candidate_pr = cycle._candidate_review_snapshot(layout, pr, data[5], saved)
+        resumed = cycle._finish_candidate_review(
+            layout, pr, data[5], saved, binding, candidate_pr, saved["candidate_review_receipt"])
     assert resumed["action"] == "awaiting-candidate-verify", resumed
     assert len(server.calls) == calls
     assert cycle._find(layout, 10, identity)["candidate_review_stop_intent"]["stop_id"] == stop_ids[0]

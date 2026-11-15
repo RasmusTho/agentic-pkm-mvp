@@ -1,9 +1,14 @@
-"""Candidate Verify through production OpenHands Bash lifecycle, with synthetic ports."""
+"""Candidate Verify through production OpenHands Bash lifecycle, with synthetic ports.
+
+Miniature child suites deliberately load no optional plugins or repository configuration.
+Clear only their inherited pytest options; outer CI timeouts and finite child deadlines remain.
+"""
 
 import json
 import os
 import subprocess
 import uuid
+import venv as venv_module
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -81,9 +86,9 @@ def verify_fixture(tmp_path, capsys, monkeypatch, *, fail=False, lose=False, los
         data, fetch, identity, server, home, _, _, _, _ = prepared(tmp_path, capsys, monkeypatch, test_source=source, sol=sol)
     layout, _, publisher, _, pr, entry, _, _, _ = data
     venv = tmp_path / 'approved-venv'
-    (venv / 'bin').mkdir(parents=True)
-    (venv / 'bin/python').symlink_to('/usr/local/bin/python3.12')
-    (venv / 'pyvenv.cfg').write_text('version = 3.12.0\ninclude-system-site-packages = true\n')
+    # Copy the executing runtime: CI's toolcache path is not present in the worker image.
+    # This is an owned fixture, not an escape from the production interpreter allowlist.
+    venv_module.EnvBuilder(system_site_packages=True, symlinks=False).create(venv)
     entry['test_venv'] = str(venv)
     events = []
     calls = []
@@ -112,7 +117,7 @@ def verify_fixture(tmp_path, capsys, monkeypatch, *, fail=False, lose=False, los
                 events.append(event)
                 cmd = body['command'].replace('/opt/pr-cycle-venv', str(venv)).replace('/workspace', str(layout.checkout(worker)))
                 result = subprocess.run(cmd, shell=True, cwd=layout.checkout(worker), capture_output=True, text=True,
-                                        env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'}, timeout=30)
+                                        env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTEST_ADDOPTS': ''}, timeout=30)
                 events.append({'kind': 'BashOutput', 'id': str(uuid.uuid4()), 'command_id': cid,
                                'order': 0, 'exit_code': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
                 if lost[0]:
@@ -211,7 +216,7 @@ def test_full_validator_checks_real_pytest_summary(tmp_path, case, accepted):
     target = 'tests/test_example.py::' + ('test_absent' if case == 'missing' else 'test_example')
     result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', target],
                             cwd=work, capture_output=True, text=True,
-                            env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
+                            env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTEST_ADDOPTS': '', 'PYTHONDONTWRITEBYTECODE': '1'}, timeout=30)
     head, base = 'a' * 40, 'b' * 40
     review, output = tmp_path / 'review.txt', tmp_path / 'output.txt'
     review.write_text(f'independent review candidate {head} pass\n')
@@ -588,10 +593,13 @@ def test_installed_bash_service_records_actual_fixture_exit(tmp_path, monkeypatc
     import asyncio
     import shlex
     import sys
+    # OpenHands is an optional installed-runtime probe, as for the ACP profile test.
+    pytest.importorskip('openhands', reason='optional installed-runtime integration; required separately in sandbox acceptance')
     from openhands.agent_server.bash_service import BashEventService
     from openhands.agent_server.models import ExecuteBashRequest
 
     monkeypatch.setenv('PYTEST_DISABLE_PLUGIN_AUTOLOAD', '1')
+    monkeypatch.setenv('PYTEST_ADDOPTS', '')
     test = tmp_path / 'test_fixture.py'
     test.write_text('def test_fixture(): assert 2 + 2 == 4\n')
 

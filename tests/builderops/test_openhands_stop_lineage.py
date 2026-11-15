@@ -217,8 +217,8 @@ def test_standalone_checkpoint_changes_generation_without_reusing_old_receipt(tm
     cycle._release_reviewer(layout, "reviewer", saved, observed)
     first = cycle._mapping(layout, "reviewer")
 
-    def later_checkpoint(layout, issue, *args, **kwargs):
-        return ew._record_checkpoint(layout, issue, {"ref": "later-checkpoint", "status": "preserved"})
+    def later_checkpoint(layout, issue, worker, *args, **kwargs):
+        return ew._record_checkpoint(layout, issue, worker, {"ref": "later-checkpoint", "status": "preserved"})
 
     monkeypatch.setattr(ew, "_checkpoint", later_checkpoint)
     result = ew.checkpoint_worker(layout, "reviewer", reason="manual checkpoint", runner=engine)
@@ -280,8 +280,8 @@ def test_standalone_checkpoint_of_changed_checkout_preserves_new_record_and_fenc
                         ({"present": True, "readable": True, "unique_work": True,
                           "branch": "codex/example", "head": "b" * 40}, []))
 
-    def later_checkpoint(layout, issue, *args, **kwargs):
-        return ew._record_checkpoint(layout, issue, {"ref": "newer-checkpoint", "status": "preserved"})
+    def later_checkpoint(layout, issue, worker, *args, **kwargs):
+        return ew._record_checkpoint(layout, issue, worker, {"ref": "newer-checkpoint", "status": "preserved"})
 
     monkeypatch.setattr(ew, "_checkpoint", later_checkpoint)
     result = ew.checkpoint_worker(layout, "reviewer", reason="manual checkpoint", runner=engine)

@@ -1238,7 +1238,7 @@ def _contained_git(
         # The writable scratch mount is owned by the controller, which need not have the
         # worker image's UID. Files the controller cannot read remain unreadable evidence.
         "--security-opt", "no-new-privileges", "--user", f"{os.geteuid()}:{os.getegid()}", "--pids-limit", "64",
-        "--memory", "256m", "--tmpfs", "/tmp:rw,nosuid,size=16m", "--env", "HOME=/tmp", *env_args,
+        "--memory", "768m", "--tmpfs", "/tmp:rw,nosuid,size=16m", "--env", "HOME=/tmp", *env_args,
         *(["--interactive"] if input_data is not None else []),
         *[arg for mount in mounts for arg in ("--mount", mount)],
         image,

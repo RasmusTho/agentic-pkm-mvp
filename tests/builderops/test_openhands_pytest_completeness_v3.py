@@ -1,4 +1,8 @@
-"""Real pytest output crosses the retained Verify and full-evidence boundaries."""
+"""Real pytest output crosses the retained Verify and full-evidence boundaries.
+
+Children are miniature plugin-free suites with their own finite subprocess deadline;
+outer repository pytest options must not leak into their isolated configuration.
+"""
 
 import json
 import os
@@ -39,7 +43,7 @@ def test_real_results_and_full_validator(tmp_path, mode, stream, accepted):
     extra = ['-k', '0'] if mode == 'deselected' else []
     result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *extra, target],
                             cwd=work, capture_output=True, text=True,
-                            env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
+                            env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTEST_ADDOPTS': '', 'PYTHONDONTWRITEBYTECODE': '1'}, timeout=30)
     output = result.stdout + '\n' + result.stderr
     (tmp_path / 'actual-output.json').write_text(json.dumps({'exit': result.returncode, 'stdout': result.stdout,
                                                               'stderr': result.stderr}, indent=2))
@@ -106,7 +110,7 @@ def test_ordinary_sandbox_verify_interprets_real_output(tmp_path, monkeypatch, i
         + ('    if n: pytest.skip("missing")\n' if incomplete else '') + '    assert True\n')
     observed = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', str(source)],
         cwd=tmp_path, capture_output=True, text=True,
-        env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
+        env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTEST_ADDOPTS': '', 'PYTHONDONTWRITEBYTECODE': '1'}, timeout=30)
     assert observed.returncode == 0
     layout, saved = _verify_setup(tmp_path, monkeypatch)
     def command(argv, *, timeout):
