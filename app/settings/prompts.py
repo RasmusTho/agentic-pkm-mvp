@@ -15,7 +15,11 @@ ASK_PROMPT_RELATIVE_PATH = Path("prompts") / "ask.md"
 def _markdown_body(text: str) -> str:
     """Return prompt Markdown without optional YAML front matter."""
     if text.startswith("---"):
-        _, _, text = text.split("---", 2)
+        lines = text.splitlines(keepends=True)
+        closing = next((i for i, line in enumerate(lines[1:], 1) if line.rstrip(" \t\r\n") == "---"), None)
+        if closing is None:
+            raise ValueError("prompt front matter is unclosed")
+        text = "".join(lines[closing + 1:])
     return text.strip()
 
 

@@ -63,11 +63,12 @@ def test_validate_reads_canonical_prompts(monkeypatch, tmp_path: Path) -> None:
     assert any(issue["code"] == "prompts.invalid" for issue in response.json()["issues"])
 
 
-def test_validate_reports_unclosed_prompt_front_matter(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("content", ["---\nname: incomplete\n", "---\nname: a---b\n"])
+def test_validate_reports_unclosed_prompt_front_matter(monkeypatch, tmp_path: Path, content: str) -> None:
     vault = _configure_vault(monkeypatch, tmp_path)
     monkeypatch.setenv("VAULT_ROOT", str(vault))
     prompt_path = vault / "settings" / "prompts" / "ask.md"
-    prompt_path.write_text("---\nname: incomplete\n", encoding="utf-8")
+    prompt_path.write_text(content, encoding="utf-8")
 
     response = TestClient(app).get("/api/settings/validate")
 
@@ -86,7 +87,7 @@ def test_validate_reports_unclosed_prompt_front_matter(monkeypatch, tmp_path: Pa
 def test_ask_prompt_resolves_with_front_matter(monkeypatch, tmp_path: Path) -> None:
     vault = _configure_vault(monkeypatch, tmp_path)
     (vault / "settings" / "prompts" / "ask.md").write_text(
-        "---\nname: ask\n---\nUse this prompt.\n", encoding="utf-8"
+        "---\nname: a---b\n---\nUse this prompt.\n", encoding="utf-8"
     )
 
     assert resolve_ask_system_prompt(vault) == ("Use this prompt.", "vault-shared:prompts/ask.md")
@@ -95,3 +96,12 @@ def test_ask_prompt_resolves_with_front_matter(monkeypatch, tmp_path: Path) -> N
 def test_loader_removed_once_unused() -> None:
     assert not Path("app/components/settings/prompts_loader.py").exists()
     assert not list(Path("app").rglob("*prompts_loader*"))
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_front_matter_block_scalar_does_not_end_prompt_metadata(monkeypatch, tmp_path: Path, newline: str) -> None:
+    vault = _configure_vault(monkeypatch, tmp_path)
+    content = newline.join(["---", "description: |", "  ---", "  private metadata", "---  ", "Real prompt", ""])
+    (vault / "settings" / "prompts" / "ask.md").write_bytes(content.encode("utf-8"))
+
+    assert resolve_ask_system_prompt(vault) == ("Real prompt", "vault-shared:prompts/ask.md")
