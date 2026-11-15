@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import selectors
 import stat
 import subprocess
 import sys
@@ -17,7 +18,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, TypeGuard, cast
@@ -43,10 +44,217 @@ MAX_PRIOR_BINDINGS = 8
 # Transfer and move snapshots live inside the existing lifecycle record. Refuse
 # rather than silently truncate an ownership chain that exceeds this bound.
 MAX_TRANSFER_HISTORY = 32
+RECOVERY_MAX_FILES = 64
+RECOVERY_MAX_CONTENT_BYTES = 16 * 1024 * 1024
+RECOVERY_MAX_GIT_BYTES = 4 * 1024 * 1024
+RECOVERY_GIT_TIMEOUT = 10.0
 
 
 class WorktreeLifecycleError(RuntimeError):
     """A worktree lifecycle operation is not safe or authorized."""
+
+
+def _recovery_git(worktree: Path, *args: str) -> bytes:
+    """Bound a read-only Git probe; never return stderr or invoke candidate helpers."""
+    command = ["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
+               "-c", "core.untrackedCache=false", "-c", "status.renames=false",
+               "-C", str(worktree), *args]
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL,
+                                   env=git_hygiene._sanitized_git_environment())
+        assert process.stdout is not None
+        try:
+            deadline = time.monotonic() + RECOVERY_GIT_TIMEOUT
+            output = bytearray()
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not selector.select(remaining):
+                        raise WorktreeLifecycleError("recovery Git observation timed out")
+                    chunk = os.read(process.stdout.fileno(), min(65536, RECOVERY_MAX_GIT_BYTES + 1 - len(output)))
+                    if not chunk:
+                        break
+                    output.extend(chunk)
+                    if len(output) > RECOVERY_MAX_GIT_BYTES:
+                        raise WorktreeLifecycleError("recovery Git observation exceeds its byte bound")
+            if process.wait(timeout=max(0.001, deadline - time.monotonic())) != 0:
+                raise WorktreeLifecycleError("recovery Git observation is unavailable")
+            return bytes(output)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+            process.stdout.close()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise WorktreeLifecycleError("recovery Git observation is unavailable") from exc
+
+
+def _recovery_metadata(path: Path, limit: int) -> bytes:
+    """Read an existing small regular metadata file without following its final symlink."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        with os.fdopen(descriptor, "rb") as handle:
+            before = os.fstat(handle.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size > limit or before.st_nlink != 1:
+                raise WorktreeLifecycleError("recovery metadata is unsupported or oversized")
+            data = handle.read(limit + 1)
+            after = os.fstat(handle.fileno())
+            if len(data) > limit or _recovery_file_identity(before) != _recovery_file_identity(after):
+                raise WorktreeLifecycleError("recovery metadata changed during observation")
+            return data
+    except OSError as exc:
+        raise WorktreeLifecycleError("recovery metadata is unavailable") from exc
+
+
+def _recovery_file_identity(info: os.stat_result) -> tuple[int, ...]:
+    # Reads can update atime. It is not candidate drift or writer evidence.
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _recovery_target(cwd: Path, worktree: Path, *, owner: str, branch: str,
+                     generation: str) -> dict[str, Any]:
+    path = _default_registry_path(cwd)
+    try:
+        payload = json.loads(_recovery_metadata(path, RECOVERY_MAX_GIT_BYTES))
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise WorktreeLifecycleError("recovery registry is invalid") from exc
+    if (not isinstance(payload, dict) or payload.get("schema") != REGISTRY_SCHEMA
+            or not isinstance(payload.get("worktrees"), dict)):
+        raise WorktreeLifecycleError("recovery registry is invalid")
+    record = _validate_authority_record(str(worktree), payload["worktrees"].get(str(worktree)))
+    if (record.get("owner") != owner or record.get("branch") != branch
+            or record.get("generation") != generation or record.get("status") != "active"):
+        raise WorktreeLifecycleError("recovery target differs from the expected registration")
+    actual_path, actual_branch = _worktree_identity(cwd, worktree)
+    raw_marker = _recovery_git(worktree, "rev-parse", "--git-path", GENERATION_MARKER).strip()
+    marker = Path(os.fsdecode(raw_marker))
+    if not marker.is_absolute():
+        marker = worktree / marker
+    actual_generation = _recovery_metadata(marker, 128).decode("ascii").strip()
+    if actual_path != worktree or actual_branch != branch or actual_generation != generation:
+        raise WorktreeLifecycleError("recovery worktree identity changed")
+    return record
+
+
+def _recovery_candidate(worktree: Path, expected_head: str) -> dict[str, Any]:
+    head = _recovery_git(worktree, "rev-parse", "--verify", "HEAD^{commit}").decode("ascii").strip()
+    if head != expected_head:
+        raise WorktreeLifecycleError("recovery HEAD differs from the expected candidate")
+    index = _recovery_git(worktree, "ls-files", "--stage", "-z")
+    index_flags = _recovery_git(worktree, "ls-files", "-v", "-z")
+    # Status deliberately trusts assume-unchanged/skip-worktree hints. Refuse those
+    # inputs before selecting or reading content; never clear hints in an old index.
+    if (index_flags and not index_flags.endswith(b"\0")) or any(
+        len(row) <= 2 or row[:2] != b"H " for row in index_flags.split(b"\0")[:-1]
+    ):
+        raise WorktreeLifecycleError("recovery index flags are unsupported or malformed")
+    status_bytes = _recovery_git(worktree, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    statuses: dict[str, str] = {}
+    for row in status_bytes.split(b"\0"):
+        if not row:
+            continue
+        if (len(row) < 4 or row[2:3] != b" " or any(c not in b" MADT?" for c in row[:2])):
+            raise WorktreeLifecycleError("recovery status contains an unsupported or conflicted entry")
+        name = os.fsdecode(row[3:])
+        if (name in statuses or name.startswith("/")
+                or any(part in {"", ".", "..", ".git"} for part in name.split("/"))):
+            raise WorktreeLifecycleError("recovery status contains an ambiguous path")
+        statuses[name] = row[:2].decode("ascii")
+    if len(statuses) > RECOVERY_MAX_FILES:
+        raise WorktreeLifecycleError("recovery candidate exceeds its file bound")
+
+    entries: list[dict[str, Any]] = []
+    try:
+        # Open every selected input and validate the aggregate BEFORE the first content read.
+        # Directory-relative no-follow opens exclude parent aliases, symlinks and special files.
+        with ExitStack() as stack:
+            root_fd = os.open(worktree, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            stack.callback(os.close, root_fd)
+            opened = []
+            total = 0
+            for name, status_code in sorted(statuses.items()):
+                parent_fd = os.dup(root_fd)
+                try:
+                    parts = name.split("/")
+                    try:
+                        for part in parts[:-1]:
+                            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                            dir_fd=parent_fd)
+                            os.close(parent_fd)
+                            parent_fd = child
+                        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                                     dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        if status_code[1] != "D" and status_code != "D ":
+                            raise WorktreeLifecycleError("recovery candidate input disappeared")
+                        entries.append({"path": name, "status": status_code, "worktree": "absent"})
+                        continue
+                    handle = stack.enter_context(os.fdopen(fd, "rb"))
+                    info = os.fstat(handle.fileno())
+                    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                            or info.st_dev != os.fstat(root_fd).st_dev):
+                        raise WorktreeLifecycleError("recovery candidate contains an unsupported input")
+                    total += info.st_size
+                    if total > RECOVERY_MAX_CONTENT_BYTES:
+                        raise WorktreeLifecycleError("recovery candidate exceeds its aggregate byte bound")
+                    opened.append((name, status_code, handle, info))
+                finally:
+                    os.close(parent_fd)
+            for name, status_code, handle, before in opened:
+                digest = hashlib.sha256()
+                count = 0
+                while True:
+                    chunk = handle.read(min(65536, before.st_size + 1 - count))
+                    if not chunk:
+                        break
+                    count += len(chunk)
+                    if count > before.st_size:
+                        raise WorktreeLifecycleError("recovery candidate input grew during observation")
+                    digest.update(chunk)
+                after = os.fstat(handle.fileno())
+                if count != before.st_size or _recovery_file_identity(before) != _recovery_file_identity(after):
+                    raise WorktreeLifecycleError("recovery candidate input changed during observation")
+                entries.append({"path": name, "status": status_code, "size": count,
+                                "mode": stat.S_IMODE(before.st_mode), "sha256": digest.hexdigest()})
+    except OSError as exc:
+        raise WorktreeLifecycleError("recovery candidate input is unavailable or unsupported") from exc
+    return {"head": head, "index_sha256": hashlib.sha256(index).hexdigest(),
+            "index_flags_sha256": hashlib.sha256(index_flags).hexdigest(),
+            "status_sha256": hashlib.sha256(status_bytes).hexdigest(),
+            "clean": not statuses, "files": sorted(entries, key=lambda entry: entry["path"])}
+
+
+def recovery_report(cwd: Path, *, worktree: Path, owner: str, branch: str, generation: str,
+                    expected_head: str) -> dict[str, Any]:
+    """Observe a candidate twice. Agreement is not atomicity, quiescence or transfer authority."""
+    requested = _canonical(worktree)
+    if (not worktree.is_absolute() or str(worktree) != str(requested) or not owner.strip()
+            or not branch or not _valid_generation(generation)
+            or not re.fullmatch(r"[0-9a-f]{40,64}", expected_head)):
+        raise WorktreeLifecycleError("exact recovery target selectors are required")
+    try:
+        before = _recovery_target(cwd, requested, owner=owner, branch=branch, generation=generation)
+        candidate = _recovery_candidate(requested, expected_head)
+        repeated = _recovery_candidate(requested, expected_head)
+        after = _recovery_target(cwd, requested, owner=owner, branch=branch, generation=generation)
+        if before != after or candidate != repeated:
+            raise WorktreeLifecycleError("recovery candidate or registration changed; no report accepted")
+    except (UnicodeError, ValueError, TypeError) as exc:
+        raise WorktreeLifecycleError("recovery observation is malformed") from exc
+    # Never emit arbitrary registry fields or nested historical payloads as report content.
+    registration = {key: before[key] for key in (
+        "path", "owner", "branch", "generation", "status", "registered_at", "heartbeat_at",
+        "expires_at", "authority_since", "registration_epoch") if key in before}
+    binding = {"registration": registration,
+               "registration_sha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
+               "candidate": candidate}
+    return {"ok": True, "mode": "recovery-report", "authority": "observation-only",
+            "ownership_transferred": False, "writer_absence": "not-proven", "process_closure": "unknown",
+            "preservation_backup": False, **binding,
+            "candidate_sha256": hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()}
 
 
 def _canonical(path: Path) -> Path:
@@ -2066,6 +2274,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--registry-file")
     parser.add_argument("--lease-file")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    operation = subparsers.add_parser("recovery-report", help="read-only exact-candidate recovery inventory; no ownership transfer")
+    operation.add_argument("--worktree", required=True)
+    operation.add_argument("--owner", required=True)
+    operation.add_argument("--branch", required=True)
+    operation.add_argument("--generation", required=True)
+    operation.add_argument("--expected-head", required=True)
     for command in ("register", "heartbeat"):
         operation = subparsers.add_parser(command)
         operation.add_argument("--worktree", required=True)
@@ -2114,7 +2328,12 @@ def main(argv: list[str] | None = None) -> int:
         lease_path = (
             _canonical(Path(args.lease_file)) if args.lease_file else None
         )
-        if args.command == "register":
+        if args.command == "recovery-report":
+            if args.registry_file or args.lease_file:
+                raise WorktreeLifecycleError("recovery report uses only the existing repository registry")
+            result = recovery_report(cwd, worktree=Path(args.worktree), owner=args.owner,
+                                     branch=args.branch, generation=args.generation, expected_head=args.expected_head)
+        elif args.command == "register":
             result = register_worktree(
                 cwd,
                 worktree=Path(args.worktree),

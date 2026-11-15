@@ -72,6 +72,27 @@ Then read the two context hints, if they exist:
 - The linked Issue/PR, only if the branch maps to one and the network is up
   (`gh pr view`, `gh issue view`). Never block recovery on network.
 
+For a legacy local agent, the existing lifecycle CLI can produce an observational candidate report:
+
+```bash
+python3 -B scripts/agent_worktree.py --cwd <trusted-checkout> recovery-report \
+  --worktree <exact-absolute-path> --owner <recorded-session> --branch <recorded-branch> \
+  --generation <recorded-generation> --expected-head <observed-full-HEAD>
+```
+
+Supply the expected selectors from the current bounded inventory; do not adopt changed values to
+make a refused report pass. The command reads the existing repository registry without updating it,
+compares two content-bound Git candidate observations, and outputs hashes and selected metadata,
+not file contents. It includes staged, unstaged and non-ignored untracked changes. Index hints
+such as Git's assume-unchanged or skip-worktree refuse before candidate content reads; the command
+does not clear them. Unsupported, oversized or differing readbacks refuse rather than truncate.
+This is not an atomic snapshot, and Git's candidate inventory is not a census of filesystem
+objects or writers. It is not a
+preservation backup, authenticated handoff, ownership recovery, writer fence or proof of process,
+child or remote-operation closure. Those states remain unknown until separately proved. Do not
+renew/reclaim an expired owner, resume a prohibited model or replace an owner because this report
+passes. The existing transfer sequence below remains binding.
+
 Before another session replaces an Issue's lifecycle owner, authenticate the live claim and the
 latest durable `lifecycle_handoff_receipt.v1` from the Issue or PR. The receipt must name the current
 lifecycle owner and session, the sole writable worktree, branch and base, the unpublished candidate
