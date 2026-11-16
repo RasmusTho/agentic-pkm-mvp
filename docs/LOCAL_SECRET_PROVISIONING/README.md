@@ -72,16 +72,18 @@ qualification. Explicit `--existing-secrets-only` deployment retains its read-on
 
 The non-production YouTube OAuth boundary uses the same BWS reader and channel project, with no
 new store or daemon. `youtube.oauth-client-id`, `youtube.oauth-client-secret`, and
-`youtube.token-store-key` are declared only for `youtube-runtime-api`, `youtube-runtime-worker`,
-and `youtube-runtime-watcher` on `dev` and `test`; the client id and client secret resolve the
+`youtube.token-store-key` are declared only for `youtube-runtime-api` and
+`youtube-runtime-watcher` on `dev` and `test`; the client id and client secret resolve the
 channel-scoped identities such as `dev/youtube.oauth-client-id` and
 `test/youtube.oauth-client-secret`; the same OAuth client may be provisioned into both channels,
 while the token-store key remains channel-scoped as `dev/youtube.token-store-key` or
 `test/youtube.token-store-key`. Missing all three leaves the YouTube runtime unconfigured; a
 partial or malformed set fails closed. Production has no YouTube grant. The native deploy writes
-only mode-0600 temporary env-file handles for the three runtime
-consumers, and Compose receives those handles through `YOUTUBE_RUNTIME_ENV_FILE_API`,
-`YOUTUBE_RUNTIME_ENV_FILE_WORKER`, and `YOUTUBE_RUNTIME_ENV_FILE_WATCHER`.
+only mode-0600 temporary env-file handles for the API and watcher runtime consumers, and Compose
+receives those handles through `YOUTUBE_RUNTIME_ENV_FILE_API` and
+`YOUTUBE_RUNTIME_ENV_FILE_WATCHER`. The outbox worker keeps its existing database grant but
+receives no YouTube OAuth or token-store secret because it emits downstream events rather than
+calling the YouTube API.
 The normal writer invocation is value-free in the command surface and reads the value from stdin
 on the approved writer host; repeat it for the three logical ids and selected channel only:
 

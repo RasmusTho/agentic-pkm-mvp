@@ -1018,7 +1018,7 @@ _deploy_channel_reject_prod_youtube_aliases() {
   local channel_env_file="${1:?channel env file required}"
   local key
   [ -f "${channel_env_file}" ] || return 0
-  for key in YOUTUBE_RUNTIME_ENV_FILE_API YOUTUBE_RUNTIME_ENV_FILE_WORKER YOUTUBE_RUNTIME_ENV_FILE_WATCHER; do
+  for key in YOUTUBE_RUNTIME_ENV_FILE_API YOUTUBE_RUNTIME_ENV_FILE_WATCHER; do
     if awk -v key="${key}" '
       {
         line = $0
@@ -1161,7 +1161,6 @@ deploy_channel_compose() {
     # inert file. Compose's --env-file has higher precedence than an unset
     # variable, so merely unsetting inherited aliases is insufficient.
     export YOUTUBE_RUNTIME_ENV_FILE_API=/dev/null
-    export YOUTUBE_RUNTIME_ENV_FILE_WORKER=/dev/null
     export YOUTUBE_RUNTIME_ENV_FILE_WATCHER=/dev/null
   fi
   compose_args=(-f "${root}/docker-compose.yaml" -f "${root}/${compose_overlay}")
@@ -1423,7 +1422,7 @@ deploy_channel_compose() {
 
     if [ "${HOST_SECRET_PROVIDER:-}" != "bws" ] && _deploy_channel_needs_youtube_secret "${channel}" "$@"; then
       if _deploy_channel_youtube_secret_bootstrap_available "${channel}" "${root}"; then
-        # One private materialization feeds the API, worker, and watcher aliases.
+        # One private materialization feeds the API and watcher aliases.
         # The child receives only path handles; the bootstrap removes the file
         # when the Compose invocation exits.
         compose_command=(
@@ -1431,7 +1430,7 @@ deploy_channel_compose() {
           "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
           --channel "${channel}"
           --consumer youtube-auth-cli
-          -- sh -c 'export YOUTUBE_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; export YOUTUBE_RUNTIME_ENV_FILE_WORKER="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; export YOUTUBE_RUNTIME_ENV_FILE_WATCHER="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"' _
+          -- sh -c 'export YOUTUBE_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; export YOUTUBE_RUNTIME_ENV_FILE_WATCHER="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"' _
           "${compose_command[@]}"
         )
       else
@@ -1443,10 +1442,9 @@ deploy_channel_compose() {
           exit "${youtube_probe_status}"
         fi
         # An explicitly unconfigured channel must not inherit a runtime
-        # handle selected by another channel or an earlier caller. Keep all
-        # three Compose aliases inert for this invocation.
+        # handle selected by another channel or an earlier caller. Keep both
+        # Compose aliases inert for this invocation.
         export YOUTUBE_RUNTIME_ENV_FILE_API=/dev/null
-        export YOUTUBE_RUNTIME_ENV_FILE_WORKER=/dev/null
         export YOUTUBE_RUNTIME_ENV_FILE_WATCHER=/dev/null
       fi
     fi

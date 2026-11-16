@@ -1454,7 +1454,6 @@ class LinuxEffects:
             raise PostgresDeployError()
         for key in (
             'YOUTUBE_RUNTIME_ENV_FILE_API',
-            'YOUTUBE_RUNTIME_ENV_FILE_WORKER',
             'YOUTUBE_RUNTIME_ENV_FILE_WATCHER',
         ):
             env.pop(key, None)
@@ -3148,7 +3147,6 @@ class LinuxEffects:
         ):
             handles.update({
                 'youtube-runtime-api': 'YOUTUBE_RUNTIME_ENV_FILE_API',
-                'youtube-runtime-worker': 'YOUTUBE_RUNTIME_ENV_FILE_WORKER',
                 'youtube-runtime-watcher': 'YOUTUBE_RUNTIME_ENV_FILE_WATCHER',
             })
         try:

@@ -51,8 +51,8 @@ def test_youtube_nonprod_delivery_preserves_native_consumer_boundary() -> None:
         "youtube.oauth-client-secret": "fixture-client-secret",
         "youtube.token-store-key": "0" * 64,
     }
-    assert values["youtube-runtime-worker"] == values["youtube-runtime-api"]
     assert values["youtube-runtime-watcher"] == values["youtube-runtime-api"]
+    assert "youtube-runtime-worker" not in values
     assert all("youtube." not in value for value in values["postgres-api"])
     assert all(
         identity.startswith("dev/")

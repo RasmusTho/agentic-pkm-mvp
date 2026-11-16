@@ -391,8 +391,6 @@ services:
       - ./config/runtime.defaults.env
       - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
         required: false
-      - path: ${YOUTUBE_RUNTIME_ENV_FILE_WORKER:-/dev/null}
-        required: false
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       # Legacy /app/vault compatibility mount moved to docker-compose.legacy-vault.yml

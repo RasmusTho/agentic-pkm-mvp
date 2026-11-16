@@ -75,9 +75,9 @@ The client id, client secret, and 32-byte token-store key are never written to t
 vault content, logs, events, or receipts. `youtube-auth connect --environment <channel>`
 materializes the mode-0600 temporary binding and composes the shared `YouTubeAccountBinder`
 writer boundary; it does not implement a second lock or credential state machine. The same
-channel-scoped declarations are delivered to the API, worker, and watcher runtime consumers when
-configured. Calling binder methods directly is an internal application route, not a supported
-operator invocation.
+channel-scoped declarations are delivered only to the API and watcher runtime consumers when
+configured; the outbox worker receives no YouTube grant. Calling binder methods directly is an
+internal application route, not a supported operator invocation.
 
 For the two non-production channels, the owner-selected OAuth client id and client secret may be
 the same Google client in both `dev` and `test`. The token-store key must remain distinct per

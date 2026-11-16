@@ -92,7 +92,6 @@ YOUTUBE_SECRET_IDS = frozenset({
 })
 YOUTUBE_BWS_CONSUMER_GRANTS = {
     "youtube-runtime-api": YOUTUBE_SECRET_IDS,
-    "youtube-runtime-worker": YOUTUBE_SECRET_IDS,
     "youtube-runtime-watcher": YOUTUBE_SECRET_IDS,
 }
 YOUTUBE_KEYCHAIN_CONSUMER = "youtube-auth-cli"

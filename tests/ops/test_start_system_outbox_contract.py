@@ -52,6 +52,27 @@ def test_compose_runtime_services_keep_vault_selectors_in_env_file() -> None:
         assert "VAULT_DESK_DIR_REL" not in env
 
 
+def test_compose_worker_has_no_youtube_oauth_env_file() -> None:
+    compose = _load_compose("docker-compose.yaml")
+    services = compose.get("services") or {}
+    worker = services.get("worker") or {}
+    env_files = worker.get("env_file") or []
+    paths = {
+        entry.get("path") if isinstance(entry, dict) else entry
+        for entry in env_files
+    }
+    assert not any("YOUTUBE_RUNTIME_ENV_FILE" in str(path) for path in paths)
+    for service, key in (
+        ("api", "YOUTUBE_RUNTIME_ENV_FILE_API"),
+        ("watcher", "YOUTUBE_RUNTIME_ENV_FILE_WATCHER"),
+    ):
+        service_paths = {
+            entry.get("path") if isinstance(entry, dict) else entry
+            for entry in (services.get(service) or {}).get("env_file", [])
+        }
+        assert any(key in str(path) for path in service_paths)
+
+
 def test_compose_watcher_has_auto_exec_env() -> None:
     compose = _load_compose("docker-compose.yaml")
     watcher = (compose.get("services") or {}).get("watcher") or {}

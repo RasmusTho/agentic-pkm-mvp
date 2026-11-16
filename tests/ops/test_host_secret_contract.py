@@ -362,7 +362,7 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
     ]
     assert [item for item in payload["consumers"] if item["consumer"] not in {
         "karakeep-service-web", "karakeep-service-search", "heimdal-karakeep-fetch", "karakeep-account-setup",
-        "youtube-auth-cli", "youtube-runtime-api", "youtube-runtime-worker", "youtube-runtime-watcher",
+        "youtube-auth-cli", "youtube-runtime-api", "youtube-runtime-watcher",
     }] == [
         {
             "consumer": "heimdal-api-ingress",
@@ -624,7 +624,7 @@ def test_existing_consumer_environment_grants_are_unchanged() -> None:
     } | {
         (channel, consumer, secret)
         for channel in ("dev", "test")
-        for consumer in ("youtube-runtime-api", "youtube-runtime-worker", "youtube-runtime-watcher", "youtube-auth-cli")
+        for consumer in ("youtube-runtime-api", "youtube-runtime-watcher", "youtube-auth-cli")
         for secret in ("youtube.oauth-client-id", "youtube.oauth-client-secret", "youtube.token-store-key")
     }
     assert "POSTGRES_PASSWORD" not in contract.child_bindings
