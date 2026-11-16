@@ -95,6 +95,33 @@ def test_activation_scope_helper_selects_api_and_native_deploy_coverage() -> Non
         assert select_tests([sibling]).unowned_paths == (sibling,)
 
 
+@pytest.mark.parametrize("path", ("Dockerfile", ".dockerignore"))
+def test_image_build_inputs_select_deploy_coverage(path: str, tmp_path: Path) -> None:
+    selection = select_tests([path])
+
+    assert selection.unowned_paths == ()
+    assert selection.subsystems == ("ops_deploy",)
+    assert "tests/deploy" in selection.targets
+    assert "tests/deploy" not in selection.deferred_targets
+    assert selector.requires_runtime_checks([path]) is True
+
+    output = tmp_path / "output"
+    result = subprocess.run(
+        [sys.executable, "scripts/select_pr_tests.py", "--changed-file", path,
+         "--github-output", str(output)],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert fields["runtime_checks"] == "true"
+    assert "tests/deploy" in fields["pytest_args"].split()
+
+
+@pytest.mark.parametrize("path", ("Dockerfile.backup", ".dockerignore.backup"))
+def test_image_build_owner_does_not_include_siblings(path: str) -> None:
+    assert select_tests([path]).unowned_paths == (path,)
+
+
 def test_companion_note_helper_selects_source_boundary_coverage() -> None:
     selection = select_tests(["app/services/companion_note.py"])
 
