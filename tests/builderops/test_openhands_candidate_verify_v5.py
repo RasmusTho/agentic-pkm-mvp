@@ -197,13 +197,51 @@ def test_private_test_venv_scrubs_copy_preserved_modes(tmp_path, monkeypatch):
     assert cycle._test_venv_source(ew.Layout(tmp_path / 'workers', 6615), str(private)) == private
 
 
+def _nonclosing_fixture_ports(monkeypatch):
+    """Change synthetic GitHub inputs before production builds identity or authority."""
+    from tests.builderops import test_openhands_candidate_wiring as wiring
+
+    original_fixture = wiring.fixture
+
+    def fixture(*args, **kwargs):
+        data = original_fixture(*args, **kwargs)
+        layout, _, _, _, pr, entry, saved, mapping, _ = data
+        pr['body'] = (
+            'Governing-Issue: #6617\nIssue-Lifecycle: non-closing\n'
+            f'Pickup-Receipt: pickup-claim-complete issue=6617 branch=b/a worktree={entry["owner_worktree"]} '
+            f'coordination_mode=dispatcher-backed fallback_reason=none '
+            f'task_id={cycle.github_issue_task_id(cycle.completion.REPOSITORY, 6617)} '
+            'lease_id=lease-1 holder=owner-6617 evidence=verified-dispatcher-lease\n')
+        # This unfinished governor must stay bound without claiming runtime acceptance.
+        pr['governing_issue']['body'] = (
+            '## Acceptance Criteria\n\n- [ ] Live activation remains required.\n'
+            '  - Verify: runtime receipt: openhands_pr_completion_activation.v1\n')
+        original_pr, original_issue = cycle.closure._pr, cycle.closure._issue
+        monkeypatch.setattr(cycle.closure, '_pr', lambda *a: {**original_pr(*a), 'body': pr['body']})
+        monkeypatch.setattr(cycle.closure, '_issue', lambda *a: {
+            **original_issue(*a), 'body': pr['governing_issue']['body']})
+        monkeypatch.setattr(cycle.closure, '_closing_issue_references', lambda *a: [])
+        saved['repair_authority_binding'] = cycle.native_authority(layout, pr, entry, purpose='repair')
+        cycle._save(layout, saved, expected_worker='w-a', expected_assignment=mapping)
+        return data
+
+    monkeypatch.setattr(wiring, 'fixture', fixture)
+
+
 def verify_fixture(tmp_path, capsys, monkeypatch, *, fail=False, lose=False, lose_output=False, repaired=False,
-                   missing_api=False, test_source=None, sol=False):
+                   missing_api=False, test_source=None, sol=False, nonclosing=False):
     source = test_source or ('def test_example(): assert False\n' if fail else 'def test_example(): pass\n')
+    if nonclosing:
+        _nonclosing_fixture_ports(monkeypatch)
     if repaired:
         data, fetch, identity, server, home = repaired_review(tmp_path, capsys, monkeypatch)
     else:
         data, fetch, identity, server, home, _, _, _, _ = prepared(tmp_path, capsys, monkeypatch, test_source=source, sol=sol)
+    if nonclosing:
+        for cid, raw in server.final_responses.items():
+            report = json.loads(raw)
+            report['closing_assessments'] = {}
+            server.final_responses[cid] = json.dumps(report)
     layout, _, publisher, _, pr, entry, _, _, _ = data
     venv = tmp_path / 'approved-venv'
     # Copy the executing runtime: CI's toolcache path is not present in the worker image.
@@ -357,6 +395,121 @@ def test_full_validator_checks_real_pytest_summary(tmp_path, case, accepted):
             delivery._full_evidence(*args)
 
 
+def test_full_evidence_explicit_nonclosing_keeps_governor_hash(tmp_path):
+    from app.builderops import openhands_delivery as delivery
+
+    work = tmp_path / 'candidate'
+    (work / 'tests').mkdir(parents=True)
+    (work / 'tests/test_scoped.py').write_text('def test_scoped(): pass\n')
+    target = 'tests/test_scoped.py::test_scoped'
+    run = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', target],
+                         cwd=work, capture_output=True, text=True, timeout=30,
+                         env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTEST_ADDOPTS': ''})
+    assert run.returncode == 0 and '1 passed' in run.stdout
+    head, base = 'a' * 40, 'b' * 40
+    governor = ('## Acceptance Criteria\n- [ ] Live activation.\n'
+                '  - Verify: runtime receipt: openhands_pr_completion_activation.v1\n')
+    hashes = {'6617': delivery._sha(governor)}
+    review, output = tmp_path / 'review.txt', tmp_path / 'verify.txt'
+    review.write_text(f'independent review {head} {hashes["6617"]}\n')
+    output.write_text(run.stdout + run.stderr)
+    receipt = {'version': 1, 'repository': delivery.REPOSITORY, 'issue': 6617,
+        'head_sha': head, 'base_sha': base, 'risk_surfaces': ['concurrency', 'state-machine'],
+        'review': {'verdict': 'pass', 'head_sha': head, 'reviewer': 'independent',
+            'blocking_findings': [], 'scope_issue_body_sha256': hashes, 'evidence': {'path': str(review)}},
+        'verification': [{'target': target, 'head_sha': head, 'result': 'pass', 'evidence': {'path': str(output)}}]}
+    path = tmp_path / 'evidence.json'
+    path.write_text(json.dumps(receipt))
+    # This state is host-provided by the authenticated native caller, never a model report.
+    body = ('Governing-Issue: #6617\nIssue-Lifecycle: non-closing\n'
+            f'Pickup-Receipt: pickup-claim-complete issue=6617 branch=b/a worktree={work} '
+            'coordination_mode=dispatcher-backed fallback_reason=none task_id=task '
+            'lease_id=lease holder=owner evidence=verified-dispatcher-lease\n')
+    state = {'worktree': str(work), 'issue': 6617, 'closing_issues': [],
+             'native_pr_number': 10, 'native_pr_body': body, 'verify_targets': [target]}
+    args = (path, state, head, base, governor)
+    delivery._full_evidence(*args, closing_contracts={})
+    # None remains the legacy single-Issue contract and cannot waive runtime ACs.
+    with pytest.raises(delivery.DeliveryError, match='Not every governing'):
+        delivery._full_evidence(*args)
+    for bad_state in (
+        {key: value for key, value in state.items() if key != 'native_pr_body'},
+        {**state, 'closing_issues': [6617]},
+        {**state, 'native_pr_body': 'Governing-Issue: #6617\nFixes #6617\n'},
+        {**state, 'verify_targets': []},
+        {**state, 'verify_targets': ['tests/test_scoped.py;echo unsafe']},
+        {**state, 'verify_targets': ['tests/../test_scoped.py']},
+        {**state, 'verify_targets': ['runtime receipt: openhands_pr_completion_activation.v1']},
+    ):
+        with pytest.raises(delivery.DeliveryError):
+            delivery._full_evidence(path, bad_state, head, base, governor, closing_contracts={})
+    with pytest.raises(delivery.DeliveryError, match='bind all current Issue'):
+        delivery._full_evidence(path, state, head, base, governor + '\nChanged governor.', closing_contracts={})
+    del receipt['review']['scope_issue_body_sha256']
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(delivery.DeliveryError, match='bind all current Issue'):
+        delivery._full_evidence(*args, closing_contracts={})
+    receipt['review']['scope_issue_body_sha256'] = hashes
+    receipt['verification'][0]['target'] = 'tests/test_scoped.py::test_unadmitted'
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(delivery.DeliveryError, match='not admitted'):
+        delivery._full_evidence(*args, closing_contracts={})
+
+
+def test_nonclosing_candidate_requires_authenticated_scope_and_admitted_targets(tmp_path, capsys, monkeypatch):
+    import copy
+
+    _nonclosing_fixture_ports(monkeypatch)
+    data, fetch, identity, server, _, _, _, report, _ = prepared(tmp_path, capsys, monkeypatch)
+    layout, _, publisher, _, _, entry, _, _, _ = data
+    pr = cycle.observation.collect(fetch)['observations'][0]
+    with cycle._single_advancement(layout), ew._worker_lifecycle_lock(layout, entry['worker']):
+        saved = cycle._find(layout, 10, identity)
+        binding, candidate_pr = cycle._candidate_review_snapshot(layout, pr, entry, saved)
+        select = lambda candidate=candidate_pr, admitted=entry: cycle._candidate_verify_targets(
+            layout, admitted, candidate, publisher)
+        assert select() == entry['verify_targets']
+        assert binding['authority_binding']['closing_issues'] == []
+        # Neither absent material nor omitted contracts for real closings are non-closing authority.
+        for material, body in (
+            ({}, candidate_pr['body']),
+            ({'issues': {}}, candidate_pr['body']),
+            ({'issues': {}}, 'Governing-Issue: #6617\nFixes #6617\n'),
+            ({'issues': {'6617': {'body': data[4]['governing_issue']['body']}}},
+             'Governing-Issue: #6617\nFixes #6617\nFixes #6619\n'),
+        ):
+            with pytest.raises(cycle.CycleError):
+                select({**candidate_pr, 'body': body, 'review_material': material})
+        for target in ('echo unsafe', 'tests/example.py;echo unsafe', 'tests/../example.py',
+                       'tests/missing.py::test_missing', 'runtime receipt: activation.v1'):
+            with pytest.raises(cycle.CycleError):
+                select(admitted={**entry, 'verify_targets': [target]})
+        drifted = copy.deepcopy(candidate_pr)
+        drifted['review_material']['candidate_binding']['scope_hashes']['6617']['body_sha256'] = '0' * 64
+        with pytest.raises(cycle.CycleError, match='Issue scope changed'):
+            select(drifted)
+        for surface in ('body', 'governor', 'closing_refs'):
+            with monkeypatch.context() as patch:
+                if surface == 'body':
+                    original = cycle.closure._pr
+                    patch.setattr(cycle.closure, '_pr', lambda *a: {**original(*a), 'body': pr['body'] + '\nDrift'})
+                elif surface == 'governor':
+                    original = cycle.closure._issue
+                    patch.setattr(cycle.closure, '_issue', lambda *a: {**original(*a), 'body': 'Drift'})
+                else:
+                    patch.setattr(cycle.closure, '_closing_issue_references', lambda *a: [6617])
+                with pytest.raises(cycle.CycleError):
+                    select()
+        report = {**report, 'closing_assessments': {}, 'verify_targets': ['tests/example.py::test_unadmitted']}
+        expected = cycle.report_expectations(layout, entry, candidate_pr, report['identity'], repo_root=publisher)
+        assert cycle.review_gate(report, expected)['outcome'] != 'pass'
+    # A changed valid admission cannot reuse the candidate review's previous target binding.
+    held = cycle.advance(layout, [{**entry, 'verify_targets': ['tests/example.py::test_unadmitted']}],
+                         fetch=fetch, http=server)['results'][0]
+    assert held['action'] == 'wait' and 'candidate review binding changed' in held['reason'], held
+    assert 'candidate_verification' not in cycle._find(layout, 10, identity)
+
+
 def test_lost_result_readback_reconciles_the_same_command(tmp_path, capsys, monkeypatch):
     data, _, identity, _, _, _, advance, _, calls = verify_fixture(tmp_path, capsys, monkeypatch, lose_output=True)
     first = advance()
@@ -403,9 +556,11 @@ def test_missing_upstream_bash_api_holds_without_command(tmp_path, capsys, monke
     assert not [call for call in calls if call[0] == 'POST']
 
 
-def test_verify_failure_repairs_real_candidate_then_publishes(tmp_path, capsys, monkeypatch):
+@pytest.mark.parametrize('nonclosing', [False, True])
+def test_verify_failure_repairs_real_candidate_then_publishes(tmp_path, capsys, monkeypatch, nonclosing):
     source = 'from pathlib import Path\ndef test_example():\n    assert Path("new.py").read_text() == "fixed\\n"\n'
-    fixture = verify_fixture(tmp_path, capsys, monkeypatch, test_source=source, lose_output=True)
+    fixture = verify_fixture(tmp_path, capsys, monkeypatch, test_source=source, lose_output=True,
+                             nonclosing=nonclosing)
     data, _, identity, server, _, _, advance, _, calls = fixture
     layout, original_author, publisher, engine, pr, entry, _, _, _ = data
     assert advance()['action'] == 'wait'  # lost Verify output readback
@@ -487,6 +642,18 @@ def test_verify_failure_repairs_real_candidate_then_publishes(tmp_path, capsys, 
     assert advance()['action'] == 'awaiting-candidate-verify'
     _publish_verified_fixture(tmp_path, monkeypatch, fixture, lost_push=True, verify_posts=2)
     assert len([c for c in calls if c[0] == 'POST']) == 2
+    if nonclosing:
+        from app.builderops import openhands_delivery as delivery
+
+        final = cycle._find(layout, 10, identity)
+        binding = final['candidate_review_dispatch']['binding']
+        assert binding['authority_binding']['closing_issues'] == []
+        assert binding['scope_hashes']['6617']['body_sha256'] == delivery._sha(pr['governing_issue']['body'])
+        assert final['candidate_review_receipt']['report']['closing_assessments'] == {}
+        evidence = json.loads(cycle.Path(final['candidate_verification']['evidence_file']).read_text())
+        assert [row['target'] for row in evidence['verification']] == entry['verify_targets']
+        assert all('runtime receipt:' not in row['target'] for row in evidence['verification'])
+        assert pr['body'].count('Issue-Lifecycle: non-closing') == 1
 
 
 def test_verify_repair_drift_holds_and_peer_progresses(tmp_path, capsys, monkeypatch):

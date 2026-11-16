@@ -5114,9 +5114,41 @@ def _candidate_verify_targets(layout: workspace.Layout, entry: Mapping[str, Any]
                               candidate_pr: Mapping[str, Any], publisher: Path) -> list[str]:
     material = candidate_pr.get("review_material")
     issues = material.get("issues") if isinstance(material, Mapping) else None
-    if not isinstance(issues, Mapping) or not issues:
+    scope = resolve_native_issue_authority(candidate_pr.get("body"))
+    if (not isinstance(material, Mapping) or not isinstance(issues, Mapping) or scope is None
+            or set(issues) != {str(number) for number in scope.closing_issues}):
         raise CycleError("exact closing Issue contracts are unavailable for Verify")
+    if not issues:
+        # An empty model assessment is not authority. The candidate snapshot binds the
+        # original PR; re-read its authenticated owner, body and GitHub closing refs.
+        candidate = material.get("candidate_binding")
+        if (not isinstance(candidate, Mapping)
+                or candidate.get("pr_body_sha256") != hashlib.sha256(candidate_pr["body"].encode()).hexdigest()):
+            raise CycleError("non-closing candidate contract binding is unavailable")
+        authority = native_authority(layout, {**candidate_pr, "head_sha": candidate.get("old_head")},
+                                     entry, purpose="repair")
+        if (authority.get("closing_issues") != []
+                or candidate.get("scope_hashes", {}).get(str(scope.governing_issue))
+                != authority.get("governing_issue_hashes")):
+            raise CycleError("non-closing candidate Issue scope changed")
+        return _bounded_pytest_targets(entry.get("verify_targets"), publisher)
     return _contract_verify_targets(issues, publisher, admitted=entry["verify_targets"])
+
+
+def _bounded_pytest_targets(value: Any, publisher: Path) -> list[str]:
+    """Resolve only the controller-admitted pytest scope, never shell commands."""
+    pattern = r"tests/[A-Za-z0-9_./-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*(?:\[[A-Za-z0-9_.-]+\])?)*"
+    if not isinstance(value, list) or not value:
+        raise CycleError("non-closing admitted Verify targets are unavailable")
+    root = publisher.resolve()
+    for target in value:
+        if not isinstance(target, str) or not re.fullmatch(pattern, target):
+            raise CycleError("non-closing Verify target needs the existing specialized owning workflow")
+        path = Path(target.split("::")[0])
+        if (".." in path.parts or not (root / path).is_file()
+                or not (root / path).resolve().is_relative_to(root)):
+            raise CycleError("non-closing admitted Verify target file is unavailable")
+    return list(dict.fromkeys(value))
 
 
 def _contract_verify_targets(issues: Mapping[str, Any], publisher: Path, *,
@@ -5419,7 +5451,9 @@ def _advance_candidate_verify(layout: workspace.Layout, pr: Mapping[str, Any], e
     evidence_hash = _write_candidate_evidence(evidence_path, json.dumps(evidence, sort_keys=True, indent=2) + "\n")
     contracts = {int(number): issue["body"] for number, issue in candidate_pr["review_material"]["issues"].items()}
     delivery._full_evidence(evidence_path, {"worktree": candidate["worktree"], "issue": authority["governing_issue"],
-        "agent_id": entry.get("claimant"), "session_id": entry.get("session")}, candidate["candidate_head"],
+        "agent_id": entry.get("claimant"), "session_id": entry.get("session"),
+        "closing_issues": authority["closing_issues"], "native_pr_number": pr["number"],
+        "native_pr_body": pr["body"], "verify_targets": entry["verify_targets"]}, candidate["candidate_head"],
         pr["base_sha"], pr["governing_issue"]["body"], excluded_roots=(layout.root.resolve(),),
         closing_contracts=contracts)
     intent.update(state="artifact_ready", evidence_file=str(evidence_path), evidence_sha256=evidence_hash)

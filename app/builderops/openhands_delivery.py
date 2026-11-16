@@ -1241,14 +1241,28 @@ def _full_evidence(
     source_digests.append(digest)
     if head not in review_text:
         raise DeliveryError("Review source does not identify the candidate commit")
-    contracts = closing_contracts if closing_contracts else {state["issue"]: issue_body}
+    contracts = closing_contracts if closing_contracts is not None else {state["issue"]: issue_body}
+    nonclosing = closing_contracts == {}
+    targets = []
+    if nonclosing:
+        # Only native callers supply this host state, after binding the authenticated
+        # PR/closing refs and controller admission. Empty receipt material alone cannot.
+        from app.builderops import openhands_pr_cycle as cycle
+        authority = resolve_native_issue_authority(state.get("native_pr_body"))
+        if (authority is None or authority.governing_issue != state["issue"] or authority.closing_issues
+                or state.get("closing_issues") != []
+                or type(state.get("native_pr_number")) is not int or state["native_pr_number"] <= 0):
+            raise DeliveryError("Explicit authenticated non-closing native scope is unavailable")
+        try:
+            targets = cycle._bounded_pytest_targets(state.get("verify_targets"), worktree)
+        except cycle.CycleError as exc:
+            raise DeliveryError(str(exc)) from exc
     scope_hashes = {str(number): _sha(body) for number, body in contracts.items()}
     scope_hashes[str(state["issue"])] = _sha(issue_body)
     multi_scope = len(scope_hashes) > 1
-    if multi_scope and (review.get("scope_issue_body_sha256") != scope_hashes
+    if (multi_scope or nonclosing) and (review.get("scope_issue_body_sha256") != scope_hashes
                         or any(digest not in review_text for digest in scope_hashes.values())):
         raise DeliveryError("Independent review does not bind all current Issue contracts")
-    targets = []
     for body in contracts.values():
         acceptance = extract_sections(body).get("acceptance criteria", "")
         items = _extract_acceptance_items(acceptance)
@@ -1290,6 +1304,8 @@ def _full_evidence(
         digest, source = _evidence_artifact(entry.get("evidence"), receipt_file.parent, worktree, excluded_roots=excluded_roots)
         source_digests.append(digest)
         target = entry["target"]
+        if nonclosing and target not in targets:
+            raise DeliveryError("Non-closing verification target was not admitted")
         if target.startswith("tests/"):
             passed = _pytest_pass_count(source)
             if not passed:
@@ -1795,7 +1811,8 @@ def _publish_native_repair_locked(
     state = {"worktree": path, "branch": branch, "issue": issue,
              "issue_body_sha256": hashes["body_sha256"], "agent_id": entry.get("claimant"),
              "session_id": entry.get("session"), "closing_issues": original["closing_issues"],
-             "claim_issue": original.get("claim_issue"), "native_pr_number": number}
+             "claim_issue": original.get("claim_issue"), "native_pr_number": number,
+             "native_pr_body": pr["body"], "verify_targets": entry.get("verify_targets")}
     previous = {"issue": issue, "branch": branch, "head": pr["head_sha"],
                 "title": pr["title"], "body_sha256": _sha(pr["body"])}
     prior = saved.get("repair_publication")
