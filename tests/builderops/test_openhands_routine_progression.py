@@ -1,0 +1,346 @@
+"""Routine progression: real cycle, native authority, Git, lifecycle and persistence.
+
+GitHub/dispatcher, container/engine and upstream HTTP are simulated external ports.
+These regressions do not establish live runtime, model or activation acceptance.
+"""
+import copy
+import json
+import subprocess
+import os
+import venv
+from types import SimpleNamespace
+
+import pytest
+
+from app.builderops import epic_workspace as ew
+from app.builderops import openhands_pr_cycle as cycle
+from tests.builderops.test_openhands_pr_cycle import _automatic_cycle_fixture
+from tests.builderops.test_epic_workspace_engine_handoff import SyntheticEngine
+
+REAL_INSPECT = ew.inspect_checkout
+REAL_STOPPED = cycle._assert_stopped
+REAL_LIVE = cycle._assert_live_container
+REAL_NATIVE_PROOF = cycle.native_execution_proof
+REAL_TEST_VENV = cycle._test_venv_source
+REAL_VENV_MINOR = cycle._venv_python_minor
+REAL_THREADS = cycle._assert_review_threads_clear
+
+
+def assembled(tmp_path, monkeypatch, *, nonclosing=False):
+    f = _automatic_cycle_fixture(tmp_path, monkeypatch)
+    layout, worker = f['layout'], 'reviewer'
+    # Put the Verify target in the actual fixture commit, as on an admitted PR head.
+    subprocess.run(['git', '-C', str(f['worktree']), 'add', 'tests/example.py'],
+                   check=True, capture_output=True)
+    subprocess.run(['git', '-C', str(f['worktree']), '-c', 'user.name=Fixture',
+                    '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture Verify target'],
+                   check=True, capture_output=True)
+    f['head'] = subprocess.check_output(['git', '-C', str(f['worktree']), 'rev-parse', 'HEAD'], text=True).strip()
+    f['live']['head']['sha'] = f['head']
+    f['pr']['head_sha'] = f['head']
+    f['entry']['head_sha'] = f['head']
+    verifier = tmp_path / 'controller-test-venv'
+    venv.EnvBuilder(with_pip=False, system_site_packages=True, symlinks=False).create(verifier)
+    config = json.loads(f['config'].read_text())
+    config['automatic_native']['test_venv'] = str(verifier)
+    f['entry']['test_venv'] = str(verifier)
+    f['config'].write_text(json.dumps(config))
+    monkeypatch.setattr(cycle, '_test_venv_source', REAL_TEST_VENV)
+    monkeypatch.setattr(cycle, '_venv_python_minor', REAL_VENV_MINOR)
+    f.update(ci_calls=[], ci_exit=0)
+    original_executor = cycle.SubprocessExecutor
+    class Executor(original_executor):
+        def run(self, argv, **kw):
+            if 'graphql' in argv and any('reviewThreads' in arg for arg in argv):
+                data = {'data': {'repository': {'pullRequest': {'reviewThreads': {
+                    'nodes': [], 'pageInfo': {'hasNextPage': False}}}}}}
+                return subprocess.CompletedProcess(argv, 0, json.dumps(data), '')
+            return super().run(argv, **kw)
+    monkeypatch.setattr(cycle, 'SubprocessExecutor', Executor)
+    monkeypatch.setattr(cycle, '_assert_review_threads_clear', REAL_THREADS)
+    checkout = layout.checkout(worker)
+    checkout.rmdir()  # empty fixture directory, never previous unique work
+    subprocess.run(['git', 'clone', '--no-hardlinks', '--branch', 'codex/example',
+                    str(f['worktree']), str(checkout)], check=True, capture_output=True)
+    subprocess.run(['git', 'clone', '--mirror', str(f['worktree']), str(layout.source)],
+                   check=True, capture_output=True)
+    layout.home(worker).mkdir(parents=True, exist_ok=True)
+    engine = SyntheticEngine()
+    verification_runs = []
+    # Existing engine fixture's absent-object diagnostic is normalized at its external port.
+    def runner(argv, **kw):
+        if list(argv)[:3] == ['docker', 'image', 'inspect']:
+            return subprocess.CompletedProcess(argv, 0, '[{"Id":"sha256:simulated-image"}]', '')
+        if list(argv)[:2] == ['docker', 'exec']:
+            if argv[-2:] == ['login', 'status']:
+                value = 'Logged in using ChatGPT'
+            elif argv[-2] == 'codex':
+                value = json.dumps({'engine': 'codex', 'conversation_id': argv[-1],
+                    'session_id': 'simulated-native', 'model': 'gpt-6.1-sol', 'effort': 'high',
+                    'timestamp': '2026-11-16T10:00:00Z'})
+            else:
+                value = 'route-ok'
+            return subprocess.CompletedProcess(argv, 0, value, '')
+        if (list(argv)[:3] == ['docker', 'start', '--attach']
+                and any('import pytest;' in arg for arg in engine.pending.get(argv[-1], []))):
+            command = engine.pending[argv[-1]]
+            targets = command[command.index('-c') + 2:]
+            verification_runs.append(list(targets))
+            # Real pytest at a labelled simulated container port, no model or GH access.
+            return subprocess.run([str(verifier / 'bin/python'), '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *targets],
+                cwd=checkout, capture_output=True, text=True, timeout=30,
+                env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTEST_ADDOPTS': ''})
+        if list(argv)[:2] == ['docker', 'inspect'] and '--format' not in argv:
+            cid = argv[-1]
+            if cid in engine.ids.values() and 'reviewer' in engine.containers:
+                return subprocess.CompletedProcess(argv, 0, json.dumps([{'Id': cid,
+                    'Name': '/' + layout.container_name(worker), 'State': {'Running': True},
+                    'Image': 'sha256:simulated-image',
+                    'Config': {'Image': 'worker@sha256:' + 'f'*64, 'Env': [], 'Labels': {ew.LABEL_EPIC: str(layout.epic), ew.LABEL_WORKER: worker}}}]), '')
+        value = engine(argv, **kw)
+        if list(argv)[:2] == ['docker', 'inspect'] and value.returncode:
+            return subprocess.CompletedProcess(argv, value.returncode, value.stdout, 'No such object')
+        return value
+    monkeypatch.setattr(cycle, '_worker_runner', runner)
+    monkeypatch.setattr(cycle, 'subprocess', SimpleNamespace(run=runner, CompletedProcess=subprocess.CompletedProcess))
+    original_command = cycle._command
+    def external_command(argv, **kw):
+        if argv[0].endswith('/await_pr_checks.sh'):
+            f['ci_calls'].append(list(argv))
+            return subprocess.CompletedProcess(argv, f['ci_exit'], 'simulated current GH CI observation', '')
+        if argv[0] == 'docker':
+            return runner(argv, capture_output=True, text=True, timeout=kw.get('timeout', 30))
+        return original_command(argv, **kw)
+    monkeypatch.setattr(cycle, '_command', external_command)
+    def inspect(layout, worker, **kw):
+        kw.setdefault('runner', runner)
+        return REAL_INSPECT(layout, worker, **kw)
+    monkeypatch.setattr(ew, 'inspect_checkout', inspect)
+    monkeypatch.setattr(cycle, '_assert_stopped', REAL_STOPPED)
+    monkeypatch.setattr(cycle, '_assert_live_container', REAL_LIVE)
+    monkeypatch.setattr(cycle, 'native_execution_proof', REAL_NATIVE_PROOF)
+    ew._record_worker(layout, 6618, state='created', container_id=None, execution_branch='codex/example')
+    home = tmp_path / 'qualified-auth-free-codex-home'
+    home.mkdir(mode=0o700)
+    ew.start_openhands_worker(layout, worker, codex_home=home, image='worker@sha256:' + 'f'*64,
+                             budget=ew.Budget('1.0', '1536m', 512), network='epicws',
+                             runner=runner, http=f['server'])
+    original_api = cycle.closure._api
+    def api(executor, cwd, repo, method, endpoint):
+        if endpoint.startswith('/pulls/10/commits'):
+            return [{'commit': {'message': 'Bounded routine source correction'}}]
+        return original_api(executor, cwd, repo, method, endpoint)
+    monkeypatch.setattr(cycle.closure, '_api', api)
+    if nonclosing:
+        f['live']['body'] = f['live']['body'].replace('Fixes #6618', 'Issue-Lifecycle: non-closing')
+        f['issue']['body'] = ('## Acceptance Criteria\n- [ ] Live acceptance remains required.\n'
+            '  - Verify: runtime receipt: openhands_pr_completion_activation.v1\n')
+        monkeypatch.setattr(cycle.closure, '_closing_issue_references', lambda *args: [])
+        entry = {**f['entry'], 'head_sha': f['head'], 'engine': 'codex', 'model': 'gpt-6.1-sol',
+                 'effort': 'high', 'verify_targets': [f['target']]}
+        f['config'].write_text(json.dumps({'admissions': [entry]}))
+    f['nonclosing'] = nonclosing
+    monkeypatch.setattr(cycle, 'github_fetch', f['fetch'])
+    f.update(engine=engine, runner=runner, home=home, verification_runs=verification_runs)
+    return f
+
+
+def stopped(f):
+    ew.stop_worker(f['layout'], 'reviewer', reason='fixture verified idle stop', runner=f['runner'])
+
+
+def tick(f):
+    return cycle.advance(f['layout'], f['config'], fetch=f['fetch'], http=f['server'],
+                         codex_home=f['home'])['results'][-1]
+
+
+def test_stopped_reviewer_resumes_through_existing_lifecycle(tmp_path, monkeypatch):
+    f = assembled(tmp_path, monkeypatch)
+    stopped(f)
+    before = cycle._mapping(f['layout'], 'reviewer')
+    first = tick(f)
+    assert first['action'] == 'independent-review', first
+    after = cycle._mapping(f['layout'], 'reviewer')
+    assert after['state'] == 'running' and after['container_id'] != before['container_id']
+    assert after['takeover']['status'] == 'consumed'
+    assert after['work_at_stop'] == before['work_at_stop']
+    second = tick(f)
+    assert second['action'] == 'reconcile', second
+    assert len(f['engine'].runs()) == 2
+    posts = [c for c in f['server'].calls if c[0] == 'POST']
+    assert len(posts) == 1
+    assert posts[0][3]['agent_settings'] == {'agent_kind': 'acp', 'acp_server': 'codex',
+                                         'acp_model': 'gpt-6.1-sol', 'acp_effort': 'high'}
+
+
+def reviewed(f):
+    first = tick(f)
+    assert first['action'] == 'independent-review', first
+    mapping = cycle._mapping(f['layout'], 'reviewer')
+    cid = mapping['conversation']['id']
+    saved = cycle._find(f['layout'], 10, first['identity'])
+    criterion = cycle.closure._acceptance_criteria(f['issue']['body'], repo_root=f['worktree'])[0]['criterion_sha256']
+    report = {'report_contract': cycle.REPORT_CONTRACT, 'identity': saved['identity'], 'head_sha': f['head'],
+        'verdict': 'pass', 'findings': [], 'verify_targets': [f['target']], 'covered_sources': ['app/example.py'],
+        'scope_assessment': {'acceptance': 'covered', 'verify_coverage': 'covered', 'limitations': [
+            {'kind': kind, 'detail': 'Read-only reviewer limitation; controller retains actual obligations.'}
+            for kind in ['evidence_not_rerun', 'ci_not_observed', 'simulated_boundary']]},
+        'closing_assessments': {'6618': {'acceptance': 'covered', 'verify_coverage': 'covered', 'limitations': [],
+            'criteria': {criterion: {'assessment': 'covered', 'rationale': 'Actual implementation and assertions inspected.'}}}},
+        'owner_doc': {'outcome': 'no_change', 'inspected_paths': ['docs/development/DEV_WORKFLOW.md'],
+                      'rationale': 'No changed owner contract in this fixture.'}}
+    if f['nonclosing']:
+        report['closing_assessments'] = {}
+        report['scope_assessment']['limitations'].append({'kind': 'out_of_scope_followup',
+            'detail': 'Open governor runtime acceptance is deliberately unfinished in this non-closing package.'})
+    f['server'].conversations[cid].update(execution_status='finished',
+        agent={'kind': 'ACPAgent', 'acp_server': 'codex', 'acp_model': 'gpt-6.1-sol', 'acp_effort': 'high'},
+        current_model_id='gpt-6.1-sol', current_effort='high', available_efforts=[{'value': 'high'}],
+        agent_state={'acp_session_id': 'simulated-native', 'acp_session_cwd': '/workspace'})
+    f['server'].events = [{'kind': 'MessageEvent', 'source': 'agent'}]
+    f['server'].final_responses[cid] = json.dumps(report)
+    # Native metadata is an external engine port; core native authority remains real.
+    monkeyproof = {'operation_id': saved['review_operation'], 'conversation_id': cid,
+        'container_id': mapping['container_id'], 'engine': 'codex', 'model': 'gpt-6.1-sol', 'effort': 'high',
+        'auth': 'chatgpt', 'source': 'native-session-metadata', 'native_session_id': 'simulated-native',
+        'timestamp': '2026-11-16T10:00:00Z'}
+    return saved, report, monkeyproof
+
+
+@pytest.mark.parametrize('nonclosing', [False, True])
+def test_informational_limits_progress_with_current_evidence(tmp_path, monkeypatch, nonclosing):
+    f = assembled(tmp_path, monkeypatch, nonclosing=nonclosing)
+    saved, report, proof = reviewed(f)
+    real_stop = ew.stop_worker
+    monkeypatch.setattr(ew, 'stop_worker', lambda *args, **kw: real_stop(*args, **kw, runner=f['runner']))
+    calls = []
+    # Refuse GH merge at the external command port; it must only be attempted after real gates.
+    old_command = cycle._command
+    def command(argv, **kw):
+        if argv[:3] == ['gh', 'pr', 'merge']:
+            calls.append('merge')
+            return subprocess.CompletedProcess(argv, 1, '', 'simulated GH refusal')
+        return old_command(argv, **kw)
+    monkeypatch.setattr(cycle, '_command', command)
+    result = tick(f)
+    fresh = cycle._find(f['layout'], 10, saved['identity'])
+    assert fresh['review'] == report
+    assert 'review_gate' in fresh, result
+    assert fresh['review_gate']['outcome'] == 'pass', result
+    assert len(f['ci_calls']) >= 2
+    assert f['verification_runs'] == [[f['target']]]
+    assert fresh['verification']['passed'] is True
+    assert calls.count('merge') == 1, result
+    assert f['issue']['state'] == 'open'
+    assert fresh['review_disposition']['report_sha256'] == cycle._digest(report)
+    assert len(fresh['review_disposition']['items']) == (4 if nonclosing else 3)
+    entry = json.loads(f['config'].read_text())['admissions'][0]
+    pr = cycle.observation._observe(cycle.observation._Reader(f['fetch'], cycle.time.monotonic), 10)
+    pr.update(route='native', check_config={'verify_targets': entry['verify_targets'], 'test_venv': entry['test_venv']})
+    pr['review_context'], pr['review_material'] = cycle._review_context(pr)
+    cycle._add_transfer_review_context(f['layout'], entry, pr)
+    # Existing per-item gate must reject changed report/item evidence against the actual run.
+    for fault in ['item', 'report', 'head', 'ci', 'verification', 'original', 'explicit-disposition']:
+        altered, changed_entry = copy.deepcopy(fresh), copy.deepcopy(entry)
+        if fault == 'item':
+            altered['review']['scope_assessment']['limitations'][0]['detail'] += ' changed'
+        elif fault == 'report':
+            altered['review']['scope_assessment']['acceptance'] += ' changed'
+        elif fault == 'head':
+            altered['review']['head_sha'] = '0' * 40
+        elif fault == 'ci':
+            altered['ci']['exit_code'] = 1
+        elif fault == 'verification':
+            altered['verification']['output_sha256'] = None
+        elif fault == 'original':
+            altered['report_reconciliations'] = [{'archived': {'review': {'findings': 'unknown'}}}]
+        else:
+            changed_entry['review_disposition'] = {**fresh['review_disposition'], 'report_sha256': '0'*64}
+        with pytest.raises(cycle.CycleError):
+            cycle._premerge(f['layout'], pr, changed_entry, altered)
+    for field in ['body', 'head', 'owner']:
+        old_live, old_task = copy.deepcopy(f['live']), copy.deepcopy(f['task'])
+        if field == 'body':
+            f['live']['body'] += '\nChanged contract'
+        elif field == 'head':
+            f['live']['head']['sha'] = '0'*40
+        else:
+            f['task']['claimed_by'] = 'foreign'
+        with pytest.raises(cycle.CycleError):
+            cycle._premerge(f['layout'], pr, entry, fresh)
+        f['live'].clear(); f['live'].update(old_live)
+        f['task'].clear(); f['task'].update(old_task)
+    f['ci_exit'] = 1
+    with pytest.raises(cycle.CycleError, match='CI'):
+        cycle._premerge(f['layout'], pr, entry, fresh)
+
+
+@pytest.mark.parametrize('fault', ['required', 'unknown', 'protected', 'runtime-closing'])
+def test_protected_or_unknown_limits_remain_blocked(tmp_path, monkeypatch, fault):
+    f = assembled(tmp_path, monkeypatch)
+    saved, report, proof = reviewed(f)
+    if fault in ('required', 'unknown'):
+        report['scope_assessment']['limitations'].append({'kind': 'acceptance_gap' if fault == 'required' else 'unclassified',
+                                                        'detail': 'required runtime missing'})
+    elif fault == 'protected':
+        report['verdict'] = 'findings'
+        report['findings'] = [{'severity': 'P3', 'category': 'documentation', 'protected_class': 'false_green',
+            'summary': 'protected classification', 'file': 'app/example.py', 'line': 1, 'failure_scenario': 'false acceptance'}]
+    else:
+        f['issue']['body'] += '\n- [ ] Actual runtime must pass.\n  - Verify: runtime receipt: required.runtime.v1\n'
+    cid = proof['conversation_id']
+    f['server'].final_responses[cid] = json.dumps(report)
+    real_stop = ew.stop_worker
+    monkeypatch.setattr(ew, 'stop_worker', lambda *args, **kw: real_stop(*args, **kw, runner=f['runner']))
+    result = tick(f)
+    assert result['action'] == ('independent-review' if fault == 'unknown' else 'wait'), result
+    assert not f['verification_runs'] and not f['ci_calls']
+    assert cycle._find(f['layout'], 10, saved['identity']).get('review_gate', {}).get('outcome') != 'pass'
+
+
+@pytest.mark.parametrize('fault', ['running-foreign', 'starting', 'unknown', 'publication', 'auth-path',
+                                  'auth-change', 'image', 'dirty', 'owner'])
+def test_stopped_start_refusals_never_create_another_writer(tmp_path, monkeypatch, fault):
+    f = assembled(tmp_path, monkeypatch)
+    if fault != 'running-foreign':
+        stopped(f)
+    layout = f['layout']
+    before = cycle._mapping(layout, 'reviewer')
+    if fault == 'running-foreign':
+        ew._record_worker(layout, 6618, conversation={'id': 'foreign', 'status': 'unknown'})
+    elif fault in ('starting', 'unknown'):
+        ew._record_worker(layout, 6618, state=fault)
+    elif fault == 'publication':
+        ew._record_worker(layout, 6618, publication_ops=[{'id': 'pending', 'kind': 'branch_push',
+            'branch': 'codex/example', 'status': 'intended'}])
+    elif fault == 'auth-path':
+        ew._record_worker(layout, 6618, auth_paths=None)
+    elif fault == 'auth-change':
+        f['home'] = tmp_path / 'different-auth-home'
+        f['home'].mkdir(mode=0o700)
+    elif fault == 'image':
+        ew._record_worker(layout, 6618, image='unsafe:latest')
+    elif fault == 'dirty':
+        (layout.checkout('reviewer') / 'partial.txt').write_text('preserve this partial work')
+    else:
+        f['task']['claimed_by'] = 'foreign'
+    launches = len(f['engine'].runs())
+    for _ in range(2):
+        result = tick(f)
+        assert result['action'] == 'wait', result
+    assert len(f['engine'].runs()) == launches
+    assert not [c for c in f['server'].calls if c[0] == 'POST']
+    assert cycle._mapping(layout, 'reviewer')['container_id'] == before['container_id']
+
+
+def test_lost_stopped_worker_create_preserves_unknown_effect(tmp_path, monkeypatch):
+    f = assembled(tmp_path, monkeypatch)
+    stopped(f)
+    f['engine'].lose_container_create = True
+    first = tick(f)
+    mapping = cycle._mapping(f['layout'], 'reviewer')
+    assert first['action'] == 'wait' and mapping['state'] == 'starting'
+    assert len(f['engine'].runs()) == 2
+    assert tick(f)['action'] == 'wait'
+    assert len(f['engine'].runs()) == 2
+    assert not [c for c in f['server'].calls if c[0] == 'POST']

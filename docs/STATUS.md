@@ -217,6 +217,16 @@ activation qualification remain pending. #6618, #6615 and #6620 remain open. The
 controller/image are unchanged; this source evidence establishes no live-runtime or unattended
 acceptance.
 
+Last reviewed (#6618 routine-progression source only): 2026-11-16 UTC, based on merged #6655
+`d6bdcf1c55c320274a43e0256f7aafdf0ed0779b`. The bounded successor corrects stopped-reviewer startup
+and controller handling of ordinary informational review limits through the existing lifecycle and
+per-item gate. The [epic workspace workflow](development/DEV_WORKFLOW.md#persistent-epic-workspace-on-tars-experimental)
+owns the retained launch references, evidence requirements and refusal boundaries. Local regressions
+use real Git, authority readers, persistence, lifecycle and pytest with simulated external ports;
+they do not establish live stopped-start, disconnect or activation acceptance. Independent candidate
+review, full types, current-head CI and guarded delivery remain with the parent workflow. #6618,
+#6615 and #6620 remain open; the hosting controller and image are unchanged.
+
 **Scoped legacy Builder recovery repository candidate (2026-11-15).** Issue #6637 adds an
 operator-led path for the two recorded stopped OpenHands runs #6601 and #6597, preserving their
 predecessor claims and existing PR identities while admitting a verified successor. This is a

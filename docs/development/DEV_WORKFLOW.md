@@ -432,6 +432,18 @@ An unrelated conversation or another owner requires the normal `resume-work`/pic
 Missing placement, local claim authority, credentials or a qualified verifier environment holds that
 PR. The controller does not claim, transfer ownership, provision a worker or invent fallback evidence.
 
+The routine-progression source correction can also resume an admitted `stopped_verified` reviewer
+through the existing takeover/start lifecycle. Under the cycle and worker locks it authenticates
+the current native owner, PR/Issue scope, branch/head, ended predecessor, clean retained source and
+settled publication, then rechecks authority before launch and conversation creation. It reuses the
+recorded digest-pinned image, budget, network and selected engine/model/effort. The central
+OpenHands launch producer now retains `auth_paths` containing only canonical `codex_home` and
+`claude_env_file` references, alongside the existing credential classes; token values are never
+stored. Both references are revalidated before takeover and launch. A legacy mapping without those
+references needs the existing trusted launch/recovery workflow; no home, image or credential default
+is inferred. Running foreign conversations, creating/unknown predecessors, unsettled effects and
+stale source or ownership hold the affected PR without starting another writer.
+
 Generated entries live in the existing admission array, marked `_automatic_native`, and are written
 atomically under `.pr-cycle.lock`; no separate authority store is introduced. Each advancement
 rederives their current head and contract and checks fresh review material before reservation.
@@ -509,6 +521,18 @@ current contents of a mutable venv. Failed or interrupted verification cannot re
 The existing immediate premerge CI, authority and fencing refreshes still apply. Independent review
 and native execution proof remain reusable under their existing bindings; identical reauthorization
 alone does not establish that otherwise applicable evidence became invalid.
+For a conforming v2 report with no findings or archived original, the source controller can make
+the existing exact-report/per-item technical disposition itself. Its narrow cases are
+`evidence_not_rerun`, `ci_not_observed` and `simulated_boundary`; `out_of_scope_followup` is supported
+only in the scope assessment of authenticated non-closing work. A provisional assessment permits
+CI/Verify only. The merge path re-derives it from live native authority and requires actual fresh
+successful sandbox evidence for every admitted target plus current-head CI. Every closing contract
+must supply fully covered pytest targets; required runtime/non-pytest acceptance stays with its
+specialized owning workflow. The open governor's current body hash is retained in the disposition.
+Explicit supplied dispositions retain their strict digest semantics and cannot fall back after
+drift. Findings, unknown or operator-bound items, required gaps and archived original analysis
+remain in the existing owning workflow; a model's informational classification alone grants no
+merge authority. This source correction still needs independent convergence and live qualification.
 P0/P1, any protected finding at any severity, a P3 with a defect category, P2 without a verified
 Known Defects disposition, gaps and incomplete assessments all wait for the owning workflow. This
 source candidate identifies a grammar-conforming, identity-bound P0/P1 report after the reviewer's
