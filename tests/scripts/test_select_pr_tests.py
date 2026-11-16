@@ -16,6 +16,21 @@ from scripts.select_pr_tests import select_tests
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_operations_preparation_entrypoints_select_real_operations_proof() -> None:
+    for path in ("app/cli/ops.py", "app/ops/native_operations_fixture.py"):
+        selection = select_tests([path])
+
+        assert selection.full_suite is False
+        assert selection.unowned_paths == ()
+        assert "operations" in selection.subsystems
+        assert "tests/operations" in selection.targets
+        assert "tests/architecture/test_autonomous_operations_boundaries.py" in selection.targets
+
+    # Keep the runtime fail-closed boundary for an undeclared CLI sibling.
+    unknown = "app/cli/unowned_operations.py"
+    assert select_tests([unknown]).unowned_paths == (unknown,)
+
+
 @pytest.mark.parametrize("path", ("scripts/await_pr_checks.sh", "scripts/ci_stall_classifier.py"))
 def test_read_only_ci_wait_helpers_select_covering_governance_contracts(path: str) -> None:
     selection = select_tests([
