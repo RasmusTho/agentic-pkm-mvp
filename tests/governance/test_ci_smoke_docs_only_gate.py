@@ -117,6 +117,21 @@ def test_unit_test_filter_or_skip_conclusion_is_corrected() -> None:
     assert "Skip unit tests for docs-only PR" in names
 
 
+@pytest.mark.parametrize("path", ("Dockerfile", ".dockerignore"))
+def test_image_inputs_trigger_unit_smoke_and_image_build(path: str) -> None:
+    workflow = yaml.safe_load(_smoke_text())
+    smoke = workflow["jobs"]["smoke"]
+    filter_step = next(step for step in smoke["steps"] if step.get("id") == "changes")
+    heavy = yaml.safe_load(filter_step["with"]["filters"])["heavy_smoke"]
+    image_workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "app-image-build.yml").read_text(encoding="utf-8")
+    )
+    image_paths = image_workflow[True]["pull_request"]["paths"]
+
+    for patterns in (_code_filter_globs(), heavy, image_paths):
+        assert any(fnmatchcase(path, pattern) for pattern in patterns), path
+
+
 def test_code_filter_covers_github_surface() -> None:
     globs = _code_filter_globs()
     for github_path in (
