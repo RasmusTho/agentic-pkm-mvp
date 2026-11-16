@@ -432,7 +432,11 @@ effort improved before adopting further changes.
   seed copies and require failure for missing/malformed metric input, failed gates and missing
   thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
   unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
-- The full and scoped non-PG unit steps retain finite outer ceilings of 120 minutes each. The scoped step's
+- The full shared and scoped non-PG unit steps retain finite outer ceilings of 180 and 120 minutes,
+  respectively. The full lane's 180-minute envelope is a finite calibration allowance after two
+  current-head runs reached the former 120-minute ceiling with all parallel shards complete and
+  only partial serial coverage; it does not prove the full serial duration or promise a speedup.
+  The scoped step's
   former 35-minute ceiling cut off #6091 / PR #6092 at 91% without a reported assertion failure
   ([job 116083429844](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38631158811/job/116083429844));
   its six selected subsystem groups run serially. Additional outer margin does not prove completion
@@ -487,8 +491,9 @@ effort improved before adopting further changes.
   deploy modules. Its inventory and process isolation remain unchanged. Actual
   full-suite CI timing is still required to demonstrate that the scheduling change gives margin.
   Because reordering can move the last finishing work item rather than leave enough serial-phase
-  time, the full-suite ceiling is temporarily 120 minutes; the default 120-second individual-test watchdog,
-  complete-coverage accounting and serial boundary remain in place. This is additional execution
+  time, the full-suite ceiling is now a finite 180-minute calibration envelope; the default
+  120-second individual-test watchdog, complete-coverage accounting and serial boundary remain in
+  place. The phase receipt binds that envelope to the workflow timeout. This is additional execution
   margin, not proof of completion or a speedup; current-head full-suite CI remains required.
   The four cases of `test_all_operation_families_share_owner_native_semantics` have a finite
   300-second test-local watchdog: they exercise a long cross-surface operation corpus, and one
