@@ -2799,6 +2799,23 @@ repository change does not install or restart the VM supervisor. A live call req
 source-installation path to load this implementation first; if its exact writer and authority
 preconditions are unavailable, leave the operation pending rather than bypassing that gate.
 
+The normal HOST SSH calls (`prepare`, `activate`, `join`, `reconcile-failed`,
+`reconcile-unknown`, and `prove-absence`) each allow at most 65,536 request bytes, including
+the JSON newline, and 65,536 stdout bytes across the complete exchange. These match the
+existing guest request-line and normal RPC response limits; stderr is independently counted
+and discarded with the same 65,536-byte ceiling. Oversized requests refuse before launch.
+A monotonic 60-second deadline covers local child setup, nonblocking input writing, output
+draining and child exit, allowing 25 seconds beyond the guest's existing 35-second normal RPC
+timeout (its supervised worker wait is 25 seconds). Activity cannot extend this deadline.
+Local cleanup closes invocation-owned pipes/selector and kills/reaps only that SSH child,
+with a separate 5-second budget: the exchange and cleanup budget is 65 seconds. Setup, IO,
+timeout, overflow or incomplete cleanup fails closed with value-free diagnostics and no
+automatic resend or new operation ID. Local exit or cleanup does not prove remote ALL-close,
+remote terminality, or that an old sender/worker cannot act later. The original HOST operation
+stays pending until the existing exact native evidence permits reconciliation; valid exit-78
+unknown-fence predicates remain typed refusals. Source delivery does not establish installed
+caller qualification or live DEV/TEST acceptance, which remains with #6170.
+
 The root-owned `config/systemd/yggdrasil-bws-deploy@.service` and installed
 `scripts/postgres_deploy_service.py` launcher supervise VM work independently of SSH. Operator setup
 runs `sudo scripts/install_bws_deploy_runtime.sh` from the checkout. That idempotent command

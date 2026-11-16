@@ -5406,11 +5406,11 @@ def test_bws_supervisor_binds_forward_only_ack_and_refuses_changed_retry(tmp_pat
     supervisor = DeploymentSupervisor(SimpleNamespace(channel='test', journal=journal))
     transmitted = []
 
-    def ssh(_argv, **kwargs):
-        transmitted.append(json.loads(kwargs['input']))
-        return SimpleNamespace(returncode=0, stdout='{"pending": true}')
+    def ssh(_argv, request):
+        transmitted.append(json.loads(request))
+        return 0, b'{"pending": true}'
 
-    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    monkeypatch.setattr(linux, '_normal_ssh_exchange', ssh)
     remote = SshDeployRemote('ygg-test')
     remote._request('join', operation_id, plan)
     request = transmitted[-1]
@@ -6876,7 +6876,6 @@ def test_host_unknown_reconciliation_refuses_adjacent_operation_modes_before_nat
 
 def test_ssh_reconcile_unknown_requires_exact_fence_response(monkeypatch):
     import json
-    from types import SimpleNamespace
     from uuid import uuid4
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
@@ -6899,11 +6898,11 @@ def test_ssh_reconcile_unknown_requires_exact_fence_response(monkeypatch):
     }
     calls = []
 
-    def ssh(argv, **kwargs):
-        calls.append((argv, json.loads(kwargs['input'])))
-        return SimpleNamespace(returncode=0, stdout=json.dumps(expected))
+    def ssh(argv, request):
+        calls.append((argv, json.loads(request)))
+        return 0, json.dumps(expected).encode()
 
-    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    monkeypatch.setattr(linux, '_normal_ssh_exchange', ssh)
     remote = linux.SshDeployRemote('ygg-test')
     assert remote.reconcile_unknown(operation_id, plan) == expected
     assert calls[0][1] == {
@@ -6911,22 +6910,22 @@ def test_ssh_reconcile_unknown_requires_exact_fence_response(monkeypatch):
         'plan': json.loads(json.dumps(plan.payload())), 'bootstrap': False,
     }
 
-    monkeypatch.setattr(linux.subprocess, 'run', lambda *_args, **_kwargs: SimpleNamespace(
-        returncode=0, stdout=json.dumps({**expected, 'native_replay_fence_durable': False}),
+    monkeypatch.setattr(linux, '_normal_ssh_exchange', lambda *_args: (
+        0, json.dumps({**expected, 'native_replay_fence_durable': False}).encode(),
     ))
     with pytest.raises(PostgresDeployError) as invalid_receipt:
         remote.reconcile_unknown(operation_id, plan)
     assert invalid_receipt.value.missing_predicate == 'durable_replay_fence_is_written'
 
-    monkeypatch.setattr(linux.subprocess, 'run', lambda *_args, **_kwargs: SimpleNamespace(
-        returncode=0, stdout=json.dumps({'refused': True, 'missing_predicate': 'worker_is_quiescent'}),
+    monkeypatch.setattr(linux, '_normal_ssh_exchange', lambda *_args: (
+        0, json.dumps({'refused': True, 'missing_predicate': 'worker_is_quiescent'}).encode(),
     ))
     with pytest.raises(linux.UnknownDeployFenceRefused) as refusal:
         remote.reconcile_unknown(operation_id, plan)
     assert refusal.value.missing_predicate == 'worker_is_quiescent'
 
-    monkeypatch.setattr(linux.subprocess, 'run', lambda *_args, **_kwargs: SimpleNamespace(
-        returncode=0, stdout=json.dumps({'refused': True}),
+    monkeypatch.setattr(linux, '_normal_ssh_exchange', lambda *_args: (
+        0, json.dumps({'refused': True}).encode(),
     ))
     with pytest.raises(linux.UnknownDeployFenceRefused) as unsupported:
         remote.reconcile_unknown(operation_id, plan)
@@ -6936,7 +6935,6 @@ def test_ssh_reconcile_unknown_requires_exact_fence_response(monkeypatch):
 def test_ssh_reconcile_unknown_preserves_native_main_refusal(tmp_path, monkeypatch):
     import io
     from contextlib import redirect_stderr, redirect_stdout
-    from types import SimpleNamespace
     from uuid import uuid4
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import DeployPlan
@@ -6949,19 +6947,19 @@ def test_ssh_reconcile_unknown_preserves_native_main_refusal(tmp_path, monkeypat
         assert request['action'] == 'reconcile-unknown'
         raise linux.UnknownDeployFenceRefused('worker_is_quiescent')
 
-    def ssh(_argv, *, input, **_kwargs):
+    def ssh(_argv, request):
         stdout, stderr = io.StringIO(), io.StringIO()
         original_stdin = linux.sys.stdin
         try:
-            linux.sys.stdin = io.StringIO(input)
+            linux.sys.stdin = io.StringIO(request.decode('utf-8'))
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 returncode = linux.main(['rpc', 'test'])
         finally:
             linux.sys.stdin = original_stdin
-        return SimpleNamespace(returncode=returncode, stdout=stdout.getvalue(), stderr=stderr.getvalue())
+        return returncode, stdout.getvalue().encode('utf-8')
 
     monkeypatch.setattr(linux, 'rpc', refused)
-    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    monkeypatch.setattr(linux, '_normal_ssh_exchange', ssh)
     with pytest.raises(linux.UnknownDeployFenceRefused) as refusal:
         linux.SshDeployRemote('ygg-test').reconcile_unknown(operation_id, plan)
     assert refusal.value.missing_predicate == 'worker_is_quiescent'
@@ -6969,7 +6967,6 @@ def test_ssh_reconcile_unknown_preserves_native_main_refusal(tmp_path, monkeypat
 
 def test_ssh_reconcile_failed_sends_exact_same_id_and_existing_secrets_mode(monkeypatch):
     import json
-    from types import SimpleNamespace
     from uuid import uuid4
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import DeployPlan
@@ -6984,11 +6981,11 @@ def test_ssh_reconcile_failed_sends_exact_same_id_and_existing_secrets_mode(monk
     }
     calls = []
 
-    def ssh(argv, **kwargs):
-        calls.append((argv, json.loads(kwargs['input'])))
-        return SimpleNamespace(returncode=0, stdout=json.dumps(response))
+    def ssh(argv, request):
+        calls.append((argv, json.loads(request)))
+        return 0, json.dumps(response).encode()
 
-    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    monkeypatch.setattr(linux, '_normal_ssh_exchange', ssh)
     receipt = linux.SshDeployRemote('ygg-test').reconcile_failed(operation_id, plan)
 
     assert receipt.operation_id == operation_id

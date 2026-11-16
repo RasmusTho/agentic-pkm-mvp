@@ -716,6 +716,26 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                     ports._verified_candidate_sha = None
                 patch.setattr(transaction._NativePorts, 'verify_candidate', unavailable_candidate)
         state.update(backups=backups, receipts=receipts, bound=True, control_root=control_root)
+        original_rpc = linux.rpc
+        def observed_rpc(selected_channel, selected):
+            try:
+                return original_rpc(selected_channel, selected)
+            except Exception as exc:
+                try:
+                    frames = [
+                        (
+                            'app_source' if 'app' in Path(frame.f_code.co_filename).parts else 'launcher_source',
+                            frame.f_code.co_name,
+                            line,
+                        )
+                        for frame, line in traceback.walk_tb(exc.__traceback__)
+                        if {'app', 'scripts'} & set(Path(frame.f_code.co_filename).parts)
+                    ]
+                    state['rpc_failure'] = (type(exc).__name__, frames[-6:])
+                except Exception:
+                    pass
+                raise
+        patch.setattr(linux, 'rpc', observed_rpc)
         return finder
 
     def guarded_bind_effects(root):
@@ -935,7 +955,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             assert not {'prepare', 'stop', 'start'} & set(state['events'])
         assert status == 78 and output.getvalue() == '' and state['close_failed']
         raise SystemExit(status)
-    assert status == 0, (status, output.getvalue(), state.get("bootstrap_failure"))
+    assert status == 0, (status, output.getvalue(), state.get("bootstrap_failure"), state.get('rpc_failure'))
     result = json.loads(output.getvalue())["source_installation"]
     assert resource.getrlimit(resource.RLIMIT_NOFILE) == state["original_limits"]
     assert not hasattr(sys, "_yggdrasil_bws_source_rpc_process")
