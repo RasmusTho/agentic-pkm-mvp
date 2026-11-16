@@ -22,6 +22,168 @@ from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
 
 _ROOT_RPC_BATCHES = {'empty': 5, 'anchored': 4, 'alias': 1, 'proposed': 1, 'uncertain': 1}
+_RPC_EXCEPTION_CLASSES = frozenset({
+    'AssertionError', 'CalledProcessError', 'FileNotFoundError', 'KeyError',
+    'OSError', 'PermissionError', 'RuntimeError', 'TimeoutError', 'TimeoutExpired',
+    'TypeError', 'UnicodeDecodeError', 'ValueError',
+})
+_RPC_FUNCTION_ROLES = frozenset({
+    '_execute_source_installation', '_git_mode', '_git_source_files', '_refuse',
+    '_verify_candidate', '_verify_candidate_checkout', '_verify_candidate_git',
+    'run', 'run_source_installation', 'verify_caller_checkout',
+})
+_RPC_GIT_CATEGORIES = frozenset({'clean', 'head', 'object', 'root', 'tree'})
+
+
+def _rpc_exception_class(error: BaseException) -> str:
+    name = type(error).__name__
+    return name if name in _RPC_EXCEPTION_CLASSES else 'other'
+
+
+def _rpc_numeric(error: BaseException, attribute: str, upper: int | float) -> int | float | None:
+    value = getattr(error, attribute, None)
+    if (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and 0 <= value <= upper):
+        return value
+    return None
+
+
+def _rpc_frames(error: BaseException) -> list[tuple[str, str, int]]:
+    frames = []
+    for frame, line in traceback.walk_tb(error.__traceback__):
+        parts = set(Path(frame.f_code.co_filename).parts)
+        if not {'app', 'scripts'} & parts:
+            continue
+        role = frame.f_code.co_name if frame.f_code.co_name in _RPC_FUNCTION_ROLES else 'other'
+        frames.append(('app_source' if 'app' in parts else 'launcher_source', role, line))
+    return frames[-6:]
+
+
+def _rpc_exception_summary(error: BaseException) -> dict[str, object]:
+    return {
+        'class': _rpc_exception_class(error),
+        'errno': _rpc_numeric(error, 'errno', 4096),
+        'timeout': _rpc_numeric(error, 'timeout', 600),
+        'frames': _rpc_frames(error),
+    }
+
+
+def _rpc_failure_diagnostic(error: BaseException, git_checks: list[dict[str, object]]) -> dict[str, object]:
+    context = []
+    seen: set[int] = set()
+    current = error.__context__
+    while current is not None and id(current) not in seen and len(context) < 4:
+        seen.add(id(current))
+        context.append(_rpc_exception_summary(current))
+        current = current.__context__
+    outer = _rpc_exception_summary(error)
+    outer['context'] = context
+    outer['git_checks'] = tuple(git_checks)
+    return outer
+
+
+def _record_rpc_failure(state: dict[str, object], error: BaseException) -> None:
+    try:
+        state['rpc_failure'] = _rpc_failure_diagnostic(
+            error, state.get('rpc_git_checks', []),
+        )
+    except Exception:
+        # Diagnostics must never replace the original RPC failure.
+        pass
+
+
+def _rpc_git_category(argv: object) -> str | None:
+    try:
+        words = tuple(str(part) for part in argv)  # noqa: C401 - values are never recorded
+    except Exception:
+        return None
+    if 'git' not in words:
+        return None
+    if '--show-toplevel' in words:
+        return 'root'
+    if 'status' in words and '--porcelain=v1' in words:
+        return 'clean'
+    if 'rev-parse' in words and 'HEAD' in words:
+        return 'head'
+    if 'ls-tree' in words:
+        return 'tree'
+    if 'cat-file' in words:
+        return 'object'
+    return None
+
+
+def _rpc_git_record(category: str, result: object = None, error: BaseException | None = None,
+                    *, expected_root: Path | None = None, expected_revision: str | None = None) -> dict[str, object]:
+    if category not in _RPC_GIT_CATEGORIES:
+        return {'category': 'other'}
+    record: dict[str, object] = {'category': category}
+    if error is not None:
+        record.update({
+            'class': _rpc_exception_class(error),
+            'errno': _rpc_numeric(error, 'errno', 4096),
+            'timeout': _rpc_numeric(error, 'timeout', 600),
+        })
+        return record
+    return_code = getattr(result, 'returncode', None)
+    record['return_code'] = (return_code if isinstance(return_code, int) and not isinstance(return_code, bool)
+                             and -255 <= return_code <= 255 else None)
+    stderr = getattr(result, 'stderr', None)
+    stdout = getattr(result, 'stdout', None)
+    record['stderr_present'] = bool(stderr)
+    if category == 'root':
+        try:
+            record['root'] = (record['return_code'] == 0 and not stderr
+                              and Path(os.fsdecode(stdout.rstrip(b'\n'))) == expected_root)
+        except Exception:
+            record['root'] = False
+    elif category == 'head':
+        try:
+            record['head'] = (record['return_code'] == 0 and not stderr
+                              and stdout.rstrip(b'\n').decode('ascii') == expected_revision)
+        except Exception:
+            record['head'] = False
+    elif category == 'clean':
+        record['clean'] = record['return_code'] == 0 and not stderr and not stdout
+    return record
+
+
+def test_rpc_failure_diagnostics_are_redacted_and_cycle_safe() -> None:
+    marker = 'PRIVATE_CANARY_RPC_DIAGNOSTIC'
+    try:
+        try:
+            raise OSError(5, marker)
+        except OSError as context:
+            raise RuntimeError(marker) from context
+    except RuntimeError as error:
+        diagnostic = _rpc_failure_diagnostic(error, [{
+            'category': 'clean', 'return_code': 0, 'stderr_present': False, 'clean': True,
+        }])
+    assert marker not in repr(diagnostic)
+    assert diagnostic['class'] == 'RuntimeError'
+    assert diagnostic['context'][0]['class'] == 'OSError'
+    assert diagnostic['context'][0]['errno'] == 5
+    assert diagnostic['git_checks'][0]['clean'] is True
+
+    cyclic = RuntimeError(marker)
+    cyclic.__context__ = cyclic
+    assert len(_rpc_failure_diagnostic(cyclic, [])['context']) == 1
+
+
+def test_rpc_failure_diagnostics_preserve_original_failure(monkeypatch) -> None:
+    original = RuntimeError('PRIVATE_CANARY_RPC_DIAGNOSTIC')
+    state: dict[str, object] = {}
+    monkeypatch.setattr(
+        sys.modules[__name__], '_rpc_failure_diagnostic',
+        lambda *_args: (_ for _ in ()).throw(AssertionError('diagnostic probe failed')),
+    )
+    with pytest.raises(RuntimeError) as raised:
+        try:
+            raise original
+        except Exception as error:
+            _record_rpc_failure(state, error)
+            raise
+    assert raised.value is original
+    assert 'rpc_failure' not in state
 
 
 def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path,
@@ -717,23 +879,29 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 patch.setattr(transaction._NativePorts, 'verify_candidate', unavailable_candidate)
         state.update(backups=backups, receipts=receipts, bound=True, control_root=control_root)
         original_rpc = linux.rpc
+        original_subprocess_run = subprocess.run
+        def observed_git_run(argv, *args, **kwargs):
+            category = _rpc_git_category(argv)
+            try:
+                result = original_subprocess_run(argv, *args, **kwargs)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                if category is not None:
+                    state.setdefault('rpc_git_checks', []).append(
+                        _rpc_git_record(category, error=exc),
+                    )
+                raise
+            if category is not None:
+                state.setdefault('rpc_git_checks', []).append(_rpc_git_record(
+                    category, result, expected_root=checkout, expected_revision=revision,
+                ))
+            return result
+        patch.setattr(subprocess, 'run', observed_git_run)
+
         def observed_rpc(selected_channel, selected):
             try:
                 return original_rpc(selected_channel, selected)
             except Exception as exc:
-                try:
-                    frames = [
-                        (
-                            'app_source' if 'app' in Path(frame.f_code.co_filename).parts else 'launcher_source',
-                            frame.f_code.co_name,
-                            line,
-                        )
-                        for frame, line in traceback.walk_tb(exc.__traceback__)
-                        if {'app', 'scripts'} & set(Path(frame.f_code.co_filename).parts)
-                    ]
-                    state['rpc_failure'] = (type(exc).__name__, frames[-6:])
-                except Exception:
-                    pass
+                _record_rpc_failure(state, exc)
                 raise
         patch.setattr(linux, 'rpc', observed_rpc)
         return finder
