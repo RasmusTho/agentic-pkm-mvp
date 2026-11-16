@@ -79,6 +79,12 @@ channel-scoped declarations are delivered to the API, worker, and watcher runtim
 configured. Calling binder methods directly is an internal application route, not a supported
 operator invocation.
 
+For the two non-production channels, the owner-selected OAuth client id and client secret may be
+the same Google client in both `dev` and `test`. The token-store key must remain distinct per
+channel, and each channel must keep isolated account and token runtime state; neither channel may
+read or reuse the other channel's token state. This exception never creates a YouTube grant for
+`prod`.
+
 ## Manual Inbox route
 
 The calling application constructs one `YouTubeInboxSyncV1` instance pinned to the connected

@@ -110,11 +110,13 @@ parent #5667 remains open for that gate.
    BuilderOps artifacts, Mimer/vault notes, command output, CI logs, or receipts.
 2. **Least privilege by consumer and channel.** A dev capture watcher receives its raw-store key and
    watched path only; it does not receive unrelated provider or deployment credentials. `dev`,
-   `test`, and `prod` secret values remain distinct except for the narrow BWS exception approved in
-   #5667: `openai.api-key`, `anthropic.api-key`, `github.token`, and `discord.webhook` use one
-   externally issued `shared/` value mirrored in the prod and non-prod BWS projects. This records
-   the accepted tradeoff that a non-prod project reader can retrieve those same provider values used
-   by prod. No other identity is shared across channels, and this exception does not widen consumer
+   `test`, and `prod` secret values remain distinct except for the narrow, explicitly approved
+   exceptions. The BWS exception in #5667 permits `openai.api-key`, `anthropic.api-key`,
+   `github.token`, and `discord.webhook` to use one externally issued `shared/` value mirrored in
+   the prod and non-prod BWS projects. For the non-production YouTube connect route, the
+   owner-selected OAuth client id and client secret may be the same Google client in `dev` and
+   `test`; the token-store keys, account bindings, and token runtime state must remain distinct and
+   isolated by channel, with no YouTube grant in `prod`. These exceptions do not widen consumer
    grants or change the dev capture watcher's least-privilege grant.
 3. **Fail closed.** A missing, malformed, or inaccessible required secret prevents the named process
    from starting; it does not select a default, print the value, or silently weaken encryption. Since
