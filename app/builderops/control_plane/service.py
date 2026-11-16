@@ -98,7 +98,7 @@ from app.builderops.control_plane.issue_delivery import (
     receipt_ref as issue_delivery_receipt_ref,
     record_id as issue_delivery_record_id,
     delivery_source_pair,
-    CANDIDATE_CONTRACT_VERSION, TWO_SOURCE_VERSIONS,
+    CANDIDATE_CONTRACT_VERSIONS, TWO_SOURCE_VERSIONS,
     tracking_repository,
 )
 
@@ -1492,7 +1492,7 @@ def create_app(
             "entry": {"attempt_receipt_hash", "attempt_id", "destination_resource_key", "session_id", "entered_at"},
             "terminal": {"attempt_receipt_hash", "destination_resource_key", "entry_receipt_hash", "session_id", "worker_receipt", "host_effect_refs", "observed_at"},
         }[kind]
-        candidate_terminal = approved["contract_version"] == CANDIDATE_CONTRACT_VERSION and kind == "terminal"
+        candidate_terminal = approved["contract_version"] in CANDIDATE_CONTRACT_VERSIONS and kind == "terminal"
         if candidate_terminal:
             expected_specific = expected_specific | {"candidate_binding"}
         if set(payload) != expected_common | expected_specific:
@@ -1622,7 +1622,7 @@ def create_app(
                 "closure": "github.issue-delivery.closure.v1",
                 "parent_evidence": "github.issue-delivery.parent-evidence.v1",
             }
-            if approved["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+            if approved["contract_version"] in CANDIDATE_CONTRACT_VERSIONS:
                 effect_types["candidate_prepare"] = "git.issue-delivery.candidate-prepare.v1"
             for ref in refs:
                 if not isinstance(ref, Mapping) or set(ref) != {
@@ -1662,7 +1662,7 @@ def create_app(
                 if (
                     outbox_status not in {"pending", "claimed", "unknown", "succeeded"}
                     or effect_payload.get("contract")
-                    != ("builderops.issue-delivery-effect.v2" if approved["contract_version"] == CANDIDATE_CONTRACT_VERSION else "builderops.issue-delivery-effect.v1")
+                    != ("builderops.issue-delivery-effect.v2" if approved["contract_version"] in CANDIDATE_CONTRACT_VERSIONS else "builderops.issue-delivery-effect.v1")
                     or effect_payload.get("request_sha256") != request_sha256
                     or effect_payload.get("effect_slot_sha256") != effect_slot_sha256
                     or effect_payload.get("approval_id") != request.approval_id

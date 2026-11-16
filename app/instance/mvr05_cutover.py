@@ -206,7 +206,7 @@ def validate_mvr05_runtime_floor(
     # receipt, so a later deployment's MVR-05 step is an already-recorded no-op rather
     # than a mismatch that would block every redeploy after the background cutover.
     if (
-        existing_floor not in {MVR05_RUNTIME_FLOOR, "mvr-06"}
+        existing_floor not in {MVR05_RUNTIME_FLOOR, "mvr-06", "mvr-06d"}
         or not isinstance(existing_receipt, Mapping)
         or existing_receipt.get("schema") != MVR05_FENCE_SCHEMA
         or existing_receipt.get("all_old_scalar_clients_stopped") is not True

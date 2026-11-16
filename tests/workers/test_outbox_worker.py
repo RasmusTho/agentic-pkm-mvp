@@ -123,6 +123,137 @@ def test_run_once_uses_real_dispatch_table_for_supported_topics(
     assert result.processed == 1
 
 
+def test_panel_scan_skips_read_only_derived_without_uuid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Byte-owned derived notes are terminal no-ops before UUID healing."""
+    vault_root = tmp_path / "vault"
+    note_path = vault_root / "Daily Briefings" / "brief.md"
+    note_path.parent.mkdir(parents=True)
+    original = (
+        "---\n"
+        "agent_maintained: true\n"
+        "read_only: true\n"
+        "authority_role: derived\n"
+        "---\n"
+        "# Daily briefing\n"
+    ).encode("utf-8")
+    note_path.write_bytes(original)
+
+    monkeypatch.setattr(
+        outbox_worker,
+        "_maybe_heal_uuid",
+        lambda *_args, **_kwargs: pytest.fail("derived artifact must not heal UUID"),
+    )
+    monkeypatch.setattr(
+        outbox_worker,
+        "_queue_transient_retry",
+        lambda *_args, **_kwargs: pytest.fail("derived artifact must not enqueue retry"),
+    )
+    monkeypatch.setattr(
+        outbox_worker,
+        "refresh_panel_note_object",
+        lambda *_args, **_kwargs: pytest.fail("derived artifact must not refresh panel state"),
+    )
+    monkeypatch.setattr(
+        outbox_worker,
+        "run_panel_note_execution",
+        lambda *_args, **_kwargs: pytest.fail("derived artifact must not execute panel actions"),
+    )
+
+    summary = outbox_worker.handle_panel_scan_requested(
+        {
+            "vault_path": str(note_path),
+            "relative_path": "Daily Briefings/brief.md",
+            "hash": "brief-hash",
+            "mtime": 123.0,
+        },
+        vault_root=vault_root,
+    )
+
+    assert summary.emitted == 0
+    assert summary.deferred is False
+    assert note_path.read_bytes() == original
+
+
+def test_panel_scan_read_only_policy_is_exact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Only the complete derived policy skips; UUID and ordinary notes still scan."""
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    skipped_with_uuid = vault_root / "derived-with-uuid.md"
+    partial = vault_root / "partial-policy.md"
+    editable = vault_root / "editable.md"
+    skipped_with_uuid.write_text(
+        "---\n"
+        "uuid: 00000000-0000-0000-0000-000000000001\n"
+        "agent_maintained: true\n"
+        "read_only: true\n"
+        "authority_role: derived\n"
+        "---\n"
+        "derived bytes\n",
+        encoding="utf-8",
+    )
+    partial.write_text(
+        "---\n"
+        "uuid: 00000000-0000-0000-0000-000000000002\n"
+        "agent_maintained: true\n"
+        "read_only: true\n"
+        "authority_role: source\n"
+        "---\n"
+        "partial policy\n",
+        encoding="utf-8",
+    )
+    editable.write_text(
+        "---\n"
+        "uuid: 00000000-0000-0000-0000-000000000003\n"
+        "---\n"
+        "editable note\n",
+        encoding="utf-8",
+    )
+
+    refreshed: list[str] = []
+    executed: list[str] = []
+
+    class _Execution:
+        emitted_count = 0
+
+    monkeypatch.setattr(outbox_worker, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(
+        outbox_worker,
+        "refresh_panel_note_object",
+        lambda *, note_uuid, **_kwargs: refreshed.append(note_uuid),
+    )
+    monkeypatch.setattr(
+        outbox_worker,
+        "run_panel_note_execution",
+        lambda note_uuid, **_kwargs: executed.append(note_uuid) or _Execution(),
+    )
+
+    derived_summary = outbox_worker.handle_panel_scan_requested(
+        {"vault_path": str(skipped_with_uuid), "relative_path": skipped_with_uuid.name},
+        vault_root=vault_root,
+    )
+    partial_summary = outbox_worker.handle_panel_scan_requested(
+        {"vault_path": str(partial), "relative_path": partial.name},
+        vault_root=vault_root,
+    )
+    editable_summary = outbox_worker.handle_panel_scan_requested(
+        {"vault_path": str(editable), "relative_path": editable.name},
+        vault_root=vault_root,
+    )
+
+    assert derived_summary.emitted == 0
+    assert partial_summary.emitted == 0
+    assert editable_summary.emitted == 0
+    assert refreshed == [
+        "00000000-0000-0000-0000-000000000002",
+        "00000000-0000-0000-0000-000000000003",
+    ]
+    assert executed == refreshed
+
+
 def test_run_once_still_processes_vault_changed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

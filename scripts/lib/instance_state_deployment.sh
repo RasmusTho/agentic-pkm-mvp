@@ -1057,6 +1057,21 @@ PY
       echo "instance state deployment: background authority cutover requires stopped-window repair" >&2
       return "${inventory_rc}"
     fi
+    # MVR-06B: in the same stopped window, retire the #3163 picker bridge into the
+    # singleton/explicit-empty background supervisor (one atomic registry generation;
+    # idempotent once complete). A failure leaves the bridge authoritative.
+    "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+      python -m app.instance.runtime background-supervisor-handoff \
+        --channel "${channel}" \
+        --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
+        --host-global-root /app/instance-ownership \
+        --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
+        --consumer bootstrap-init
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      echo "instance state deployment: background supervisor handoff requires stopped-window repair" >&2
+      return "${inventory_rc}"
+    fi
   fi
 
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \

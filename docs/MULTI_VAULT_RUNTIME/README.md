@@ -22,6 +22,17 @@ background lifecycle binding are still target state. MVR-06A (#3863) adds only t
 for the latter: the opt-in `minimumRuntimeSchema=mvr-06` floor, the delegated least-privilege
 background-runtime role, and a read-only staged background intent whose add/remove commands fail
 `capability_not_ready`; the legacy picker bridge remains the authoritative watcher owner until 06B.
+MVR-06B (#3864) retires that bridge atomically into the ownership-checked,
+revision/auth-reconciling, effect-leased singleton/explicit-empty background supervisor, activates
+governed singleton/explicit-empty intent, and activates production registration removal and
+same-channel tombstone reactivation. MVR-06C (#3865) generalizes the supervisor per binding but
+keeps many-binding supervision dormant (a second binding stays sealed until MVR-06D enables its
+queue-dispatch contract), and activates production relocation behind the shared/exclusive
+effect-lease order. MVR-06D (#3866) activates many-binding enrollment/start together with its
+recoverable PostgreSQL claim dispatch behind the `minimumRuntimeSchema=mvr-06d` floor (registry v4),
+quarantines or revalidates pending queued work under current authority and binding, and adds the
+zero/one/many `/api/health` projection; vault-file and derived-projection handlers are not yet
+admitted to many-binding dispatch.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 
@@ -86,9 +97,9 @@ owner resumes; interrupted rotation recovers one complete generation and never c
 Registration uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
 active reservation still matches its channel and root. The same physical content root cannot be
 active in two dev/test/prod/native ownership domains simultaneously, and nested roots cannot straddle
-those domains. Relocation is specified with a sealed entrypoint until MVR-06C implements its
-production engine and proves every foreground and background consumer uses the matching
-shared/exclusive effect-lease order. Explicit transfer
+those domains. Relocation is active since MVR-06C: its production engine
+(`app/instance/binding_relocation.py`) proves every foreground and background consumer uses the
+matching shared/exclusive effect-lease order and stays sealed before that floor. Explicit transfer
 remains capability-gated until MVR-05C activates foreground read/write ownership fencing. It then
 uses a production-derived source-channel inventory to close foreground ingress, drain and stop every
 vault-bound watcher, scalar worker, settings reload, outbox/ingest, Heimdal projection, API/CLI, and
@@ -243,7 +254,8 @@ production resolution, never an authorized subset. A dimension may seed an expli
 selection, and what the immutable snapshot stores is the resolved explicit binding set plus the
 dimension revision as provenance. Registration removal transactionally strips that binding from
 every dimension in the same locked registry transaction; production registration removal itself
-stays `capability_not_ready` until MVR-06B.
+was `capability_not_ready` until MVR-06B (#3864) activated it behind the background supervisor
+floor.
 
 ### Fresh bootstrap after operational-lineage loss
 

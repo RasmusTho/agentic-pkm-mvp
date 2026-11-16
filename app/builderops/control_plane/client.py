@@ -436,7 +436,7 @@ class BuilderOpsControlPlaneClient:
             raise ControlPlaneProtocolError("unsupported native Issue-delivery task version")
         sources = binding.get("delivery_sources")
         if binding["contract"] == "fca-issue-delivery-task.v2":
-            if (not isinstance(sources, Mapping) or sources.get("contract_version") != "fca-issue-delivery.v3"
+            if (not isinstance(sources, Mapping) or sources.get("contract_version") not in {"fca-issue-delivery.v3", "fca-issue-delivery.v4"}
                 or type(binding.get("task_record_version")) is not int
                 or binding["task_record_version"] != row.get("version")):
                 raise ControlPlaneProtocolError("candidate native task binding changed")

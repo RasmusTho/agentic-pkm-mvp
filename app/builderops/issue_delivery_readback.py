@@ -23,7 +23,7 @@ from app.builderops.control_plane.client_cli import (
 )
 from app.builderops.control_plane.models import canonical_repository
 from app.builderops.control_plane.client import ControlPlaneClientError
-from app.builderops.control_plane.issue_delivery import CANDIDATE_CONTRACT_VERSION, canonical_hash, delivery_source_pair, tracking_repository
+from app.builderops.control_plane.issue_delivery import CANDIDATE_CONTRACT_VERSIONS, canonical_hash, delivery_source_pair, tracking_repository
 from app.builderops.owner_fact_producers import (
     BIFROST_AUTHORITY, BIFROST_REPOSITORY, OwnerFactRefusal,
     _validate_documentation_candidate, read_owner_binding,
@@ -176,7 +176,7 @@ def admit_issue_delivery_task(
         status="ready",
         why_now="An approved Issue delivery is ready for independent readback.",
         issue_delivery={
-            "contract": CANDIDATE_TASK_CONTRACT if approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else TASK_CONTRACT,
+            "contract": CANDIDATE_TASK_CONTRACT if approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS else TASK_CONTRACT,
             "task_record_version": 1,
             "approval_id": approval_id,
             "approval_manifest_hash": approval["approval_manifest_hash"],
@@ -260,7 +260,7 @@ def _task_binding(task: Any, approval: Mapping[str, Any]) -> None:
         or row.get("state") not in {"ready", "claimed", "completed"}
         or type(row.get("version")) is not int
         or row["version"] < 1
-        or binding.get("contract") != (CANDIDATE_TASK_CONTRACT if approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else TASK_CONTRACT)
+        or binding.get("contract") != (CANDIDATE_TASK_CONTRACT if approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS else TASK_CONTRACT)
         or binding.get("task_record_version") != row["version"]
         or binding.get("approval_id") != approval.get("approval_id")
         or binding.get("approval_manifest_hash") != approval.get("approval_manifest_hash")
@@ -408,7 +408,7 @@ def read_issue_delivery_projection(
         value = _mapping(status, "host effect status")
         effect_payload = _mapping(value.get("payload"), "host effect payload")
         if (
-            value.get("status") not in ({"pending", "claimed", "unknown", "succeeded"} if approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else {"succeeded"})
+            value.get("status") not in ({"pending", "claimed", "unknown", "succeeded"} if approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS else {"succeeded"})
             or effect_payload.get("request_sha256") != ref["request_sha256"]
             or effect_payload.get("effect_slot_sha256") != ref["effect_slot_sha256"]
             or effect_payload.get("approval_id") != approval_id
@@ -417,7 +417,7 @@ def read_issue_delivery_projection(
         ):
             raise IssueDeliveryReadbackRefused("host effect readback changed")
         host_effects.append(deepcopy(dict(value)))
-    if approval["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+    if approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS:
         return compose_issue_delivery_readback(task=task, approval_readback=approval_readback,
             operation=operation, host_effects=host_effects, github_evidence=None, owner_binding=None)
     issue = _mapping(approval.get("issue"), "approved Issue")
@@ -507,7 +507,7 @@ def compose_issue_delivery_readback(
     if op.get("state") != "terminal" or op.get("operation_key") != approval.get("operation_key"):
         raise IssueDeliveryReadbackRefused("destination operation is not terminal for this approval")
     # Deliberately do not consult op["worker_receipt"] for any outcome.
-    candidate_version = approval["contract_version"] == CANDIDATE_CONTRACT_VERSION
+    candidate_version = approval["contract_version"] in CANDIDATE_CONTRACT_VERSIONS
     targets = _targets(host_effects, op.get("host_effect_refs"), candidate=candidate_version)
     if candidate_version:
         # This finite readback cannot establish remote delivery or owner facts.

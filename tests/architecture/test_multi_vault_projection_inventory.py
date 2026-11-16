@@ -735,6 +735,9 @@ def test_store_object_composite_key_producer_inventory_is_exact() -> None:
     assert {path for path in actual if path[0] in {"chunks", "embeddings"}} == {
         ("chunks", "app/stores/pg.py", "delete"),
         ("embeddings", "app/stores/pg.py", "delete"),
+        # MVR-06B: tombstone reactivation invalidates this binding's derived rows.
+        ("chunks", "app/instance/binding_removal.py", "delete"),
+        ("embeddings", "app/instance/binding_removal.py", "delete"),
     }, "the zero-writer child tables must remain zero-writer"
     assert not any(operation == "truncate" for _, _, operation in actual)
     for table in mechanism_tables:
@@ -1342,7 +1345,9 @@ def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
         # ``dispatcher show --events`` owns one explicit read transaction
         # whose SQL is intentionally local to the separate SQLite plane.
         "app/dispatcher/cli.py": 1,
-        "app/dispatcher/store.py": 2,
+        # Recovery reads only dispatcher tables inside its query-only snapshot;
+        # the additional invisible statement is its explicit BEGIN.
+        "app/dispatcher/store.py": 3,
         "app/dispatcher/verification_dispatch.py": 1,
         "app/dispatcher/verification_runtime.py": 1,
     }, (
@@ -1449,7 +1454,10 @@ def test_the_durable_projection_surface_is_fully_classified_and_binding_keyed() 
         for path in discover_durable_mutation_paths(manifest)
         if path.table == "sets"
     }
-    assert set_mutations == {("app/stores/pg.py", "insert")}
+    assert set_mutations == {
+        ("app/stores/pg.py", "insert"),
+        ("app/instance/binding_removal.py", "delete"),
+    }
     set_ddl = [
         seam
         for seam in discover_runtime_ddl_seams(manifest)

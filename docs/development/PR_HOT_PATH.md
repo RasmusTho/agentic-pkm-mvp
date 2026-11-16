@@ -70,6 +70,11 @@ high-risk, and ambiguous readback cases route to `.codex/skills/publish-pr/FULL_
 That file is the canonical full-path publication owner.
 Neither publication route owns merge, Issue closure, release, or deployment.
 
+For the qualified #6560 recovery, the native plan and apply path refuses the governing or closing
+Issue, existing PR #6565, or original worktree. Use the #6560 existing-PR proof in the full-path
+procedure before each effect. A reviewed intent comment binds account-attributed body bytes; the
+operator must separately preserve the ordered source of the actual attempt and its readback.
+
 ## PR Body Preparation
 
 `scripts/pr_body_generator.py` is the authoritative body constructor for implementation,

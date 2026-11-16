@@ -808,6 +808,40 @@ class TokenProvider:
 # --- Account binding manager -------------------------------------------------
 
 
+def youtube_account_status(
+    binding_id: str, *, binding_store: AccountBindingStore, token_store: YouTubeTokenStore
+) -> dict[str, Any]:
+    """Return the existing non-mutating binder status for a binding."""
+    binding = binding_store.get(binding_id)
+    if binding is None:
+        return redact(
+            {"status": "absent", "reason_code": "auth_missing", "scopes": [], "token_store": "encrypted"}
+        )
+    state, reason_code = binding.state, binding.reason_code
+    if state == "connected":
+        try:
+            if not token_store.has_record(binding_id):
+                state, reason_code = "degraded", "auth_missing"
+            else:
+                token = token_store.get(binding_id)
+                if (
+                    token is None
+                    or token.provider_channel_id != binding.provider_channel_id
+                ):
+                    state, reason_code = "degraded", "auth_missing"
+        except Exception:  # fail closed without exposing store/decryption detail
+            state, reason_code = "degraded", "auth_key_missing"
+    return redact(
+        {
+            "status": state,
+            "reason_code": reason_code,
+            "scopes": list(binding.scopes),
+            "token_store": "encrypted",
+        }
+    )
+
+
+
 class YouTubeAccountBinder:
     """Connect / status / disconnect / reconnect for a YouTube account binding.
 
@@ -968,38 +1002,9 @@ class YouTubeAccountBinder:
     # -- status ---------------------------------------------------------------
 
     def status(self, binding_id: str) -> dict[str, Any]:
-        """Live, non-secret status view for ``binding_id``.
-
-        Derives the fail-closed ``auth_key_missing`` state when a token record
-        exists but the store key is absent (INV-YSS-4), without persisting a
-        read-derived state.
-        """
-        binding = self._bindings.get(binding_id)
-        if binding is None:
-            return redact(
-                {"status": "absent", "reason_code": "auth_missing", "scopes": [], "token_store": "encrypted"}
-            )
-        state, reason_code = binding.state, binding.reason_code
-        if state == "connected":
-            try:
-                if not self._store.has_record(binding_id):
-                    state, reason_code = "degraded", "auth_missing"
-                else:
-                    token = self._store.get(binding_id)
-                    if (
-                        token is None
-                        or token.provider_channel_id != binding.provider_channel_id
-                    ):
-                        state, reason_code = "degraded", "auth_missing"
-            except Exception:  # fail closed without exposing store/decryption detail
-                state, reason_code = "degraded", "auth_key_missing"
-        return redact(
-            {
-                "status": state,
-                "reason_code": reason_code,
-                "scopes": list(binding.scopes),
-                "token_store": "encrypted",
-            }
+        """Return the live, fail-closed account status without persisting it."""
+        return youtube_account_status(
+            binding_id, binding_store=self._bindings, token_store=self._store
         )
 
     # -- disconnect -----------------------------------------------------------

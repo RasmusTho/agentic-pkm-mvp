@@ -1547,8 +1547,9 @@ def test_scoped_runner_weights_atomic_roots_without_stacking_deploy_nodes(tmp_pa
     ops = next(unit for unit in parallel if "tests/ops" in unit)
     scripts = next(unit for unit in parallel if "tests/scripts" in unit)
     assert ops != scripts
-    assert ops == ("tests/ops", *(f"--ignore={path}" for path in serial))
-    assert scripts == ("tests/scripts",)
+    assert sum(unit.count("tests/ops") for unit in parallel) == 1
+    assert sum(unit.count("tests/scripts") for unit in parallel) == 1
+    assert all(f"--ignore={path}" in ops for path in serial)
     assert sorted(target for unit in parallel for target in unit if target in nodes) == sorted(nodes)
     assert sum(set(SHARED_CHECKOUT_NODES) <= set(unit) for unit in parallel) == 1
     assert all(path not in unit for unit in parallel for path in serial)
@@ -1726,6 +1727,38 @@ def test_scoped_heavy_node_units_stay_in_distinct_processes(tmp_path, monkeypatc
         assert not any(any(node in unit for node in source) and any(node in unit for node in native)
                        for unit in parallel)
     assert sum("tests/scripts" in unit for unit in parallel) == 1
+
+
+def test_scoped_runner_keeps_measured_deploy_units_in_distinct_processes(monkeypatch):
+    """Recorded mixed workload must retain the measured modules' planned units."""
+    import scripts.run_scoped_test_partitions as runner
+    from scripts.plan_full_suite_node_shards import (
+        NATIVE_ADMISSION_MODULE, SHARED_CHECKOUT_NODES, SOURCE_RPC_MODULE, TARGET_MODULE,
+        plan_node_units,
+    )
+
+    source = tuple(f"{SOURCE_RPC_MODULE}::test_case[{i}]" for i in range(302))
+    native = tuple(f"{NATIVE_ADMISSION_MODULE}::test_case[{i}]" for i in range(394))
+    deploy = (*SHARED_CHECKOUT_NODES, *(f"{TARGET_MODULE}::test_case[{i}]" for i in range(101)))
+    ops = tuple(f"tests/ops/test_dispatcher.py::test_case[{i}]" for i in range(1700))
+    scripts = tuple(f"tests/scripts/test_dispatcher.py::test_case[{i}]" for i in range(1496))
+    collected = (*source, *native, *deploy, *ops, *scripts)
+    monkeypatch.setattr(runner, "_collect_parallel_nodes", lambda _targets: collected)
+    targets = (SOURCE_RPC_MODULE, NATIVE_ADMISSION_MODULE, TARGET_MODULE,
+               "tests/ops/test_dispatcher.py", "tests/scripts")
+    processes = runner._expand_and_balance_parallel(tuple((target,) for target in targets), jobs=4)
+
+    assert len(processes) <= 4
+    for module, nodes in ((SOURCE_RPC_MODULE, source), (NATIVE_ADMISSION_MODULE, native),
+                          (TARGET_MODULE, deploy)):
+        units = plan_node_units(nodes, module, max_workers=4)
+        owners = [next(i for i, process in enumerate(processes) if unit[0] in process)
+                  for unit in units]
+        assert len(set(owners)) == len(units)
+        assert sorted(node for process in processes for node in process if node in nodes) == sorted(nodes)
+        assert all(all(node in processes[owner] for node in unit)
+                   for unit, owner in zip(units, owners, strict=True))
+    assert sorted(target for process in processes for target in process if target in targets) == sorted(targets[-2:])
 
 
 @pytest.mark.parametrize("mode", ["pytest-failure", "missing", "duplicate", "unexpected"])

@@ -60,9 +60,17 @@ DEGRADED_REASONS: frozenset[str] = frozenset(
 
 #: Server-derived authentication subjects that may map to the local delegated role.
 #: A client header can claim none of them; see `app/auth.py::resolve_auth_subject`.
-AuthSubject = Literal["trusted_loopback", "trusted_companion_proxy", "api_key_credential"]
+AuthSubject = Literal[
+    "trusted_loopback",
+    "trusted_companion_proxy",
+    "api_key_credential",
+    # MVR-06B: the server-derived instance background runtime. No request carrier can
+    # claim it; only the background lifecycle supervisor constructs it from the private
+    # delegated background-runtime role record.
+    "instance_background_runtime",
+]
 
-PrincipalKind = Literal["human", "delegated_operator_role"]
+PrincipalKind = Literal["human", "delegated_operator_role", "background_runtime_role"]
 
 
 class ActiveContextError(RuntimeError):

@@ -20,10 +20,12 @@ python -m app.cli health --json
 | `yt_dlp` | `app/cli/health.py:30-36` | Module import | `pip install -r requirements.txt`. |
 | `index_outbox` | `app/cli/health.py` | Existing `INDEX_OUTBOX_PATH` is a readable, writable regular file; missing paths are reported without creating them. | Start the producer/bootstrap path or fix permissions and adjust the env path. |
 | `llm_access` | `app/cli/health.py` + `app/model_access/capability_health.py` | Required, no-inference health over logical capabilities required by active configured text routes. Only fresh `available` capability observations pass; degraded, unavailable, unknown, missing, malformed, and stale observations fail closed. `transport_observation` reports configured network-path reachability separately, including when a pre-completion path fallback was used. Skipped eval routes and embeddings are not probed; embedding identity stays separate under `embedding_index`. The public API omits provider, model, transport, endpoint, and selected-path identity from model-access health. | Inspect `checks.llm_access.capabilities`, `checks.llm_access.transport_observation`, and correlate `trace_id`. The local CLI retains route configuration under `checks.llm_router` for operator diagnosis. |
-| `obsidian` | `app/cli/health.py` + `app/knowledge/health.py` | Obsidian CLI in `PATH` and installer compatibility (`>=1.12.4`) when knowledge policy requires Obsidian adapter | Install/update Obsidian installer and ensure `obsidian` command is available. |
+| `obsidian` | `app/cli/health.py` + `app/knowledge/health.py` | Obsidian CLI in `PATH` and installer compatibility (`>=1.12.4`) when knowledge policy selects the Obsidian CLI adapter; an explicit `fs_vault` primary reports this dependency as skipped | Install/update Obsidian installer and ensure `obsidian` command is available when the CLI adapter is active. |
 | `companion_diagnostics` | `app/cli/health.py:586-635` + `app/services/companion_diagnostics.py` | Calls `companion_diagnostics_summary(vault_root)`; reports `duplicate_companion_count` (UUIDs present in both canonical `⚙️ System/companions/` and legacy `_system/companions/`). Optional check — does not affect the `ok` boolean; skipped when `vault_root` cannot be resolved. | Inspect `checks.companion_diagnostics.data.duplicate_companion_count` in the JSON output (`python -m app.cli health --json`). Non-zero counts indicate historical duplicates from a dual-write era; remove the legacy `_system/companions/<uuid>.md` files manually or wait for a future migration tool. |
 
 `checks.llm_access` is an `/api/health` dependency signal only. It does not change `/readyz`, whose readiness contract remains based on store/Postgres readiness; embedding identity remains separate under `checks.embedding_index`.
+
+An explicit DEV/TEST `fs_vault` primary with fallback disabled is a valid non-production posture. Health checks the selected filesystem adapter and does not probe the inactive Obsidian CLI; production defaults remain unchanged.
 
 ## Provider-neutral capability health
 
@@ -153,10 +155,13 @@ Thresholds (configurable in the vault `health.md` `thresholds:` block, same as t
 Posture — **alerting signal only, read-only, no auto-repair**:
 
 - A breach sets `dead_letter_status: warn` and appends an inspection hint to `suggested_actions`, and the CLI dependency check (`python -m app.cli health --json`, key `checks.dead_letters`) reports `ok: false` with the same fields.
+- The YouTube sync projection consumes `dead_letter_status` for this global audit signal: a historical `dead_lettered_count` with status `pass` does not add `dead_letters_present`; request-store dead letters remain their own queue signal.
 - A malformed or indeterminate JSONL audit tail sets the dead-letter fields to `null` and `dead_letter_status: unknown`; it is never treated as an empty/pass result. Inspect the outbox with `python -m app.cli events-doctor --path $INDEX_OUTBOX_PATH`.
 - A breach does **not** block vault writes: dead-letter breach is not in `WRITE_BLOCKED_STATES` (`writes_allowed` stays `true`). Dead-letters are downstream-processing failures; capture is the product and stays available while processing is repaired.
 - `checks.dead_letters` is a non-required check: it never flips the aggregate `/api/health` `ok`/`required_ok` booleans, so a full dead-letter queue cannot restart containers.
 - Re-driving or clearing dead-lettered rows is an explicit operator/agent action; no health surface mutates the outbox.
+
+The optional `checks.youtube_sync` diagnostic preserves `status: paused` when sync gates are intentionally off. The CLI reports that paused-only state as informational (`ok: true`) only when authentication is connected and no other reason code is present; auth, offline, queue, quota, and source failures remain degraded.
 
 ## Store-resolution signal
 
@@ -229,6 +234,83 @@ Fields returned under `authority_spine`:
 All values are bounded status strings; no raw state, path, secret, token, or traceback is exposed. The sanitization gate in `_sanitize_health_value()` applies to `authority_spine` exactly as it does to every other health field.
 
 The `write_guard` field reflects the current cached `HealthContract` state without evaluating the WriteGuard or running the full health contract diagnostics. It transitions to `blocked` whenever the runtime enters a `safe_mode` or `unhealthy` state (see `app/health_contract.py:WRITE_BLOCKED_STATES`).
+## Runtime health
+
+### Background lifecycle supervisor (shipped, MVR-06B / #3864)
+
+`BackgroundLifecycleSupervisor.health()` (`app/instance/background_supervisor.py`) is the
+truthful health projection of the singleton/explicit-empty background supervisor in each
+watcher/worker/settings process. It reports one entry per supervised lifecycle with
+`binding_id`, `generation`, `status`, `intent_revision`, `registry_revision`, `auth_epoch`,
+`context_id`, `capability_digest`, and `failure` — never a host path or binding payload.
+
+| `status` | Meaning |
+| --- | --- |
+| `running` | The durable singleton binding is registered, not sealed, owned by this channel's active ledger lease for its canonical root, and authorized by GOV under the current background-role auth epoch. |
+| `idle` | Durable explicit-empty or compatibility no-vault intent. Healthy and truthful; the worker reports `no_vault` instead of polling. Never a silent fallback to the default. |
+| `failed` | Loud failure with a bounded reason: binding unregistered, `draining_removal` or `reactivating` (sealed until its rebuild receipt), ownership lease missing/pending/foreign/changed, or authorization revoked/stale. A failed binding never masquerades as healthy and never redirects to another binding. |
+
+A new durable intent revision, binding revision, or auth epoch rotates the lifecycle into the
+next `generation` after draining in-flight shared effects; a drain that does not finish keeps the
+lifecycle `failed` and is retried. A reactivated binding stays `failed` (degraded) until its rebuild
+receipt clears the reservation. In a `failed` or `idle` cycle the watcher performs no vault effect
+and the worker dispatches no vault-bound row.
+
+Where it is visible today: watcher and worker log the projection when their startup preflight
+starts the supervisor (`error` for `failed`), the worker heartbeat reports
+`status=background_lifecycle_failed` while blocked, and `background-binding-list|inspect` report
+durable intent. MVR-06B itself reported no `/api/health` field; MVR-06D (below) adds it.
+
+### Per-binding gated health (shipped dormant, MVR-06C / #3865)
+
+MVR-06C generalizes the projection per binding. `health()` now returns `supervisor:
+mvr06c-per-binding`, the gate posture `many_binding` (`dormant` in every production process;
+`internal_harness` only in the capability-gated test harness), `binding_capacity` (`1` in
+production until MVR-06D), and one redacted entry per supervised lifecycle, each also carrying
+its `binding_revision`. Truthfulness rules added by 06C:
+
+| Case | Reported |
+| --- | --- |
+| Binding under production relocation (`relocating` reservation) | `failed` with `binding is relocating`; no effect on either root until the commit, then the next reconcile rotates into a new `generation` on the new root. |
+| Running lifecycle whose root lost its ownership lease (moved, replaced, or relocated elsewhere) | Rotated to `failed` (`ownership lease`) on the next reconcile or effect, never left reported `running`. |
+| Two supervised bindings (internal harness only) | Independent entries: one binding's revision change, ownership failure, or GOV denial rotates or fails only that entry; the other keeps its generation. The background-role auth epoch and intent revision are instance-wide. |
+
+Before the MVR-06D activation no production process supervises or reports more than one
+binding (see below).
+
+### Zero/one/many background health and `/api/health` (shipped, MVR-06D / #3866)
+
+After `background-many-binding-activate` records `minimumRuntimeSchema=mvr-06d`, `health()`
+reports `supervisor: mvr06d-per-binding`, `many_binding: active`, `binding_capacity: null`
+(unbounded explicit set), an aggregate `status`, and each lifecycle's bounded `failure_kind`
+(`role`, `unregistered`, `sealed`, `ownership`, `authorization`, `drain`). Before activation the
+06C values (`dormant`, capacity `1`) are unchanged.
+
+`GET /api/health` now carries an informational `background_lifecycles` field once the MVR-06B
+handoff has run (absent before it; it never changes `ok`/`required_ok`). It is a read-only
+projection: the API re-resolves every enrolled binding from durable truth (no drain, lease, or
+effect), so its `generation` values are a projection — each watcher/worker keeps its own
+generations in its heartbeat. Fields: the supervisor projection above, `dispatch_contract`
+(`singleton` before activation, `mvr06d-claims` after), `readiness`, and `queue` (`backend`
+`absent` for a memory store; for PostgreSQL after activation, per-scope counts of `pending`,
+`claimed`, `effect_pending`, `reconciliation_required`, and `quarantined` rows plus
+`unadmitted_pending`). Only opaque binding ids, revisions, statuses, and counts are exposed —
+never a host path or payload.
+
+| Case | `status` / `readiness` |
+| --- | --- |
+| Zero enrolled bindings (explicit-empty) | `idle` / `idle` — durable, never a fallback to the default, survives restart. |
+| One or more bindings, all running, clean queue | `healthy` / `healthy`. |
+| Any failed member | `degraded` / `degraded`; the failed entry is reported with its `failure_kind`, the others keep running, and no work is redirected. |
+| A quarantined row, an unadmitted handler row pending, or the queue unreadable | readiness `degraded` (a valid global row never degrades it). |
+| An `effect_reconciliation_required` row | readiness `blocked`: an ambiguous post-crash effect outcome is neither replayed, acknowledged, dropped, nor quarantined until an operator reconciles it. |
+
+The many-binding watcher heartbeat keys `watchers` by `<spec>@<binding_id>`, omits
+`vault_path`, and reports `degraded` when any lifecycle failed; the worker heartbeat reports
+`background_lifecycle_failed` when a member is failed and nothing was processed. Readiness is
+reported only after MVR-05's classification receipt and current authority checks passed at
+activation.
+
 <!-- SECTION:HEALTH:END -->
 
 ## Outbox and dead-letter signals

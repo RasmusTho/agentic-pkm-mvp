@@ -189,3 +189,351 @@ def test_mvr06a_rejects_all_intent_mutations_until_supervisor_handoff(staged) ->
         settings.api_key = previous
     assert denied.status_code in {401, 403}, denied.text
     assert _files_digest(runtime) == digest_before
+
+
+# -- MVR-06B (#3864): governed singleton/explicit-empty producers ------------------------
+
+
+@pytest.fixture()
+def handed_off(tmp_path: Path, monkeypatch):
+    from tests._mvr06b_handoff_harness import mvr06b_instance, stub_settings_reload
+
+    runtime, first, extra = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    selection_routes.reset_selection_store_for_tests()
+    return runtime, first.vault_binding_id, extra[0].vault_binding_id, TestClient(app)
+
+
+def _deny_content_authority(monkeypatch, denied: str) -> None:
+    from app.governance.binding_authority import RegistryBindingAuthorizer
+    from tests.helpers.revoked_binding_authorizer import RevokedBindingAuthorizer
+
+    original = RegistryBindingAuthorizer.authorize
+
+    def authorize(self, request):
+        if request.vault_binding_id != denied:
+            return original(self, request)
+        revoked = RevokedBindingAuthorizer(self)
+        revoked.revoke_for_test(denied)
+        return revoked.authorize(request)
+
+    monkeypatch.setattr(RegistryBindingAuthorizer, "authorize", authorize)
+
+
+def _intent(runtime):
+    from app.instance.background_supervisor import stored_intent
+
+    return stored_intent(runtime.registry.load())
+
+
+def test_mvr06b_commands_allow_only_singleton_or_empty_intent(
+    handed_off, monkeypatch
+) -> None:
+    from app.events.topic_schema_registry import is_registered_topic, validate_topic_payload
+    from app.events.types import INSTANCE_BACKGROUND_INTENT_CHANGED
+
+    runtime, binding_a, binding_b, client = handed_off
+    registry_path = str(runtime.layout.registry_path)
+    listing = client.get("/api/instance/background-bindings").json()
+    assert listing["intent_mutations"] == "singleton_or_empty"
+
+    # Unknown binding: refused before any write.
+    before = _intent(runtime)
+    unknown = client.post("/api/instance/background-bindings", json={"vault_binding_id": "nope"})
+    assert unknown.status_code == 404
+    assert _intent(runtime) == before
+
+    # Unauthorized binding: refused before any write (CLI and API share the service).
+    _deny_content_authority(monkeypatch, binding_b)
+    response = client.post(
+        "/api/instance/background-bindings", json={"vault_binding_id": binding_b}
+    )
+    assert response.status_code == 403
+    cli_refusal = cli(
+        "background-binding-add", "--registry-path", registry_path,
+        "--vault-binding-id", binding_b, "--consumer", "cli",
+    )
+    assert cli_refusal["_exit_code"] != 0
+    assert _intent(runtime) == before
+    monkeypatch.undo()
+
+    # A singleton add through the API commits exactly one durable revision + one hint.
+    from tests._mvr06b_handoff_harness import bind_runtime_env, stub_settings_reload
+
+    bind_runtime_env(monkeypatch, runtime)
+    stub_settings_reload(monkeypatch)
+    captured: list = []
+    from app.services import outbox as outbox_module
+
+    monkeypatch.setattr(
+        outbox_module, "write_outbox_event",
+        lambda event, conn=None, **kw: captured.append((event, kw["idempotency_key"])) or "k",
+    )
+    added = client.post("/api/instance/background-bindings", json={"vault_binding_id": binding_a})
+    assert added.status_code == 200, added.text
+    body = added.json()
+    assert body["mode"] == "explicit" and body["background_vault_binding_ids"] == [binding_a]
+    assert body["intent_revision"] == before.revision + 1
+    assert len(captured) == 1
+    event, key = captured[0]
+    assert event.event_type == INSTANCE_BACKGROUND_INTENT_CHANGED
+    assert is_registered_topic(INSTANCE_BACKGROUND_INTENT_CHANGED)
+    validate_topic_payload(INSTANCE_BACKGROUND_INTENT_CHANGED, event.payload)
+    assert event.payload["intent_revision"] == body["intent_revision"]
+
+    # Idempotent re-add: no new revision, no second hint.
+    again = client.post("/api/instance/background-bindings", json={"vault_binding_id": binding_a})
+    assert again.status_code == 200 and again.json()["changed"] is False
+    assert len(captured) == 1
+
+    # A second binding is gated: capability_not_ready, nothing changes.
+    second = client.post("/api/instance/background-bindings", json={"vault_binding_id": binding_b})
+    assert second.status_code == 409
+    assert second.json()["detail"]["error"] == "capability_not_ready"
+    assert _intent(runtime).background_vault_binding_ids == (binding_a,)
+
+    # The headless CLI removes to explicit-empty through the same service.
+    removed = cli(
+        "background-binding-remove", "--registry-path", registry_path,
+        "--vault-binding-id", binding_a, "--consumer", "cli",
+    )
+    assert removed["_exit_code"] == 0, removed
+    assert removed["explicit_empty"] is True
+    listed = cli("background-binding-list", "--registry-path", registry_path, "--consumer", "cli")
+    assert listed["explicit_empty"] is True and listed["background_vault_binding_ids"] == []
+
+
+def test_first_explicit_mutation_snapshots_compatibility_singleton_before_apply(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from tests._mvr06b_handoff_harness import (
+        admin,
+        background_ids,
+        mvr06b_instance,
+        stub_settings_reload,
+        supervisor,
+    )
+
+    cases = {
+        "remove-current": ("remove", "a", "explicit", ()),
+        "add-current": ("add", "a", "explicit", ("a",)),
+        "remove-nonmember": ("remove", "b", "explicit", ("a",)),
+    }
+    for index, (name, (command, which, mode, expected)) in enumerate(cases.items()):
+        runtime, first, (second,) = mvr06b_instance(tmp_path / str(index), monkeypatch)
+        stub_settings_reload(monkeypatch)
+        ids = {"a": first.vault_binding_id, "b": second.vault_binding_id}
+        assert background_ids(runtime) == (ids["a"],), name
+        getattr(admin(runtime), command)(ids[which])
+        intent = _intent(runtime)
+        assert intent.mode == mode, name
+        assert intent.background_vault_binding_ids == tuple(ids[item] for item in expected), name
+
+    # add-different against the non-empty compatibility snapshot would yield two members:
+    # rejected as a gated second enrollment, mode and lifecycle untouched.
+    runtime, first, (second,) = mvr06b_instance(tmp_path / "different", monkeypatch)
+    stub_settings_reload(monkeypatch)
+    lifecycle = supervisor(runtime).start()
+    before = _intent(runtime)
+    from app.instance.background_authority import BackgroundIntentNotReadyError
+
+    with pytest.raises(BackgroundIntentNotReadyError, match="second background binding"):
+        admin(runtime).add(second.vault_binding_id)
+    assert _intent(runtime) == before
+    assert before.mode == "compatibility"
+    assert supervisor(runtime).start().binding_id == lifecycle.binding_id == first.vault_binding_id
+
+    # Truthful no-vault compatibility snapshots as the empty set: add yields a singleton.
+    runtime, first, (second,) = mvr06b_instance(tmp_path / "novault", monkeypatch)
+    stub_settings_reload(monkeypatch)
+    from app.instance.runtime import open_default_vault_service
+
+    open_default_vault_service(runtime.layout.registry_path).clear()
+    assert background_ids(runtime) == ()
+    admin(runtime).add(second.vault_binding_id)
+    assert _intent(runtime).background_vault_binding_ids == (second.vault_binding_id,)
+
+
+def test_stale_binding_intent_can_be_removed_without_content_authority(
+    handed_off, monkeypatch
+) -> None:
+    runtime, binding_a, binding_b, client = handed_off
+    from tests._mvr06b_handoff_harness import admin
+
+    admin(runtime).add(binding_a)
+    # Content authority is lost: add is refused, but instance-authorized remove clears it.
+    _deny_content_authority(monkeypatch, binding_a)
+    from app.instance.background_supervisor import BackgroundLifecycleError
+
+    with pytest.raises(BackgroundLifecycleError):
+        admin(runtime).add(binding_a)
+    response = client.delete(f"/api/instance/background-bindings/{binding_a}")
+    assert response.status_code == 200, response.text
+    assert response.json()["explicit_empty"] is True
+    # Idempotent, even for a binding with no registry entry at all.
+    again = client.delete("/api/instance/background-bindings/binding-never-registered")
+    assert again.status_code == 200 and again.json()["changed"] is False
+    monkeypatch.undo()
+
+    # A member whose registration disappears stays as stale intent; remove still clears.
+    from tests._mvr06b_handoff_harness import bind_runtime_env, stub_settings_reload
+
+    bind_runtime_env(monkeypatch, runtime)
+    stub_settings_reload(monkeypatch)
+    admin(runtime).add(binding_b)
+    runtime.remove(binding_b)
+    assert binding_b not in runtime.registry.load().registrations
+    assert _intent(runtime).background_vault_binding_ids == (binding_b,)
+    removed = admin(runtime).remove(binding_b)
+    assert removed["explicit_empty"] is True and removed["changed"] is True
+    with pytest.raises(Exception, match="unknown vault_binding_id"):
+        admin(runtime).add(binding_b)
+
+
+def test_mvr06c_rejects_many_until_mvr06d_dispatch_gate(handed_off) -> None:
+    """MVR-06C generalizes the supervisor but production many-binding stays sealed.
+
+    Enrollment through the API and the headless CLI, the registry's intent commit, the
+    supervisor record's binding capacity, and the process supervisor all keep refusing a
+    second binding until MVR-06D atomically enables its matching queue-dispatch contract;
+    only the private harness capability can construct a many-binding supervisor.
+    """
+
+    from dataclasses import replace
+
+    from app.instance.background_intent import (
+        BACKGROUND_SUPERVISOR_KEY,
+        BackgroundSupervisorRecord,
+    )
+    from app.instance.background_supervisor import (
+        BackgroundLifecycleSupervisor,
+        process_background_supervisor,
+    )
+    from app.instance.vault_registry import CapabilityNotReadyError, RegistryError
+
+    runtime, binding_a, binding_b, client = handed_off
+    registry_path = str(runtime.layout.registry_path)
+    added = client.post("/api/instance/background-bindings", json={"vault_binding_id": binding_a})
+    assert added.status_code == 200, added.text
+    enrolled = _intent(runtime)
+    assert enrolled.background_vault_binding_ids == (binding_a,)
+    files_before = _files_digest(runtime)
+
+    refused = client.post("/api/instance/background-bindings", json={"vault_binding_id": binding_b})
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert detail["error"] == "capability_not_ready"
+    assert "MVR-06D" in detail["message"] and "queue-dispatch" in detail["message"]
+    cli_refusal = cli(
+        "background-binding-add", "--registry-path", registry_path,
+        "--vault-binding-id", binding_b, "--consumer", "cli",
+    )
+    assert cli_refusal["_exit_code"] != 0 and cli_refusal["error"] == "capability_not_ready"
+    assert _files_digest(runtime) == files_before
+    assert client.get("/api/instance/background-bindings").json()["intent_mutations"] == (
+        "singleton_or_empty"
+    )
+
+    # The durable store itself refuses many-binding intent, whatever the producer: the
+    # snapshot validator every registry read and write runs rejects it.
+    from app.instance.vault_registry import _validate_background_supervisor_state
+
+    many = replace(
+        enrolled,
+        revision=enrolled.revision + 1,
+        background_vault_binding_ids=tuple(sorted((binding_a, binding_b))),
+    )
+    with pytest.raises(RegistryError, match="sealed until MVR-06D"):
+        _validate_background_supervisor_state(many, runtime.registry.load().extensions)
+    record = BackgroundSupervisorRecord.from_payload(
+        runtime.registry.load().extensions[BACKGROUND_SUPERVISOR_KEY]
+    )
+    assert record.max_bindings == 1
+    assert _files_digest(runtime) == files_before
+
+    # The generalized supervisor is dormant: production supervises the singleton only,
+    # and constructing a many-binding supervisor needs the private harness capability.
+    production = process_background_supervisor("worker")
+    assert production is not None
+    assert production.reconcile().binding_id == binding_a
+    health = production.health()
+    assert health["many_binding"] == "dormant" and health["binding_capacity"] == 1
+    for capability in (None, object()):
+        with pytest.raises(CapabilityNotReadyError, match="dormant until MVR-06D"):
+            BackgroundLifecycleSupervisor.for_runtime(
+                registry_path=runtime.layout.registry_path,
+                ownership_root=runtime.ledger.root,
+                channel_id=runtime.layout.channel_id,
+                consumer="worker",
+                internal_binding_ids=(binding_a, binding_b),
+                _harness_capability=capability,
+            )
+
+
+def test_mvr06d_enrollment_enables_many_with_dispatch(handed_off, monkeypatch) -> None:
+    """MVR-06D: a two-or-more explicit set persists and starts only once the matching
+    many-binding queue-dispatch contract is enabled, and restart reconstructs exactly that
+    deduplicated, re-authorized set."""
+
+    from app.instance import background_supervisor
+    from app.instance.background_supervisor import process_background_supervisor
+    from app.instance.vault_registry import many_binding_dispatch_enabled
+    from tests._mvr06d_many_binding_harness import activate_many_binding
+
+    runtime, binding_a, binding_b, client = handed_off
+    registry_path = str(runtime.layout.registry_path)
+    url = "/api/instance/background-bindings"
+    assert client.post(url, json={"vault_binding_id": binding_a}).status_code == 200
+
+    # Before activation the second enrollment is refused and nothing is persisted.
+    files_before = _files_digest(runtime)
+    sealed = client.post(url, json={"vault_binding_id": binding_b})
+    assert sealed.status_code == 409 and "MVR-06D" in sealed.json()["detail"]["message"]
+    assert _files_digest(runtime) == files_before
+    assert not many_binding_dispatch_enabled(runtime.registry.load())
+
+    # The matching dispatch contract is enabled by the shipped activation command only.
+    activated = activate_many_binding(runtime)
+    assert activated["_exit_code"] == 0 and activated["activated"] is True, activated
+    assert activated["minimum_runtime_schema"] == "mvr-06d"
+    assert client.get(url).json()["intent_mutations"] == "many"
+
+    added = client.post(url, json={"vault_binding_id": binding_b})
+    assert added.status_code == 200, added.text
+    assert sorted(added.json()["background_vault_binding_ids"]) == sorted((binding_a, binding_b))
+    revision = _intent(runtime).revision
+    # Re-adding a member is idempotent (deduplicated by vault_binding_id) through both
+    # producers: no new revision, no duplicate member.
+    again = client.post(url, json={"vault_binding_id": binding_b})
+    assert again.status_code == 200 and again.json()["changed"] is False
+    cli_again = cli(
+        "background-binding-add", "--registry-path", registry_path,
+        "--vault-binding-id", binding_a, "--consumer", "cli",
+    )
+    assert cli_again["_exit_code"] == 0 and cli_again["changed"] is False
+    assert _intent(runtime).revision == revision
+    assert _intent(runtime).background_vault_binding_ids == tuple(sorted((binding_a, binding_b)))
+
+    # The process supervisor starts both.
+    background_supervisor._PROCESS_SUPERVISORS.clear()
+    worker = process_background_supervisor("worker")
+    started = {item.binding_id: item.status for item in worker.start_all()}
+    assert started == {binding_a: "running", binding_b: "running"}
+    assert worker.health()["many_binding"] == "active"
+    assert worker.health()["binding_capacity"] is None
+
+    # Restart reconstructs exactly the durable set and re-authorizes every member: a
+    # member whose authority is gone comes back failed, never silently dropped or healthy.
+    _deny_content_authority(monkeypatch, binding_b)
+    background_supervisor._PROCESS_SUPERVISORS.clear()
+    restarted = process_background_supervisor("worker")
+    after = {item.binding_id: item for item in restarted.start_all()}
+    assert set(after) == {binding_a, binding_b}
+    assert after[binding_a].status == "running"
+    assert after[binding_b].status == "failed"
+    assert after[binding_b].failure_kind == "authorization"
+
+    # Request/session selection never enrols a member.
+    listed = client.get(url).json()
+    assert sorted(listed["background_vault_binding_ids"]) == sorted((binding_a, binding_b))
+    assert listed["mode"] == "explicit"

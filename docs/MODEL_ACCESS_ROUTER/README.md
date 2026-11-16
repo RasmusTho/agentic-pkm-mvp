@@ -130,6 +130,43 @@ Trusted instructions and user content remain separate end to end. Codex maps tru
 to its existing `developer_instructions` channel, not a literal system role; Ollama uses its
 explicit `system` message. A literal-system-role request fails on Codex.
 
+### Planned DEV/TEST certificate continuity
+
+This section describes a target, not an installed renewal service. DEV and TEST need model access
+to continue across certificate expiry without replaying an ambiguous inference request. The current
+VLAN and optional Tailnet paths use host-managed mTLS identities; a listener, a successful public
+file check, or a source-code merge does not prove unattended issuance or consumer adoption.
+
+Platform and Operations owns signing, distribution, host lifecycle and recovery; Model Access owns
+the declared TLS references and caller verification. The target is a bounded, scheduled renewal of
+the actual qualified server and client identities, with owner-managed recovery and alerts. It must
+remain usable after the relevant supported restart or login cycle, or report that dependency and
+failure clearly. A one-time certificate extension or expiry alarm alone does not meet this outcome.
+
+The rollout must inventory the real DEV/TEST consumers and active ingress generations without
+exposing key material. It must bind the authorized signer, exact issuer and subject, key identity,
+intended TLS purpose, addresses, validity and destination before signing. The existing Product
+server, CA and client identity can also serve PROD: renewal must not replace or modify their shared
+files, trust or live service unless an existing owner contract independently authorizes that effect.
+An isolated DEV/TEST identity, or another existing owner-qualified route with equivalent isolation,
+can satisfy this boundary. Unknown signer custody, consumer identity or original-operation state is
+not successful issuance or adoption.
+
+For each selected leaf, stage and verify the signed candidate before publication; retain the last
+known valid material. Publish through the existing owner lifecycle, requalify the actual service
+generation before each reload and verify the presented leaf and mTLS on every affected admitted
+route and caller. A lost response is UNKNOWN and does not authorize repeating a mutation or a model
+request. Bounded recovery must reconcile the original operation, or restore the exact qualified
+previous material and verify the same consumers. CA replacement additionally needs an overlap period
+covering every actual server and client trust consumer; old trust is not retired while adoption is
+unknown. Never treat a single local file or TCP probe as proof of all consumers.
+
+Implementation is expected in independently reviewable slices: signer and transaction, managed
+server/guest distribution and recovery, then scheduled execution and alerting. Each slice must
+provide synthetic fault and restart tests; final acceptance requires a qualified TEST journey, a
+short DEV smoke, exact candidate/consumer receipts and successful failure/restart recovery. A
+public certificate preflight, when delivered, is a building block, not a signer or a rotation service.
+
 ## Catalog Discovery and Freshness Contract
 
 MARR-04 supplies the catalog and selection primitives; MARR-05 adopts them in Product callers through the shared facade.
@@ -186,6 +223,8 @@ This parent-level acceptance remains separate from merging individual MARR slice
 ## Relationship to GitHub Issues
 
 The parent feature issue is [#5618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618), a blocked validation hub, not an implementation issue. Each task above maps to one dependency-ordered child Issue; child Issue numbers are written into task frontmatter as soon as filed. No child is pickup-ready until its dependencies and the specification PR are merged, its Verify targets resolve, and strict readiness validation passes.
+
+The separate certificate-continuity outcome is tracked by [#6575](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6575). It does not change #5618's original acceptance scope. Its first slice is [verified certificate candidate preparation](PREPARE_CERTIFICATE_RENEWAL_CANDIDATE.md) / #6576. The separate [temporary legacy bridge renewal](RENEW_TEMPORARY_LEGACY_BRIDGE_CERTIFICATE.md) / #6581 targets its existing Mac owner and is retired with that bridge; it does not replace #6550. Its live adoption, full client renewal and end-to-end acceptance remain separate work.
 
 ## Out of Scope
 

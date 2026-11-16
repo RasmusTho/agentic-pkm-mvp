@@ -372,7 +372,8 @@ class YouTubeTokenStore:
     transitions across processes.
     """
 
-    def __init__(self, path: Path | str | None = None) -> None:
+    def __init__(self, path: Path | str | None = None, *, read_only: bool = False) -> None:
+        self._read_only = read_only
         if path is None:
             configured_path = (os.environ.get(PATH_ENV_VAR) or "").strip()
             state_root = canonical_oauth_state_root()
@@ -401,7 +402,11 @@ class YouTubeTokenStore:
             migrate_legacy_default = False
         self._lock = threading.Lock()
         if migrate_legacy_default:
-            self._migrate_legacy_default()
+            if read_only:
+                if any(self._entry_exists(p, label="legacy") for p in _legacy_default_token_store_paths()):
+                    raise OAuthStateMigrationError("legacy YouTube OAuth state requires migration")
+            else:
+                self._migrate_legacy_default()
         if path is None and not configured_path:
             self._preflight_existing_default_target()
 
@@ -538,16 +543,18 @@ class YouTubeTokenStore:
                 raise
             descriptor = -1
             try:
-                try:
-                    os.mkdir(_STATE_DIRECTORY, mode=0o700, dir_fd=runtime_fd)
-                except FileExistsError:
-                    pass
+                if not self._read_only:
+                    try:
+                        os.mkdir(_STATE_DIRECTORY, mode=0o700, dir_fd=runtime_fd)
+                    except FileExistsError:
+                        pass
                 descriptor = os.open(_STATE_DIRECTORY, flags, dir_fd=runtime_fd)
                 # The credential file cannot become authoritative until the
                 # private directory's entry is durable in its parent.  Fsync
                 # even when the directory pre-existed so a retry after an
                 # indeterminate earlier fsync closes that crash window.
-                os.fsync(runtime_fd)
+                if not self._read_only:
+                    os.fsync(runtime_fd)
             except OSError:
                 if descriptor >= 0:
                     os.close(descriptor)
@@ -560,6 +567,8 @@ class YouTubeTokenStore:
             try:
                 metadata = parent.lstat()
             except FileNotFoundError:
+                if self._read_only:
+                    raise OAuthStateBoundaryError("private YouTube OAuth state directory is unavailable") from None
                 try:
                     parent.mkdir(mode=0o700)
                 except FileExistsError:
@@ -1010,6 +1019,8 @@ class YouTubeTokenStore:
         return data
 
     def _write_file(self, data: dict[str, Any]) -> None:
+        if self._read_only:
+            raise OAuthStateBoundaryError("read-only YouTube token store cannot write")
         directory_fd = self._open_state_directory()
         temporary_name = f".{self._path.name}.{uuid.uuid4().hex}.tmp"
         descriptor: int | None = None
@@ -1056,6 +1067,8 @@ class YouTubeTokenStore:
     def acquire_writer_admission(self) -> OAuthWriterAdmission:
         """Acquire the channel's nonblocking cross-process OAuth writer lease."""
 
+        if self._read_only:
+            raise OAuthStateBoundaryError("read-only YouTube token store cannot acquire writer admission")
         directory_fd = self._open_state_directory()
         try:
             descriptor = os.open(

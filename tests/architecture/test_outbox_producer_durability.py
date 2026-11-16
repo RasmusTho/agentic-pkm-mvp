@@ -131,6 +131,13 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "`python -m app.instance.runtime default-vault-set` command unusable on a bare "
         "instance that has no configured outbox at all"
     ),
+    ("app/instance/background_supervisor.py", "emit_background_intent_event"): (
+        "MVR-06B (#3864): identical durability posture to the MVR-02 default mutation "
+        "above. Every caller commits the durable background-intent revision to the "
+        "instance-state registry BEFORE this runs; the supervisor reconciles that "
+        "revision and the auth epoch, never event delivery, so the hint is not the "
+        "transition authority and no caller derives success from the return"
+    ),
     ("app/instance/vault_dimensions.py", "emit_dimension_mutation_event"): (
         "MVR-04 (#3858): identical durability posture to the MVR-02 default mutation "
         "above, and for the same reason. set_dimension_state commits the new membership "

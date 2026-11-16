@@ -7155,6 +7155,7 @@ def _normal_parent_exit_with_descendant(
     )
     heartbeat_counts: list[int] = []
     outcome: dict[str, BaseException] = {}
+    launcher_finished = Event()
 
     def launch() -> None:
         try:
@@ -7164,20 +7165,31 @@ def _normal_parent_exit_with_descendant(
             )
         except BaseException as exc:  # noqa: BLE001 - asserted thread outcome
             outcome["error"] = exc
+        finally:
+            launcher_finished.set()
 
     worker = Thread(target=launch, daemon=True)
     worker.start()
-    try:
-        worker.join(timeout=0.5)
-        assert not worker.is_alive(), {
+
+    def blocked() -> dict[str, object]:
+        return {
             "launcher_still_blocked": True,
             "heartbeats": len(heartbeat_counts),
             "group_signals": process.group_signals,
         }
+
+    try:
+        # Observe launcher completion with the captured unpatched Event.wait
+        # (accelerated_wait caps timeouts at 0.01s) instead of a 0.5s
+        # wall-clock join that loses to scheduler delay under CI load. Only
+        # the launcher's own group SIGKILL releases the descendant-held
+        # stdout, so a regressed launcher still hits the finite backstop.
+        assert event_wait(launcher_finished, _LAUNCHER_FINISH_BACKSTOP), blocked()
+        worker.join(timeout=_LAUNCHER_FINISH_BACKSTOP)
+        assert not worker.is_alive(), blocked()
     finally:
-        if worker.is_alive():
-            process.release_stdout()
-            worker.join(timeout=1)
+        process.release_stdout()
+        worker.join(timeout=1)
     error = outcome.get("error")
     assert isinstance(error, CodexExecFailure), outcome
     return process, error, heartbeat_counts

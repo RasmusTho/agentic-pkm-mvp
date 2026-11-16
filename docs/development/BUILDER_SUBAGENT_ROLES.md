@@ -125,12 +125,16 @@ head (or `none`), changed files, current validation and current review/receipt e
 time binding, blockers, residual risk, and exactly one next authorized action.
 
 For a dispatcher-backed handoff, the current owner first releases the exact dispatcher task with
-`python3 -m app.dispatcher release <task-id> --agent <current-agent> --json` and re-reads the task
+`python3 -m app.dispatcher release <task-id> --agent <current-agent> --expected-lease-id <observed-lease-id> --json` and re-reads the task
 as unleased (`claimed_by: null`, `lease_id: null`) and ready or blocked. Only then may the Issue
 return to `agent:ready`; the named successor runs the normal
 `scripts/issue_pickup_claim.sh` dispatcher-backed pickup for the same task and re-reads task id,
-Issue number, status, holder, lease id/resource, future expiry, and `released_at: null`. A
+Issue number, status, holder, lease id/resource, future expiry, `released_at: null`, and the exact
+Builder session in the claim event. A
 label-only fallback authenticates only its fallback receipt and never fabricates a dispatcher lease.
+For the native cross-host dispatcher-to-fallback case, include the predecessor observations and
+release timestamps specified in `DEV_WORKFLOW.md :: Persistent epic workspace on TARS (experimental)`;
+the receiving host cannot inspect the former host's dispatcher or registry itself.
 After the dispatcher release → successor claim/readback sequence, the current owner releases its
 active worktree registration and re-reads it as non-active. The named successor then registers the
 sole receipt-named worktree (or receipt-named replacement), re-reads its owner, branch, and
@@ -142,6 +146,10 @@ successor post its acknowledgment. A connector-only transfer may instead authent
 `writable_worktree: none`, but must not fabricate a local registration. If any release, claim,
 registration, readback, or acknowledgment fails, authority does not transfer; Neither side may
 publish, merge, or close in that intermediate state.
+
+The native PR-cycle route additionally performs the registry preparation and post-acknowledgment pin
+in `DEV_WORKFLOW.md :: OpenHands factory owner trial`. Until that technical readback succeeds, native
+merge authority remains unproved. It does not introduce a separate human approval.
 
 The acknowledgment fences the former lifecycle owner into a read-only role: the former owner may
 supply evidence but may no longer edit, push, publish, merge, close, or mutate lifecycle state.
@@ -219,5 +227,10 @@ subagent_handoff_receipt:
 
 The former Claude role route is preserved only so historical handoffs, audits, and compatibility
 documents remain interpretable. It is not an active Builder carrier. Do not launch Claude, read
-Anthropic credentials, or add `.claude/agents/**` adapters from this role map; any future carrier
-requires a separately governed contract and current authority readback.
+Anthropic credentials, or add `.claude/agents/**` adapters from this role map. The prospective
+shared carrier contract in `BUILDER_SYSTEM_PROCESS_MAP.md :: Current active Builder carrier`
+allows future dormant adapter work and a separately qualified transition, but compatibility
+artifacts, user direction and isolated pilots do not authorize a live launch. A second carrier must
+pass the existing owner-admission, protected execution, isolation, effect and readback gates, plus
+its own host qualification and applicable owner acceptance. Roles remain execution adapters and
+never become approval, lifecycle or effect authorities.

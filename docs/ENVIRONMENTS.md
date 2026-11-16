@@ -451,6 +451,115 @@ The existing `PKM_SETTINGS_PROFILE` control mechanism continues to work without 
 
 The settings profile is now understood as a **narrower control mechanism that lives beneath the environment model**, rather than the full environment specification. As the runtime evolves, new environment-specific behavior should be controlled via `PKM_ENVIRONMENT` rather than extending the settings profile approach. The legacy `PKM_SETTINGS_PROFILE` mechanism does not project to `test`; `test` is reachable only through the first-class `PKM_ENVIRONMENT=test` selector, which the local bootstrap workflow now uses.
 
+### Background lifecycle supervision (shipped, MVR-06B / #3864)
+
+Background watcher/worker/settings lifecycles no longer take their binding from the frozen
+`VAULT_ROOT`/`WATCHER_VAULT_PATH` env snapshot once the MVR-06B handoff has run; the env stays
+a bootstrap adapter only. Control surface:
+
+| Surface | Purpose |
+| --- | --- |
+| `python -m app.instance.runtime background-supervisor-handoff --channel <c> --registry-path <r> --host-global-root <h> --quiescence-proof-path <p> [--legacy-bootstrap-root <root>]` | One-time, inside the proved stopped deployment window: retire the #3163 picker bridge and seat the singleton/explicit-empty supervisor atomically. Idempotent after success. KD-A42F26A9AD87 applies: drain the outbox or stop writers before the MVR-06 opt-in on DEV/TEST. |
+| `GET/POST/DELETE /api/instance/background-bindings`, `background-binding-list|inspect|add|remove` | Governed singleton/explicit-empty intent (a second binding is `capability_not_ready` until `background-many-binding-activate` atomically enables its matching queue-dispatch contract, MVR-06D below). |
+| `background-role-revoke --channel <c> --host-global-root <h>` | After the handoff a GOV revocation must drain affected lifecycles through the ownership fence → exclusive binding-lease order; the unfenced form is refused. |
+| `binding-remove --vault-binding-id <id> [--replacement-default-binding-id <id>]`, `binding-reactivate --root <root>`, `binding-lifecycle-recover` (each with `--channel`, `--registry-path`, `--host-global-root`, `--watcher-posture running|absent`, and `--watcher-state-dir` when running) | Production registration removal (draining reservation → drain → final scan → tombstone commit → post-commit drain → ownership release) and same-channel tombstone reactivation (content epoch advance, derived-state invalidation, full rescan re-emitted and settled through worker dispatch, rebuild receipt), each crash-recoverable from its journal. The MVR-01C scalar rollback target is refused before any reservation. Cross-channel rehome (`InstanceRegistryRuntime.rehome_removed`) is reactivation followed by the governed transfer. |
+
+The supervisor (`app/instance/background_supervisor.py`) is ownership-checked: start/rebind
+requires the active MVR-01 ledger lease for this exact channel, binding, and canonical root
+fingerprint, so a binding leased in another release channel, pending, retired, or whose root
+changed is refused (also after restart). It reconciles the durable registry revision and the
+background-role auth epoch at start and on every effect; wake-up hints
+(`instance.background_intent.changed`) only accelerate that. Every background effect holds the
+shared per-binding effect lease from final validation through I/O and receipt: the outbox worker
+resolves the durable binding through its process supervisor and revalidates inside the lease, and
+an ordinary watcher cycle runs inside `supervisor.effect()` on the durable root, while its
+bracketing rebind scans stay the journal-bound reconciler. Pending queue rows of a removed or
+relocated binding stay undispatched and attributable; MVR-06D (below) revalidates or quarantines
+them.
+
+### Per-binding supervision and binding relocation (shipped dormant/activated, MVR-06C / #3865)
+
+MVR-06C generalizes the supervisor into a zero/one/many-capable per-binding supervisor and
+activates production relocation. **Until the MVR-06D activation below, many-binding supervision
+is dormant, not active:** production
+supervises only durable intent, which every producer (API, CLI, the registry's own snapshot
+validator, and the supervisor record's binding capacity of 1) keeps at zero or one binding until
+MVR-06D atomically enables many-binding enrollment/start together with its queue-dispatch
+contract. Only an internal capability-gated test harness can construct a many-binding supervisor
+over an explicit set; it never enrolls that set in durable intent or dispatches queued work.
+
+| Surface | Purpose |
+| --- | --- |
+| `binding-relocate --vault-binding-id <id> --destination <root>` (with `--channel`, `--registry-path`, `--host-global-root`, `--watcher-posture running\|absent`), also `InstanceRegistryRuntime.relocate`; `binding-lifecycle-recover` resumes an interrupted relocation | Production relocation of one registration to a new root holding the **same** vault. Journal `binding-relocation.json`: identity validation (the target's vault marker must name the binding's `vault_id` and `local_instance_id`) → `relocating` reservation (seals new foreground/background shared effects on both roots) → ownership fence + exclusive binding lease drain (waits for every authorized effect) → identity re-proof and ledger root-locator move → one registry commit (new root, advanced `bindingRevision`, path-free `bindingLineage` `relocated` entry) → registry/ledger/background convergence proof. A different initialized vault, a missing/incomplete/ambiguous marker, another local clone, an uninitialized binding, a missing target, an overlap with another registered root, and the MVR-01C scalar rollback target are refused before any mutation; a pre-move refusal compensates to the source. A moved (renamed) directory or a copy both relocate. Governed-lineage relocation to a different clone identity is not activated. Receipts carry no host path. |
+
+Consumer behaviour after a relocation: the next request on an existing session resolves a new
+ActiveContextSet generation (the binding revision changed), its context/cache identity changes,
+and a superseded snapshot can no longer name either root. Background lifecycles reconcile from
+the durable binding revision into a new generation on the new root; the worker recompiles
+vault-authored settings when its binding *or root* changes. A stale holder that captured the old
+root is refused at the ownership fence. Each lifecycle reconciles, drains, and fails on its own
+(one binding's revision, ownership, sealed state, or GOV verdict never rotates or fails another;
+the background-role auth epoch and the intent revision are instance-wide), and a running
+lifecycle whose root lost its ownership lease is reported `failed`. Cross-process binding state is
+handed between background processes as a versioned, redacted `BackgroundContextHandoff`
+projection that the receiver re-validates against its own durable resolution; it never shares an
+in-memory generation or env snapshot. Queued rows link their consumer context to the immutable
+producer context at dispatch (MVR-06D below). The
+legacy carrier-free compatibility selection held by an already-running API process is not rebound
+by a relocation: its compatibility writes fail `capability_not_ready` because the selected root no
+longer matches the registered compatibility root, but its carrier-free reads keep the process
+selection until the picker reselects (a residual of the transitional adapter, D13/D14).
+
+### Many-binding background lifecycles and queued-work convergence (shipped, MVR-06D / #3866)
+
+MVR-06D completes the zero/one/many background posture. Many-binding enrollment/start and its
+matching queue-dispatch contract activate together, in one registry generation, and only after
+MVR-05's classification receipt and current binding/authority checks pass:
+
+| Surface | Purpose |
+| --- | --- |
+| `python -m app.instance.runtime background-many-binding-activate --channel <c> --registry-path <r> --host-global-root <h> --quiescence-proof-path <p>` | One-time, inside the proved stopped deployment window (the all-process fence): validate MVR-05's complete cutover receipt, the MVR-06D outbox claim schema (`alembic upgrade head`, revision `fa06d0c00001`), that no undelivered unscoped `legacy-compatibility-binding` row remains (drain it through the singleton worker first — KD-A42F26A9AD87), and that no queue-state field predates the floor; then commit registry schema v4 with `minimumRuntimeSchema=mvr-06d` and a counts-only classification receipt. Idempotent. Before activation every second enrollment stays `capability_not_ready`. |
+| `GET/POST/DELETE /api/instance/background-bindings`, `background-binding-list|inspect|add|remove` | After activation `intent_mutations` is `many`: the explicit set is any deduplicated number of members (zero is durable idle). Adding a member starts its own lifecycle at generation 1; removing a running member drains it under the ownership fence → its exclusive effect lease before the commit. |
+| `background-queue-list`, `background-queue-reissue --row-id <id> --vault-binding-id <id>`, `background-queue-drop --row-id <id> --reason <r>` | Governed quarantine administration: inspect (ids, topic, binding, reason — never a payload), reissue only to the row's **same** stable binding once it runs under current authority (id and legacy-key lineage preserved; any other binding is refused), or drop terminally. |
+
+Runtime behaviour once `mvr-06d` is recorded:
+
+- **Zero / one / many.** Every watcher and worker process supervises one immutable background
+  `ActiveContextSet` lifecycle per enrolled binding. Zero members idle truthfully (the worker
+  reports `no_vault`, the watcher performs no effect, and restart never re-enrolls a default);
+  one member runs exactly as one per-binding lifecycle; with several, each binding is watched on
+  its own lifecycle root with its own watcher state directory and cadences, and each dispatches
+  only its own queued work. A failed member (unregistered, sealed, ownership lease lost, GOV
+  denial, undrained) is reported failed and performs no effect; it never redirects to another
+  binding, and the aggregate is `degraded`, never healthy. With several members no single
+  binding's settings are compiled process-globally; each lifecycle resolves its own context
+  settings.
+- **Recoverable claims.** The worker no longer polls with a plain select: it claims one row per
+  scope (`global` singleton, or exactly one binding) through an atomic `FOR UPDATE SKIP LOCKED`
+  lease with a database-monotonic fencing token, persists `effect_pending` before the effect, runs
+  the handler inside a token-checked store transaction that records the effect outcome, and then
+  acknowledges. `WORKER_CLAIM_LEASE_SECONDS` (default 300) bounds a lease. Only handlers whose
+  effect is atomic with that outcome are admitted (no-effect topics and the knowledge-acquisition
+  consumer signals); every vault-file or derived-projection handler topic (ingest, panel scan,
+  promotion, debrief, note move, embedding) has no post-effect reconciliation read yet, so its rows
+  stay pending, are counted as `unadmitted_pending`, and degrade readiness instead of dispatching.
+- **Queued-work convergence.** Before dispatch every vault-bound row is revalidated against the
+  current stable binding, a complete envelope, and payload locators that must resolve under the
+  binding's current root. A routine restart or generation rotation keeps valid rows and records a
+  new consumer context linked to the immutable producer context. Rows of a removed binding,
+  a binding no longer enrolled, a binding denied by GOV, or with an incompatible absolute/stale
+  locator (for example after a relocation) are durably quarantined without dispatch or
+  acknowledgement. A transient failure (sealed, ownership, role revocation, drain) blocks rows
+  rather than quarantining them. MVR-05's unprovable rows stay quarantined.
+- **Rollback.** Every MVR-06A–06C image refuses the v4 registry at its schema gate before any
+  registry, principal, or vault access. Recovery uses an MVR-06D-compatible roll-forward or
+  rollback image; nothing lowers or compensates the floor.
+
+Still out of scope: admitting the vault-file/derived-projection handlers to many-binding dispatch
+(they need production reconciliation reads), the channel-transfer and reactivation drains (they
+settle source rows through the reconciler-admitted singleton drain), and the D13/D14 residual
+adapters retired by MVR-07A.
+
 ## Canonical Local Test Bootstrap
 
 The official local `test` golden path is:

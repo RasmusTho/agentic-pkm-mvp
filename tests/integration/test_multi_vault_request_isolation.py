@@ -688,3 +688,93 @@ def test_parent_request_context_acceptance(tmp_path, monkeypatch) -> None:
     )
     assert stale_write.status_code in (401, 409), stale_write.text
     assert "Stale" not in (first_root / "Inbox/inbox.md").read_text(encoding="utf-8")
+
+
+def test_binding_revision_rotates_context_and_cache_before_next_request(
+    tmp_path, monkeypatch, client
+) -> None:
+    """MVR-06C: production relocation rotates the next request's context and cache.
+
+    The relocation advances the binding revision, so the very next production request on
+    the same session resolves a new ActiveContextSet generation whose cache identity
+    differs, and the superseded snapshot can no longer name either root.
+    """
+
+    from pathlib import Path
+
+    from app.instance.active_context_service import (
+        ACTION_SELECTION_INSPECT,
+        PERMISSION_SELECTION_READ,
+        WRITE_CLASS_READ,
+    )
+    from app.instance.context_bound_read import (
+        ContextBoundReadError,
+        resolve_context_read_roots,
+    )
+    from app.retrieval.context_cache import runtime_context_cache_identity
+    from tests._mvr06b_handoff_harness import mvr06b_instance, stub_settings_reload
+    from tests._mvr06c_relocation_harness import (
+        copy_vault,
+        enroll_only,
+        initialized_registration,
+    )
+
+    runtime, _first, _extra = mvr06b_instance(tmp_path, monkeypatch)
+    stub_settings_reload(monkeypatch)
+    selection_routes.reset_selection_store_for_tests()
+    bound = initialized_registration(runtime, tmp_path / "bound")
+    enroll_only(runtime, bound.vault_binding_id)
+    old_root = Path(bound.path)
+    Path(old_root, "only-old.md").write_text("# Old root", encoding="utf-8")
+    session = _create(client, bound.vault_binding_id)
+    headers = {"X-Active-Context-Session": session["context_selection_id"]}
+
+    def scoped_read() -> tuple[int, list[str]]:
+        response = client.get("/api/companion/vault/notes/scoped", headers=headers)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        return body["context_generation"], sorted(
+            note["path"] for note in body["notes"] if note["path"].startswith("only-")
+        )
+
+    service = selection_routes.build_selection_service(selection_routes.get_selection_store())
+    derived = service.derive("trusted_loopback")
+    gov = dict(
+        action=ACTION_SELECTION_INSPECT,
+        write_class=WRITE_CLASS_READ,
+        required_permission=PERMISSION_SELECTION_READ,
+    )
+
+    def resolve():
+        return service.resolve_request_context(
+            derived=derived,
+            session_bearer=session["context_selection_id"],
+            override_bearer=None,
+            **gov,
+        )
+
+    assert scoped_read() == (1, ["only-old.md"])
+    before = resolve()
+    assert before.snapshot.generation == 1 and before.invalidation is None
+    before_key = runtime_context_cache_identity(before.snapshot, settings_bundle_digest="fixed").key
+
+    target = copy_vault(old_root, tmp_path / "relocated")
+    Path(target, "only-old.md").unlink()
+    Path(target, "only-new.md").write_text("# New root", encoding="utf-8")
+    relocated = runtime.relocate(bound.vault_binding_id, target)
+
+    after = resolve()
+    assert after.snapshot.generation == 2
+    assert after.invalidation is not None
+    assert after.invalidation.previous_generation == 1
+    assert after.invalidation.reason == "binding_or_authority_revision_changed"
+    [binding] = after.snapshot.source_bindings
+    assert binding.binding_revision == relocated.extensions["bindingRevision"]
+    after_key = runtime_context_cache_identity(after.snapshot, settings_bundle_digest="fixed").key
+    assert after_key != before_key
+    # The superseded snapshot (and anything cached under it) cannot name either root.
+    with pytest.raises(ContextBoundReadError, match="binding revision changed"):
+        resolve_context_read_roots(before.snapshot, registry_store=runtime.registry)
+    assert [root.root for root in resolve_context_read_roots(after.snapshot, registry_store=runtime.registry)] == [target.resolve()]
+    # The next production request on the same session reads only the new root.
+    assert scoped_read() == (2, ["only-new.md"])

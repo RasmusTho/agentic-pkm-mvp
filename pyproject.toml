@@ -76,6 +76,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "agent-client-protocol==0.12.1",
     "pytest>=8.0",
     "pytest-asyncio>=1.4,<2",
     "pytest-xdist>=3.6",

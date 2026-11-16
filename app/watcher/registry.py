@@ -10,8 +10,9 @@ import stat as stat_module
 import time
 from bisect import bisect_right
 from collections.abc import Iterable, Mapping
-from contextlib import contextmanager
-from dataclasses import dataclass, field
+from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 from datetime import timezone, datetime
 from functools import wraps
 from pathlib import Path
@@ -67,6 +68,7 @@ from app.watcher.settings_delta import (
     is_settings_source_path,
     settings_delta_state_values,
 )
+from app.instance.errors import RegistryError
 from app.instance.settings_rebind import compatibility_ingress_window
 from app.watcher.settings_rebind import DormantSettingsRebindReconciler
 from app.watcher.state import WatcherState
@@ -2324,6 +2326,74 @@ def _emit_watch_event(
 
 
 
+def _enter_background_lifecycle_fence(
+    cfg: RegistryConfig,
+    rebind_cycle: object | None,
+    cycle_fence: ExitStack,
+) -> None:
+    """MVR-06B: run an ordinary cycle under the shared per-binding effect lease.
+
+    After the bridge handoff every ordinary watcher batch holds this process's
+    supervisor effect (ownership fence -> shared lease -> revalidated registry/auth/GOV)
+    through its I/O and receipts, on the durable binding's root rather than the boot env
+    root. The bracketing ``prepared``/``committed``/``recovery`` scans stay the
+    journal-bound reconciler, which removal keeps admitted while it seals ordinary
+    holders. A failed, sealed, stale, or empty lifecycle performs no vault effect this
+    cycle; the next cycle reconciles again. Before the handoff this is a no-op.
+    """
+
+    from app.instance.background_supervisor import (
+        BackgroundBindingIdle,
+        BackgroundLifecycleError,
+        process_background_supervisor,
+    )
+    from app.instance.binding_effect_lease import BindingEffectLeaseError
+
+    from app.instance.scalar_binding_runtime import (
+        background_effect_runtime,
+        frozen_binding_effect,
+        reconciler_old_root_runtime,
+    )
+
+    mode = getattr(rebind_cycle, "mode", None)
+    if mode in {"prepared", "committed", "recovery"}:
+        record = getattr(rebind_cycle, "record", None)
+        prior = None if record is None else record.prior_binding_id
+        supervisor = process_background_supervisor("watcher") if prior is not None else None
+        if supervisor is not None and prior is not None:
+            # Stamp the bracketing scan under the binding it brackets: the boot env root
+            # may be another binding, and a removal's prior is no longer registered.
+            cycle_fence.enter_context(
+                frozen_binding_effect(
+                    reconciler_old_root_runtime(
+                        supervisor, binding_id=prior, root=Path(cfg.vault_path)
+                    )
+                )
+            )
+        return
+    try:
+        supervisor = process_background_supervisor("watcher")
+        if supervisor is None:
+            return
+        # MVR-06D: a many-binding cycle names its own binding; its effect leases only it.
+        lifecycle = cycle_fence.enter_context(supervisor.effect(_MANY_BINDING_TARGET.get()))
+        # Every emission of this cycle resolves this generation, never the boot env root.
+        cycle_fence.enter_context(
+            frozen_binding_effect(background_effect_runtime(supervisor, lifecycle))
+        )
+    except (BackgroundLifecycleError, BackgroundBindingIdle, BindingEffectLeaseError, RegistryError) as exc:
+        if cfg.enable:
+            logger.warning("watcher cycle holds no vault effect: %s", exc)
+        cycle_fence.callback(setattr, cfg, "enable", cfg.enable)
+        cfg.enable = False
+        return
+    cfg.vault_path = Path(lifecycle.root)
+    if not cfg.enable and _as_bool(env_str("WATCHER_ENABLE")):
+        # A requested watcher that went idle adopts the durable binding, e.g. explicit-empty
+        # followed by a governed add. ``WATCHER_ENABLE=0`` stays disabled.
+        cfg.enable = True
+
+
 def _run_spec_tick(
     cfg: RegistryConfig,
     spec: WatcherSpec,
@@ -2804,6 +2874,127 @@ def _run_spec_tick(
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 
 
+#: MVR-06D: the binding whose lifecycle the current many-binding watcher cycle runs.
+_MANY_BINDING_TARGET: ContextVar[str | None] = ContextVar(
+    "mvr06d_many_binding_watcher_target", default=None
+)
+
+
+def _many_binding_watcher_supervisor() -> Any:
+    """The watcher process supervisor once MVR-06D activated many-binding, else ``None``."""
+
+    from app.instance.background_supervisor import process_background_supervisor
+    from app.instance.vault_registry import many_binding_dispatch_enabled
+
+    try:
+        supervisor = process_background_supervisor("watcher")
+    except Exception:
+        return None  # the singleton cycle fails closed on the same registry read
+    if supervisor is None or not many_binding_dispatch_enabled(supervisor.registry.load()):
+        return None
+    return supervisor
+
+
+def _binding_state_dir(cfg: RegistryConfig, binding_id: str) -> Path:
+    digest = hashlib.sha256(binding_id.encode("utf-8")).hexdigest()[:16]
+    return cfg.state_dir / "bindings" / digest
+
+
+@dataclass
+class _ManyBindingWatcherState:
+    """Per-binding watcher state, cadences, and the last per-binding summaries."""
+
+    states: dict[str, dict[str, WatcherState]] = field(default_factory=dict)
+    briefing: dict[str, BriefingTickCadence] = field(default_factory=dict)
+    sync: dict[str, SyncTickCadence] = field(default_factory=dict)
+    lifecycles: list[dict[str, object]] = field(default_factory=list)
+
+
+def _run_many_binding_watcher_cycle(
+    cfg: RegistryConfig,
+    supervisor: Any,
+    memory: _ManyBindingWatcherState,
+    *,
+    now: float,
+    process_panel_notes_inline: bool,
+) -> dict[str, dict[str, object]]:
+    """MVR-06D: one independent watcher cycle per running binding lifecycle.
+
+    Each binding scans only its own lifecycle root with its own state directory and
+    cadences, under its own effect lease, so every emission is stamped by that binding's
+    generation. A failed or sealed binding performs no effect this cycle and is reported
+    as such; it is never redirected to another binding's root.
+    """
+
+    lifecycles = supervisor.reconcile_all()
+    memory.lifecycles = [item.health() for item in lifecycles]
+    summaries: dict[str, dict[str, object]] = {}
+    for lifecycle in lifecycles:
+        binding = lifecycle.binding_id
+        if binding is None or lifecycle.status != "running" or lifecycle.root is None:
+            continue
+        binding_cfg = replace(
+            cfg,
+            vault_path=Path(lifecycle.root),
+            state_dir=_binding_state_dir(cfg, binding),
+            enable=cfg.enable or _as_bool(env_str("WATCHER_ENABLE")),
+        )
+        binding_cfg.state_dir.mkdir(parents=True, exist_ok=True)
+        states = memory.states.setdefault(
+            binding,
+            {
+                spec.name: _load_registry_state(_state_path(binding_cfg.state_dir, spec.name))
+                for spec in cfg.specs
+            },
+        )
+        token = _MANY_BINDING_TARGET.set(binding)
+        try:
+            cycle = _run_registry_cycle(
+                binding_cfg,
+                None,
+                states=states,
+                now=now,
+                briefing_cadence=memory.briefing.setdefault(binding, BriefingTickCadence()),
+                process_panel_notes_inline=process_panel_notes_inline,
+                sync_cadence=memory.sync.setdefault(binding, SyncTickCadence()),
+            )
+        finally:
+            _MANY_BINDING_TARGET.reset(token)
+        summaries[binding] = {
+            "binding_id": binding,
+            "generation": lifecycle.generation,
+            "context_id": lifecycle.context.context_id if lifecycle.context else None,
+            "watchers": cycle,
+        }
+    return summaries
+
+
+def _write_many_binding_heartbeat(
+    cfg: RegistryConfig, memory: _ManyBindingWatcherState, *, now: float
+) -> None:
+    states = {
+        f"{spec_name}@{binding}": state
+        for binding, by_spec in memory.states.items()
+        for spec_name, state in by_spec.items()
+    }
+    failed = any(item.get("status") == "failed" for item in memory.lifecycles)
+    status = "degraded" if failed else _overall_watcher_status(states)
+    watchers: dict[str, dict[str, object]] = {}
+    for binding, by_spec in memory.states.items():
+        for name, payload in _build_watchers_payload(cfg.specs, by_spec).items():
+            watchers[f"{name}@{binding}"] = payload
+    write_registry_heartbeat(
+        path=cfg.heartbeat_path,
+        status=status,
+        watchers=watchers,
+        outbox_path=cfg.outbox_path,
+        config_path=cfg.config_path,
+        paused=cfg.stop_file.exists(),
+        enqueue_failures_total=sum(state.enqueue_failures_total for state in states.values()),
+        now=now,
+    )
+
+
 def _run_registry_cycle(
     cfg: RegistryConfig,
     reconciler: DormantSettingsRebindReconciler | None,
@@ -2818,7 +3009,7 @@ def _run_registry_cycle(
 
     sync_cadence = sync_cadence if sync_cadence is not None else SyncTickCadence()
 
-    with _compatibility_watcher_window(reconciler):
+    with _compatibility_watcher_window(reconciler), ExitStack() as cycle_fence:
         _adopt_idle_selected_binding(cfg, reconciler)
         rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
         recovery_mode = rebind_cycle is not None and rebind_cycle.mode == "recovery"
@@ -2849,6 +3040,7 @@ def _run_registry_cycle(
                 cfg.enable = False
             else:
                 cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
+        _enter_background_lifecycle_fence(cfg, rebind_cycle, cycle_fence)
         for spec in cfg.specs:
             authority = {
                 "root": str(cfg.vault_path), "scope": spec.scope_glob,
@@ -2958,6 +3150,15 @@ def run_registry_once(
     _loaded_config: RegistryConfig | None = None,
 ) -> dict[str, dict[str, object]]:
     cfg = _loaded_config or load_registry_config(config_path)
+    many = _many_binding_watcher_supervisor()
+    if many is not None:
+        memory = _ManyBindingWatcherState()
+        now = time.time()
+        many_summaries = _run_many_binding_watcher_cycle(
+            cfg, many, memory, now=now, process_panel_notes_inline=True
+        )
+        _write_many_binding_heartbeat(cfg, memory, now=now)
+        return many_summaries
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
     states = {
         spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
@@ -2995,6 +3196,23 @@ def run_registry_forever(
     _loaded_config: RegistryConfig | None = None,
 ) -> None:
     cfg = _loaded_config or load_registry_config(config_path)
+    many = _many_binding_watcher_supervisor()
+    if many is not None:
+        # MVR-06D: one independent cycle per binding lifecycle; settings are resolved per
+        # binding context, never compiled process-globally from one binding's root.
+        memory = _ManyBindingWatcherState()
+        tick_limit = max_ticks if max_ticks is not None and max_ticks > 0 else None
+        tick = 0
+        while True:
+            now = time.time()
+            _run_many_binding_watcher_cycle(
+                cfg, many, memory, now=now, process_panel_notes_inline=False
+            )
+            _write_many_binding_heartbeat(cfg, memory, now=now)
+            tick += 1
+            if tick_limit is not None and tick >= tick_limit:
+                return
+            time.sleep(cfg.tick_sleep_seconds)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
     idle_without_binding = False
     with _compatibility_watcher_window(reconciler):
@@ -3021,6 +3239,19 @@ def run_registry_forever(
             # is the cleared vault, so stay idle exactly like the long-lived loop.
             cfg.enable = False
             idle_without_binding = True
+        if startup_rebind_cycle is None or startup_rebind_cycle.mode not in {
+            "prepared",
+            "committed",
+            "recovery",
+        }:
+            from app.instance.background_supervisor import durable_background_root
+
+            durable, durable_root = durable_background_root()
+            if durable and durable_root is None:
+                # MVR-06B: durable empty intent never compiles the boot env root.
+                idle_without_binding = True
+            elif durable and durable_root is not None:
+                cfg.vault_path = durable_root
         # `watcher run` is the production entrypoint.  Compile its bound vault at
         # boot just as API and worker do; the registry config is authoritative for
         # this process and need not depend on VAULT_ROOT being set separately.

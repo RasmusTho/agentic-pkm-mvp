@@ -149,6 +149,16 @@ subject identity with `builder_system`, changes the header and evidence scope, a
 Focus claim into the system lens. Returning to Focus restores the prior stable subject. Cross-links
 are navigation, never a data join.
 
+A typed return reference distinguishes the stable subject context of Overview/Focus/Command/Receipt
+from the explicit `builder_system` root and map/evidence depth of Builder System Control. Crossing
+between them carries no source payload, classification, correlation, command eligibility, receipt
+state, or authority claim. This is a navigation contract, not a session store or shared identity.
+
+Overview may point to a system-wide governance concern, and Builder System Control may point to an
+exact Issue/capability Focus or existing governed route. The destination re-reads its own source
+contract. A dead, stale, unavailable, or unlinked destination is shown as such; the shell never
+repairs the link or reclassifies the source in browser state.
+
 The lens may link to a stable Issue/capability Focus or to an existing governed workflow. It may not
 surface a global provider-session view, infer that a session is work, or treat provider provenance
 as delivery authority. Cockpit -> Detail -> governed Command/Receipt remains the journey for any
@@ -166,10 +176,15 @@ decision-maker.
 
 ### Explicit non-authority
 
-The lens owns no policy, workflow transition, task, queue, claim, session, source registry, delivery
-graph, correlation, severity, approval, mutation, or durable disposition. It never writes GitHub,
-the repository, BuilderOps, a provider, or an external system directly. It never promotes a
-descriptive process-map observation into intended governance.
+Neither the lens nor any UX, design, browser, or read-model projection owns policy, workflow
+transition, task, queue, claim, session, source registry, delivery graph, correlation, severity,
+approval, mutation, or a BuilderOps disposition. Source BuilderOps records retain the operational
+authority assigned by their own contracts: `LearningSignal` records delivery divergences,
+`PromotionIntent` stages cross-authority proposals, and `BuilderOpsReceipt` records transitions,
+projections, promotions, supersessions, or discards. The lens may render those source-owned
+dispositions, but it cannot create, override, or reinterpret them. Neither the lens nor its
+projections writes GitHub, the repository, BuilderOps, a provider, or an external system directly.
+The lens never promotes a descriptive process-map observation into intended governance.
 
 ### Intent–evidence continuity
 
@@ -631,7 +646,12 @@ by treating this target-state specification as delivered behavior.
 
 ## Separate interaction and visual requirements
 
-The future design handoff must preserve:
+The unified-journey scope is `mixed`; the live design-system selection and token-parity receipt and
+static illustrative research are recorded in [the owner-journey handoff](../DEVUI.md#governed-unified-journey-interaction-handoff).
+This does not deliver the BSC route, UI, fixture validation, or owner acceptance. The next BSC
+design slice must validate this separate lens against its own real fixtures and the state matrix below.
+
+The BSC implementation and its fixture-bound validation must preserve:
 
 - a visibly different Builder System identity/header from any Issue or capability Focus;
 - progressive disclosure from five calm orientation maps to exact evidence and limitations;
@@ -642,6 +662,26 @@ The future design handoff must preserve:
 - unresolved owner questions inside their evidence detail and existing decision route, never in a
   new backlog; and
 - reversible navigation back to the prior Focus without carrying or inferring correlations.
+
+It must also prove the following interaction-state matrix against stable BSC-01..03 and
+Overview/Focus fixtures:
+
+| State or mode | Required treatment |
+| --- | --- |
+| Fresh / measured empty | Preserve source, watermark/denominator, exact claim, and the difference between observed zero and absent evidence. |
+| Stale / last known | Date the evidence, state the affected claim, permit orientation only, and withdraw freshness-dependent preview or action. |
+| Unavailable / unread / unsupported / refused | Keep unaffected maps and sibling roots usable; show source-specific reason, limitation, retry/read route, and no optimistic empty state. |
+| Missing / unlinked / not assessed / conflicting | Show the gap and next legal evidence or governance route; never infer correlation, severity, or owner decision. |
+| Read-only navigation | Use ordinary links/evidence expansion with no authority styling, hidden side effect, or browser-held durable state. |
+| Future command preview | Separate it structurally and semantically from read-only regions; bind exact scope/source freshness and withdraw on change. |
+| Terminal receipt | Return it to the originating governance context with outcome, source/receipt identity, missing proof, limitations, and existing next route. |
+| Blocked / ambiguous outcome | Keep the last proven state, disable repeat effects, expose governed recovery/readback, and never render success. |
+
+Desktop, narrow, 200% zoom, keyboard, screen-reader, print, and JavaScript-off modes must retain the
+same `builder_system` identity, map order, evidence order, source names, limitation language, and
+typed return target. Focus restoration returns to the invoking control; state cannot depend on color
+alone; print/export includes provenance, freshness, and limitations and omits commands. No mode may
+turn Builder System Control into a Focus tab or join the sibling roots.
 
 Claude Design availability affects BSC-04 only. It does not block the nonvisual contracts, source
 inventory, composition, or fixtures that precede that handoff.
@@ -664,7 +704,8 @@ of Focus parent #4693; Builder System Control remains a separate delivery line.
    governed repair-route references. It adds no severity, policy decision, UI, command, or effect.
 4. **BSC-04 — governed visual design handoff.** Use stable fixtures from BSC-01..03 to validate the
    separate lens, degraded states, unresolved owner questions, accessibility, responsive behavior,
-   and Command/Receipt boundary when the external design capability is available.
+   and Command/Receipt boundary when the external design capability is available. The unified
+   target is reconciled by #4982, but BSC-04 fixture-bound lens validation remains undelivered.
 5. **BSC-05 — route previews over existing workflows.** After authenticated action admission and
    destination-owned replay/readback exist, add typed previews for a deliberately selected subset
    of existing governed workflows. No generic command language.
@@ -672,6 +713,11 @@ of Focus parent #4693; Builder System Control remains a separate delivery line.
 BSC-01 through BSC-03 are nonvisual and may proceed before BSC-04. BSC-05 depends on the accepted
 design and each destination's authority contract. No follow-up creates a policy engine, workflow
 engine, task system, or source registry.
+
+Related ownership remains separate: #4693 owns the Focus/Conversation parent; #4695 owns its design
+validation; #4697 owns Start Model Inquiry preview/receipt; #4741 owns Stage A acceptance; #4746
+owns connected Overview/Focus design evidence; and closed #4980 owns the evidence-bound
+process-health model. This specification neither replaces nor silently unblocks any of them.
 
 ## Cross-slice invariants
 

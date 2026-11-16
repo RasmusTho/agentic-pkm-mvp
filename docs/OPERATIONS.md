@@ -27,6 +27,8 @@ TypeSafe DEV actual-consumer evidence: the [2026-10-21 Product receipt and exter
 Use this document as the operator-facing starting point for runtime operations.
 
 Specialized companion documents:
+- [Builder development workflow](development/DEV_WORKFLOW.md) - the local OpenHands owner route
+  under development in #6600; this is not a production runtime operation.
 - `docs/HEALTH.md` - health CLI behavior and runtime health contract
 - `docs/OBSERVABILITY.md` - runtime observability signals, counters, and span/log contracts
 - `docs/INFRASTRUCTURE.md` - application Compose fallback and local observability reference
@@ -855,6 +857,62 @@ Watcher auto-exec enablement rule:
 - Do not use the legacy snapshot watcher for runtime start-system flows.
 - Do not treat lab/dev-only watcher paths as production equivalents.
 
+## Background binding and registration lifecycle (MVR-06B/06C)
+
+Available only after the opt-in `background-supervisor-handoff`; before it these commands answer
+`capability_not_ready`. Contract: `docs/ENVIRONMENTS.md :: Runtime Control Surface`; status meanings:
+`docs/HEALTH.md :: Runtime health`.
+
+```bash
+python -m app.instance.runtime background-binding-list --registry-path <registry>
+python -m app.instance.runtime background-binding-add --registry-path <registry> --vault-binding-id <id>
+python -m app.instance.runtime background-binding-remove --registry-path <registry> --vault-binding-id <id>
+python -m app.instance.runtime binding-remove --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> [--watcher-state-dir <dir>] --vault-binding-id <id> [--replacement-default-binding-id <id>]
+python -m app.instance.runtime binding-reactivate --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> [--watcher-state-dir <dir>] --root <vault-root>
+python -m app.instance.runtime binding-relocate --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> --vault-binding-id <id> --destination <new-vault-root>
+python -m app.instance.runtime binding-lifecycle-recover --channel <c> --registry-path <registry> --host-global-root <h> --watcher-posture <running|absent> [--watcher-state-dir <dir>]
+```
+
+`--watcher-posture running` needs the watcher's `WATCHER_STATE_DIR`, so the removal waits for the
+watcher's final old-root scan and drain receipts. State `absent` only when no watcher runs.
+
+- A background lifecycle reporting `failed` performs no vault effect and never redirects to another
+  binding. Read `failure`, repair the named cause, and let the next cycle reconcile; a removed
+  explicit member stays failed until it is removed from intent or reactivated.
+- After a process died during `binding-remove` or `binding-reactivate`, run
+  `binding-lifecycle-recover` with the watcher running. Until then the binding stays sealed, and a
+  reactivation is refused while a removal is incomplete.
+- A reactivation that cannot rebuild (unreachable database, unsettled queue rows) stays
+  `reactivating` and sealed. Fix the cause and recover; it never reports healthy early.
+- `binding-relocate` (MVR-06C) moves one binding to a new root that holds the same vault: move or
+  copy the vault first, then relocate. The target's vault marker must name the binding's vault and
+  local clone; anything else is refused with no change. The binding reports `failed`
+  (`relocating`) while it drains and commits, then reconciles onto the new root. After a crash,
+  `binding-lifecycle-recover` rolls the relocation forward; a refusal before the ownership move (for
+  example a target that changed) withdraws it and keeps the old root. The MVR-01C scalar rollback
+  target cannot be relocated.
+
+### Many-binding activation and quarantined work (MVR-06D)
+
+```bash
+python -m app.instance.runtime background-many-binding-activate --channel <c> --registry-path <registry> --host-global-root <h> --quiescence-proof-path <proof>
+python -m app.instance.runtime background-queue-list --registry-path <registry>
+python -m app.instance.runtime background-queue-reissue --registry-path <registry> --row-id <id> --vault-binding-id <id>
+python -m app.instance.runtime background-queue-drop --registry-path <registry> --row-id <id> --reason <text>
+```
+
+- Activation runs once, inside the proved stopped window, after `alembic upgrade head`. A refusal
+  naming unscoped compatibility rows means the outbox is not drained: let the singleton worker
+  settle it (KD-A42F26A9AD87), then retry. After activation no MVR-06A–06C image can start.
+- `/api/health` `background_lifecycles.readiness` `degraded` with quarantined rows: inspect them
+  with `background-queue-list`. A row reissues only to its own binding once that binding runs
+  again under current authority; otherwise drop it with a reason.
+- `blocked` readiness means an `effect_reconciliation_required` row: its effect outcome is
+  ambiguous. Verify the effect manually before deciding; the runtime never replays, acknowledges,
+  or drops it on its own.
+- `unadmitted_pending` counts rows whose handler has no reconciliation read yet (ingest, panel
+  scan, promotion, debrief, note move, embedding). Many-binding dispatch leaves them pending.
+
 ## Obsidian sync runtime
 
 Current runtime model:
@@ -1056,6 +1114,11 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
   persistent Product routing, inference qualification or release acceptance. DEV/TEST source support
   also permits a separately configured Tailnet mTLS path through the governed deploy wrapper; host
   ingress, channel activation and verification remain separate operational steps.
+- `scripts/check_model_access_certificates.py` checks explicitly supplied DEV/TEST public server,
+  client and CA files against a server IP and a validity margin. For example, pass `--channel dev`,
+  `--server`, `--client`, `--ca` and `--server-ip`; `--min-days` defaults to 30. It does not inspect
+  private keys, discover the files used by running services, renew certificates, or establish live
+  mTLS health. Actual rotation and adoption remain separate operational work.
 - For the explicit `openai_api` evaluation transport, the executor may start through
   `scripts/start_model_access_executor.sh` as the dev-only `model-access-executor` Keychain consumer
   of `openai.api-key` (#6386). Switching the launchd job to that launcher and the owner's one-time
@@ -1100,6 +1163,11 @@ the [runtime receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6347#i
   qualification or current runtime health.
 
 ### BuilderOps Issue-delivery repository support
+
+The [local OpenHands Canvas launcher instructions](development/BUILDER_SYSTEM_PROCESS_MAP.md#current-active-builder-carrier)
+describe repository-local support for an existing agent-server. This does not establish factory
+qualification or production activation. Repository-only review (local Canvas entry only):
+2026-11-08, Issue #6601 and `scripts/openhands_canvas.py`; unrelated review dates are unchanged.
 
 Issue #5586 adds repository-side `fca-issue-delivery.v2` support for the bounded Bifrost
 consumer, with an independently pinned trusted hub workflow, separate hub tracking Issue,

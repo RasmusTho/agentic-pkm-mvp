@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import ctypes
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -10,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -60,6 +63,275 @@ def _harness(directory: Path) -> dict[str, str]:
     env.pop("PYTEST_ADDOPTS", None)
     env["PYTHONPATH"] = str(directory)
     return env
+
+
+def test_untrusted_mount_skips_inherited_cleanup_and_refuses_default(tmp_path: Path) -> None:
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    env = _harness(suite)
+    parent = tmp_path / "inherited"
+    parent.mkdir(mode=0o700)
+    expired = _candidate(parent, "expired", pid=_dead_pid())
+    conftest = suite / "conftest.py"
+    with conftest.open("a") as target:
+        target.write("\ndef _temp_mount_identity(fd):\n    raise _TempMountNoOwners('synthetic noowners')\n")
+    (suite / "test_probe.py").write_text("def test_probe(tmp_path):\n    assert tmp_path.is_dir()\n")
+    env["PYTEST_DEBUG_TEMPROOT"] = str(parent)
+    command = [sys.executable, "-m", "pytest", "-q"]
+    run = subprocess.run(command, cwd=suite, env=env, capture_output=True, text=True, timeout=30)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert expired.exists()
+    assert any(path.name.startswith("pkm-py-") and path != expired for path in parent.iterdir())
+    env.pop("PYTEST_DEBUG_TEMPROOT")
+    env["TMPDIR"] = str(tmp_path)
+    run = subprocess.run(command, cwd=suite, env=env, capture_output=True, text=True, timeout=30)
+    assert run.returncode != 0
+    assert "pytest temporary-root isolation failed" in run.stderr
+    assert expired.exists()
+
+
+def test_untrusted_marked_ancestor_is_not_modified_by_nested_pytest(tmp_path: Path) -> None:
+    parent = _candidate(tmp_path, "untrusted-ancestor", pid=_dead_pid())
+    marker = parent / ".agentic-pkm-pytest-owner.json"
+    before = marker.stat().st_mtime_ns, marker.read_bytes()
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    env = _harness(suite)
+    env["PYTEST_DEBUG_TEMPROOT"] = str(parent)
+    with (suite / "conftest.py").open("a") as target:
+        target.write("\ndef _temp_mount_identity(fd):\n    raise _TempMountNoOwners('synthetic noowners')\n")
+    (suite / "test_probe.py").write_text("def test_probe(tmp_path):\n    assert tmp_path.is_dir()\n")
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=suite, env=env,
+                         capture_output=True, text=True, timeout=30)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert (marker.stat().st_mtime_ns, marker.read_bytes()) == before
+    assert not list(parent.glob(".agentic-pkm-pytest-child-*"))
+    assert any(path.name.startswith("pkm-py-") for path in parent.iterdir())
+
+
+def test_unknown_marked_ancestor_fails_without_modifying_marker(tmp_path: Path) -> None:
+    parent = _candidate(tmp_path, "unknown-ancestor", pid=_dead_pid())
+    marker = parent / ".agentic-pkm-pytest-owner.json"
+    before = marker.stat().st_mtime_ns, marker.read_bytes()
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    env = _harness(suite)
+    env["PYTEST_DEBUG_TEMPROOT"] = str(parent)
+    with (suite / "conftest.py").open("a") as target:
+        target.write("\n_real_mount = _temp_mount_identity\n"
+                     "def _temp_mount_identity(fd):\n"
+                     f"    if os.fstat(fd).st_ino == {parent.stat().st_ino}:\n"
+                     "        raise OSError('synthetic transient probe error')\n"
+                     "    return _real_mount(fd)\n")
+    (suite / "test_probe.py").write_text("def test_probe():\n    pass\n")
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=suite, env=env,
+                         capture_output=True, text=True, timeout=30)
+    assert run.returncode != 0 and "ancestor mount is unqualified" in run.stderr
+    assert (marker.stat().st_mtime_ns, marker.read_bytes()) == before
+    assert not list(parent.glob(".agentic-pkm-pytest-child-*"))
+    assert not any(path.name.startswith("pkm-py-") for path in parent.iterdir())
+
+
+def test_untrusted_parent_still_fences_qualified_marked_ancestor(tmp_path: Path) -> None:
+    outer = _candidate(tmp_path, "qualified-ancestor", pid=_dead_pid())
+    inner = outer / "inherited"
+    inner.mkdir(mode=0o700)
+    marker = outer / ".agentic-pkm-pytest-owner.json"
+    before = marker.stat().st_mtime_ns
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    env = _harness(suite)
+    env["PYTEST_DEBUG_TEMPROOT"] = str(inner)
+    with (suite / "conftest.py").open("a") as target:
+        target.write("\n_real_mount = _temp_mount_identity\n"
+                     "def _temp_mount_identity(fd):\n"
+                     f"    if os.fstat(fd).st_ino == {inner.stat().st_ino}:\n"
+                     "        raise OSError('synthetic noowners')\n"
+                     "    return _real_mount(fd)\n")
+    ready, release = tmp_path / "ready", tmp_path / "release"
+    env.update(READY=str(ready), RELEASE=str(release))
+    (suite / "test_probe.py").write_text(
+        "import os, time\nfrom pathlib import Path\n"
+        "def test_probe(tmp_path):\n"
+        "    Path(os.environ['READY']).touch()\n"
+        "    limit = time.monotonic() + 20\n"
+        "    while not Path(os.environ['RELEASE']).exists():\n"
+        "        assert time.monotonic() < limit\n"
+        "        time.sleep(.01)\n"
+    )
+    process = subprocess.Popen([sys.executable, "-m", "pytest", "-q"], cwd=suite, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        deadline = time.monotonic() + 20
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert ready.exists(), "nested pytest did not reach the test"
+        descriptor = os.open(marker, os.O_RDONLY)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(descriptor)
+        old_ns = time.time_ns() - 8 * 24 * 60 * 60 * 1_000_000_000
+        os.utime(outer, ns=(old_ns, old_ns))
+        _root_harness()._prune_expired_temp_roots(tmp_path)
+        assert outer.exists()
+    finally:
+        release.touch()
+        try:
+            output, _ = process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output, _ = process.communicate()
+    assert process.returncode == 0, output
+    assert marker.stat().st_mtime_ns > before
+    assert not list(outer.glob(".agentic-pkm-pytest-child-*"))
+    assert any(path.name.startswith("pkm-py-") for path in inner.iterdir())
+
+
+def test_cleanup_preserves_candidate_when_mount_identity_changes(tmp_path: Path, monkeypatch) -> None:
+    subject = _root_harness()
+    expired = _candidate(tmp_path, "expired", pid=_dead_pid())
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    (foreign / "artifact").write_text("preserve")
+    real_lock, real_same = subject._lock_temp_parent, subject._same_temp_mount
+    changed = False
+    def lock_then_change(*args, **kwargs):
+        nonlocal changed
+        result = real_lock(*args, **kwargs)
+        changed = True  # A changed mount is observed immediately before rename.
+        return result
+    monkeypatch.setattr(subject, "_lock_temp_parent", lock_then_change)
+    monkeypatch.setattr(subject, "_same_temp_mount",
+                        lambda *args: False if changed else real_same(*args))
+    subject._prune_expired_temp_roots(tmp_path)
+    assert changed and (expired / "artifact.txt").exists()
+    assert (foreign / "artifact").read_text() == "preserve"
+    quarantines = list(tmp_path.glob(".pytest-prune-*"))
+    assert len(quarantines) == 1 and not list(quarantines[0].iterdir())
+
+
+def test_replaced_empty_quarantine_is_not_removed_or_used(tmp_path: Path, monkeypatch) -> None:
+    subject = _root_harness()
+    expired = _candidate(tmp_path, "replace-quarantine", pid=_dead_pid())
+    real_lock = subject._lock_temp_parent
+    replacement = None
+    def replace_after_lock(*args, **kwargs):
+        nonlocal replacement
+        result = real_lock(*args, **kwargs)
+        replacement = next(tmp_path.glob(".pytest-prune-*"))
+        replacement.rename(tmp_path / "detached-quarantine")
+        replacement.mkdir(mode=0o700)
+        return result
+    monkeypatch.setattr(subject, "_lock_temp_parent", replace_after_lock)
+    subject._prune_expired_temp_roots(tmp_path)
+    assert replacement is not None and replacement.is_dir() and not list(replacement.iterdir())
+    assert (tmp_path / "detached-quarantine").is_dir()
+    assert (expired / "artifact.txt").exists()
+
+
+def test_cleanup_preserves_same_device_nested_mount(tmp_path: Path, monkeypatch) -> None:
+    subject = _root_harness()
+    expired = _candidate(tmp_path, "mount", pid=_dead_pid())
+    nested = expired / "nested"
+    nested.mkdir()
+    (nested / "foreign").write_text("preserve")
+    os.utime(expired, ns=(1, 1))
+    same_device = nested.stat().st_dev
+    real_mount = subject._temp_mount_identity
+    def mount_with_bind(fd):
+        identity = real_mount(fd)
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) == (same_device, nested.stat().st_ino):
+            return (*identity, "different-mount-id")
+        return identity
+    monkeypatch.setattr(subject, "_temp_mount_identity", mount_with_bind)
+    subject._prune_expired_temp_roots(tmp_path)
+    assert (nested / "foreign").read_text() == "preserve"
+    assert (expired / "artifact.txt").exists()
+    assert not list(tmp_path.glob(".pytest-prune-*"))
+
+
+def test_cleanup_preserves_special_entries_without_opening_them(tmp_path: Path) -> None:
+    subject = _root_harness()
+    expired = _candidate(tmp_path, "fifo", pid=_dead_pid())
+    fifo = expired / "fifo"
+    os.mkfifo(fifo)
+    os.utime(expired, ns=(1, 1))
+    subject._prune_expired_temp_roots(tmp_path)
+    assert fifo.exists() and (expired / "artifact.txt").exists()
+
+
+@pytest.mark.parametrize("limit", ["_TEMP_SCAN_SECONDS = 0", "_TEMP_SCAN_MAX_ENTRIES = 1"])
+def test_cleanup_scan_budget_preserves_root_and_pytest_continues(tmp_path: Path, limit: str) -> None:
+    parent, suite = tmp_path / "parent", tmp_path / "suite"
+    parent.mkdir(mode=0o700)
+    suite.mkdir()
+    expired = _candidate(parent, "budget", pid=_dead_pid())
+    env = _harness(suite)
+    env["PYTEST_DEBUG_TEMPROOT"] = str(parent)
+    with (suite / "conftest.py").open("a") as target:
+        target.write("\n" + limit + "\n")
+    (suite / "test_probe.py").write_text("def test_probe(tmp_path):\n    assert tmp_path.is_dir()\n")
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=suite, env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (expired / "artifact.txt").exists()
+    assert not list(parent.glob(".pytest-prune-*"))
+
+
+def test_candidate_tree_scan_stops_at_entry_budget(tmp_path: Path, monkeypatch) -> None:
+    subject = _root_harness()
+    (tmp_path / "first").touch()
+    (tmp_path / "second").touch()
+    fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        mount = subject._temp_mount_identity(fd)
+        monkeypatch.setattr(subject, "_TEMP_SCAN_MAX_ENTRIES", 1)
+        assert not subject._temp_tree_on_mount(fd, mount, time.monotonic() + 5)
+    finally:
+        os.close(fd)
+    assert (tmp_path / "first").exists() and (tmp_path / "second").exists()
+
+
+def test_mount_ownership_probe_and_real_noowners_volume(tmp_path: Path, monkeypatch) -> None:
+    subject = _root_harness()
+    class FakeStatFS:
+        argtypes = None
+        restype = None
+        def __init__(self, flags, fstype=b"apfs"):
+            self.flags, self.fstype = flags, fstype
+        def __call__(self, _fd, pointer):
+            result = ctypes.cast(pointer, ctypes.POINTER(subject._DarwinStatFS)).contents
+            result.fstype = self.fstype
+            result.flags = self.flags
+            result.mountpoint = b"/synthetic"
+            return 0
+    monkeypatch.setattr(subject, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(subject.ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace(fstatfs=FakeStatFS(0)))
+    fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        assert subject._temp_mount_identity(fd)[0] == "darwin"
+        monkeypatch.setattr(subject.ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace(fstatfs=FakeStatFS(0x200000)))
+        with pytest.raises(OSError, match="not qualified"):
+            subject._temp_mount_identity(fd)
+        monkeypatch.setattr(subject.ctypes, "CDLL", lambda *args, **kwargs:
+                            SimpleNamespace(fstatfs=FakeStatFS(0, b"unverified")))
+        with pytest.raises(OSError, match="not qualified"):
+            subject._temp_mount_identity(fd)
+    finally:
+        os.close(fd)
+    monkeypatch.undo()
+    probe = os.environ.get("PYTEST_NOOWNERS_PROBE")
+    if probe:
+        assert sys.platform == "darwin"
+        fd = os.open(probe, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            with pytest.raises(OSError, match="not qualified"):
+                subject._temp_mount_identity(fd)
+        finally:
+            os.close(fd)
 
 
 def test_parallel_pytest_runs_use_unique_debug_temp_roots(

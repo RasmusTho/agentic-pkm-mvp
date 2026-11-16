@@ -447,6 +447,14 @@ class DormantSettingsRebindReconciler:
             return RebindCycle(record=record, mode="dormant", receipt=None)
         if record.phase == "no_lifecycle":
             return RebindCycle(record=record, mode="no_lifecycle", receipt=None)
+        if (
+            record.phase == "prepared"
+            and record.prior_binding_id is None
+            and snapshot.extensions.get("backgroundSupervisor")
+        ):
+            # MVR-06B: no running binding means no old root to bracket, and this candidate
+            # is not committed yet. Scan nothing; the lifecycle fence adopts it after commit.
+            return RebindCycle(record=record, mode="refused", receipt=None)
         if record.phase == "prepared" and self.cleared_before(record):
             # A restart may load the enabled env config before a foreign selection
             # replaces the completed CLEAR. Restore that durable idle posture before
@@ -796,21 +804,30 @@ class DormantSettingsRebindReconciler:
         prior = record.prior_binding_id
         if prior is None:
             return
-        registration = snapshot.registrations.get(prior)
+        registration: object = snapshot.registrations.get(prior)
+        if registration is None:
+            # MVR-06B: a removal-committed prior root stays the bracket's old root.
+            registration = snapshot.removal_tombstones.get(prior)
         if registration is None:
             return
         try:
             if same_filesystem_root(
                 resolve_filesystem_root_identity(cfg.vault_path),
-                resolve_filesystem_root_identity(registration.path),
+                resolve_filesystem_root_identity(registration.path),  # type: ignore[attr-defined]
             ):
                 return
         except FilesystemIdentityError:
             pass
         completed = self._latest_completed_receipt(before=record.desired_revision)
-        if completed is None or completed.candidate_binding_id != prior:
+        if (completed is None or completed.candidate_binding_id != prior) and not (
+            # MVR-06B: an unbracketed post-handoff revision writes no receipt; durable
+            # intent, not the boot env root, is what the prior binding was running on.
+            snapshot.extensions.get("backgroundSupervisor")
+        ):
             return
-        cfg.vault_path = validate_settings_rebind_candidate_root(Path(registration.path))
+        cfg.vault_path = validate_settings_rebind_candidate_root(
+            Path(registration.path)  # type: ignore[attr-defined]
+        )
 
     def cleared_before(self, record: SettingsRebindRecord) -> bool:
         """Return True when durable watcher history ends in a completed CLEAR.
@@ -852,11 +869,16 @@ class DormantSettingsRebindReconciler:
         prior = DormantSettingsRebindReconciler._required_binding(
             record.prior_binding_id or record.candidate_binding_id, name="prior"
         )
-        registration = snapshot.registrations.get(prior)
+        registration: object = snapshot.registrations.get(prior)
+        if registration is None:
+            # MVR-06B removal commits the tombstone before the post-commit old-root
+            # drain; ownership is released only after this bracket completes, so the
+            # tombstone is the durable old root for the reconciler-only scan.
+            registration = snapshot.removal_tombstones.get(prior)
         if registration is None:
             raise RegistryError("settings rebind prior watcher binding is missing")
         configured = resolve_filesystem_root_identity(cfg.vault_path)
-        expected = resolve_filesystem_root_identity(registration.path)
+        expected = resolve_filesystem_root_identity(registration.path)  # type: ignore[attr-defined]
         if not same_filesystem_root(configured, expected):
             raise RegistryError("settings rebind watcher is not bound to the durable prior root")
 
