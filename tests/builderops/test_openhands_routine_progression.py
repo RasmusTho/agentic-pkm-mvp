@@ -40,7 +40,13 @@ def assembled(tmp_path, monkeypatch, *, nonclosing=False):
     f['pr']['head_sha'] = f['head']
     f['entry']['head_sha'] = f['head']
     verifier = tmp_path / 'controller-test-venv'
-    venv.EnvBuilder(with_pip=False, system_site_packages=True, symlinks=False).create(verifier)
+    # This security-owned fixture must satisfy the real preflight even under CI's
+    # group-writable outer umask; restore that umask for the rest of the test.
+    previous_umask = os.umask(0o077)
+    try:
+        venv.EnvBuilder(with_pip=False, system_site_packages=True, symlinks=False).create(verifier)
+    finally:
+        os.umask(previous_umask)
     config = json.loads(f['config'].read_text())
     config['automatic_native']['test_venv'] = str(verifier)
     f['entry']['test_venv'] = str(verifier)
@@ -89,7 +95,8 @@ def assembled(tmp_path, monkeypatch, *, nonclosing=False):
             # Real pytest at a labelled simulated container port, no model or GH access.
             return subprocess.run([str(verifier / 'bin/python'), '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *targets],
                 cwd=checkout, capture_output=True, text=True, timeout=30,
-                env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTEST_ADDOPTS': ''})
+                env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTEST_ADDOPTS': '',
+                     'PYTHONDONTWRITEBYTECODE': '1'})
         if list(argv)[:2] == ['docker', 'inspect'] and '--format' not in argv:
             cid = argv[-1]
             if cid in engine.ids.values() and 'reviewer' in engine.containers:
@@ -167,6 +174,48 @@ def test_stopped_reviewer_resumes_through_existing_lifecycle(tmp_path, monkeypat
     second = tick(f)
     assert second['action'] == 'reconcile', second
     assert len(f['engine'].runs()) == 2
+    posts = [c for c in f['server'].calls if c[0] == 'POST']
+    assert len(posts) == 1
+    assert posts[0][3]['agent_settings'] == {'agent_kind': 'acp', 'acp_server': 'codex',
+                                         'acp_model': 'gpt-6.1-sol', 'acp_effort': 'high'}
+
+
+def test_reserved_review_retries_after_temporary_prelaunch_refusal(tmp_path, monkeypatch):
+    f = assembled(tmp_path, monkeypatch)
+    stopped(f)
+    before = cycle._mapping(f['layout'], 'reviewer')
+    busy = True
+
+    def runner(argv, **kw):
+        if (busy and list(argv)[:2] == ['docker', 'ps']
+                and 'label=epic-workspace.codex-home=1' in argv):
+            return subprocess.CompletedProcess(argv, 0, 'another-worker\n', '')
+        return f['runner'](argv, **kw)
+
+    monkeypatch.setattr(cycle, '_worker_runner', runner)
+    launches = len(f['engine'].runs())
+    first = tick(f)
+    assert first['action'] == 'wait', first
+    assert 'codex home is already mounted' in first['reason']
+    state = cycle.epic_run_state.load_epic_run_state(f['layout'].run_id, root=f['layout'].run_state_dir)
+    saved = [row for row in state['compact_receipts'] if row.get('kind') == 'pr_cycle'
+             and row.get('number') == 10][0]
+    operation = saved['review_operation']
+    assert cycle._mapping(f['layout'], 'reviewer') == before
+    assert len(f['engine'].runs()) == launches
+    assert not [c for c in f['server'].calls if c[0] == 'POST']
+
+    busy = False
+    for _ in range(2):
+        result = tick(f)
+        assert result['action'] == 'reconcile', result
+        assert result['operation_id'] == operation
+    after = cycle._mapping(f['layout'], 'reviewer')
+    assert after['state'] == 'running' and after['container_id'] != before['container_id']
+    assert after['takeover']['status'] == 'consumed'
+    assert after['work_at_stop'] == before['work_at_stop']
+    assert after['conversation']['operation_id'] == operation
+    assert len(f['engine'].runs()) == launches + 1
     posts = [c for c in f['server'].calls if c[0] == 'POST']
     assert len(posts) == 1
     assert posts[0][3]['agent_settings'] == {'agent_kind': 'acp', 'acp_server': 'codex',

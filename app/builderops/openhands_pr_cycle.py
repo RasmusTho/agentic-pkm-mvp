@@ -3495,8 +3495,11 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
             return prior
     if isinstance(prior, dict) and prior.get("status") != workspace.CONVERSATION_ENDED:
         raise CycleError("previous conversation may still write")
-    if mapping.get("auth_paths") is not None and mapping.get("stop_id") is not None:
+    if ((expected_owner_binding is not None or "claimant" in admission)
+            and mapping.get("auth_paths") is not None and mapping.get("stop_id") is not None):
         # Also fence a retry after launch succeeded but the pre-conversation refresh failed.
+        # Retained launch metadata alone does not select native authority: explicit
+        # legacy quota continuations retain their existing admission/lifecycle route.
         native_authority(layout, pr, admission, purpose="admission")
         expected_owner_binding = _automatic_review_worker(layout, pr, admission)
     checkout = workspace.inspect_checkout(layout, worker, runner=_worker_runner)
@@ -6432,12 +6435,14 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
         cid = conversation.get("id") if isinstance(conversation, dict) else None
         review = saved.get("review") if saved.get("public_report_conversation") == cid and cid else None
         pending = _reconciliation(saved)
-        # A reserved reconciliation has no conversation until its reviewer runs again.
+        # Reservation precedes startup, so a pre-launch refusal can leave no bound
+        # conversation. Let intake retry the same operation through the fenced lifecycle.
         awaiting_successor = (isinstance(handoff, Mapping) and handoff.get("status") == "awaiting_pr_cycle"
                               and handoff.get("operation_id") == operation_id and isinstance(conversation, Mapping)
                               and conversation.get("status") == workspace.CONVERSATION_ENDED)
-        if review is None and not awaiting_successor and (pending is None or pending.get("operation") != operation_id
-                                                          or worker_record.get("state") == "running"):
+        if (review is None and isinstance(conversation, Mapping) and conversation.get("operation_id") == operation_id
+                and not awaiting_successor and (pending is None or pending.get("operation") != operation_id
+                                                or worker_record.get("state") == "running")):
             review = review_result(layout, entry["worker"], operation_id, pr, identity, entry, http=http)
         if review is not None:
             saved["review"] = review
