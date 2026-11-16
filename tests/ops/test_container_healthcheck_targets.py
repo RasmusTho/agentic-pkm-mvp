@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 import time
 
+import pytest
 import yaml
 
 
@@ -86,6 +88,8 @@ def test_prod_api_and_worker_use_the_internal_ollama_service() -> None:
 
 
 def _effective_compose(channel: str | None) -> dict:
+    if shutil.which("docker") is None:
+        pytest.skip("docker compose executable unavailable")
     compose_files = [REPO_ROOT / "docker-compose.yaml"]
     if channel is not None:
         compose_files.append(REPO_ROOT / f"docker-compose.{channel}.yml")
