@@ -360,6 +360,7 @@ def test_unknown_projected_publication_does_not_block_actual_peer_review(tmp_pat
                         'evidence_file': str(tmp_path / 'missing-evidence.json')}}
     peer_entry = registered_peer(tmp_path, monkeypatch, layout, entry, real_lifecycle_owner)
     admission = tmp_path / 'admissions.json'
+    admission.touch(mode=0o600, exist_ok=False)
     admission.write_text(json.dumps({'admissions': [peer_entry, candidate_entry]}))
     result = cycle.advance(layout, admission, fetch=peer_fetch, http=server, publisher_executor=Network())
     assert result['results'][0]['action'] == 'independent-review', result
