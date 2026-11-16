@@ -76,6 +76,7 @@ jobs:
               - 'requirements*.txt'
               - 'Makefile'
               - 'Dockerfile'
+              - '.dockerignore'
               - 'docker-compose*.yaml'
               - 'docker-compose*.yml'
             # Agent-contract and doc surfaces. Deliberately NOT folded into
@@ -762,6 +763,8 @@ jobs:
               - 'mypy.ini'
               - 'pytest.ini'
               - 'alembic.ini'
+              - 'Dockerfile'
+              - '.dockerignore'
               - '.github/**'
               - 'mimer-mcp-sidecar/**'
               # GitHub governance, agent-contract, and doc surfaces have real
