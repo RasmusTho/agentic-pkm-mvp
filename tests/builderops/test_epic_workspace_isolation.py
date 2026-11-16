@@ -77,7 +77,8 @@ class FakeEngine:
                 for i, arg in enumerate(launch):
                     if arg == "--mount":
                         fields = dict(part.split("=", 1) for part in launch[i + 1].split(",") if "=" in part)
-                        mounts.append({"Type": fields["type"], "Source": fields["source"], "Destination": fields["target"]})
+                        mounts.append({"Type": fields["type"], "Source": fields["source"], "Destination": fields["target"],
+                                       "RW": not launch[i + 1].endswith(",readonly")})
                 port = self.ports.get(worker)
                 info = {"Id": cid, "Config": {"Labels": labels_dict},
                         "State": {"Status": self.containers[worker], "OOMKilled": False, "ExitCode": 0},

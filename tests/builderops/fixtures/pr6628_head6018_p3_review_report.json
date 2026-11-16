@@ -1,0 +1,80 @@
+{
+ "closing_assessments": {
+  "6619": {
+   "acceptance": "covered",
+   "criteria": {
+    "0b593f5f25fe8621cfa28943c44099a16503e13bcdc00d75f6910e384d0858ff": {
+     "assessment": "covered",
+     "rationale": "Production coordinate (epic_coordination.coordinate, invoked through epic_workspace main) judges each OpenHands worker under its lifecycle lock. It uses digests of checkout content, test cache, validation and PR state; failure-signature changes are excluded from progress. judge_item records change_approach, then bounded_diagnosis, then handoff, then a no_progress_exhausted stop, each bounded by stall_limit and the 60s backoff and tagged to the assignment. A worker blocker file with no non-builder receipt yields repair_technical_dependency, routed to issue-maintenance-change-control with the GitHub write kept as a coordinator obligation. read_issue_authority/authority_for accept only live lifecycle labels plus a matching OWNER-associated receipt. Human-action or non-builder-owned receipts become authority_stop with a stop_conditions record and no session contact. Other items continue and appear in independent_work_continues. The named test exercises all of this through repeated CLI passes and asserts exact decision and stop records, peers progressing and no lifecycle or publication side effects. The apply-path tests show directives reach only the current conversation and are never re-posted."
+    }
+   },
+   "limitations": [
+    "Real model behaviour and live coordinator runs depend on the external runtime receipt, which uses simulated authority; I did not re-run it.",
+    "Current-head CI not observed in this review.",
+    "Persistent disconnect-safe coordination and automatic activation remain #6618."
+   ],
+   "verify_coverage": "covered"
+  }
+ },
+ "covered_sources": [
+  "app/builderops/epic_coordination.py",
+  "app/builderops/epic_coordination_effects.py",
+  "app/builderops/epic_workspace.py",
+  "app/builderops/openhands_pr_cycle.py",
+  "app/builderops/openhands_pr_observation.py",
+  "scripts/agent_worktree.py",
+  "scripts/epic_coordination_live_fixture.py",
+  "tests/builderops/test_epic_coordination_assignment_fence.py",
+  "tests/builderops/test_epic_coordination_regressions.py",
+  "tests/builderops/test_epic_workspace_coordination.py",
+  "tests/builderops/test_epic_workspace_isolation.py",
+  "tests/builderops/test_epic_workspace_openhands.py",
+  "tests/builderops/test_openhands_pr_cycle.py",
+  "tests/builderops/test_openhands_pr_cycle_p2_repair.py",
+  "tests/builderops/test_openhands_stop_lineage.py",
+  "tests/scripts/test_git_hygiene_reclaim.py"
+ ],
+ "findings": [
+  {
+   "category": "owner-doc-accuracy",
+   "failure_scenario": "An operator or successor following DEV_WORKFLOW to the #6617 source or its qualification evidence goes to #6627 and gets the wrong review and CI provenance. The same PR's STATUS.md and the parent ledger name #6626.",
+   "file": "docs/development/DEV_WORKFLOW.md",
+   "line": 585,
+   "severity": "P3",
+   "suggested_fix": "Replace 'merged in #6627' with 'merged in #6626'.",
+   "summary": "Owner doc attributes the merged #6617 preservation/takeover/retirement source to PR #6627; it was delivered by PR #6626 (merge 318281e27c87c219bdb7ab637f713fc75e8fe60f). #6627 is the non-closing #6618 PR."
+  }
+ ],
+ "head_sha": "6018f93c9b5a0fddfb6cb316159927fcf5313f03",
+ "identity": "5ed1ffa2b20a49cc8a1b1db041ff6b1fd110263401797fa20a47ff05b2fbd756",
+ "owner_doc": {
+  "inspected_paths": [
+   "docs/development/DEV_WORKFLOW.md",
+   "docs/development/GIT_HYGIENE.md",
+   "docs/STATUS.md"
+  ],
+  "outcome": "updated",
+  "rationale": "#6619 requires a coordinator behaviour note in DEV_WORKFLOW. The new 'Coordinator progress judgement (#6619, source candidate)' section documents the entry point, evidence model, ladder, authority rules, --apply fencing, replay semantics, the live fixture and its limits. PR-cycle stop-lineage and verifier recovery are documented in DEV_WORKFLOW. Path-reuse refusal and epoch continuity are in GIT_HYGIENE. STATUS has a dated, non-claiming snapshot. One inaccuracy is reported as a P3 finding: DEV_WORKFLOW line 585 cites #6627 instead of #6626."
+ },
+ "scope_assessment": {
+  "acceptance": "The #6619 outcome is implemented in the production coordinate entrypoint (epic_workspace main -> epic_coordination.coordinate). Progress is judged from checkout content, pytest last-failed cache, validation_status and live PR state. Heartbeats, event counts, narration and error-text churn are explicitly excluded. Equivalent evidence climbs a bounded ladder (change_approach, bounded_diagnosis with helper budget 0, handoff, then a no_progress_exhausted stop) recorded in existing dispatch_decisions/stop_conditions. A worker-declared blocker with no non-builder receipt is routed to issue-maintenance-change-control as repair_technical_dependency. A GitHub OWNER-associated blocker-action receipt matching live lifecycle labels is preserved as authority_stop with no worker contact, while peers keep being judged. Optional --apply delivery is reserved before the effect, bound to the assignment tuple and endpoint, reconciled by marker and never re-posted. The composed #6618 PR-cycle repairs (stop-generation fencing, exact-ID verifier lifecycle, merge-intent retention, claimant chronology, cross-branch path refusal) fail closed on unknown ownership or effects.",
+  "limitations": [
+   "Unit tests use simulated Docker, agent-server and GitHub boundaries. Real model reaction and the actual owned coordinator runs rely on the cited runtime receipt (issuecomment-6872271808), which I did not independently re-run. Its authority input was explicitly SIMULATED.",
+   "Current-head CI for 6018f93 was not observed by this review; the PR body says it remains required.",
+   "coordinate is a one-shot pass invoked by the trusted controller, not a disconnect-safe standing coordinator; that remains #6618.",
+   "Applied vs non-applied passes read the PR part from different sources (live inventory digest vs run-state mapping). With an open PR on the worker branch, alternating modes would register as false progress and reset the ladder.",
+   "Records written before this change without stop IDs (stopped workers, authorized takeovers, review stop intents) now refuse takeover or review until a fresh worker-stop or trusted reconciliation. This is fail-closed, but it is an upgrade step to plan before activating the candidate.",
+   "agent_worktree now permanently refuses re-registering a path for a different branch, because records are never deleted. A replacement path is required; this is documented in GIT_HYGIENE.",
+   "Known deferred P2s KD-4B9E44394285 (stale replay after new evidence) and KD-E936BAA5DA07 (reservation stranded by port-lock contention) remain open under #6618 operating limits."
+  ],
+  "verify_coverage": "The named Verify test drives seven workers through repeated real CLI coordinate passes over a real run-state file and real git checkouts. The engine, agent-server and GitHub are simulated stand-ins. It asserts the recorded change_approach/bounded_diagnosis/handoff/exhausted-stop sequence, one repair decision with the owning workflow, a preserved authority stop with its receipt fields, unknown-evidence items that never advance, peers listed in independent_work_continues, and no start, stop or publication side effects. Directive delivery, replay, lost-reply, 429, assignment and endpoint fencing and authority-at-send-boundary are covered by the other tests in that file and in the assignment_fence/regressions files, which pass. PR-cycle, stop-lineage and reclaim targets pass (155 for the requested targets; 182 for the additional coordination/OpenHands/isolation/agent_worktree files)."
+ },
+ "verdict": "findings",
+ "verify_targets": [
+  "tests/builderops/test_epic_workspace_coordination.py::test_no_progress_and_false_blocker_trigger_bounded_action",
+  "tests/builderops/test_openhands_pr_cycle.py",
+  "tests/builderops/test_openhands_pr_cycle_p2_repair.py",
+  "tests/builderops/test_openhands_stop_lineage.py",
+  "tests/scripts/test_git_hygiene_reclaim.py"
+ ]
+}

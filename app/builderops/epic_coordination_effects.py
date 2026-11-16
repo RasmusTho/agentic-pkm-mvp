@@ -106,7 +106,7 @@ def _update(layout: ew.Layout, effect: Mapping[str, Any], *, next_action: str) -
                         record["outcome"] = "unknown"
                     mapping = state["issue_mappings"][str(effect["issue"])]
                     if _binding(mapping, record, str(record.get("worker"))):
-                        mapping["next_action"] = next_action
+                        ew._set_coordination_action(mapping, next_action)
                     else:
                         # A newer stop or assignment owns the mapping; this attempt's result and
                         # obligations stay here, in the old attempt's own record.
@@ -155,7 +155,7 @@ def _reserve(layout: ew.Layout, issue: int, worker: str, decision: Mapping[str, 
             reserved["previous_refusal"] = refusal
         else:
             records.append(dict(reserved))
-        mapping["next_action"] = "Reconcile the reserved directive by its conversation event marker; never resend an unknown attempt."
+        ew._set_coordination_action(mapping, "Reconcile the reserved directive by its conversation event marker; never resend an unknown attempt.")
         return state
     epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater,
                                          expected_epic_issue_number=layout.epic)
@@ -247,10 +247,10 @@ def _refuse(layout: ew.Layout, issue: int, worker: str, tick: str, decision: Map
             state["dispatch_decisions"].append(record)
             mapping = state["issue_mappings"][str(issue)]
             if ew.assignment_of(mapping) == observed:
-                mapping["next_action"] = (f"Directive refused: {reason}; reobserve the worker and source authority, "
+                ew._set_coordination_action(mapping, (f"Directive refused: {reason}; reobserve the worker and source authority, "
                                           f"then continue {coord.REPAIR_WORKFLOW}."
                                           if decision["action"] == "repair_technical_dependency" else
-                                          f"Directive refused: {reason}; reconcile the worker identity before a new decision.")
+                                          f"Directive refused: {reason}; reconcile the worker identity before a new decision."))
         return state
     epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater,
                                          expected_epic_issue_number=layout.epic)

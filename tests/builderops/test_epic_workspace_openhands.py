@@ -280,3 +280,89 @@ def test_late_create_response_cannot_replace_a_newer_stop_record(tmp_path, capsy
     saved = ew._load_state(layout)["issue_mappings"]["6617"]
     assert result["status"] == "unknown" and saved["conversation"]["status"] == ew.CONVERSATION_ENDED
     assert saved["state"] == "stopped_verified"
+
+
+def test_sol_high_is_reserved_and_sent_before_initial_prompt(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("bounded task")
+    for args in (("gpt-6.1-sol", None), ("gpt-6.1-sol", "low"), ("gpt-6.1-astra", "high")):
+        model, effort = args
+        flags = ["--model", model] + (["--effort", effort] if effort else [])
+        assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex",
+                     "--prompt-file", str(prompt), *flags) == 2
+    assert not [c for c in server.calls if c[0] == "POST"]
+    capsys.readouterr()
+    server.lose_next_create = True
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex",
+                 "--model", "gpt-6.1-sol", "--effort", "high", "--prompt-file", str(prompt)) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record["model"] == "gpt-6.1-sol" and record["effort"] == "high" and record["status"] == "created"
+    posts = [c for c in server.calls if c[0] == "POST"]
+    assert len(posts) == 1
+    assert posts[0][3]["agent_settings"] == {"agent_kind": "acp", "acp_server": "codex",
+                                               "acp_model": "gpt-6.1-sol", "acp_effort": "high"}
+    assert posts[0][3]["initial_message"]["content"][0]["text"] == "bounded task"
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex",
+                 "--model", "gpt-6.1-sol", "--effort", "high", "--prompt-file", str(prompt)) == 2
+    assert len([c for c in server.calls if c[0] == "POST"]) == 1
+
+
+def test_unknown_terra_is_not_relabelled_or_replaced_by_sol(tmp_path, capsys):
+    root, engine, server = _setup(tmp_path, capsys)
+    assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("task")
+    server.lose_next_create = server.create_not_applied = True
+    capsys.readouterr()
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex",
+                 "--model", "gpt-6.1-terra", "--effort", "high", "--prompt-file", str(prompt)) == 0
+    old = json.loads(capsys.readouterr().out)
+    assert old["status"] == "unknown"
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex",
+                 "--model", "gpt-6.1-sol", "--effort", "high", "--prompt-file", str(prompt)) == 2
+    record = ew._load_state(ew.Layout(root.resolve(), 6615))["issue_mappings"]["6617"]["conversation"]
+    assert record["id"] == old["id"] and record["model"] == "gpt-6.1-terra" and record["status"] == "unknown"
+    assert len([c for c in server.calls if c[0] == "POST"]) == 1
+
+
+def test_subscription_readback_requires_pinned_image_and_chatgpt_auth():
+    import subprocess
+    cid = "a" * 64
+    image = "worker@sha256:" + "b" * 64
+    mapping = {"container_id": cid, "image": image, "credentials": {"codex": "chatgpt-login-dir"}}
+    login = ["Logged in using ChatGPT"]
+    env = []
+    def runner(argv, **kwargs):
+        if argv[1] == "inspect":
+            output = json.dumps([{"Id": cid, "Image": "sha256:actual", "Config": {"Image": image, "Env": env}}])
+        elif argv[1:3] == ["image", "inspect"]:
+            output = json.dumps([{"Id": "sha256:actual"}])
+        elif argv[-2:] == ["login", "status"]:
+            output = login[0]
+        else:
+            output = "route-ok"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+    ew.verify_codex_subscription(mapping, runner)
+    login[0] = "Logged in using API key"
+    import pytest
+    with pytest.raises(ew.LaunchRefused):
+        ew.verify_codex_subscription(mapping, runner)
+    login[0] = "Logged in using ChatGPT"
+    env.append("OPENAI_API_KEY=synthetic")
+    with pytest.raises(ew.LaunchRefused):
+        ew.verify_codex_subscription(mapping, runner)
+
+
+def test_installed_upstream_settings_and_profile_accept_sol_high():
+    import pytest
+    ACPAgentProfile = pytest.importorskip("openhands.sdk.profiles.agent_profile").ACPAgentProfile
+    ACPAgentSettings = pytest.importorskip("openhands.sdk.settings.model").ACPAgentSettings
+
+    settings = ACPAgentSettings(agent_kind="acp", acp_server="codex", acp_model="gpt-6.1-sol", acp_effort="high")
+    profile = ACPAgentProfile(name="owner-sandbox-gpt-6.1-sol-high", acp_server="codex",
+                              acp_model="gpt-6.1-sol", acp_effort="high",
+                              mcp_server_refs=[], secret_refs=[], integration_refs=[])
+    assert (settings.acp_model, settings.acp_effort) == ("gpt-6.1-sol", "high")
+    assert (profile.acp_model, profile.acp_effort) == ("gpt-6.1-sol", "high")

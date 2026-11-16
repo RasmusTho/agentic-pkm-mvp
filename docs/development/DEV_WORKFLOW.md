@@ -73,6 +73,16 @@ cannot be restarted. Existing live older workers must be inspected and stopped b
 These mechanisms do not yet establish delegated-process cancellation. Roll back to the existing CLI
 if needed; retain recorded sessions and draft PRs.
 
+In the #6618 source candidate, the model-free owner accepts `start #456 gpt-6.1-sol high`, using
+exactly the model and effort fields also used for the owner sandbox. The direct start command accepts
+`--model gpt-6.1-sol --effort high`. Selection is recorded before creation and passed to ACP before
+the first prompt; the guarded proxy checks the selected model, effort, provider and subscription.
+The per-process Codex arguments do not change the global Codex home. An existing or uncertain run
+retains its original selection and cannot be restarted under a different choice. The older Terra route
+and its recorded evidence remain supported. The explicit-effort route checks the installed upstream
+ACP settings for effort support before making a worktree or claiming work. This candidate still
+requires independent review, cold installation and an actual Sol/high turn before runtime qualification.
+
 The CLI remains available directly. Replace the example paths and explicitly authorized Issue:
 
 ```sh
@@ -385,26 +395,243 @@ one trial entry names `number`, exact `head_sha`, dedicated pre-existing `worker
 `lifecycle_repo`, and explicit pytest
 `verify_targets`, and `test_venv`, an absolute host path to a secret-free test environment. The
 controller configuration must be owned by the controller and protected from other writers. The
-venv path and its contents must satisfy the ownership, mode, symlink and credential-shaped filename
+CLI passes the configuration path into the cycle; the cycle reads and validates the file only after
+acquiring its existing per-epic `.pr-cycle.lock`, and holds that lock throughout the advancement.
+The trusted owning workflow must hold the same lock for the entire admission read, update and atomic
+replacement, including disposition revocation. A busy lock requires a later retry. Programmatic
+callers with file-backed admissions must pass the `Path` to `advance`, not an earlier file snapshot;
+the existing list argument is for admissions supplied directly by the caller.
+
+The source successor adds opt-in initial admission to that same one-shot controller. A protected
+configuration may start with `admissions: []` and one `automatic_native` object containing
+`claimant`, Builder `session`, `lifecycle_repo`, `test_venv`, `engine`, `model`, and optional `effort`.
+For example, the current owner-selected operating choice is `engine: codex`,
+`model: gpt-6.1-sol`, `effort: high`; these settings do not prove the executing model or authentication.
+The upstream caller invokes the same `--once --root ... --epic ... --config ...` command. No
+per-PR number, SHA, worker or target list needs to be supplied for initial admission.
+
+For every observed PR without an explicit entry, the controller derives its entry from the existing
+claim-Issue worker mapping, branch registration and existing coordination authority. It reads
+dispatcher status using the lifecycle repository for state resolution, retaining the normal explicit
+`DISPATCHER_*` path overrides. Dispatcher imports stay pinned to the running controller release;
+publisher-checkout Python code is not executed. Native ownership/verification reads use the same
+state source; new merge intents also retain that lifecycle repository for dispatcher reconciliation.
+With an available dispatcher, derivation requires the exact active lease. Only supported
+`db_exists: false`, `github-label-only-fallback`, `dispatcher_db_missing` status admits derivation
+from an existing authenticated pickup comment matching the registered agent, Builder session,
+branch, worktree and claim Issue. The native reader rechecks latest claimant, unedited receipt,
+continuous registration and complete original-pickup/transfer history. A fallback comment alone
+cannot replace another owner or an uncompleted cross-host handoff; an available or ambiguous
+dispatcher never silently becomes fallback. The configured
+claimant and Builder session must already own the work. It reuses the native authority reader to
+authenticate GitHub identity, live head/body/Issue contracts and closing references, claim-session
+events, registry generation, handoff history and absence of executor/fenced authority. Admission may
+use an idle running OpenHands worker or continue its already-recorded PR-cycle conversation; this
+read-purpose does not grant repair or merge authority and does not relax their stopped-writer gates.
+An unrelated conversation or another owner requires the normal `resume-work`/pickup/handoff path.
+Missing placement, local claim authority, credentials or a qualified verifier environment holds that
+PR. The controller does not claim, transfer ownership, provision a worker or invent fallback evidence.
+
+Generated entries live in the existing admission array, marked `_automatic_native`, and are written
+atomically under `.pr-cycle.lock`; no separate authority store is introduced. Each advancement
+rederives their current head and contract and checks fresh review material before reservation.
+Exact closing contracts supply pytest `Verify:` targets; with no closing Issues, the governing
+contract supplies them. A distinct unfinished parent is excluded when only children close.
+Non-pytest targets require the existing specialized owning workflow. Explicit entries retain their
+exact-head semantics and take precedence. Removing `automatic_native` holds generated entries.
+The owning workflow still supplies its substantive, bound `review_disposition` through the existing
+serialized configuration update; this is not a human approval or an initial-admission step.
+Regeneration retains that input only while its derived binding is unchanged. A confirmed publication
+uses the existing exact-head refresh and drops stale disposition/publication input; the next scan
+reauthenticates the new head automatically. An unsettled candidate/publication retains its original
+entry until the existing effect path reconciles it; observing a new head cannot replace that receipt.
+If its persisted entry is missing, that PR holds for normal `resume-work` restoration of the existing
+controller record instead of being admitted again from an empty array.
+Unknown effects and duplicate prevention continue to use
+the existing dispatch decisions, cycle receipts and publication/merge intents. A held peer does not
+prevent an unrelated eligible PR advancing. This is source behavior awaiting live qualification;
+the scheduled collector and hosting controller remain unchanged until separately authorized.
+
+The trusted workflow must also hold that same cycle lock throughout provisioning, updating or
+replacing an admitted test environment and its dependencies. If a test environment is shared by
+multiple epics, the writer must hold every affected epic's cycle lock in a consistent order for the
+whole update. The lock prevents cooperative updates during verification and the subsequent merge
+decision; the container's read-only mount alone cannot prevent a host-side update. The epic cycle
+accepts an operator-provisioned venv and has no separate repository-owned upgrade command. The
+hash-named environment made by `openhands_test_environment.prepare` via
+`scripts/setup_openhands_factory.sh` belongs to the separate macOS factory and is not the epic
+cycle's automatic provisioning or upgrade path.
+The venv path and its contents must satisfy the ownership, mode, symlink and credential-shaped filename
 preflight; that filename check cannot prove arbitrary file contents are secret-free. It must be a
 controller-owned path outside the configured model workspace root (`--root`) and must not be that root
 or one of its ancestors: a venv in a worker checkout or home could fake passing tests, and an
 enclosing directory would mount the whole workspace. An agent-local test venv is never admissible as
-the independent verifier environment. A venv's Python
-symlink may point to the supported system Python path in the pinned container. The source reads the host GitHub identity, dispatcher claim and verification
+the independent verifier environment. A venv's `pyvenv.cfg` must record exactly one supported
+Python 3.12 or 3.13 version, and its Python symlinks may only point to the matching `/usr[/local]/bin/python3[.12|.13]`;
+the disposable container then requires the pinned image's actual interpreter to equal that minor and
+fails otherwise (3.11, 3.14 and mismatches are refused). A venv built for a different minor than the
+image's Python is not usable. Image Python is checked only by that in-container preflight, not before create. The source reads the host GitHub identity, dispatcher claim and verification
 history, and uses the existing OpenHands lifecycle and a separate credential-free test container.
+Claim and ownership history bind to the Issue named by the PR's single `Pickup-Receipt` (the
+governing Issue or an exact closing child; the governing Issue when absent), while contract, review,
+closure and owner-doc scope stay on the governing and closing Issues (`PR_HOT_PATH.md :: Multi-Issue
+PR Scope`). For a child claim, a distinct open governing parent may only carry the validation-hub
+state `agent:blocked` + `action:wait-dependency` on a `type:epic`/`type:feature` whose body names
+every closing child; any other parent or child hold still stops the cycle.
 That container mounts the configured host venv read-only at `/opt/pr-cycle-venv` and refuses to run tests
 when its in-container interpreter and pytest preflight fails. The source includes guarded native
 merge and PR-specific post-merge continuation. Review evidence binds the observed diff, exact closing
-contracts and check configuration; every closing criterion needs a review assessment. The native
-metadata reader connects the exact retained OpenHands conversation and live ACP session to that
-session's bounded Codex or Claude log, retaining only model, effort, timestamps and session identities.
+contracts and check configuration; every closing criterion needs a review assessment. The review
+prompt states report grammar `pr_cycle_report.v2`, and `review_gate` validates the review stage and
+premerge against the same tables in `openhands_pr_cycle.py`. Each finding carries an explicit
+`protected_class` from the severity-routing protected list, or `none`. Each limitation has a `kind`:
+informational kinds (for example `ci_not_observed`, because current-head CI is enforced separately)
+proceed, and gap kinds (uncovered acceptance, Verify, owner doc, source or evidence) block.
+`owner_doc.outcome` is `no_change`, `already_updated` with exact `updates`, or the blocking
+`required_missing`. The gate also compares identity, head, Verify targets, `covered_sources` and
+the closing criterion hashes with the reviewer's own material, using the files-API path list that
+premerge re-reads. A coverage error is therefore caught before sandbox verification. A finished
+conversation's malformed answer counts as a terminal report. An unreadable answer retains its digest
+and at most 65,536 characters, which may occupy 262,144 UTF-8 bytes; JSON escaping can make the
+reconciliation prompt larger still. The documented 64 KiB byte bound is not yet enforced.
+Reviewer classifications are evidence, not authority to waive a protected finding or an uncovered
+obligation. Before sandbox verification, the existing authorized owning session must assess the whole
+report and every finding and limitation, including a report that labels itself clean. It records a
+`review_disposition` in the controller-owned admission, outside reviewer-writable paths. This is an
+ordinary owning-workflow action, not a new human approval requirement. The item decision is
+`nonblocking` only when the owning workflow has examined the evidence and can support that conclusion;
+uncertain or contradictory evidence waits. The controller rechecks the same binding before premerge.
+A truly informational P3 with a supported nonblocking disposition proceeds to current-head CI,
+sandbox verification and the guarded merge gate; the saved report is kept verbatim. Pending or
+failed CI waits without starting a sandbox. After CI is green, each advancement that can merge runs
+Verify again under its cycle lock: a receipt from an earlier advancement cannot establish the
+current contents of a mutable venv. Failed or interrupted verification cannot reuse an earlier pass.
+The existing immediate premerge CI, authority and fencing refreshes still apply. Independent review
+and native execution proof remain reusable under their existing bindings; identical reauthorization
+alone does not establish that otherwise applicable evidence became invalid.
+P0/P1, any protected finding at any severity, a P3 with a defect category, P2 without a verified
+Known Defects disposition, gaps and incomplete assessments all wait for the owning workflow. This
+source candidate identifies a grammar-conforming, identity-bound P0/P1 report after the reviewer's
+verified stop, provided no other blocker or intake hold applies. It records one repair-author reservation
+in the existing dispatch decisions before using the existing takeover, worker start and OpenHands
+conversation lifecycle. It binds the review, source branch and head, stopped reviewer and checkpoint,
+claim, registered worktree and Builder session. The repair-purpose authority check retains those
+ownership and stopped-writer checks while allowing unresolved review threads; after takeover it binds
+the exact running successor and rechecks authority before creating the conversation. Existing worker
+owner and Builder-session fields, when present, must match the claim; their exact values, including
+absence on older mappings, are fenced when the conversation is reserved and immediately before POST.
+A lost create
+is reconciled using the same recorded conversation ID; an unresolved earlier publication holds repair.
+The default merge-purpose check still requires review threads clear. In the source candidate, a
+finished repair author is bound to its native execution proof and stopped through the existing
+ID-bound preservation lifecycle. The stopped result can bind a clean additive candidate in the sole
+registered host publisher worktree. For a file-backed admission, the controller may supply
+`repair_publication` with `candidate_head`, `paths` (the exact changed-file list), and an absolute
+`evidence_file` outside the worker workspace. The host-owned full-evidence receipt must bind the
+candidate head and base, independent reviewer and risk surfaces, and passing sources for every exact
+closing Issue's Verify targets. For multiple Issue contracts, `review.scope_issue_body_sha256` maps
+the governing and every closing Issue number to its current body hash; the independent review source
+must contain those hashes and the candidate SHA. A distinct open parent is the governing contract;
+its unfinished targets are not required unless it also closes. The admission and evidence are supplied
+by the trusted controller, not the model worker. Source dispatches an isolated candidate review and
+retains its bounded finished response and independently observed native execution proof before the
+reviewer stop.
+
+The source cycle invokes the existing governed native publisher under its cycle and worker locks. It
+records the original observation and push intent, reconciles uncertain outcomes before ordinary
+head admission, and atomically refreshes the same file-backed admission only after exact PR/head
+readback. The refreshed entry drops the old review disposition and publication request so the next
+head needs fresh review, Verify and CI. An unresolved effect holds that PR while other PRs continue.
+The source also provides a stopped-source projection helper: under the worker lifecycle lock it
+rechecks the stop, container absence, source identity and retained full checkpoint, then constructs
+an ordinary versioned tree in contained scratch. It records the full checkpoint tree separately from
+the projected tree and checks each projected blob and mode against both the checkpoint and physical
+source. Ignored untracked work stays in the full checkpoint and original checkout. The projection is
+a point-in-time observation, with disposable tree objects and a manifest. A contained blob reader
+can return explicitly selected projected bytes from the self-contained checkpoint after revalidating
+the projection before and after the read; it checks each returned blob's Git object ID. The default
+advancement records the stopped source and registered publisher intent, materializes versioned
+bytes, uses the branch gate and creates an additive commit with readback and replay checks when no
+candidate head is supplied. The publisher revalidates the projection and full checkpoint custody at
+its source checks; ignored work stays preserved outside the delivery tree. Explicit candidate heads
+retain the earlier full-checkpoint binding where it applies and use a verified projection when the
+checkpoint also contains ignored work. Preparation holds on unresolved commit outcomes, changed
+publisher work, configured filters or file/directory topology changes needing reconciliation.
+The worker lifecycle can reserve a separate review assignment under the same issue while retaining
+the stopped author's primary assignment and checkpoint. Endpoint, conversation, stop and checkpoint
+operations resolve the specific worker; a pending reviewer fences author continuation, and reviewer
+start checks the original author stop and container absence. The default source cycle records a
+candidate-bound intent, materializes a separate checkout with independent Git objects, and starts or
+reconciles one OpenHands conversation. It rechecks source custody and PR/Issue/owner scope before
+dispatch and after the reviewer stop; a stale binding holds the operation and stops the identified
+reviewer. A persisted finished response resumes its exact stop without reopening the conversation.
+The existing structured report gate checks the candidate and issue scope. A clean report waits for
+actual Verify evidence. The source cycle can run exact supported closing-Issue pytest targets in a
+separate credential-free OpenHands workspace using its Bash command/event API and a controller-owned
+read-only test environment. It records command intent before dispatch, reconciles the same server
+command after an unknown reply, retains actual output and exit status, and stops the exact workspace.
+A passing pytest result requires a single complete summary across retained output; multiple
+summary-like lines or a no-tests result are ambiguous or incomplete and hold verification, even
+when an additional line looks like a pass. Ordinary diagnostic text remains usable.
+A successful run produces a controller-owned artifact checked by the existing full-publication
+validator before the native publisher; unsupported targets or unknown outcomes remain held. Bounded
+findings or a retained failed or incomplete Verify result start one separately materialized author at
+the reviewed local candidate, while the observed remote PR head and predecessor checkpoints remain
+bound. A Verify-triggered assignment binds the actual target, exit, output and event lineage and
+requires the exact verifier stop; it retains the clean review and failed Verify with the predecessor
+generation. The verifier lifecycle lock fences the failure check through author dispatch. Unknown
+command and conversation effects continue to reconcile their recorded IDs.
+After native author proof and an exact stop, the publisher prepares a new additive commit whose parent
+is that reviewed candidate; the next candidate needs a fresh review. No passing Verify artifact is
+inferred from a review or from an unknown command outcome.
+This describes the source candidate, not a claim that the currently running controller has adopted it;
+new-head review dispatch, full qualification and closure remain to be completed. A legacy or
+non-conforming report is never edited and never passed. When it has no known blocker, the original
+report, proof and stop move verbatim into the record's `report_reconciliations` history, and one retry
+of the same identity is reserved. Once the reviewer runs again through the existing takeover/start lifecycle, that retry
+starts one new OpenHands conversation, which re-expresses the earlier analysis under the grammar. A
+second non-conforming report waits with an explicit owning-workflow repair reason. A legacy report
+with no findings, no limitations and a known owner-doc outcome still needs the owning session's
+assessment of the whole report. Explicit protected findings, gap limitations, incomplete closing
+assessments and a required-missing owner doc are detected even when adjacent fields are malformed.
+An already archived original is checked for those blockers and for complete, understood required
+assessment material before a retry can pass. Unsupported or missing original material waits for
+the owning workflow; a generic disposition cannot erase it. Historical reports and their proofs
+remain unchanged, and arbitrary malformed legacy reports are not automatically converted. A later
+review at a repaired identity can proceed through the existing workflow. The native metadata reader
+connects the exact retained OpenHands conversation and live ACP session to that session's bounded
+Codex or Claude log, retaining only model, effort, timestamps and session identities.
 It requires the observed model to match the selected model; a Codex effort must be `high` or stronger
 (`xhigh`, `max`, `ultra`) and equal the API-selected `current_effort`. A session keeps one effort; a
 supported escalation starts a new conversation rather than changing effort mid-task. These are
 native-provided observations, not tamper-proof attestation. Missing, mixed or mismatched observations
-stop the review. Subscription authentication also requires the native login check; no model call is
+stop the review. In a Claude log the reader skips only API-error records and the exact zero-usage
+`<synthetic>` "No response requested." control record that same-conversation steering writes, after
+checking its session and timestamp; any other synthetic record refuses, and real inference by one
+model is still required. Subscription authentication also requires the native login check; no model call is
 needed for this metadata read.
+
+The disposition is a JSON object with `identity`, `head_sha`, `report_sha256`,
+`original_report_sha256` and `original_attempt_sha256` (both null without a retry), substantive
+`assessment`, and `items`. The attempt digest covers the entire archived report, proof, stop and
+checkpoint. For a pre-existing archive without a stored attempt digest, the owner must compare it
+with the retained authoritative evidence before binding it in the disposition. Digests
+are SHA-256 of the exact JSON value encoded with sorted keys and compact separators, as in the
+existing cycle record. The cycle's `disposition_request` exposes the binding and each item digest
+for the owning session, without making any item decision. Each disposition item contains
+`report` (`current` or `original`), `where` (`findings`,
+`scope`, or `closing:<issue-number>`), zero-based `index`, `sha256`, `decision`, and a substantive
+`rationale`. Assessment and rationale each require at least 20 non-padding characters; that length
+check does not prove their meaning. Every current item needs `decision: nonblocking`. Each original item either has its
+own supported `nonblocking` decision or `decision: retained` with a `successor` containing its
+exact `where`, `index`, and `sha256`. Retained content must preserve the original substantive
+finding or limitation; an explicit protected finding, defect, or gap cannot be waived through this
+path. The saved disposition is an audit copy, never an authorization input. Stale identities,
+head/report/item digests, missing original or current items, changed original proof/stop lineage,
+and changed dispositions fail closed. A changed disposition invalidates earlier sandbox evidence.
+The owner updates the admission through the existing serialized controller workflow, never from the
+reviewer's report. These bindings prove coverage and provenance; the authorized owning session is
+responsible for judging the meaning of the evidence.
 
 `lifecycle_repo` is an absolute, controller-owned host checkout of the existing worktree lifecycle
 registry, outside every model workspace; it must expose the candidate's actual registered worktree,
@@ -604,6 +831,16 @@ The trusted host has its existing GitHub CLI authentication; worker containers d
 Publication stays with the coordinator, which fetches the
 worker branch and uses `publish-pr`.
 
+The #6618 successor recipe `config/builderops/epic-workspace/openhands-worker.Dockerfile` derives
+from the local pinned baseline `epic-worker@sha256:3c3c2472b35ea3ccb0df57df7cc9d2303f582dcb2987b259124c9df946d56644`.
+That baseline runs as UID/GID 1000 without passwd/group records; Python NSS lookups during repository
+imports require a real account. The recipe adds a locked, no-login `worker` account with home
+`/home/worker` and checks NSS identity as runtime user 1000:1000, retaining the parent's tools and
+entrypoint. It must be built and qualified between reconciled runs; actual start, repository import
+and OpenHands/native execution proof remain required. This source change installs no active image
+and establishes no current-head CI result. The separate native-only `worker.Dockerfile` already has
+Node's UID account and remains valid.
+
 OpenHands is the normal execution and session-control surface. The default image in this source is
 the pinned upstream agent-server (`ghcr.io/openhands/agent-server:1.60.1-python`, by digest; it bundles
 claude-agent-acp 0.63.0 and codex-acp 2.2.2). The installed controller and image require separate
@@ -613,16 +850,44 @@ runtime readback. The recorded #6618 exception is worker `w-6618`, stopped and r
 port in 18700–18799 and a per-worker session key in the controller-only `control/` directory.
 Conversation history is kept in the worker's persistent home. `conversation-start --engine
 claude-code|codex [--model M]` creates the conversation through upstream `agent_settings`
-(`acp_server`, `acp_model`), tagged with epic, Issue and worker. The default is Claude Code with
-`claude-sonnet-5-5`; Codex accepts only `gpt-6.1-terra`, and Astra is refused. The conversation id
+(`acp_server`, `acp_model`), tagged with epic, Issue and worker. For the current #6615 operating
+choice, use `--engine codex --model gpt-6.1-terra` explicitly for coordination, implementation,
+diagnosis and review. The temporary Claude-first quota priority ended on 2026-11-14; a Claude reset
+does not by itself change this choice. This is not permanent vendor policy. The existing source CLI
+still defaults to Claude Code with `claude-sonnet-5-5` when `--engine` is omitted, so do not omit it
+for this operation. The installed baseline accepts only `gpt-6.1-terra`; the source candidate also admits explicit
+Sol/high as described below, and Astra is refused. The conversation id
 is recorded before the request. A lost response is reconciled by reading that id and is never
 retried as a create. In this source candidate, `conversation-status` reads the newest bounded
 upstream event page (default 50) and classifies only the latest `ConversationErrorEvent` as
 `quota_exhausted`, `authentication`, `context_exhausted`, `transient_network` or `task_failure`.
 The classifier recognizes the observed native session and weekly quota phrases; tool and message
 text cannot trigger a handoff. Upstream 1.60.1 already supports the newest-first event ordering.
-Only quota exhaustion may trigger the engine handoff (#6618). The running pinned controller has
-not been hot-upgraded with this correction, and automatic handoff remains unqualified.
+The #6618 source candidate adds `sandbox start gpt-6.1-sol high` for a stopped owner sandbox and
+admits an explicit subscription-backed Sol/high selection with
+`conversation-start --engine codex --model gpt-6.1-sol --effort high` and the same `model` and
+`effort` fields in PR-cycle admission. These fields are set in upstream ACP settings before the
+initial prompt and retained with the conversation; model and effort must agree with native readback.
+The candidate owner gateway and sandbox readiness also require the pinned container, first-party
+provider route and ChatGPT subscription login to be read back before admitting access.
+Terra remains available and the Claude quota handoff remains explicitly Terra. A retained or unknown
+conversation keeps its original selection and requires verified stop before a successor. The source
+candidate is not an installed or qualified Sol runtime: independent review, cold installation and
+an actual selected and observed Sol/high turn are still required.
+In the enabling #6618 source candidate, an applied coordinator pass can transfer a confirmed,
+identity-bound Claude quota failure to a new Codex/Terra conversation. The pass retains the
+existing Issue owner and Builder session, stops the exact predecessor container, checkpoints and
+reconciles its checkout and publication attempts, and consumes one takeover generation before
+creating the successor. The continuation uses compact Issue and run-state evidence, not a summary
+from the exhausted model. Unknown publication remains quarantined by operation. A lost conversation
+create response is reconciled by the reserved ID; it is not posted again. An unavailable PR inventory
+or an unresolved directive on the old, verifiably stopped conversation holds that effect, not the
+preserved continuation. A PR review resumes through
+the existing PR cycle, which can detect the same quota handoff for an admitted review and reconstructs
+its report contract under the same operation ID. That one-shot candidate processes other admitted PRs
+before the handoff; the scheduled read-only collector is unchanged until trusted adoption.
+The running pinned controller has not been hot-upgraded with this candidate. Independent integrated
+review and real native/disconnect runtime proof remain required before adoption.
 `worker-start` runs a
 plain container and is recorded as `native-exception`: it is for bootstrap, diagnostics and recovery
 only and never counts as OpenHands-delivered work.
@@ -649,7 +914,7 @@ The third command is the emergency stop for every container of one epic. The fou
 previous controller release. Workers must not hot-replace the active release. A candidate controller
 is installed as a new `<sha>` directory between reconciled runs.
 
-Preservation, takeover and retirement are implemented in the #6617 source merged in #6627. The
+Preservation, takeover and retirement are implemented in the #6617 source merged in #6626. The
 running pinned controller has not been upgraded or qualified by this source change. After that source
 is installed and verified, these commands run from outside any worker:
 
@@ -747,17 +1012,24 @@ is installed and verified, these commands run from outside any worker:
 Claude Code authenticates with a subscription token from `claude setup-token`. The token is stored
 as `CLAUDE_CODE_OAUTH_TOKEN` in `~ygg/.config/epic-workspace/claude.env` (mode 0600, outside the
 workspace root) and passed with `--env-file` (`openhands-start --claude-env-file`). Upstream OpenHands
-lets this token take precedence and strips `ANTHROPIC_API_KEY`. The Terra reserve uses one ChatGPT
+lets this token take precedence and strips `ANTHROPIC_API_KEY`. Codex uses one ChatGPT
 subscription login in `~ygg/.config/epic-workspace/codex`, created once by the owner with
 `ssh -t bob-1-builder-system '~/epic-sandbox/runner/current/config/builderops/epic-workspace/codex-device-login.sh'`.
 `openhands-start --codex-home` mounts it at `/run/codex-home` for one worker at a time, because
 refresh tokens rotate. No API key and no host credential store is used.
 
-Known limits: on the 3915 MiB, no-swap trial VM, native workers hit OOM at both 1000 and 1200 MiB;
-the current trial uses 1500 MiB and serial execution pending peak-memory and concurrency
-qualification. Test runs use an owned disk-backed temporary directory for `TMPDIR` and a separate
-pytest base directory per run to avoid accumulating temporary files in memory. These are trial
-observations, not a global worker budget minimum. The default engine's `docker0` bridge is missing,
+Known limits: the approved BOB-1 trial envelope is two CPUs and 3915 MiB without swap, with
+one 2g native worker running serially. Workers hit OOM at 1000 and 1200 MiB; a later 1500 MiB
+source writer also suffered OOM and required external preservation before a 2g successor continued.
+The successor source candidate raises the shared contained-Git inspection/checkpoint limit from
+256m to 768m for both read-only inspection and ID-bound checkpoint create/start, including repack
+and readback. The hosting controller remains frozen at `ffdee080` with image `3c3c2472`; recovery
+`c68dd18d`/`b5e7feac` remains separate. Actual recoveries and multiple production handoffs used a
+scoped 768m inspection override; the source candidate has not hot-replaced that running controller.
+These are demonstrated workload observations, not a global worker minimum or a capacity guarantee;
+adding the worker and inspection limits does not prove peak host memory use. Test runs use an owned
+disk-backed temporary directory for `TMPDIR` and a separate pytest base directory per run.
+The default engine's `docker0` bridge is missing,
 which is why the owned `epicws` bridge is used.
 An agent-server worker uses about 0.5 GB at rest. A checkpoint containing ignored files or stash commits
 can remain unreleasable when publication cannot prove their captured content or reachability.
@@ -781,7 +1053,7 @@ coordinator are #6618; non-progress handling is #6619 (source candidate below).
 
 ### Coordinator progress judgement (#6619, source candidate)
 
-`epicws --epic <N> coordinate --tick <id> [--stall-limit 3] [--apply]` runs one bounded pass of
+`epicws --epic <N> coordinate --tick <id> [--stall-limit 3] [--apply] [--codex-home <path>]` runs one bounded pass of
 `app/builderops/epic_coordination.py` on the trusted controller. It uses the existing run-state and
 OpenHands worker identities; it does not add a scheduler or give the model container host control or
 GitHub credentials. This is an enabling source candidate, not an installed or qualified controller.
@@ -817,8 +1089,20 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
   writer. Event activity is diagnosis input only, never progress. Quota, authentication, context, transient network and policy errors retain separate
   next actions; they are not silently treated as task failures or a license to switch engines. A
   locally OOM-killed or exited container holds its unfinished assignment, recorded owner when known,
-  checkout and remaining action, while eligible peers continue. No cleanup, worker stop, successor
-  or takeover is performed by this pass; preservation and one-writer qualification remain required.
+  checkout and remaining action, while eligible peers continue. With `--apply`, a confirmed Claude
+  quota failure is the sole automatic engine-replacement case; the existing per-worker lifecycle and
+  run-state fences govern its stop, takeover and start. The optional `--codex-home` selects the existing
+  private subscription home; its default is the documented `~ygg/.config/epic-workspace/codex` for
+  the controller user. An unavailable or already mounted login holds only that continuation, allowing
+  an active Terra worker to finish; the exhausted predecessor may already be stopped and preserved.
+  Other classes do not switch engines. An interrupted successor
+  container launch is settled by the existing exact-container stop and a new takeover generation;
+  an unknown conversation create is read back rather than repeated.
+- **Identity and status.** Workspace status joins the recorded Issue, worker, conversation selection,
+  owner/session, branch, PR and progress with available conversation status. A native identity is
+  shown only when an existing controller receipt binds it to the same conversation, operation and
+  container; unavailable identity and opaque native descendants remain unknown. This projection is
+  not itself authentication or proof of a live model run.
 - **Blocker authority.** A worker can declare `.codex-tmp/worker-blocker.json` using schema
   `worker_blocker.v1` and a `summary`; its text is not authority. The controller reads current Issue
   labels and the latest blocker-action receipt independently of declarations. This public read accepts a matching
@@ -876,8 +1160,8 @@ GitHub credentials. This is an enabling source candidate, not an installed or qu
 - **Replay and obligations.** Every previously applied tick remains idempotent even out of order;
   a replay still observes current authority. Decisions,
   effects and remaining actions live in the existing `dispatch_decisions` and `stop_conditions`;
-  GitHub Issues, PRs and CI remain authoritative. Issue maintenance, handoff and lifecycle actions
-  remain explicit coordinator obligations and are not performed by `coordinate`. A fresh authorized
+  GitHub Issues, PRs and CI remain authoritative. Issue maintenance and other lifecycle actions remain explicit coordinator obligations;
+  the confirmed quota handoff above uses the existing lifecycle. A fresh authorized
   judgment can follow a refused zero-attempt blocker decision with a new linked decision; the old
   decision and refusal remain as evidence. A reserved, unknown, delivered or run-deferred attempt
   cannot be rebound or resent. A refusal containing conflicting POST or marker evidence holds the

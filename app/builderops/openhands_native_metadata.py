@@ -11,11 +11,19 @@ import re
 import stat
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
 MAX_FILE = 64 * 1024 * 1024
 MAX_LINE = 4 * 1024 * 1024
+# Claude Code writes this zero-usage, non-inference record when same-conversation steering asks
+# for no reply. Only this exact shape is skipped; any other synthetic record refuses.
+_CONTROL_CONTENT = [{"type": "text", "text": "No response requested."}]
+_CONTROL_COUNTERS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+_CONTROL_NULLS = {"output_tokens_details", "service_tier", "inference_geo", "iterations", "speed", "fallback_credit"}
+_CONTROL_NESTED = {"server_tool_use": {"web_search_requests", "web_fetch_requests"},
+                   "cache_creation": {"ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"}}
 
 
 def _rows(path: Path) -> Iterator[dict[str, Any]]:
@@ -66,6 +74,39 @@ def _codex(path: Path, session: str) -> dict[str, Any]:
     return {"session_id": session, "model": model, "effort": effort, "timestamp": timestamp}
 
 
+def _zero(value: Any) -> bool:
+    return type(value) is int and value == 0
+
+
+def _timestamp(value: Any) -> bool:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return False
+    try:
+        return datetime.fromisoformat(value[:-1] + "+00:00").tzinfo is not None
+    except ValueError:
+        return False
+
+
+def _claude_control(row: dict[str, Any], message: dict[str, Any], session: str) -> bool:
+    usage = message.get("usage")
+    if (row.get("isApiErrorMessage") is not False or row.get("sessionId") != session
+            or not _timestamp(row.get("timestamp")) or message.get("content") != _CONTROL_CONTENT
+            or message.get("stop_reason") != "stop_sequence" or message.get("role", "assistant") != "assistant"
+            or message.get("type", "message") != "message" or not isinstance(usage, dict)
+            or not all(_zero(usage.get(key)) for key in _CONTROL_COUNTERS)):
+        return False
+    for key, value in usage.items():
+        if key in _CONTROL_NULLS and value is not None:
+            return False
+        if key in _CONTROL_NESTED and value is not None and not (
+                isinstance(value, dict) and set(value) <= _CONTROL_NESTED[key]
+                and all(item is None or _zero(item) for item in value.values())):
+            return False
+        if key not in _CONTROL_NULLS and key not in _CONTROL_NESTED and key not in _CONTROL_COUNTERS:
+            return False
+    return True
+
+
 def _claude(path: Path, session: str) -> dict[str, Any]:
     observed: list[tuple[str, str]] = []
     for row in _rows(path):
@@ -74,6 +115,10 @@ def _claude(path: Path, session: str) -> dict[str, Any]:
         message = row.get("message")
         model, timestamp = message.get("model") if isinstance(message, dict) else None, row.get("timestamp")
         if row.get("isApiErrorMessage") is True and model == "<synthetic>":
+            continue
+        if model == "<synthetic>":
+            if not isinstance(message, dict) or not _claude_control(row, message, session):
+                raise ValueError("native synthetic record is not a recognized control")
             continue
         if row.get("sessionId") != session or not isinstance(model, str) or not model or not isinstance(timestamp, str):
             raise ValueError("native assistant identity missing")

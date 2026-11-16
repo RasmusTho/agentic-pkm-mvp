@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from app.builderops.openhands_policy import (
-    PolicyRefusal,
+    MODEL, PolicyRefusal,
     prepare_request,
     verify_effective_config,
     verify_thread_response,
@@ -32,9 +32,16 @@ class GuardedProxy:
         self, child: subprocess.Popen[bytes], workspace: Path, output: BinaryIO,
         *, allowed_read_roots: tuple[str, ...], resume_thread_id: str | None = None,
         workspace_writable: bool = True, delivery_state_dir: Path | None = None,
+        model: str = MODEL, effort: str | None = None,
     ):
         if child.stdin is None or child.stdout is None:
             raise ValueError("child must have piped stdin and stdout")
+        from app.builderops.epic_workspace import resolve_engine, resolve_effort
+
+        if not isinstance(model, str) or not model:
+            raise ValueError("explicit model is empty")
+        _, model = resolve_engine("codex", model)
+        self.model, self.effort = model, resolve_effort("codex", model, effort)
         self.child = child
         self.workspace = workspace.resolve()
         self.output = output
@@ -102,7 +109,7 @@ class GuardedProxy:
                 self._wait_preflight()
             with self._condition:
                 prepared = prepare_request(message, workspace=self.workspace, threads=self._threads,
-                                           resume_thread_id=self.resume_thread_id)
+                                           resume_thread_id=self.resume_thread_id, model=self.model, effort=self.effort)
                 if request_id is not None:
                     self._pending[request_id] = str(method)
             if method in {"turn/start", "turn/steer"} and self.delivery_state_dir is not None:
@@ -115,6 +122,8 @@ class GuardedProxy:
                         state = service._read(self.delivery_state_dir)
                         if (not state or state.get("kind") != "openhands_delivery_run.v1"
                                 or state.get("worktree") != str(self.workspace)
+                                or state.get("acp_model", MODEL) != self.model
+                                or state.get("acp_effort") != self.effort
                                 or state.get("phase") not in {"creating_conversation", "active"}):
                             raise PolicyRefusal("delivery_continuation_unverified")
                         self._to_child(prepared)
@@ -144,7 +153,7 @@ class GuardedProxy:
                     try:
                         verify_effective_config(
                             self._config, self._account, allowed_read_roots=self.allowed_read_roots,
-                            workspace_writable=self.workspace_writable,
+                            workspace_writable=self.workspace_writable, model=self.model, effort=self.effort,
                         )
                         self._preflight = "ok"
                         print("factory preflight: verified ChatGPT auth and fixed configuration", file=sys.stderr, flush=True)
@@ -171,12 +180,12 @@ class GuardedProxy:
             pending_method = self._pending.pop(request_id, None)
             if pending_method in {"thread/start", "thread/resume"} and "result" in message:
                 try:
-                    thread_id = verify_thread_response(message["result"], workspace=self.workspace)
+                    thread_id = verify_thread_response(message["result"], workspace=self.workspace, model=self.model, effort=self.effort)
                     if (pending_method == "thread/resume" and self.resume_thread_id
                             and thread_id != self.resume_thread_id):
                         raise PolicyRefusal("resumed_thread_mismatch")
                     self._threads.add(thread_id)
-                    print("factory thread: verified gpt-6.1-terra / openai / builder_factory", file=sys.stderr, flush=True)
+                    print(f"factory thread: verified {self.model} / openai / builder_factory", file=sys.stderr, flush=True)
                 except PolicyRefusal as exc:
                     message = {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32002, "message": str(exc)}}
         self._to_client(message)
@@ -237,9 +246,17 @@ def main() -> int:
     read_roots = json.loads(os.environ["OPENHANDS_FACTORY_READ_ROOTS"])
     if not isinstance(read_roots, list) or not all(isinstance(root, str) for root in read_roots):
         raise ValueError("invalid fixed read roots")
+    from app.builderops.epic_workspace import resolve_engine, resolve_effort
+
+    requested_model = os.environ.get("OPENHANDS_FACTORY_MODEL", MODEL)
+    if not requested_model:
+        raise ValueError("explicit model is empty")
+    _, model = resolve_engine("codex", requested_model)
+    effort = resolve_effort("codex", model, os.environ.get("OPENHANDS_FACTORY_EFFORT") or None)
     child = subprocess.Popen([str(binary), "app-server", *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     return GuardedProxy(
         child, workspace, sys.stdout.buffer, allowed_read_roots=tuple(read_roots),
+        model=model, effort=effort,
         resume_thread_id=os.environ.get("OPENHANDS_FACTORY_RESUME_THREAD") or None,
         workspace_writable=os.environ.get("OPENHANDS_FACTORY_READ_ONLY") != "1",
         delivery_state_dir=(Path(os.environ["OPENHANDS_FACTORY_DELIVERY_DIR"])

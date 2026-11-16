@@ -52,8 +52,9 @@ def render_status(state: dict[str, Any], observations: dict[str, Any] | None = N
         lines.extend([
             f"\n### [Issue #{issue}]({REPO}/issues/{issue}) — {mapping.get('worker', 'unknown')}",
             f"Recorded workspace state: {mapping.get('state', 'unknown')}; branch: `{mapping.get('branch', 'unknown')}`.",
-            f"OpenHands conversation: `{conversation.get('id', 'unavailable')}`; selected engine/model: "
-            f"{conversation.get('engine', 'unknown')} / {conversation.get('model', 'unknown')}.",
+            f"OpenHands conversation: `{conversation.get('id', 'unavailable')}`; selected engine/model/effort: "
+            f"{conversation.get('engine', 'unknown')} / {conversation.get('model', 'unknown')} / "
+            f"{conversation.get('effort', 'unspecified')}.",
             f"Live conversation: {live.get('execution_status') or 'unavailable (stopped, busy or not verified reachable)'}. "
             f"Latest observed activity: {live.get('latest_event') or 'unavailable'}.",
             f"Recorded next action: {str(mapping.get('next_action', 'unknown'))[:1600]}",
@@ -70,7 +71,7 @@ def render_status(state: dict[str, Any], observations: dict[str, Any] | None = N
     return "\n\n".join(lines)
 
 
-def _sandbox_profile(config: dict[str, Any]) -> None:
+def _sandbox_profile(config: dict[str, Any], model: str = "gpt-6.1-terra", effort: str | None = None) -> None:
     """Select the existing upstream ACP profile surface so Canvas enables its composer."""
     code = """import sys
 from pathlib import Path
@@ -79,22 +80,43 @@ from app.builderops import epic_workspace as e
 e.OPENHANDS_PORT_RANGE=range(18840,18848)
 l=e.Layout(Path(sys.argv[2]),int(sys.argv[3]))
 m=e._load_state(l)['issue_mappings'][sys.argv[3]]
-expected={'agent_kind':'acp','acp_server':'codex','acp_model':'gpt-6.1-terra','mcp_server_refs':[],'secret_refs':[],'integration_refs':[]}
+_,model=e.resolve_engine('codex',sys.argv[4])
+effort=e.resolve_effort('codex',model,sys.argv[5] or None)
+expected={'agent_kind':'acp','acp_server':'codex','acp_model':model,'mcp_server_refs':[],'secret_refs':[],'integration_refs':[]}
+if effort is not None: expected['acp_effort']=effort
+profile='owner-sandbox' if effort is None and model=='gpt-6.1-terra' else 'owner-sandbox-'+model+'-'+effort
 with e._endpoint_session(l,'owner-sandbox',int(sys.argv[3]),m,e.subprocess.run) as (port,key):
- code,data=e._http('GET',port,key,'/agent-profiles/owner-sandbox',None,10)
+ code,data=e._http('GET',port,key,'/agent-profiles/'+profile,None,10)
  if code==404:
-  code,_=e._http('POST',port,key,'/agent-profiles/owner-sandbox',expected,10)
+  code,_=e._http('POST',port,key,'/agent-profiles/'+profile,expected,10)
   if code not in (200,201): raise ValueError('profile creation uncertain')
-  code,data=e._http('GET',port,key,'/agent-profiles/owner-sandbox',None,10)
+  code,data=e._http('GET',port,key,'/agent-profiles/'+profile,None,10)
  p=data.get('profile',{})
  if code!=200 or any(p.get(k)!=v for k,v in expected.items()): raise ValueError('profile mismatch')
  code,_=e._http('POST',port,key,'/agent-profiles/'+p['id']+'/activate',None,10)
  if code!=200:raise ValueError('profile activation unavailable')
 """
-    result = subprocess.run(["python3", "-c", code, config["runner"], config["root"], str(config["sandbox_epic"])],
+    result = subprocess.run(["python3", "-c", code, config["runner"], config["root"], str(config["sandbox_epic"]), model, effort or ""],
                             capture_output=True, text=True, timeout=60, check=False)
     if result.returncode:
         raise OwnerAccessError("Sandbox ACP profile is not verified; no UI readiness is claimed.")
+
+
+def _sandbox_auth(config: dict[str, Any]) -> None:
+    code = """import sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from app.builderops import epic_workspace as e
+e.OPENHANDS_PORT_RANGE=range(18840,18848)
+l=e.Layout(Path(sys.argv[2]),int(sys.argv[3]))
+m=e._load_state(l)['issue_mappings'][sys.argv[3]]
+with e._endpoint_session(l,'owner-sandbox',int(sys.argv[3]),m,e.subprocess.run):
+ e.verify_codex_subscription(m,e.subprocess.run)
+"""
+    result = subprocess.run(["python3", "-c", code, config["runner"], config["root"], str(config["sandbox_epic"])],
+                            capture_output=True, text=True, timeout=120, check=False)
+    if result.returncode:
+        raise OwnerAccessError("Sandbox subscription authentication is not verified; no readiness is claimed.")
 
 
 def status(config: dict[str, Any]) -> str:
@@ -124,7 +146,10 @@ def run_command(config: dict[str, Any], text: str) -> str:
     command = text.strip().lower()
     if command in {"status", "status #6615", "workers"}:
         return status(config)
-    if command == "sandbox start":
+    if command in {"sandbox start", "sandbox start gpt-6.1-sol high", "sandbox start gpt-6.1-terra high"}:
+        parts = command.split()
+        model = parts[2] if len(parts) > 2 else "gpt-6.1-terra"
+        effort = parts[3] if len(parts) > 3 else None
         current = _controller(config, "status")
         worker = next((w for w in current.get("workers", []) if w.get("worker") == WORKER), None)
         if not worker:
@@ -135,24 +160,35 @@ def run_command(config: dict[str, Any], text: str) -> str:
                 _controller(config, "takeover", "--worker", WORKER, "--reason", "owner requested sandbox restart")
             _controller(config, "openhands-start", "--worker", WORKER, "--cpus", "0.7", "--memory", "1500m",
                         "--pids", "256", "--codex-home", config["codex_home"])
-        _sandbox_profile(config)
         observation = _controller(config, "conversation-status", "--worker", WORKER)
         record = observation.get("conversation") or {}
         if not record or record.get("status") == "ended_with_container":
-            _controller(config, "conversation-start", "--worker", WORKER, "--engine", "codex", "--model",
-                        "gpt-6.1-terra", "--prompt-file", config["readiness_prompt"])
+            _sandbox_profile(config, model, effort)
+            args = ["conversation-start", "--worker", WORKER, "--engine", "codex", "--model", model]
+            if effort is not None:
+                args.extend(["--effort", effort])
+            _controller(config, *args, "--prompt-file", config["readiness_prompt"])
         elif record.get("status") in {"creating", "unknown"}:
             _controller(config, "conversation-reconcile", "--worker", WORKER)
         observed = _controller(config, "conversation-status", "--worker", WORKER)
         if not observed.get("reachable") or (observed.get("conversation") or {}).get("status") != "created":
             return "Sandbox conversation is not verified reachable. Request `sandbox status`; no readiness or task execution is claimed."
+        selected = observed.get("conversation") or {}
+        settings = observed.get("agent_settings") or {}
+        if selected.get("engine") != "codex" or selected.get("model") != model or selected.get("effort") != effort:
+            return "Existing sandbox selection differs; preserve it and use sandbox stop before a new selection."
+        if effort is not None and (settings.get("agent_kind") != "acp" or settings.get("acp_server") != "codex"
+                                   or settings.get("acp_model") != model or settings.get("current_model_id") != model
+                                   or settings.get("acp_effort") != effort or settings.get("current_effort") != effort):
+            return "Sandbox model or effort is not verified; no readiness is claimed."
         if observed.get("execution_status") == "error":
             return "Sandbox conversation reports an engine error; task submission is not ready. Request `sandbox status`. No engine switch or automatic replay was attempted."
+        _sandbox_auth(config)
         conversation = observed.get("conversation") or {}
         url = config['sandbox_url'] + '/conversations/' + str(conversation.get('id', ''))
         return (f"Owner sandbox is running. [Open sandbox Canvas]({url}). "
                 "Open the existing owner-sandbox conversation and send a bounded scratch/read-only task. "
-                "New Conversation is disabled: one admitted conversation protects the shared checkout. Native Codex gpt-6.1-terra, "
+                f"New Conversation is disabled: one admitted conversation protects the shared checkout. Native Codex {model} / {effort or 'unspecified effort'}, "
                 "existing ChatGPT subscription only. No automatic publication/merge. Return here and use "
                 "`sandbox stop` when finished to release the shared native slot. A busy slot refuses start; it never stops another worker.")
     if command == "sandbox stop":
@@ -165,7 +201,7 @@ def run_command(config: dict[str, Any], text: str) -> str:
                          "Retained work is preserved; activity is not delivery." for w in workers)
     return ("## BOB-1 owner access\n\n"
             "Enter `status` to inspect Epic #6615, workers, blockers and delivery links.\n\n"
-            "Enter `sandbox start`, then open the returned Canvas link and the existing conversation for your next bounded "
+            "Enter `sandbox start`, or `sandbox start gpt-6.1-sol high` for an explicit selection, then open the returned Canvas link and the existing conversation for your next bounded "
             "scratch/read-only task. The single native slot may be busy with existing work. "
             "In sandbox Canvas, Stop interrupts the conversation; sending another message continues that conversation "
             "while its server is alive. It does not prove all native descendants stopped. "

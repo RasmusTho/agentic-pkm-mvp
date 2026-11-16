@@ -14,7 +14,8 @@ from app.builderops import openhands_pr_cycle as cycle
 from app.builderops import legacy_owner_recovery as recovery_module
 from app.dispatcher import leases
 from app.dispatcher.events import claim_event_digest, event_history_digest
-from tests.builderops.test_openhands_pr_cycle import setup as setup_worker
+from tests.builderops.openhands_disposition_test_support import digest, synthetic_disposition, synthetic_reservation
+from tests.builderops.test_openhands_pr_cycle import CONFORMING, setup as setup_worker
 from tests.scripts.test_legacy_successor_recovery import operator_case as operator_case_fixture, _args, _git  # noqa: F401
 
 REAL_GIT_READ = cycle.legacy_owner_recovery._git_read
@@ -248,6 +249,30 @@ def test_operator_review_context_binds_descendant_diff_and_ack(recovery, monkeyp
         {**material, 'ack_digest': registration['operator_registration']['ack_digest']})
 
 
+def _saved_review(layout, entry, pr, *, operation='operation', conversation='conversation'):
+    """Produce the bound synthetic review inputs consumed by the real premerge gate."""
+    identity = cycle.completion.work_identity(pr)
+    expected = cycle.report_expectations(layout, entry, pr, identity)
+    review = {**copy.deepcopy(CONFORMING), 'identity': identity, 'head_sha': expected['head_sha'],
+              'verify_targets': expected['verify_targets'], 'verdict': 'pass', 'findings': [],
+              'covered_sources': expected['sources'],
+              'closing_assessments': {number: {
+                  'acceptance': 'covered', 'verify_coverage': 'covered', 'limitations': [],
+                  'criteria': {criterion: {'assessment': 'covered', 'rationale': 'verified'}
+                               for criterion in criteria}}
+                  for number, criteria in expected['criteria'].items()}}
+    entry['review_disposition'] = synthetic_disposition(review)
+    synthetic_reservation(layout, pr['number'], identity, operation)
+    return {'number': pr['number'], 'identity': identity, 'review_operation': operation,
+            'conversation_provenance': {'reviewer': conversation},
+            'execution_proof': {'operation_id': operation, 'engine': entry['engine'], 'model': entry['model'],
+                'auth': 'chatgpt', 'source': 'native-session-metadata', 'native_session_id': 'native',
+                'conversation_id': conversation, 'timestamp': '2026-11-15T08:00:00Z', 'effort': 'high'},
+            'review': review,
+            'verification': {'passed': True, 'head_sha': pr['head_sha'], 'targets': entry['verify_targets'],
+                             'disposition_sha256': digest(entry['review_disposition'])}}
+
+
 @pytest.fixture
 def production_path(operator_case_fixture, tmp_path, monkeypatch):  # noqa: F811 - imported pytest fixture
     case = operator_case_fixture
@@ -326,18 +351,7 @@ def production_path(operator_case_fixture, tmp_path, monkeypatch):  # noqa: F811
     pr.update(route='native', check_config={})
     pr['review_context'], pr['review_material'] = cycle._review_context(pr)
     cycle._add_transfer_review_context(layout, entry, pr)
-    criteria = cycle.closure._acceptance_criteria(issue_body, repo_root=checkout)
-    saved = {'review_operation': 'operation', 'conversation_provenance': {'reviewer': 'conversation'},
-             'execution_proof': {'operation_id': 'operation', 'engine': entry['engine'], 'model': entry['model'],
-                 'auth': 'chatgpt', 'source': 'native-session-metadata', 'native_session_id': 'native',
-                 'conversation_id': 'conversation', 'timestamp': '2026-11-15T08:00:00Z', 'effort': 'high'},
-             'review': {'verdict': 'pass', 'findings': [], 'covered_sources': [],
-                        'scope_assessment': {'acceptance': 'covered', 'verify_coverage': 'covered', 'limitations': []},
-                        'owner_doc': {'outcome': 'no_change', 'inspected_paths': ['docs/owner'], 'rationale': 'reviewed'},
-                        'closing_assessments': {str(case['issue']): {'acceptance': 'covered', 'verify_coverage': 'covered',
-                            'limitations': [], 'criteria': {criteria[0]['criterion_sha256']:
-                                {'assessment': 'covered', 'rationale': 'verified'}}}}},
-             'verification': {'passed': True, 'head_sha': head, 'targets': entry['verify_targets']}}
+    saved = _saved_review(layout, entry, pr)
     return {'layout': layout, 'entry': entry, 'pr': pr, 'saved': saved, 'controls': controls, 'live': live, 'case': case}
 
 
@@ -364,12 +378,79 @@ def test_later_pr_body_update_requires_fresh_review_identity(production_path):
     updated['review_context'], updated['review_material'] = cycle._review_context(updated)
     cycle._add_transfer_review_context(f['layout'], f['entry'], updated)
     assert cycle.completion.work_identity(updated) != cycle.completion.work_identity(f['pr'])
-    rereview = copy.deepcopy(f['saved'])
-    rereview['review_operation'] = 'new-review'
-    rereview['execution_proof']['operation_id'] = 'new-review'
-    rereview['execution_proof']['conversation_id'] = 'new-conversation'
-    rereview['conversation_provenance']['reviewer'] = 'new-conversation'
+    rereview = _saved_review(f['layout'], f['entry'], updated,
+                            operation='new-review', conversation='new-conversation')
     assert cycle._premerge(f['layout'], updated, f['entry'], rereview)['head_sha'] == updated['head_sha']
+
+
+@pytest.fixture
+def recovered_child_scope(production_path, monkeypatch):
+    f = production_path
+    claim, parent = f['case']['issue'], 6615
+    # Recovery was produced and pinned with governing == claim. Only the later
+    # live PR contract changes; the original child-bound proof stays untouched.
+    assert cycle.native_authority(f['layout'], f['pr'], f['entry'])['claim_issue'] == claim
+    original_issue, original_fetch = cycle.closure._issue, cycle.github_fetch
+    parent_issue = copy.deepcopy(original_issue(None, None, None, claim))
+    parent_issue.update(number=parent, body=parent_issue['body'] + f'\nChild #{claim}\n',
+                        labels=[{'name': name} for name in
+                                ('type:epic', 'agent:blocked', 'action:wait-dependency')])
+    f['live']['body'] = f['pr']['body'].replace(f'Governing-Issue: #{claim}', f'Governing-Issue: #{parent}')
+    monkeypatch.setattr(cycle.closure, '_issue', lambda executor, cwd, repo, number:
+                        parent_issue if number == parent else original_issue(executor, cwd, repo, number))
+    monkeypatch.setattr(cycle, 'github_fetch', lambda path, timeout:
+                        (200, json.dumps(parent_issue).encode()) if path.endswith(f'/issues/{parent}')
+                        else original_fetch(path, timeout))
+    updated = cycle.observation._observe(cycle.observation._Reader(cycle.github_fetch, cycle.time.monotonic),
+                                         f['case']['pr'])
+    assert updated is not None
+    updated.update(route='native', check_config={})
+    updated['review_context'], updated['review_material'] = cycle._review_context(updated)
+    cycle._add_transfer_review_context(f['layout'], f['entry'], updated)
+    assert cycle.completion.work_identity(updated) != cycle.completion.work_identity(f['pr'])
+    return {**f, 'pr': updated, 'parent': parent}
+
+
+def test_recovered_operator_uses_child_claim_after_parent_contract_update(recovered_child_scope):
+    f = recovered_child_scope
+    assert f['pr']['review_material']['transfer_to_current']['current_head'] == f['pr']['head_sha']
+    for purpose in ('admission', 'repair', 'merge'):
+        authority = cycle.native_authority(f['layout'], f['pr'], f['entry'], purpose=purpose)
+        assert authority['governing_issue'] == f['parent']
+        assert authority['claim_issue'] == f['case']['issue']
+        assert authority['closing_issues'] == [f['case']['issue']]
+        assert authority['head_sha'] == f['pr']['head_sha']
+        assert authority['owner']['task_id'] == cycle.github_issue_task_id(cycle.completion.REPOSITORY, f['case']['issue'])
+        assert authority['owner']['lease_id'] == f['entry']['lease_id']
+        assert authority['worktree_owner']['owner'] == f['entry']['session']
+
+
+@pytest.mark.parametrize('foreign', ['issue', 'task', 'session'])
+def test_recovered_child_scope_refuses_foreign_operator_authority(recovered_child_scope, monkeypatch, foreign):
+    f = recovered_child_scope
+    if foreign == 'issue':
+        registry = cycle.agent_worktree._default_registry_path(f['case']['cwd'])
+        with cycle.agent_worktree._locked_registry(registry) as payload:
+            payload['worktrees'][str(f['case']['worktree'])]['operator_registration']['issue'] = f['parent']
+        expected = 'operator registration is missing or unpinned'
+    else:
+        original_inspect = cycle.closure._dispatcher_inspect
+        def inspect(*args):
+            task, events, lease = copy.deepcopy(original_inspect(*args))
+            if foreign == 'task':
+                task['task_id'] = task['task_id'].replace(str(f['case']['issue']), str(f['parent']))
+            else:
+                claims = [event for event in events if event['event_type'] == 'task.claimed']
+                claims[-1]['payload']['session'] = 'foreign-session'
+            return task, events, lease
+        monkeypatch.setattr(cycle.closure, '_dispatcher_inspect', inspect)
+        expected = 'dispatcher' if foreign == 'task' else 'operator takeover does not bind the legacy claim'
+    review_error = cycle.closure.ClosureError if foreign == 'task' else cycle.CycleError
+    with pytest.raises(review_error, match=expected):
+        cycle._add_transfer_review_context(f['layout'], f['entry'], f['pr'])
+    for purpose in ('admission', 'repair', 'merge'):
+        with pytest.raises(cycle.CycleError, match=expected):
+            cycle.native_authority(f['layout'], f['pr'], f['entry'], purpose=purpose)
 
 
 @pytest.mark.parametrize('failure', ['head', 'review', 'red_ci', 'pending_ci', 'executor_fence', 'inflight_fence',

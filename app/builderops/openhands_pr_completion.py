@@ -9,7 +9,7 @@ import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, TypedDict
+from typing import Any, Mapping, NotRequired, TypedDict
 
 from app.builderops.epic_run_state import update_epic_run_state
 
@@ -23,6 +23,8 @@ class Decision(TypedDict):
     reason: str
     operation_id: str | None
     route: str
+    repair_candidate: NotRequired[dict[str, Any]]
+    repair_authority: NotRequired[dict[str, str]]
 
 
 def _digest(value: Any) -> str:

@@ -7,24 +7,30 @@ missing or ambiguous evidence is a wait, not authority to perform an effect.
 from __future__ import annotations
 
 import argparse
+import configparser
 import fcntl
 import hashlib
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterator, Literal, Mapping, Sequence, cast
+from urllib.parse import urlencode
 
 from app.builderops import closure, epic_run_state, epic_workspace as workspace, legacy_git_config, legacy_owner_recovery
 from app.builderops import openhands_pr_completion as completion
 from app.builderops import openhands_pr_observation as observation
+from app.builderops import openhands_delivery as delivery
+from app.builderops import publication
 from app.builderops.publication import SubprocessExecutor
 from app.dispatcher.sync_github import github_issue_task_id
 from app.dispatcher.events import claim_event_digest, event_history_digest
@@ -37,6 +43,10 @@ class CycleError(RuntimeError):
     """An observation or operation could not be safely established."""
 
 
+class VerifyReadbackPending(CycleError):
+    """The existing OpenHands Verify command has an unknown outcome."""
+
+
 CONTAINER_TEST_VENV = "/opt/pr-cycle-venv"
 CODEX_CLI = "/acp-node/lib/node_modules/@agentclientprotocol/codex-acp/node_modules/@openai/codex/bin/codex.js"
 _worker_runner: workspace.Runner = subprocess.run
@@ -45,6 +55,40 @@ CLAUDE_STATUS = (
     "node_modules/@anthropic-ai/claude-agent-sdk-*/claude'); "
     "assert len(p)==1; os.execv(p[0],[p[0],'auth','status','--json'])"
 )
+
+
+class _LifecycleDispatcherExecutor:
+    """Pin dispatcher code to this controller, but resolve state from its lifecycle repo."""
+
+    def __init__(self, executor: publication.CommandExecutor, source: Path) -> None:
+        self.executor, self.source = executor, source
+
+    def run(self, argv: Sequence[str], *, cwd: Path,
+            input_text: str | None = None) -> publication.CommandResult:
+        if list(argv[:3]) == [sys.executable, "-m", "app.dispatcher"]:
+            bootstrap = ("import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
+                         "runpy.run_module(sys.argv.pop(1),run_name='__main__')")
+            argv = [sys.executable, "-P", "-c", bootstrap, str(Path(__file__).resolve().parents[2]), *argv[2:]]
+            cwd = self.source
+        return self.executor.run(argv, cwd=cwd, input_text=input_text)
+
+
+def _dispatcher_mode(executor: publication.CommandExecutor, cwd: Path) -> str:
+    result = executor.run([sys.executable, "-m", "app.dispatcher", "status", "--json"], cwd=cwd)
+    if result.returncode != 0:
+        raise CycleError("dispatcher status failed; availability is ambiguous")
+    try:
+        value = json.loads(result.stdout)
+    except ValueError as exc:
+        raise CycleError("dispatcher status is malformed") from exc
+    if isinstance(value, dict) and value.get("ok") is True:
+        if (value.get("db_exists") is False and value.get("coordination_mode") == closure.DEGRADED_MODE
+                and value.get("fallback_reason") == "dispatcher_db_missing"):
+            return closure.DEGRADED_MODE
+        if (value.get("db_exists") is True and value.get("coordination_mode") == closure.DISPATCHER_MODE
+                and value.get("fallback_reason") is None):
+            return closure.DISPATCHER_MODE
+    raise CycleError("dispatcher is available or its status is ambiguous; no fallback authority")
 
 
 def _command(argv: Sequence[str], *, timeout: float = 30) -> subprocess.CompletedProcess[str]:
@@ -85,8 +129,8 @@ def _save(layout: workspace.Layout, record: dict[str, Any], *, expected_worker: 
           expected_assignment: Mapping[str, Any] | None = None) -> None:
     def update(state: dict[str, Any]) -> dict[str, Any]:
         if expected_worker is not None and expected_assignment is not None:
-            issue = workspace._issue_for_worker(state, expected_worker)
-            current = state["issue_mappings"][str(issue)]
+            workspace._issue_for_worker(state, expected_worker)
+            current = workspace._worker_mapping(state, expected_worker)
             if (not workspace._same_assignment(current, expected_assignment)
                     or current.get("stop_id") != expected_assignment.get("stop_id")
                     or current.get("work_at_stop") != expected_assignment.get("work_at_stop")):
@@ -127,6 +171,21 @@ def _assert_stopped(layout: workspace.Layout, worker: str, mapping: Mapping[str,
         raise CycleError("recorded worker container absence is not established")
 
 
+SUPPORTED_TEST_PYTHON_MINORS = (12, 13)
+
+
+def _venv_python_minor(source: Path) -> int:
+    """Return the minor version recorded by the venv, which must be a supported one."""
+    try:
+        text = (source / "pyvenv.cfg").read_text()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CycleError("approved test environment is unavailable") from exc
+    found = re.findall(r"(?m)^version(?:_info)?[ \t]*=[ \t]*3\.([0-9]+)(?:\.|$)", text)
+    if len(set(found)) != 1 or int(found[0]) not in SUPPORTED_TEST_PYTHON_MINORS:
+        raise CycleError("test environment Python version is unsupported or ambiguous")
+    return int(found[0])
+
+
 def _test_venv_source(layout: workspace.Layout, value: str) -> Path:
     """Accept only an explicit, privately controlled venv without credential-shaped files.
 
@@ -158,14 +217,19 @@ def _test_venv_source(layout: workspace.Layout, value: str) -> Path:
             if stat.S_ISLNK(info.st_mode):
                 target = path.resolve()
                 if not workspace._is_within(target, source) and not (
-                    path.parent == source / "bin" and re.fullmatch(r"python(?:3(?:\.13)?)?", name)
-                    and str(target) in ("/usr/local/bin/python3.13", "/usr/bin/python3.13",
-                                        "/usr/local/bin/python3", "/usr/bin/python3")
+                    path.parent == source / "bin" and re.fullmatch(r"python(?:3(?:\.(?:12|13))?)?", name)
+                    and re.fullmatch(r"/usr(?:/local)?/bin/python3(?:\.(?:12|13))?", str(target))
                 ):
                     raise CycleError("test environment symlink escapes its boundary")
     python = source / "bin" / "python"
     if not source.is_dir() or not (python.is_symlink() or python.is_file()) or not (source / "pyvenv.cfg").is_file():
         raise CycleError("approved test environment is unavailable")
+    minor = _venv_python_minor(source)
+    for name in ("python", "python3", f"python3.{minor}"):
+        link = source / "bin" / name
+        hop = Path(os.readlink(link)).name if link.is_symlink() else ""
+        if re.fullmatch(r"python3\.[0-9]+", hop) and hop != f"python3.{minor}":
+            raise CycleError("test environment interpreter does not match its recorded Python version")
     return source
 
 
@@ -275,8 +339,9 @@ def _sandbox_verify_locked(layout: workspace.Layout, worker: str, head: str, tar
         "--workdir", "/workspace", "--env", "PYTHONPATH=/workspace", "--env", "HOME=/tmp",
         "--env", "PYTHONDONTWRITEBYTECODE=1", "--entrypoint", f"{CONTAINER_TEST_VENV}/bin/python", image,
     ]
+    # The pinned image runs this, so its actual interpreter must equal the venv's recorded minor.
     script = ("import sys; "
-              "sys.version_info[:2] == (3, 13) or sys.exit('unsupported test interpreter'); "
+              f"sys.version_info[:2] == (3, {_venv_python_minor(source)}) or sys.exit('unsupported test interpreter'); "
               "import pytest; raise SystemExit(pytest.main(['-q', *sys.argv[1:]]))")
     created = _command([*base, "-c", script, *targets], timeout=60)
     cid = created.stdout.strip()
@@ -304,10 +369,8 @@ def _sandbox_verify_locked(layout: workspace.Layout, worker: str, head: str, tar
         raise CycleError("verification checkout changed while testing")
     digest = hashlib.sha256((result.stdout + "\n" + result.stderr).encode()).hexdigest()
     summary = result.stdout + "\n" + result.stderr
-    passed = bool(re.search(r"\b[1-9][0-9]* passed\b", summary))
-    incomplete = bool(re.search(r"\b[1-9][0-9]* (?:skipped|xfailed|xpassed|deselected)\b", summary))
     return {"head_sha": head, "targets": targets, "exit_code": result.returncode,
-            "passed": result.returncode == 0 and passed and not incomplete, "output_sha256": digest}
+            "passed": result.returncode == 0 and bool(delivery._pytest_pass_count(summary)), "output_sha256": digest}
 
 
 def ci_once(number: int, source_root: Path) -> dict[str, Any]:
@@ -321,7 +384,7 @@ def ci_once(number: int, source_root: Path) -> dict[str, Any]:
             "output_sha256": hashlib.sha256((result.stdout + "\n" + result.stderr).encode()).hexdigest()}
 
 
-def _assert_review_threads_clear(executor: SubprocessExecutor, cwd: Path, number: int) -> None:
+def _assert_review_threads_clear(executor: publication.CommandExecutor, cwd: Path, number: int) -> None:
     query = """query($number:Int!){repository(owner:"RasmusTho",name:"agentic-pkm-mvp"){
       pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved isOutdated}
       pageInfo{hasNextPage}}}}}"""
@@ -464,6 +527,44 @@ def _fallback_comment(comments: list[Any], *, comment_id: int, issue: int, agent
     if closure._parse_timestamp(comment.get("updated_at"), "fallback pickup update") != created:
         raise CycleError("edited fallback pickup comment is not authoritative")
     return created
+
+
+def _pickup_issue(body: str, *, governing: int, closing: Sequence[int]) -> int:
+    """Name the one Issue whose claim owns execution: the PR's pickup, else the governing Issue.
+
+    The publication contract admits a pickup for the governing or an exact closing
+    Issue. Contract, review and closure scope stay bound to their own Issues.
+    """
+    receipts = re.findall(r"(?m)^Pickup-Receipt:[ \t]*(.+)$", body)
+    if len(receipts) > 1:
+        raise CycleError("original pickup provenance is ambiguous")
+    if not receipts:
+        return governing
+    match = re.match(r"pickup-claim-complete issue=([1-9][0-9]*) ", receipts[0])
+    if match is None or int(match[1]) not in {governing, *closing}:
+        raise CycleError("original pickup provenance cannot establish the governing owner")
+    return int(match[1])
+
+
+def _assert_scope_holds(governing: Mapping[str, Any], *, number: int, claim: int, closing: Sequence[int]) -> None:
+    """Apply governing-parent holds; a distinct open parent may only be a waiting validation hub."""
+    if claim == number or number in closing:
+        _assert_unheld_issue(governing)
+        return
+    labels = governing.get("labels")
+    if not isinstance(labels, list) or any(not isinstance(x, dict) or not isinstance(x.get("name"), str) for x in labels):
+        raise CycleError("Issue labels are held or unreadable")
+    names = {x["name"].casefold() for x in labels}
+    if "agent:blocked" in names:
+        # LABEL_TAXONOMY: a parent validation hub waiting on child slices is
+        # agent:blocked with exactly action:wait-dependency. Any other state holds.
+        body = governing.get("body")
+        if ({x for x in names if x.startswith(("agent:", "action:"))} != {"agent:blocked", "action:wait-dependency"}
+                or not names & {"type:epic", "type:feature"} or not isinstance(body, str)
+                or any(not re.search(rf"(?<![\w#])#{child}(?!\d)", body) for child in closing)):
+            raise CycleError("Issue labels are held or unreadable")
+        names -= {"agent:blocked"}
+    _assert_unheld_issue({"labels": [{"name": name} for name in names]})
 
 
 def _pickup_origin(body: str, *, issue: int, closing: Sequence[int], branch: str,
@@ -1661,10 +1762,20 @@ def _claimant_history(*, registration: Mapping[str, Any], records: Mapping[str, 
     return anchors
 
 
-def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any]) -> dict[str, Any]:
-    """Read native ownership, route and canonical scope from host authorities, not PR attestations."""
+def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any], *,
+                     purpose: Literal["merge", "repair", "admission"] = "merge",
+                     repair_writer: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Read native ownership and scope; unresolved threads only exclude merge authority.
+
+    A repair result does not authorize a writer, publication or merge by itself: the
+    caller must also bind an actionable review and use the stopped-worker lifecycle.
+    """
+    if purpose not in ("merge", "repair", "admission"):
+        raise CycleError("unknown native authority purpose")
+    if repair_writer is not None and purpose != "repair":
+        raise CycleError("a running repair writer cannot authorize merge")
     cwd = Path(__file__).resolve().parents[2]
-    executor = SubprocessExecutor(timeout_seconds=30)
+    executor: publication.CommandExecutor = SubprocessExecutor(timeout_seconds=30)
     user = executor.run(["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"], cwd=cwd)
     if user.returncode != 0 or user.stdout.strip() != "RasmusTho":
         raise CycleError("host GitHub identity is unavailable or differs from the authorized account")
@@ -1681,30 +1792,47 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                 or live.get("base", {}).get("ref") != "main" or body != pr["body"]
                 or live.get("title", "") != pr.get("title", "")):
             raise CycleError("live PR or native contract drifted")
+        if purpose != "merge":
+            labels = live.get("labels")
+            if (not isinstance(labels, list) or any(not isinstance(row, dict) or not isinstance(row.get("name"), str)
+                                                   for row in labels)
+                    or sorted(row["name"] for row in labels) != sorted(pr.get("labels", []))
+                    or {row["name"].strip().casefold() for row in labels} &
+                    {"wip", "work in progress", "do-not-merge", "do not merge", "agent:blocked",
+                     "agent:needs-human", "agent:needs-review", "hold"}):
+                raise CycleError("live PR labels are held, changed or unavailable")
         refs = closure._closing_issue_references(executor, cwd, completion.REPOSITORY, int(pr["number"]))
         if refs != list(authority.closing_issues):
             raise CycleError("GitHub closing references differ from the canonical contract")
         issue = closure._issue(executor, cwd, completion.REPOSITORY, authority.governing_issue)
         if issue.get("state") != "open" or issue.get("body") != pr["governing_issue"]["body"]:
             raise CycleError("governing Issue contract or state drifted")
-        _assert_unheld_issue(issue)
-        _assert_review_threads_clear(executor, cwd, int(pr["number"]))
+        claim = _pickup_issue(body or "", governing=authority.governing_issue, closing=refs)
+        _assert_scope_holds(issue, number=authority.governing_issue, claim=claim, closing=refs)
+        if claim != authority.governing_issue:
+            claimed = closure._issue(executor, cwd, completion.REPOSITORY, claim)
+            if claimed.get("state") != "open":
+                raise CycleError("claimed closing Issue is not open")
+            _assert_unheld_issue(claimed)
+        if purpose == "merge":
+            _assert_review_threads_clear(executor, cwd, int(pr["number"]))
         branch = live.get("head", {}).get("ref")
         if not isinstance(branch, str) or not branch:
             raise CycleError("head branch identity unavailable")
         registration, lifecycle_records = _lifecycle_owner(layout, entry, branch)
-        issue_comments = _api_pages(executor, cwd, f"/issues/{authority.governing_issue}/comments")
+        executor = _LifecycleDispatcherExecutor(executor, Path(entry["lifecycle_repo"]))
+        issue_comments = _api_pages(executor, cwd, f"/issues/{claim}/comments")
         pr_comments = _api_pages(executor, cwd, f"/issues/{pr['number']}/comments")
-        origin, fallback_origin_at = _pickup_origin(body or "", issue=authority.governing_issue,
+        origin, fallback_origin_at = _pickup_origin(body or "", issue=claim,
                                                     closing=refs, branch=branch, comments=issue_comments)
         original_at = fallback_origin_at
-        task_id = github_issue_task_id(completion.REPOSITORY, authority.governing_issue)
+        task_id = github_issue_task_id(completion.REPOSITORY, claim)
         prior_registration = registration.get("prior_owner")
         if prior_registration is not None and not isinstance(prior_registration, Mapping):
             raise CycleError("predecessor registration evidence is malformed")
         pickup_reference = _predecessor_pickup_reference(
             [*issue_comments, *pr_comments], registration.get("transfer_registration"),
-            issue=authority.governing_issue, pr_number=int(pr["number"]))
+            issue=claim, pr_number=int(pr["number"]))
         lineage: dict[str, Any] | None = None
         dispatcher_events: Sequence[Mapping[str, Any]] | None = None
         changed_owner = False
@@ -1719,37 +1847,27 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
         if operator_recovery and entry.get("coordination_mode", "dispatcher-backed") != "dispatcher-backed":
             raise CycleError("operator recovery requires dispatcher coordination")
         if entry.get("coordination_mode", "dispatcher-backed") == "github-label-only-fallback":
-            status = executor.run([sys.executable, "-m", "app.dispatcher", "status", "--json"], cwd=cwd)
-            if status.returncode != 0:
-                raise CycleError("dispatcher status failed; availability is ambiguous")
-            try:
-                dispatcher = json.loads(status.stdout)
-            except ValueError as exc:
-                raise CycleError("dispatcher status is malformed") from exc
-            if (not isinstance(dispatcher, dict) or dispatcher.get("ok") is not True
-                    or dispatcher.get("db_exists") is not False
-                    or dispatcher.get("coordination_mode") != closure.DEGRADED_MODE
-                    or dispatcher.get("fallback_reason") != "dispatcher_db_missing"
+            if (_dispatcher_mode(executor, cwd) != closure.DEGRADED_MODE
                     or entry.get("fallback_reason") != "dispatcher_db_missing"):
                 raise CycleError("dispatcher is available or its status is ambiguous")
             owner_path = entry.get("owner_worktree")
             if not isinstance(owner_path, str) or not Path(owner_path).is_absolute() or str(Path(owner_path).resolve()) != owner_path:
                 raise CycleError("fallback owner worktree is unavailable")
             owner = closure._degraded_coordination_snapshot(
-                executor, Path(owner_path), completion.REPOSITORY, authority.governing_issue,
+                executor, Path(owner_path), completion.REPOSITORY, claim,
                 entry.get("fallback_reason"), entry.get("coordination_evidence"), entry.get("claimant"),
                 entry.get("session"), branch)
             if owner.get("comment_author") != "RasmusTho":
                 raise CycleError("fallback pickup receipt was not authored by the authorized account")
             fallback_pickup_at = _fallback_comment(
-                issue_comments, comment_id=owner["comment_id"], issue=authority.governing_issue,
+                issue_comments, comment_id=owner["comment_id"], issue=claim,
                 agent=entry["claimant"], session=entry["session"], branch=branch,
                 path=owner_path, reason=entry["fallback_reason"])
             for comment in issue_comments:
                 if not _authenticated_comment(comment) or not isinstance(comment.get("body"), str):
                     continue
                 match = closure.PICKUP_RECEIPT_RE.fullmatch(comment["body"])
-                if (match and int(match["issue"]) == authority.governing_issue and comment["id"] != owner["comment_id"]
+                if (match and int(match["issue"]) == claim and comment["id"] != owner["comment_id"]
                         and closure._parse_timestamp(comment["created_at"], "pickup receipt") == fallback_pickup_at):
                     raise CycleError("fallback pickup ordering is ambiguous")
             proof = registration.get("transfer_registration")
@@ -1758,7 +1876,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             remote_evidence = False
             if len(pinned_ack) == 1:
                 try:
-                    parsed, _, _ = agent_worktree._transfer_comment(pinned_ack[0], issue=authority.governing_issue,
+                    parsed, _, _ = agent_worktree._transfer_comment(pinned_ack[0], issue=claim,
                                                                     pr=int(pr["number"]))
                     remote_evidence = isinstance(parsed.get("predecessor_dispatcher"), dict)
                 except agent_worktree.WorktreeLifecycleError as exc:
@@ -1777,7 +1895,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                 changed_owner = True
                 prior_session, prior_path = prior_registration.get("owner"), prior_registration.get("path")
                 prior_agent, fallback_origin_at, _ = _fallback_predecessor(
-                    issue_comments, issue=authority.governing_issue, branch=branch,
+                    issue_comments, issue=claim, branch=branch,
                     prior=prior_registration, before=fallback_pickup_at, comment_id=pickup_reference)
             elif isinstance(proof, Mapping) or origin.get("mode") == closure.DISPATCHER_MODE or not origin:
                 changed_owner, remote_prior = True, True
@@ -1787,7 +1905,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             task, events, lease = closure._dispatcher_inspect(executor, cwd, task_id)
             dispatcher_events = events
             owner = closure._dispatcher_snapshot_from_task(task, task_id, repository=completion.REPOSITORY,
-                        issue_number=authority.governing_issue, pr_number=int(pr["number"]), lease=lease)
+                        issue_number=claim, pr_number=int(pr["number"]), lease=lease)
             closure._validate_claimant_history(events, owner)
             if (owner["lease_holder"] != entry.get("claimant") or owner["lease_id"] != entry.get("lease_id")
                     or not isinstance(entry.get("session"), str) or not entry["session"].strip()):
@@ -1798,7 +1916,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             if isinstance(proof, Mapping) and proof.get("state") == "pinned" and len(pinned) == 1:
                 try:
                     pinned_receipt, pinned_at, digest = agent_worktree._transfer_comment(
-                        pinned[0], issue=authority.governing_issue, pr=int(pr["number"]))
+                        pinned[0], issue=claim, pr=int(pr["number"]))
                 except agent_worktree.WorktreeLifecycleError as exc:
                     raise CycleError("pinned handoff comment is unavailable or unauthenticated") from exc
                 handoff_ack = pinned_receipt.get("successor_acknowledgment")
@@ -1811,11 +1929,11 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                     if match is None or pinned_pickup.get("session") != registration["owner"]:
                         raise CycleError("historical fallback pickup is unavailable")
                     historical_pickup = _fallback_comment(issue_comments, comment_id=int(match[1]),
-                        issue=authority.governing_issue, agent=entry["claimant"], session=registration["owner"],
+                        issue=claim, agent=entry["claimant"], session=registration["owner"],
                         branch=branch, path=proof["path"], reason="dispatcher_db_missing")
                     current_lineage = _dispatcher_migration_lineage(
                         events, owner, origin={}, registration={**registration, "prior_owner": None},
-                        comments=issue_comments, issue=authority.governing_issue, branch=branch)
+                        comments=issue_comments, issue=claim, branch=branch)
                     own_claims = [closure._parse_timestamp(event.get("timestamp"), "dispatcher claim")
                                   for event in events if event.get("task_id") == task_id
                                   and event.get("event_type") == "task.claimed"
@@ -1847,12 +1965,12 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                     raise CycleError("candidate changed-file readback is unavailable")
                 _operator_lineage(events=events, owner=owner, origin=origin, registration=registration, records=lifecycle_records,
                     comments=[*issue_comments, *pr_comments], issue_comments=issue_comments,
-                    issue=authority.governing_issue, pr_number=int(pr["number"]), branch=branch,
+                    issue=claim, pr_number=int(pr["number"]), branch=branch,
                     head=pr["head_sha"], files=sorted(x["filename"] for x in changed_files),
                     entry={**entry, "base_sha": live.get("base", {}).get("sha")})
             elif same_session_transfer is None:
                 lineage = _dispatcher_migration_lineage(events, owner, origin=origin, registration=registration,
-                                                        comments=[*issue_comments, *pr_comments], issue=authority.governing_issue,
+                                                        comments=[*issue_comments, *pr_comments], issue=claim,
                                                         branch=branch, predecessor_pickup_id=pickup_reference)
             changed_owner = lineage is not None
             if same_session_transfer is not None:
@@ -1887,7 +2005,7 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             if isinstance(prior_registration, Mapping):
                 predecessor_anchor = _validate_predecessor_anchor(
                     prior_registration, [*issue_comments, *pr_comments],
-                    issue=authority.governing_issue, pr_number=int(pr["number"]), records=lifecycle_records)
+                    issue=claim, pr_number=int(pr["number"]), records=lifecycle_records)
             if isinstance(prior_registration, Mapping) and prior_session != prior_registration.get("owner"):
                 if not remote_prior:
                     raise CycleError("predecessor session differs from the released registry owner")
@@ -1896,18 +2014,18 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                 raise CycleError("candidate changed-file readback is unavailable")
             if predecessor_anchor is not None:
                 _verify_predecessor_transfer(predecessor_anchor, comments=[*issue_comments, *pr_comments],
-                    events=dispatcher_events, issue=authority.governing_issue, pr_number=int(pr["number"]),
+                    events=dispatcher_events, issue=claim, pr_number=int(pr["number"]),
                     branch=branch, head=pr["head_sha"], files=sorted(x["filename"] for x in files),
                     registration=registration, entry={**entry, "base_sha": live.get("base", {}).get("sha")},
                     remote_context=remote_prior)
             if same_session_transfer is not None:
                 _verify_predecessor_transfer(same_session_transfer, comments=[*issue_comments, *pr_comments],
-                    events=dispatcher_events, issue=authority.governing_issue, pr_number=int(pr["number"]),
+                    events=dispatcher_events, issue=claim, pr_number=int(pr["number"]),
                     branch=branch, head=pr["head_sha"], files=sorted(x["filename"] for x in files),
                     registration=registration, entry={**entry, "base_sha": live.get("base", {}).get("sha")},
                     remote_context=remote_prior, current_transfer=True)
             else:
-                _handoff_record([*issue_comments, *pr_comments], issue=authority.governing_issue, pr_number=int(pr["number"]),
+                _handoff_record([*issue_comments, *pr_comments], issue=claim, pr_number=int(pr["number"]),
                             branch=branch, head=pr["head_sha"],
                             files=sorted(x["filename"] for x in files), current=registration,
                             entry={**entry, "base_sha": live.get("base", {}).get("sha")}, coordination=owner,
@@ -1917,12 +2035,12 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
                             remote_prior=remote_prior)
         anchors = [] if operator_recovery else _claimant_history(registration=registration, records=lifecycle_records,
             comments=[*issue_comments, *pr_comments], issue_comments=issue_comments, events=dispatcher_events,
-            origin=origin, origin_at=original_at, issue=authority.governing_issue,
+            origin=origin, origin_at=original_at, issue=claim,
             pr_number=int(pr["number"]), branch=branch, entry=entry)
         if changed_owner and len(anchors) > 2:
             for anchor in anchors[:-2]:
                 _verify_predecessor_transfer(anchor, comments=[*issue_comments, *pr_comments],
-                    events=dispatcher_events, issue=authority.governing_issue, pr_number=int(pr["number"]),
+                    events=dispatcher_events, issue=claim, pr_number=int(pr["number"]),
                     branch=branch, head=pr["head_sha"], files=sorted(x["filename"] for x in files),
                     registration=registration, entry={**entry, "base_sha": live.get("base", {}).get("sha")},
                     remote_context=remote_prior)
@@ -1932,11 +2050,28 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
             raise CycleError("PR has a verification or fenced authority receipt")
         state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
         reviewer = _mapping(layout, entry["worker"])
-        _assert_stopped(layout, entry["worker"], reviewer)
+        if purpose == "admission" and reviewer.get("state") == "running":
+            _automatic_review_worker(layout, pr, entry)
+        elif repair_writer is None:
+            _assert_stopped(layout, entry["worker"], reviewer)
+        else:
+            takeover = workspace._takeover_of(reviewer)
+            predecessor = repair_writer.get("predecessor_container")
+            if (not workspace._same_assignment(reviewer, repair_writer.get("assignment", {}))
+                    or reviewer.get("state") != "running" or reviewer.get("runtime") != "openhands"
+                    or not isinstance(predecessor, str) or not workspace._CONTAINER_ID.fullmatch(predecessor)
+                    or reviewer.get("container_id") == predecessor
+                    or takeover.get("status") != "consumed" or takeover.get("stop_id") != repair_writer.get("stop_id")
+                    or reviewer.get("stop_id") != repair_writer.get("stop_id")
+                    or reviewer.get("work_at_stop") != repair_writer.get("work_at_stop")):
+                raise CycleError("repair writer does not bind the stopped reviewer and takeover")
+            _assert_live_container(layout, entry["worker"], reviewer)
+            if workspace._id_present(predecessor, _worker_runner):
+                raise CycleError("reviewer container reappeared before repair")
         for issue_key, other in state["issue_mappings"].items():
             if not isinstance(other, dict) or other.get("worker") == entry["worker"]:
                 continue
-            if issue_key == str(authority.governing_issue) and not other.get("branch"):
+            if issue_key in {str(claim), str(authority.governing_issue)} and not other.get("branch"):
                 raise CycleError("another worker may write the candidate")
             if other.get("branch") == branch:
                 other_worker = other.get("worker")
@@ -1946,14 +2081,14 @@ def native_authority(layout: workspace.Layout, pr: Mapping[str, Any], entry: Map
         return {"number": pr["number"], "head_sha": pr["head_sha"], "body": body,
                 "title": live.get("title"), "branch": branch, "governing_issue": authority.governing_issue,
                 "governing_issue_hashes": closure._issue_hashes(issue),
-                "closing_issues": refs, "owner": owner, "base_ref": "main",
-                "worktree_owner": {k: registration[k] for k in ("path", "branch", "owner", "generation", "expires_at")},
+                "closing_issues": refs, "claim_issue": claim, "owner": owner, "base_ref": "main",
+                "worktree_owner": {k: registration[k] for k in ("path", "branch", "owner", "generation", "registration_epoch", "expires_at")},
                 "coordination_mode": entry.get("coordination_mode", "dispatcher-backed")}
     except closure.ClosureError as exc:
         raise CycleError(f"native authority unavailable: {exc.reason}") from exc
 
 
-def _api_pages(executor: SubprocessExecutor, cwd: Path, endpoint: str) -> list[Any]:
+def _api_pages(executor: publication.CommandExecutor, cwd: Path, endpoint: str) -> list[Any]:
     rows: list[Any] = []
     for page in range(1, 101):
         value = closure._api(executor, cwd, completion.REPOSITORY, "GET", f"{endpoint}?per_page=100&page={page}")
@@ -2020,7 +2155,9 @@ def _review_context(pr: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, An
     context = {"files_digest": _digest(files), "diff_digest": hashlib.sha256(diff.stdout.encode()).hexdigest(),
                "closing_issue_hashes": {k: v["hashes"] for k, v in issues.items()},
                "check_config_digest": _digest({"tree": config, "protection": protection, "rules": rules})}
-    return context, {"diff": diff.stdout, "issues": issues}
+    # Changed paths come from the same files API that premerge re-reads, never from diff headers.
+    changed = sorted(str(row["filename"]) for row in files)
+    return context, {"diff": diff.stdout, "issues": issues, "paths": changed}
 
 
 def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, Any],
@@ -2028,13 +2165,14 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
     """Bind transfer-to-current changes to the ordinary review identity and material."""
     if not entry.get("lifecycle_repo"):
         return
-    executor = SubprocessExecutor(timeout_seconds=30)
+    executor: publication.CommandExecutor = SubprocessExecutor(timeout_seconds=30)
     cwd = Path(__file__).resolve().parents[2]
     live = closure._pr(executor, cwd, completion.REPOSITORY, int(pr["number"]))
     branch = live.get("head", {}).get("ref")
     if not isinstance(branch, str) or live.get("head", {}).get("sha") != pr["head_sha"]:
         raise CycleError("transfer review source is unavailable")
     registration, records = _lifecycle_owner(layout, entry, branch)
+    executor = _LifecycleDispatcherExecutor(executor, Path(entry["lifecycle_repo"]))
     proof = registration.get("transfer_registration")
     operator_recovery = "operator_registration" in registration
     if proof is None and registration.get("prior_owner") is not None and not operator_recovery:
@@ -2042,35 +2180,36 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
     authority = resolve_native_issue_authority(pr.get("body"))
     if authority is None:
         raise CycleError("native issue authority is unavailable")
-    issue_comments = _api_pages(executor, cwd, f"/issues/{authority.governing_issue}/comments")
+    claim = _pickup_issue(pr.get("body", ""), governing=authority.governing_issue, closing=authority.closing_issues)
+    issue_comments = _api_pages(executor, cwd, f"/issues/{claim}/comments")
     pr_comments = _api_pages(executor, cwd, f"/issues/{pr['number']}/comments")
-    origin, origin_at = _pickup_origin(pr.get("body", ""), issue=authority.governing_issue,
+    origin, origin_at = _pickup_origin(pr.get("body", ""), issue=claim,
         closing=authority.closing_issues, branch=branch, comments=issue_comments)
     if proof is None and not operator_recovery and origin.get("path"):
         _validate_original_moves(registration, records, origin["path"])
     events = None
     if entry.get("coordination_mode", closure.DISPATCHER_MODE) == closure.DISPATCHER_MODE:
         task, events, lease = closure._dispatcher_inspect(executor, cwd,
-            github_issue_task_id(completion.REPOSITORY, authority.governing_issue))
+            github_issue_task_id(completion.REPOSITORY, claim))
     if operator_recovery:
         if events is None or proof is not None:
             raise CycleError("operator recovery requires separate dispatcher authority")
-        owner = closure._dispatcher_snapshot_from_task(task, github_issue_task_id(completion.REPOSITORY, authority.governing_issue),
-            repository=completion.REPOSITORY, issue_number=authority.governing_issue, pr_number=int(pr["number"]), lease=lease)
+        owner = closure._dispatcher_snapshot_from_task(task, github_issue_task_id(completion.REPOSITORY, claim),
+            repository=completion.REPOSITORY, issue_number=claim, pr_number=int(pr["number"]), lease=lease)
         closure._validate_claimant_history(events, owner)
         changed_files = _api_pages(executor, cwd, f"/pulls/{pr['number']}/files")
         if not changed_files or any(not isinstance(x, dict) or not isinstance(x.get("filename"), str) for x in changed_files):
             raise CycleError("candidate changed-file readback is unavailable")
         _operator_lineage(events=events, owner=owner, origin=origin, registration=registration, records=records,
             comments=[*issue_comments, *pr_comments], issue_comments=issue_comments,
-            issue=authority.governing_issue, pr_number=int(pr["number"]), branch=branch,
+            issue=claim, pr_number=int(pr["number"]), branch=branch,
             head=pr["head_sha"], files=sorted(x["filename"] for x in changed_files),
             entry={**entry, "base_sha": live.get("base", {}).get("sha")})
         proof = registration.get("operator_registration")
     else:
         _claimant_history(registration=registration, records=records, comments=[*issue_comments, *pr_comments],
             issue_comments=issue_comments, events=events, origin=origin, origin_at=origin_at,
-            issue=authority.governing_issue, pr_number=int(pr["number"]), branch=branch, entry=entry)
+            issue=claim, pr_number=int(pr["number"]), branch=branch, entry=entry)
         if proof is None:
             return
         _validate_transfer_move(registration, records)
@@ -2095,6 +2234,568 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
     pr["review_material"]["transfer_to_current"] = material
 
 
+# Explicit review-report grammar. The prompt is rendered from these tables and review_gate validates
+# against the same tables, so producer and consumer cannot drift. A report without report_contract is
+# the legacy v1 shape; it is accepted only when it has nothing to classify.
+REPORT_CONTRACT = "pr_cycle_report.v2"
+# Protected classes from verification-and-closure FULL_PATH :: Severity routing. They block at any severity.
+PROTECTED_CLASSES = {
+    "data_integrity": "data loss or corruption",
+    "authority_integrity": "source, vault or authority-integrity violation",
+    "secret_or_auth": "secret, authentication or authorization failure",
+    "migration_durability": "migration durability failure",
+    "concurrency": "concurrency or multi-writer safety failure",
+    "unauthorized_effect": "irreversible or external side effect without the required authority",
+    "false_green": "false-green CI, receipt, merge or closure evidence",
+    "contract_failure": "failed governing acceptance criterion, Verify target, contract or closure gate",
+    "inconclusive": "evidence cannot distinguish a protected failure from a lesser defect",
+}
+# P3 is non-defect advice only; a defect category with P3 severity is inconsistent and blocks.
+ADVISORY_CATEGORIES = ("documentation", "maintainability", "naming", "readability", "style", "suggestion",
+                       "test_quality")
+DEFECT_CATEGORIES = ("correctness", "performance", "robustness")
+# Informational limitations name a check the reviewer did not perform whose outcome is enforced
+# elsewhere or lies outside the closing contract. Gaps are uncovered obligations and always block.
+LIMITATION_KINDS = {
+    "ci_not_observed": (False, "current-head CI was not observed; the cycle requires it before merge"),
+    "simulated_boundary": (False, "tests replace external ports; the Verify targets still run in the sandbox"),
+    "evidence_not_rerun": (False, "cited evidence was read, not re-executed; every criterion is still assessed"),
+    "out_of_scope_followup": (False, "an obligation owned by another open Issue that this PR does not close"),
+    "operator_note": (False, "an operating or upgrade note that is not a defect"),
+    "acceptance_gap": (True, "an acceptance criterion is not covered by the implementation"),
+    "verify_gap": (True, "a Verify obligation is not covered by executed tests"),
+    "owner_doc_gap": (True, "a required owner-doc update is missing or wrong"),
+    "source_gap": (True, "a changed source path was not examined"),
+    "evidence_gap": (True, "evidence is insufficient to assess an obligation"),
+}
+OWNER_DOC_OUTCOMES = {"no_change": False, "already_updated": False, "required_missing": True}
+_FINDING_REQUIRED = {"severity", "category", "protected_class", "summary", "file", "line", "failure_scenario"}
+_UPDATE_PATH = re.compile(r"[A-Za-z0-9_./-]{1,300}")
+_UPDATE_CLAIM = re.compile(r"[A-Za-z0-9 ,.;:/()_-]{1,300}")
+
+
+def _text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= 4000
+
+
+def _disposition_reason(value: Any) -> bool:
+    """Reject empty or terse notes; semantic sufficiency remains the owner's responsibility."""
+    return _text(value) and len(value.strip()) >= 20
+
+
+def report_grammar() -> str:
+    """The exact report grammar given to every reviewer; review_gate enforces the same tables."""
+    kinds = "; ".join(f"{k} ({'blocking gap' if b else 'informational'}: {d})" for k, (b, d) in LIMITATION_KINDS.items())
+    protected = "; ".join(f"{k} ({d})" for k, d in PROTECTED_CLASSES.items())
+    return (f"Report grammar {REPORT_CONTRACT}. Include report_contract set to {REPORT_CONTRACT}, identity, head_sha, "
+            "verdict (pass exactly when findings is empty, otherwise findings), findings (array of objects with "
+            "exactly severity P0, P1, P2 or P3, category, protected_class, summary, file, line (integer >= 1), "
+            "failure_scenario and optional suggested_fix). protected_class is one of: "
+            f"{protected}; or none. Any protected finding blocks merge and must be P0 or P1. P3 is only for "
+            f"non-defect advice and its category is one of {', '.join(ADVISORY_CATEGORIES)}; a defect uses "
+            f"{', '.join(DEFECT_CATEGORIES)} or an advisory category with P0, P1 or P2. P2 waits for the owning "
+            "workflow's Known Defects disposition. Put defects in findings, never in limitations. "
+            "verify_targets (array of exact targets reviewed), covered_sources (sorted array of every changed "
+            "app/, scripts/ or tests/ path examined), scope_assessment (acceptance, verify_coverage, limitations), "
+            "owner_doc (outcome, inspected_paths, rationale, and updates when outcome is already_updated), "
+            "closing_assessments keyed by exact Issue number, each with acceptance and verify_coverage "
+            "(covered or incomplete), limitations, and criteria keyed by SHA-256 of the exact criterion text, "
+            "each with assessment (covered or incomplete) and substantive rationale. Every limitations array "
+            f"holds objects with exactly kind and detail; kind is one of: {kinds}. Use an empty array when there "
+            "is no limitation. owner_doc.outcome is no_change (no owner-doc change is implied), already_updated "
+            "(this PR updates owner docs; updates lists objects with exactly path, a changed and inspected owner-doc "
+            "path, and claim, at most 300 characters of letters, digits, spaces and ,.;:/()_-) or "
+            "required_missing (a required owner-doc update is absent; this blocks).")
+
+
+def _limitations(value: Any, contract: str, where: str, grammar: list[str], blocking: list[str],
+                 informational: list[dict[str, Any]]) -> None:
+    if not isinstance(value, list):
+        grammar.append(f"{where}: limitations must be an array")
+    elif value and contract != REPORT_CONTRACT:
+        grammar.append(f"{where}: legacy limitations are unclassified")
+    else:
+        for index, row in enumerate(value):
+            if (not isinstance(row, dict) or set(row) != {"kind", "detail"} or row.get("kind") not in LIMITATION_KINDS
+                    or not _text(row.get("detail"))):
+                grammar.append(f"{where}: limitation {index} is malformed or of unknown kind")
+            elif LIMITATION_KINDS[row["kind"]][0]:
+                blocking.append(f"{where}: {row['kind']} limitation")
+            else:
+                informational.append({"where": where, "limitation": index, "kind": row["kind"]})
+
+
+_REPORT_FIELDS = {"report_contract", "identity", "head_sha", "verdict", "findings", "verify_targets", "owner_doc",
+                  "covered_sources", "scope_assessment", "closing_assessments"}
+
+
+def report_expectations(layout: workspace.Layout, entry: Mapping[str, Any], pr: Mapping[str, Any],
+                        identity: str, *, repo_root: Path | None = None) -> dict[str, Any]:
+    """What a report for this exact identity must cover, from the material its reviewer was given."""
+    material = pr.get("review_material")
+    if (not isinstance(material, dict) or not isinstance(material.get("issues"), dict)
+            or not isinstance(material.get("paths"), list) or not material["paths"]
+            or not all(isinstance(p, str) and p for p in material["paths"])):
+        raise CycleError("review material is unavailable")
+    paths = set(material["paths"])
+    criteria = {}
+    for number, issue in material["issues"].items():
+        rows = closure._acceptance_criteria(issue.get("body") if isinstance(issue, dict) else None,
+                                            repo_root=repo_root or layout.checkout(entry["worker"]))
+        targets = [t.strip("`") for row in rows for t in row["verify_targets"]]
+        if any(not any(t == actual or t.startswith(actual + "::") for actual in entry["verify_targets"])
+               for t in targets):
+            # An admission defect, not a report defect: say so before any sandbox or CI run.
+            raise CycleError("closing Issue Verify targets are not covered by the admitted Verify targets")
+        criteria[str(number)] = sorted(row["criterion_sha256"] for row in rows)
+    return {"identity": identity, "head_sha": pr["head_sha"], "verify_targets": list(entry["verify_targets"]),
+            "paths": sorted(paths), "sources": sorted(p for p in paths if p.startswith(("app/", "scripts/", "tests/"))),
+            "criteria": criteria}
+
+
+def review_gate(review: Any, expected: Mapping[str, Any] | None = None, *,
+                disposition: Any = None, reconciliation: Any = None) -> dict[str, Any]:
+    """Apply report syntax, then the separate controller-owned disposition boundary.
+
+    ``disposition`` is supplied only by the controller's trusted admission, never by a
+    reviewer report or by the saved copy of a disposition. It is deliberately not a
+    prose classifier: the owning workflow must examine each item before adopting it.
+    """
+    try:
+        gate = _review_gate(review, expected)
+    except (TypeError, AttributeError, KeyError, ValueError):
+        return {"outcome": "reconcile_report", "contract": None, "blocking": [],
+                "grammar": ["report has wrong-typed fields"], "informational": []}
+    if gate["outcome"] == "pass":
+        try:
+            reason = _disposition_error(review, expected, disposition, reconciliation)
+        except (TypeError, AttributeError, KeyError, ValueError):
+            reason = "owner disposition or original analysis is malformed or unknown"
+        if reason:
+            gate["outcome"] = "changes_requested"
+            gate["blocking"].append(reason)
+        elif disposition is not None:
+            gate["disposition_sha256"] = _digest(disposition)
+    return gate
+
+
+def _explicit_review_blockers(review: Any) -> list[str]:
+    """Collect known negative outcomes even when neighboring report fields are malformed."""
+    if not isinstance(review, dict):
+        return []
+    blocking: list[str] = []
+    findings = review.get("findings")
+    if isinstance(findings, list):
+        for index, item in enumerate(findings):
+            if not isinstance(item, dict):
+                continue
+            severity, protected = item.get("severity"), item.get("protected_class")
+            if severity in ("P0", "P1"):
+                blocking.append(f"finding {index}: {severity}")
+            elif severity == "P2":
+                blocking.append(f"finding {index}: P2 without verified Known Defects disposition")
+            if isinstance(protected, str) and protected in PROTECTED_CLASSES:
+                blocking.append(f"finding {index}: protected {protected} blocks regardless of severity")
+            if severity == "P3" and item.get("category") in DEFECT_CATEGORIES:
+                blocking.append(f"finding {index}: P3 cannot carry defect category {item['category']}")
+
+    def limits(value: Any, where: str) -> None:
+        if isinstance(value, list):
+            for row in value:
+                kind = row.get("kind") if isinstance(row, dict) else None
+                if isinstance(kind, str) and kind in LIMITATION_KINDS and LIMITATION_KINDS[kind][0]:
+                    blocking.append(f"{where}: {kind} limitation")
+
+    owner_doc = review.get("owner_doc")
+    if isinstance(owner_doc, dict) and owner_doc.get("outcome") == "required_missing":
+        blocking.append("owner_doc: required owner-doc update is missing")
+    scope = review.get("scope_assessment")
+    if isinstance(scope, dict):
+        limits(scope.get("limitations"), "scope")
+    children = review.get("closing_assessments")
+    if isinstance(children, dict):
+        for number, child in children.items():
+            if not isinstance(child, dict):
+                continue
+            where = f"closing #{number}"
+            rows = child.get("criteria")
+            if ("incomplete" in (child.get("acceptance"), child.get("verify_coverage"))
+                    or (isinstance(rows, dict) and any(isinstance(row, dict) and row.get("assessment") == "incomplete"
+                                                       for row in rows.values()))):
+                blocking.append(f"{where}: acceptance or Verify assessment is incomplete")
+            limits(child.get("limitations"), where)
+    return blocking
+
+
+def _bounded_repair_candidate(review: Mapping[str, Any], gate: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Identify an unambiguous P0/P1 report; this is evidence, not write authority."""
+    if gate.get("outcome") != "changes_requested" or gate.get("grammar"):
+        return None
+    findings = review.get("findings")
+    if not isinstance(findings, list):
+        return None
+    indexes = [index for index, item in enumerate(findings)
+               if isinstance(item, dict) and item.get("severity") in ("P0", "P1")]
+    if not indexes:
+        return None
+    # A protected finding also emits a separate blocking item; it remains in the
+    # selected P0/P1 finding. Other gaps or dispositions require their own workflow.
+    allowed = {f"finding {index}: {findings[index]['severity']}" for index in indexes}
+    allowed.update(f"finding {index}: protected {findings[index]['protected_class']} blocks regardless of severity"
+                   for index in indexes if findings[index].get("protected_class") in PROTECTED_CLASSES)
+    blockers = gate.get("blocking")
+    if not isinstance(blockers, list) or not blockers or any(item not in allowed for item in blockers):
+        return None
+    return {"report_sha256": _digest(review), "finding_indexes": indexes}
+
+
+def _review_gate(review: Any, expected: Mapping[str, Any] | None) -> dict[str, Any]:
+    # Do this before grammar validation, which may fail or skip malformed siblings.
+    blocking = _explicit_review_blockers(review)
+    try:
+        gate = _review_gate_grammar(review, expected)
+    except (TypeError, AttributeError, KeyError, ValueError):
+        gate = {"outcome": "reconcile_report", "contract": None, "blocking": [],
+                "grammar": ["report has wrong-typed fields"], "informational": []}
+    gate["blocking"] = list(dict.fromkeys(blocking + gate["blocking"]))
+    bound_elsewhere = (expected is not None and isinstance(review, dict)
+                       and any(review.get(key) != expected.get(key)
+                               for key in ("identity", "head_sha", "verify_targets")))
+    if gate["blocking"] and not bound_elsewhere:
+        gate["outcome"] = "changes_requested"
+    return gate
+
+
+def _review_gate_grammar(review: Any, expected: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Derive the severity-policy gate from an immutable public report.
+
+    ``pass`` lets the report reach sandbox verification, current-head CI and the live premerge checks.
+    ``changes_requested`` is a genuine blocker: P0/P1, P2 without a verified disposition, a protected or
+    inconsistently labelled finding, a gap limitation, an incomplete assessment or a missing owner doc.
+    ``reconcile_report`` means the report does not follow the grammar; it is corrected once per
+    contract through a bounded OpenHands reconciliation, never by editing the saved report.
+    """
+    grammar: list[str] = []
+    blocking: list[str] = []
+    informational: list[dict[str, Any]] = []
+    if not isinstance(review, dict):
+        return {"outcome": "reconcile_report", "contract": None, "blocking": [], "grammar": ["report is not an object"],
+                "informational": []}
+    contract = review.get("report_contract", "legacy")
+    if contract not in (REPORT_CONTRACT, "legacy"):
+        grammar.append("unknown report_contract")
+    if not set(review) <= _REPORT_FIELDS:
+        grammar.append("unknown report fields: " + ", ".join(sorted(map(str, set(review) - _REPORT_FIELDS))))
+    binding: list[str] = []
+    if expected is not None:
+        binding = [f"{key} does not match this review" for key in ("identity", "head_sha", "verify_targets")
+                   if review.get(key) != expected[key]]
+        grammar.extend(binding)
+        if review.get("covered_sources") != expected["sources"]:
+            grammar.append("covered_sources differ from the changed source paths")
+        children = review.get("closing_assessments", {})
+        children = children if isinstance(children, dict) else {}
+        if sorted(children) != sorted(expected["criteria"]):
+            grammar.append("closing_assessments do not match the closing Issues")
+        grammar.extend(f"closing #{number}: criteria keys do not match the exact criteria"
+                       for number, hashes in sorted(expected["criteria"].items())
+                       if isinstance(children.get(number), dict) and isinstance(children[number].get("criteria"), dict)
+                       and sorted(children[number]["criteria"]) != hashes)
+    findings = review.get("findings")
+    if (review.get("verdict") not in ("pass", "findings") or not isinstance(findings, list)
+            or (review["verdict"] == "pass") != (findings == [])):
+        grammar.append("verdict and findings disagree")
+        findings = findings if isinstance(findings, list) else []
+    for index, item in enumerate(findings):
+        severity = item.get("severity") if isinstance(item, dict) else None
+        if severity in ("P0", "P1"):
+            blocking.append(f"finding {index}: {severity}")
+        elif severity == "P2":
+            # No verified registry disposition is readable here; the owning workflow keeps it.
+            blocking.append(f"finding {index}: P2 without verified Known Defects disposition")
+        if contract != REPORT_CONTRACT:
+            if severity not in ("P0", "P1", "P2"):
+                grammar.append(f"finding {index}: legacy finding lacks an explicit protected classification")
+            continue
+        protected = item.get("protected_class") if isinstance(item, dict) else None
+        if (not isinstance(item, dict) or not _FINDING_REQUIRED <= set(item) <= _FINDING_REQUIRED | {"suggested_fix"}
+                or severity not in ("P0", "P1", "P2", "P3")
+                or item.get("category") not in ADVISORY_CATEGORIES + DEFECT_CATEGORIES
+                or (protected != "none" and protected not in PROTECTED_CLASSES)
+                or not all(_text(item.get(k)) for k in ("summary", "file", "failure_scenario"))
+                or ("suggested_fix" in item and not isinstance(item["suggested_fix"], str))
+                or type(item.get("line")) is not int or item["line"] < 1):
+            grammar.append(f"finding {index}: malformed or unknown classification")
+        elif protected != "none":
+            blocking.append(f"finding {index}: protected {protected} blocks regardless of severity")
+        elif severity == "P3" and item["category"] not in ADVISORY_CATEGORIES:
+            blocking.append(f"finding {index}: P3 cannot carry defect category {item['category']}")
+        elif severity == "P3":
+            informational.append({"index": index, "severity": "P3", "category": item["category"],
+                                  "file": item["file"], "line": item["line"]})
+    scope = review.get("scope_assessment")
+    if not isinstance(scope, dict) or not all(_text(scope.get(k)) for k in ("acceptance", "verify_coverage")):
+        grammar.append("scope_assessment needs acceptance and verify_coverage")
+    else:
+        if set(scope) != {"acceptance", "verify_coverage", "limitations"}:
+            grammar.append("scope_assessment has unknown or missing fields")
+        _limitations(scope.get("limitations"), contract, "scope", grammar, blocking, informational)
+    sources = review.get("covered_sources")
+    if not isinstance(sources, list) or not all(isinstance(x, str) for x in sources) or sources != sorted(sources):
+        grammar.append("covered_sources must be a sorted array of paths")
+    owner_doc = review.get("owner_doc")
+    owner_doc = owner_doc if isinstance(owner_doc, dict) else {}
+    paths, outcome = owner_doc.get("inspected_paths"), owner_doc.get("outcome")
+    if set(owner_doc) - {"outcome", "inspected_paths", "rationale", "updates"}:
+        grammar.append("owner_doc has unknown fields")
+    if outcome != "already_updated" and "updates" in owner_doc:
+        grammar.append("owner_doc updates require the already_updated outcome")
+    if (not isinstance(paths, list) or not paths or not all(_text(x) for x in paths)
+            or outcome not in OWNER_DOC_OUTCOMES or not _text(owner_doc.get("rationale"))):
+        grammar.append("owner_doc needs a known outcome, inspected_paths and rationale")
+    elif OWNER_DOC_OUTCOMES[outcome]:
+        blocking.append("owner_doc: required owner-doc update is missing")
+    elif outcome == "already_updated":
+        updates = owner_doc.get("updates")
+        if (not isinstance(updates, list) or not updates
+                or any(not isinstance(x, dict) or set(x) != {"path", "claim"} or not isinstance(x.get("path"), str)
+                       or not _UPDATE_PATH.fullmatch(x["path"]) or x["path"] not in paths
+                       or (expected is not None and x["path"] not in expected["paths"])
+                       or not isinstance(x.get("claim"), str) or not _UPDATE_CLAIM.fullmatch(x["claim"])
+                       for x in updates)):
+            grammar.append("owner_doc already_updated needs exact inspected update paths and claims")
+    children = review.get("closing_assessments", {})
+    if not isinstance(children, dict):
+        grammar.append("closing_assessments must be an object")
+        children = {}
+    for number, child in sorted(children.items()):
+        where = f"closing #{number}"
+        rows = child.get("criteria") if isinstance(child, dict) else None
+        if (not isinstance(child, dict) or not isinstance(rows, dict)
+                or set(child) != {"acceptance", "verify_coverage", "criteria", "limitations"}
+                or any(child.get(k) not in ("covered", "incomplete") for k in ("acceptance", "verify_coverage"))
+                or any(not isinstance(row, dict) or set(row) != {"assessment", "rationale"}
+                       or row.get("assessment") not in ("covered", "incomplete")
+                       or not _text(row.get("rationale")) for row in rows.values())):
+            grammar.append(f"{where}: assessment is malformed")
+            continue
+        if "incomplete" in (child["acceptance"], child["verify_coverage"]) or any(
+                row["assessment"] == "incomplete" for row in rows.values()):
+            blocking.append(f"{where}: acceptance or Verify assessment is incomplete")
+        _limitations(child.get("limitations"), contract, where, grammar, blocking, informational)
+    # Findings in a report bound to other content are not evidence about this review.
+    outcome = "reconcile_report" if binding else "changes_requested" if blocking else "reconcile_report" if grammar else "pass"
+    return {"outcome": outcome, "contract": contract, "blocking": blocking, "grammar": grammar,
+            "informational": informational}
+
+
+def _report_items(report: Mapping[str, Any]) -> dict[tuple[str, int], Any]:
+    """Enumerate every known finding and limitation without changing the report."""
+    findings = report.get("findings")
+    scope = report.get("scope_assessment")
+    # The existing report grammar permits omission for a non-closing PR.
+    children = report.get("closing_assessments", {})
+    if not isinstance(findings, list) or not isinstance(scope, dict) or not isinstance(children, dict):
+        raise ValueError("original analysis cannot be enumerated")
+    collections = {"findings": findings, "scope": scope.get("limitations")}
+    for number, child in children.items():
+        if not isinstance(number, str) or not isinstance(child, dict):
+            raise ValueError("original closing analysis is unknown")
+        collections[f"closing:{number}"] = child.get("limitations")
+    if any(not isinstance(rows, list) for rows in collections.values()):
+        raise ValueError("original limitations cannot be enumerated")
+    return {(where, index): item for where, rows in collections.items() for index, item in enumerate(cast(list[Any], rows))}
+
+
+def _archived_material_error(prior: Mapping[str, Any], current: Mapping[str, Any],
+                             expected: Mapping[str, Any] | None) -> str | None:
+    """Refuse to turn unknown or explicitly negative original obligations into a retry pass."""
+    gate = _review_gate(prior, expected)
+    if gate["blocking"]:
+        return "original review has a protected or incomplete obligation: " + "; ".join(gate["blocking"])
+    if prior.get("verdict") not in ("pass", "findings"):
+        return "original review has an unknown verdict"
+    # Legacy unclassified items have their own exact owner disposition. A mismatched verdict
+    # also leaves those items visible. Other grammar errors leave required material unknown.
+    for reason in gate["grammar"]:
+        if (reason == "verdict and findings disagree"
+                or reason.endswith(": legacy finding lacks an explicit protected classification")
+                or reason.endswith(": legacy limitations are unclassified")):
+            continue
+        return "original review has unsupported or missing required material: " + reason
+    scope, owner, children = prior.get("scope_assessment"), prior.get("owner_doc"), prior.get("closing_assessments", {})
+    if (not isinstance(scope, dict) or set(scope) != {"acceptance", "verify_coverage", "limitations"}
+            or not isinstance(owner, dict) or set(owner) - {"outcome", "inspected_paths", "rationale", "updates"}
+            or not isinstance(children, dict)):
+        return "original review contains unknown or missing assessment material"
+    current_children = current.get("closing_assessments", {})
+    if not isinstance(current_children, dict) or set(children) != set(current_children):
+        return "original closing assessments do not match the closing scope"
+    for number, child in children.items():
+        successor = current_children.get(number)
+        if (not isinstance(child, dict) or set(child) != {"acceptance", "verify_coverage", "criteria", "limitations"}
+                or not isinstance(child.get("criteria"), dict) or not isinstance(successor, dict)
+                or not isinstance(successor.get("criteria"), dict)
+                or set(child["criteria"]) != set(successor["criteria"])
+                or any(not isinstance(row, dict) or set(row) != {"assessment", "rationale"}
+                       for row in child["criteria"].values())):
+            return "original closing assessment contains unknown or missing required material"
+    return None
+
+
+def _original_item_may_be_nonblocking(where: str, item: Any) -> bool:
+    """A trusted owner cannot waive an explicit protected or defect obligation here."""
+    if where == "findings":
+        return (isinstance(item, dict) and item.get("severity") == "P3"
+                and item.get("protected_class", "none") == "none"
+                and item.get("category") not in DEFECT_CATEGORIES
+                and all(_text(item.get(key)) for key in ("summary", "file", "failure_scenario"))
+                and type(item.get("line")) is int and item["line"] >= 1)
+    if isinstance(item, str):
+        return _text(item)
+    return (isinstance(item, dict) and set(item) == {"kind", "detail"}
+            and item.get("kind") in LIMITATION_KINDS and not LIMITATION_KINDS[item["kind"]][0]
+            and _text(item.get("detail")))
+
+
+def _retains_item(where: str, original: Any, current: Any) -> bool:
+    if where == "findings":
+        if not isinstance(original, dict) or not isinstance(current, dict):
+            return False
+        # A legacy classification can be translated; substantive fields cannot be rewritten.
+        ignored = {"category", "protected_class"}
+        return (all(current.get(key) == value for key, value in original.items() if key not in ignored)
+                and (original.get("protected_class", "none") == "none"
+                     or current.get("protected_class") == original.get("protected_class")))
+    if isinstance(original, str):
+        return isinstance(current, dict) and current.get("detail") == original
+    return isinstance(original, dict) and current == original
+
+
+def _disposition_request(review: Mapping[str, Any], reconciliation: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Expose exact evidence for the owning session without proposing an item decision."""
+    items = [{"report": "current", "where": where, "index": index, "sha256": _digest(item)}
+             for (where, index), item in _report_items(review).items()]
+    original_digest = original_attempt_digest = None
+    if reconciliation is not None:
+        archive = reconciliation["archived"]
+        original = archive["review"]
+        original_digest, original_attempt_digest = _digest(original), _digest(archive)
+        items.extend({"report": "original", "where": where, "index": index, "sha256": _digest(item)}
+                     for (where, index), item in _report_items(original).items())
+    return {"identity": review["identity"], "head_sha": review["head_sha"], "report_sha256": _digest(review),
+            "original_report_sha256": original_digest, "original_attempt_sha256": original_attempt_digest,
+            "items": items}
+
+
+def _disposition_error(review: Mapping[str, Any], expected: Mapping[str, Any] | None,
+                       disposition: Any, reconciliation: Any) -> str | None:
+    """Validate exact per-item owner adoption and, on retry, the complete original lineage."""
+    current = _report_items(review)
+    original: dict[tuple[str, int], Any] = {}
+    prior_material: Mapping[str, Any] | None = None
+    original_digest = original_attempt_digest = None
+    identity = expected.get("identity") if expected is not None else review.get("identity")
+    head = expected.get("head_sha") if expected is not None else review.get("head_sha")
+    if reconciliation is not None:
+        if not isinstance(reconciliation, dict) or not isinstance(reconciliation.get("archived"), dict):
+            return "original review lineage is unavailable"
+        archive = reconciliation["archived"]
+        prior = archive.get("review")
+        proof, stop = archive.get("execution_proof"), archive.get("stop_intent")
+        operation = reconciliation.get("original_operation")
+        assignment = stop.get("assignment") if isinstance(stop, dict) else None
+        conversation = assignment.get("conversation") if isinstance(assignment, dict) else None
+        if (not isinstance(prior, dict) or not isinstance(proof, dict) or not isinstance(stop, dict)
+                or prior.get("identity") != identity or prior.get("head_sha") != head
+                or (expected is not None and expected.get("criteria") and "closing_assessments" not in prior)
+                or reconciliation.get("identity", identity) != identity or reconciliation.get("head_sha", head) != head
+                or not isinstance(operation, str) or not operation or archive.get("review_operation") != operation
+                or proof.get("operation_id") != operation or archive.get("stop_verified") is not True
+                or proof.get("source") != "native-session-metadata"
+                or proof.get("auth") != {"codex": "chatgpt", "claude-code": "claude-subscription"}.get(cast(str, proof.get("engine")))
+                or proof.get("engine") not in ("codex", "claude-code") or not _text(proof.get("model"))
+                or not _text(proof.get("native_session_id")) or not _text(proof.get("timestamp"))
+                or (proof.get("engine") == "codex" and proof.get("effort") not in ("high", "xhigh", "max", "ultra"))
+                or not isinstance(proof.get("container_id"), str)
+                or not re.fullmatch(r"[0-9a-f]{12,64}", proof["container_id"])
+                or not isinstance(stop.get("stop_id"), str) or not re.fullmatch(r"[0-9a-f]{32}", stop["stop_id"])
+                or "checkpoint" not in stop or "previous_stop_id" not in stop
+                or (stop.get("checkpoint") is not None and
+                    (not isinstance(stop["checkpoint"], dict) or not _text(stop["checkpoint"].get("ref"))))
+                or not isinstance(assignment, dict) or assignment.get("runtime") != "openhands"
+                or stop.get("container_id") != proof.get("container_id")
+                or assignment.get("container_id") != proof.get("container_id")
+                or not isinstance(conversation, dict) or conversation.get("id") != proof.get("conversation_id")
+                or not isinstance(archive.get("public_report_conversation"), str)
+                or proof.get("conversation_id") != archive.get("public_report_conversation")
+                or not isinstance(archive.get("conversation_provenance"), dict)
+                or archive["conversation_provenance"].get("reviewer") != proof.get("conversation_id")
+                or not isinstance(reconciliation.get("operation"), str)
+                or reconciliation["operation"] == operation):
+            return "original review lineage is unknown or contradictory"
+        original_digest = _digest(prior)
+        if reconciliation.get("original_report_sha256") != original_digest:
+            return "original review digest changed"
+        original_attempt_digest = _digest(archive)
+        if (reconciliation.get("original_attempt_sha256") is not None
+                and reconciliation["original_attempt_sha256"] != original_attempt_digest):
+            return "original review proof or stop archive changed"
+        prior_material = prior
+        original = _report_items(prior)
+    if (not isinstance(disposition, dict) or set(disposition) !=
+            {"identity", "head_sha", "report_sha256", "original_report_sha256", "original_attempt_sha256",
+             "assessment", "items"}
+            or not isinstance(identity, str) or not identity or not isinstance(head, str) or not head
+            or disposition.get("identity") != identity or disposition.get("head_sha") != head
+            or disposition.get("report_sha256") != _digest(review)
+            or disposition.get("original_report_sha256") != original_digest
+            or disposition.get("original_attempt_sha256") != original_attempt_digest
+            or not _disposition_reason(disposition.get("assessment"))
+            or not isinstance(disposition.get("items"), list)):
+        return "owner disposition is missing or bound to different review evidence"
+    if prior_material is not None:
+        material_error = _archived_material_error(prior_material, review, expected)
+        if material_error:
+            return material_error
+    seen: set[tuple[str, str, int]] = set()
+    for row in disposition["items"]:
+        if (not isinstance(row, dict) or not {"report", "where", "index", "sha256", "decision", "rationale"} <= set(row)
+                or set(row) - {"report", "where", "index", "sha256", "decision", "rationale", "successor"}
+                or row.get("report") not in ("current", "original") or not isinstance(row.get("where"), str)
+                or type(row.get("index")) is not int or not _disposition_reason(row.get("rationale"))):
+            return "owner disposition has a malformed item or rationale"
+        key = (row["where"], row["index"])
+        item_set = current if row["report"] == "current" else original
+        token = (row["report"], *key)
+        if token in seen or key not in item_set or row.get("sha256") != _digest(item_set[key]):
+            return "owner disposition item is missing, duplicated or changed"
+        seen.add(token)
+        if row["report"] == "current":
+            if row["decision"] != "nonblocking" or "successor" in row:
+                return "current item has no nonblocking owner disposition"
+        elif row["decision"] == "nonblocking":
+            if "successor" in row or not _original_item_may_be_nonblocking(key[0], item_set[key]):
+                return "original protected, defective or unknown item cannot be waived"
+        elif row["decision"] == "retained":
+            target = row.get("successor")
+            if (not _original_item_may_be_nonblocking(key[0], item_set[key])
+                    or not isinstance(target, dict) or set(target) != {"where", "index", "sha256"}
+                    or not isinstance(target.get("where"), str) or type(target.get("index")) is not int):
+                return "original protected, defective or unknown item has no nonblocking successor"
+            target_key = (target["where"], target["index"])
+            if (target_key not in current or target_key[0] != key[0]
+                    or target["sha256"] != _digest(current[target_key])
+                    or not _retains_item(key[0], item_set[key], current[target_key])):
+                return "original item was omitted, changed or softened"
+        else:
+            return "original item has no established disposition"
+    required = {("current", *key) for key in current} | {("original", *key) for key in original}
+    if seen != required:
+        return "owner disposition does not cover every original and current item"
+    return None
+
+
 def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, Any],
               saved: Mapping[str, Any]) -> dict[str, Any]:
     """Refresh exact review, source, issue and CI evidence immediately before native merge."""
@@ -2107,21 +2808,19 @@ def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, 
             or not isinstance(saved.get("conversation_provenance"), dict)
             or saved["conversation_provenance"].get("reviewer") != proof.get("conversation_id")
             or (entry["engine"] == "codex" and proof.get("effort") not in ("high", "xhigh", "max", "ultra"))
+            or (entry.get("effort") is not None and proof.get("effort") != entry["effort"])
             or not isinstance(review, dict)
-            or review.get("verdict") != "pass" or review.get("findings") != []
             or not isinstance(tests, dict) or tests.get("passed") is not True
             or tests.get("head_sha") != pr["head_sha"] or tests.get("targets") != entry["verify_targets"]):
         raise CycleError("review execution or sandbox verification is incomplete")
-    owner_doc = review.get("owner_doc")
-    assessment = review.get("scope_assessment")
-    if (not isinstance(assessment, dict) or not isinstance(assessment.get("acceptance"), str)
-            or not assessment["acceptance"].strip() or not isinstance(assessment.get("verify_coverage"), str)
-            or not assessment["verify_coverage"].strip() or assessment.get("limitations") != []):
-        raise CycleError("independent scope and Verify coverage assessment is incomplete")
-    if (not isinstance(owner_doc, dict) or owner_doc.get("outcome") not in ("no_change", "already_updated")
-            or not isinstance(owner_doc.get("inspected_paths"), list) or not owner_doc["inspected_paths"]
-            or not isinstance(owner_doc.get("rationale"), str) or not owner_doc["rationale"].strip()):
-        raise CycleError("owner-doc assessment requires governed continuation")
+    # Re-derive the same owner-bound gate immediately before the live authority and CI reads.
+    gate = review_gate(review, report_expectations(layout, entry, pr, saved["identity"]),
+                       disposition=entry.get("review_disposition"), reconciliation=_bound_reconciliation(layout, saved))
+    if gate["outcome"] != "pass":
+        raise CycleError(f"review report gate is {gate['outcome']}: " + "; ".join(gate["blocking"] or gate["grammar"]))
+    if tests.get("disposition_sha256") != gate.get("disposition_sha256"):
+        raise CycleError("sandbox verification does not bind the current review disposition")
+    owner_doc = review["owner_doc"]
     fresh = observation._observe(observation._Reader(github_fetch, time.monotonic), int(pr["number"]))
     if fresh is None:
         raise CycleError("PR is no longer open")
@@ -2140,12 +2839,8 @@ def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, 
         raise CycleError("independent review does not cover the exact changed source paths")
     doc_receipt = f"post-merge owner-doc check: PR #{pr['number']}; no owner-doc change implied."
     if owner_doc["outcome"] == "already_updated":
-        updates = owner_doc.get("updates")
-        if (not isinstance(updates, list) or not updates or any(not isinstance(x, dict)
-                or x.get("path") not in paths or not isinstance(x.get("path"), str)
-                or not re.fullmatch(r"[A-Za-z0-9_./-]{1,300}", x["path"])
-                or not isinstance(x.get("claim"), str)
-                or not re.fullmatch(r"[A-Za-z0-9 ,.;:/()_-]{1,300}", x["claim"]) for x in updates)):
+        updates = owner_doc["updates"]
+        if any(x["path"] not in paths for x in updates):
             raise CycleError("owner-doc changes lack exact updated paths and claims")
         doc_receipt = (f"post-merge owner-doc check: PR #{pr['number']}; owner docs updated in this PR: "
                        + "; ".join(f"{x['path']} ({x['claim']})" for x in updates) + ".")
@@ -2201,7 +2896,9 @@ def _assert_child_assessment(review: Mapping[str, Any], number: int, criteria: l
     rows = child.get("criteria") if isinstance(child, dict) else None
     hashes = {criterion["criterion_sha256"] for criterion in criteria}
     if (not isinstance(child, dict) or child.get("acceptance") != "covered"
-            or child.get("verify_coverage") != "covered" or child.get("limitations") != []
+            or child.get("verify_coverage") != "covered" or not isinstance(child.get("limitations"), list)
+            or any(not isinstance(x, dict) or x.get("kind") not in LIMITATION_KINDS or LIMITATION_KINDS[x["kind"]][0]
+                   for x in child["limitations"])
             or not isinstance(rows, dict) or set(rows) != hashes or not hashes
             or any(not isinstance(row, dict) or row.get("assessment") != "covered"
                    or not isinstance(row.get("rationale"), str) or not row["rationale"].strip()
@@ -2210,7 +2907,7 @@ def _assert_child_assessment(review: Mapping[str, Any], number: int, criteria: l
 
 
 def _dispatcher_after_merge(layout: workspace.Layout, saved: dict[str, Any], owner: Mapping[str, Any],
-                            executor: SubprocessExecutor, cwd: Path, governor: int, number: int) -> None:
+                            executor: publication.CommandExecutor, cwd: Path, governor: int, number: int) -> None:
     """Reconcile each native dispatcher effect against ordered events and durable intent."""
     keys = ("task_id", "repository", "issue_number", "lease_holder", "lease_id", "lease_expires_at", "linked_pr")
     if (any(not isinstance(owner.get(k), str) or not owner[k] for k in keys)
@@ -2314,9 +3011,13 @@ def reconcile_native(layout: workspace.Layout, saved: dict[str, Any]) -> dict[st
         raise CycleError("recorded merge intent identity is invalid")
     try:
         governor = intent["governing_issue"]
+        # Intents before an explicit claim Issue were always claimed on the governor.
+        claim = intent.get("claim_issue", governor)
         mode = intent.get("coordination_mode")
         owner = intent.get("owner")
-        if governor in intent["closing_issues"]:
+        if type(claim) is not int or claim not in {governor, *intent["closing_issues"]}:
+            raise CycleError("recorded claim Issue is outside the PR scope")
+        if claim in intent["closing_issues"]:
             # Old intents predate the explicit mode; their authenticated snapshots
             # retain either the fallback mode or the exact dispatcher lease fields.
             if mode is None and isinstance(owner, dict):
@@ -2396,10 +3097,18 @@ def reconcile_native(layout: workspace.Layout, saved: dict[str, Any]) -> dict[st
                 raise CycleError("owner-doc comment result is not established")
             sent[key] = "observed"
             _save(layout, saved)
-        if governor in intent["closing_issues"] and mode == "dispatcher-backed":
+        if claim in intent["closing_issues"] and mode == "dispatcher-backed":
             if not isinstance(owner, dict):
                 raise CycleError("recorded dispatcher coordination is ambiguous")
-            _dispatcher_after_merge(layout, saved, owner, executor, cwd, governor, number)
+            scoped_executor: publication.CommandExecutor = executor
+            source = intent.get("lifecycle_repo")
+            if source is not None:
+                if (not isinstance(source, str) or not Path(source).is_absolute()
+                        or str(Path(source).resolve()) != source or not Path(source).is_dir()
+                        or workspace._is_within(Path(source), layout.root)):
+                    raise CycleError("recorded lifecycle repository is unavailable for dispatcher reconciliation")
+                scoped_executor = _LifecycleDispatcherExecutor(executor, Path(source))
+            _dispatcher_after_merge(layout, saved, owner, scoped_executor, cwd, claim, number)
         cleanup = saved.setdefault("label_cleanup", {})
         for target in intent["closing_issues"]:
             issue = closure._issue(executor, cwd, completion.REPOSITORY, target)
@@ -2437,7 +3146,8 @@ def merge_once(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str,
     worker = entry["worker"]
     with workspace._worker_lifecycle_lock(layout, worker):
         _review_verification_lineage(_mapping(layout, worker), saved)
-        saved["merge_intent"] = authority
+        saved["merge_intent"] = ({**authority, "lifecycle_repo": entry["lifecycle_repo"]}
+                                 if entry.get("lifecycle_repo") else authority)
         _save(layout, saved)
         try:
             result = _command(["gh", "pr", "merge", str(pr["number"]), "--repo", completion.REPOSITORY,
@@ -2458,8 +3168,8 @@ def _mapping(layout: workspace.Layout, worker: str) -> dict[str, Any]:
     state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
     if state["epic_issue_number"] != layout.epic:
         raise CycleError("epic owner mismatch")
-    issue = workspace._issue_for_worker(state, worker)
-    return dict(state["issue_mappings"][str(issue)])
+    workspace._issue_for_worker(state, worker)
+    return dict(workspace._worker_mapping(state, worker))
 
 
 def _assert_live_container(layout: workspace.Layout, worker: str, mapping: Mapping[str, Any]) -> None:
@@ -2492,8 +3202,10 @@ def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: 
     image = mapping.get("image")
     credentials = mapping.get("credentials")
     engine, model = workspace.resolve_engine(admission["engine"], admission["model"])
+    effort = workspace.resolve_effort(engine, model, admission.get("effort"))
     if (not isinstance(record, dict) or record.get("operation_id") != operation_id
             or record.get("engine") != engine or record.get("model") != model
+            or (effort is not None and record.get("effort") != effort)
             or not isinstance(credentials, dict)
             or (engine == "codex" and credentials.get("codex") != "chatgpt-login-dir")
             or (engine == "claude-code" and credentials.get("claude") != "oauth-token-env")
@@ -2533,7 +3245,6 @@ def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: 
     config_check = (
         "import pathlib,tomllib; p=pathlib.Path('/run/codex-home/config.toml'); "
         "c=tomllib.loads(p.read_text()) if p.exists() else {}; "
-        "assert c.get('model') in (None,'gpt-6.1-terra'); "
         "assert c.get('model_provider') in (None,'openai'); "
         "assert c.get('openai_base_url') is None; "
         "assert c.get('chatgpt_base_url') in (None,'https://chatgpt.com/backend-api/'); "
@@ -2562,11 +3273,13 @@ def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: 
             or not isinstance(agent, dict) or agent.get("kind") != "ACPAgent"
             or agent.get("acp_server") != engine or agent.get("acp_model") != model
             or info.get("current_model_id") != model
+            or (effort is not None and (agent.get("acp_effort") != effort or info.get("current_effort") != effort))
             or not isinstance(info.get("current_effort"), str)
             or not isinstance(info.get("available_efforts"), list)
             or not any(isinstance(e, dict) and e.get("value") == info["current_effort"]
                        for e in info["available_efforts"])
-            or status.get("reachable") is not True or status.get("execution_status") not in ("finished", "FINISHED")
+            or status.get("reachable") is not True or status.get("events_reachable") is not True
+            or status.get("execution_status") not in ("finished", "FINISHED")
             or status.get("errors") or not isinstance(kinds, list)
             or any(isinstance(k, str) and ("rerout" in k.casefold() or "fallback" in k.casefold()) for k in kinds)):
         raise CycleError("native conversation execution is not established")
@@ -2604,14 +3317,7 @@ def _review_prompt(pr: Mapping[str, Any], identity: str, targets: list[str]) -> 
             "obligations or harmful reverts against the contract; judge intended fixes and refactors on their merits. "
             "Do not write or publish. In your final public response put one JSON "
             "object between <BEGIN_PR_CYCLE_REPORT> and <END_PR_CYCLE_REPORT>. Public closeout text may precede "
-            "the delimiter, but do not put other JSON objects there. Include identity, head_sha, "
-            "verdict (pass or findings), findings (array), "
-            "verify_targets (array of exact targets reviewed), covered_sources (sorted array of every changed "
-            "app/, scripts/ or tests/ path examined), scope_assessment (acceptance, verify_coverage, "
-            "limitations), owner_doc (outcome, inspected_paths and rationale), "
-            "closing_assessments keyed by exact Issue number, each with acceptance and verify_coverage "
-            "(covered or incomplete), limitations array, and criteria keyed by SHA-256 of the exact criterion "
-            "text, each with assessment and substantive rationale. Assess every criterion "
+            "the delimiter, but do not put other JSON objects there. " + report_grammar() + " Assess every criterion "
             "against the actual implementation, not merely the names of test targets. Obtain criterion hashes "
             "using app.builderops.closure._acceptance_criteria on each supplied Issue body. "
             f"Requested Verify targets: {json.dumps(targets)}. PR body: {pr['body']}\n"
@@ -2619,27 +3325,70 @@ def _review_prompt(pr: Mapping[str, Any], identity: str, targets: list[str]) -> 
             f"Exact closing contracts and reviewed file patches: {json.dumps(pr['review_material'])}")
 
 
+def _reconciliation_prompt(pr: Mapping[str, Any], identity: str, targets: list[str],
+                           reconciliation: Mapping[str, Any]) -> str:
+    """One bounded report correction that reuses the earlier independent analysis as evidence."""
+    original = reconciliation["archived"]["review"]
+    return (f"Report-contract reconciliation for PR #{pr['number']} at head {pr['head_sha']} and contract identity "
+            f"{identity}. An earlier independent review of this exact head and contract produced the report below "
+            f"(sha256 {reconciliation['original_report_sha256']}), but it does not follow {REPORT_CONTRACT}: "
+            + "; ".join(reconciliation["gate"]["grammar"]) + ". Treat that analysis as evidence: re-express it under "
+            "the grammar, classify each finding and limitation, and re-inspect code, contracts or owner docs only "
+            "where a classification needs it. Do not drop, soften or relabel a finding without stating why in its "
+            "fields; an uncovered criterion, Verify target or required owner-doc update is a gap, and a defect is a "
+            "finding. " + _review_prompt(pr, identity, targets)
+            + f"\nEarlier report (evidence, verbatim): {json.dumps(original, sort_keys=True)}")
+
+
+@workspace._serialized_worker
 def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_id: str,
                               pr: Mapping[str, Any], identity: str, admission: Mapping[str, Any],
-                              *, http: Callable[..., tuple[int, Any]] = workspace._http) -> dict[str, Any]:
+                              *, http: Callable[..., tuple[int, Any]] = workspace._http,
+                              reconciliation: Mapping[str, Any] | None = None,
+                              expected_owner_binding: Mapping[str, Any] | None = None) -> dict[str, Any]:
     mapping = _mapping(layout, worker)
+    if expected_owner_binding is not None and (set(expected_owner_binding) != {"lifecycle_owner", "owner", "builder_session"}
+            or any(mapping.get(key) != value for key, value in expected_owner_binding.items())):
+        raise CycleError("review worker owner or Builder session changed")
     if mapping.get("state") != "running" or mapping.get("runtime") != "openhands":
+        if reconciliation is not None:
+            raise CycleError(f"report reconciliation {operation_id} is reserved; start reviewer {worker} "
+                             "through the existing OpenHands takeover and start lifecycle")
         raise CycleError("review worker is not a running OpenHands worker")
     _assert_live_container(layout, worker, mapping)
     prior = mapping.get("conversation")
+    handoff = mapping.get("engine_handoff")
+    if (isinstance(handoff, Mapping) and handoff.get("status") == "awaiting_pr_cycle"
+            and handoff.get("operation_id") == operation_id):
+        admission = {**admission, "engine": "codex", "model": "gpt-6.1-terra"}
     if isinstance(prior, dict) and prior.get("operation_id") == operation_id:
+        if expected_owner_binding is not None and prior.get("owner_binding") != dict(expected_owner_binding):
+            raise CycleError("review conversation owner binding changed")
         if prior.get("status") in ("creating", "unknown"):
-            return workspace.reconcile_worker_conversation(layout, worker, http=http, runner=_worker_runner)
-        return prior
+            return workspace._reconcile_worker_conversation_locked(layout, worker, http=http, runner=_worker_runner)
+        if not (prior.get("status") == workspace.CONVERSATION_ENDED and isinstance(handoff, Mapping)
+                and handoff.get("status") == "awaiting_pr_cycle" and handoff.get("operation_id") == operation_id):
+            return prior
     if isinstance(prior, dict) and prior.get("status") != workspace.CONVERSATION_ENDED:
         raise CycleError("previous conversation may still write")
-    checkout = workspace.inspect_checkout(layout, worker)
+    checkout = workspace.inspect_checkout(layout, worker, runner=_worker_runner)
     if (checkout.get("readable") is not True or checkout.get("head") != pr["head_sha"]
             or checkout.get("uncommitted_count") != 0):
         raise CycleError("review checkout is not clean at the admitted head")
-    return workspace.start_conversation(
+    prompt = (_review_prompt(pr, identity, admission["verify_targets"]) if reconciliation is None else
+              _reconciliation_prompt(pr, identity, admission["verify_targets"], reconciliation))
+    if (isinstance(handoff, Mapping) and handoff.get("status") == "awaiting_pr_cycle"
+            and handoff.get("operation_id") == operation_id):
+        from app.builderops import epic_engine_handoff
+
+        context = epic_engine_handoff.continuation_context(layout, worker, handoff)
+        prompt = ("Compact controller records for this same review (unknown means not established):\n"
+                  + json.dumps(context, ensure_ascii=True, sort_keys=True, default=str) + "\n\n" + prompt)
+    return workspace._start_conversation_locked(
         layout, worker, engine=admission["engine"], model=admission["model"],
-        prompt=_review_prompt(pr, identity, admission["verify_targets"]), operation_id=operation_id,
+        effort=admission.get("effort"), prompt=prompt,
+        operation_id=operation_id,
+        expected_owner_binding=expected_owner_binding,
         http=http, runner=_worker_runner)
 
 
@@ -2688,9 +3437,11 @@ def _public_report(text: Any) -> dict[str, Any] | None:
 @workspace._serialized_worker
 def review_result(layout: workspace.Layout, worker: str, operation_id: str,
                   pr: Mapping[str, Any], identity: str, admission: Mapping[str, Any],
-                  *, http: Callable[..., tuple[int, Any]] = workspace._http) -> dict[str, Any] | None:
+                  *, http: Callable[..., tuple[int, Any]] = workspace._http,
+                  include_raw: bool = False) -> Any:
     mapping = _mapping(layout, worker)
     _assert_live_container(layout, worker, mapping)
+    text = None
     try:
         state = workspace._load_state(layout)
         issue = workspace._issue_for_worker(state, worker)
@@ -2709,19 +3460,23 @@ def review_result(layout: workspace.Layout, worker: str, operation_id: str,
                     or info.get("execution_status") not in ("finished", "FINISHED")):
                 return None
             code, final = http("GET", port, key, f"/conversations/{cid}/agent_final_response", None, 10.0)
-            result = _public_report(final.get("response") if code == 200 and isinstance(final, dict) else None)
+            text = final.get("response") if code == 200 and isinstance(final, dict) else None
+            if include_raw:
+                if not isinstance(text, str) or len(text.encode("utf-8")) > 65536:
+                    raise CycleError("finished candidate review response unavailable or exceeds the bound")
+                return text, _public_report(text)
+            result = _public_report(text)
     except (OSError, ValueError, RecursionError, workspace.EpicWorkspaceError):
         return None
-    allowed = {"identity", "head_sha", "verdict", "findings", "verify_targets", "owner_doc",
-               "covered_sources", "scope_assessment", "closing_assessments"}
-    if (not isinstance(result, dict) or not set(result) <= allowed
-            or result.get("identity") != identity or result.get("head_sha") != pr["head_sha"]
-            or result.get("verdict") not in ("pass", "findings") or not isinstance(result.get("findings"), list)
-            or result.get("verify_targets") != admission["verify_targets"]
-            or not isinstance(result.get("owner_doc"), dict)
-            or (result["verdict"] == "pass" and result["findings"])
-            or (result["verdict"] == "findings" and not result["findings"])):
+    if result is None:
+        # A finished, bound conversation whose public answer is not one bounded report is terminal.
+        # Its digest stands in for it, and review_gate routes it to the bounded reconciliation.
+        if isinstance(text, str) and text.strip():
+            return {"unreadable_report_sha256": hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(),
+                    "unreadable_report_text": text[:65536]}
         return None
+    # The conversation binds the report to this operation; review_gate classifies every report field,
+    # including identity, head and Verify targets, so a defective report is reconciled, not ignored.
     # A model's own account of its execution is not a runtime authentication receipt.
     # The controller must independently prove the executing engine before qualification.
     return result
@@ -2744,21 +3499,2427 @@ def _validate_admission(value: Any) -> dict[int, dict[str, Any]]:
             raise CycleError("invalid admission identity or Verify targets")
         workspace.validate_worker_id(worker)
         engine, model = workspace.resolve_engine(row.get("engine", ""), row.get("model"))
+        workspace.resolve_effort(engine, model, row.get("effort"))
         admitted[number] = {**row, "engine": engine, "model": model}
     return admitted
 
 
-def advance(layout: workspace.Layout, admissions: list[dict[str, Any]], *,
-            fetch: observation.Fetch = github_fetch,
-            http: Callable[..., tuple[int, Any]] = workspace._http) -> dict[str, Any]:
-    admitted = _validate_admission(admissions)
+def _read_configuration(layout: workspace.Layout, path: Path) -> dict[str, Any]:
+    """Read controller-owned file authority while the advancement lock is held."""
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022
+            or workspace._is_within(path, layout.root.resolve() / f"epic-{layout.epic}" / "workers")):
+        raise CycleError("admission configuration must be controller-owned and outside worker directories")
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise CycleError("invalid configuration")
+    return config
+
+
+def _read_admissions(layout: workspace.Layout, path: Path) -> Any:
+    return _read_configuration(layout, path).get("admissions", [])
+
+
+def _write_configuration(path: Path, config: Mapping[str, Any], expected: str) -> None:
+    """Replace the existing admission file under the caller's cycle lock, fencing drift."""
+    descriptor, name = tempfile.mkstemp(prefix=".pr-cycle-admission-", dir=path.parent)
+    try:
+        os.fchmod(descriptor, stat.S_IMODE(path.stat().st_mode))
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(config, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.read_text(encoding="utf-8") != expected:
+            raise CycleError("admission changed during controller update")
+        os.replace(name, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def _automatic_settings(value: Any) -> dict[str, Any]:
+    """One controller-owned operating scope, never a PR/body/model assertion."""
+    required = {"claimant", "session", "lifecycle_repo", "test_venv", "engine", "model"}
+    if (not isinstance(value, dict) or not required <= value.keys()
+            or value.keys() - required - {"effort"}
+            or any(not isinstance(value[k], str) or not value[k].strip() for k in required)):
+        raise CycleError("automatic_native requires claimant/session, lifecycle repository, test venv and engine/model")
+    engine, model = workspace.resolve_engine(value["engine"], value["model"])
+    workspace.resolve_effort(engine, model, value.get("effort"))
+    return {**value, "engine": engine, "model": model}
+
+
+def _automatic_review_worker(layout: workspace.Layout, pr: Mapping[str, Any],
+                             entry: Mapping[str, Any]) -> dict[str, Any]:
+    mapping = _mapping(layout, entry["worker"])
+    if (any(mapping.get(k) is not None and mapping[k] != entry["claimant"] for k in ("owner", "lifecycle_owner"))
+            or mapping.get("builder_session") not in (None, entry["session"])):
+        raise CycleError("worker belongs to another lifecycle owner; resume-work/handoff required")
+    if mapping.get("state") == "running":
+        if mapping.get("runtime") != "openhands":
+            raise CycleError("automatic review requires the existing OpenHands placement")
+        _assert_live_container(layout, entry["worker"], mapping)
+        conversation = mapping.get("conversation")
+        if conversation is not None and (not isinstance(conversation, dict)
+                or conversation.get("status") != workspace.CONVERSATION_ENDED):
+            state = workspace._load_state(layout)
+            own = [r for r in state["compact_receipts"] if isinstance(r, dict) and r.get("kind") == "pr_cycle"
+                   and r.get("number") == pr["number"] and isinstance(conversation, dict)
+                   and conversation.get("operation_id") is not None
+                   and conversation["operation_id"] in (r.get("review_operation"), r.get("repair_operation"))]
+            if len(own) != 1:
+                raise CycleError("existing conversation may still write; resume-work/handoff required")
+    else:
+        _assert_stopped(layout, entry["worker"], mapping)
+    return {k: mapping.get(k) for k in ("lifecycle_owner", "owner", "builder_session")}
+
+
+def _automatic_admission(layout: workspace.Layout, pr: Mapping[str, Any],
+                         settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Derive an entry; existing records retain all ownership/effect authority."""
+    if (pr.get("draft") is not False or pr.get("restrictions") or pr.get("base_ref") != "main"
+            or pr.get("head_repository") != completion.REPOSITORY
+            or re.search(r"\b(?:draft[ -]only|do[ -]not[ -]merge|do not merge|merge hold)\b", pr["body"], re.I)):
+        raise CycleError("draft, hold or unsupported PR source")
+    _assert_unheld_issue({"labels": [{"name": label} for label in pr["labels"]]})
+    authority = resolve_native_issue_authority(pr["body"])
+    if authority is None:
+        raise CycleError("native Issue contract unavailable; preserve the owning route")
+    claim = _pickup_issue(pr["body"], governing=authority.governing_issue, closing=authority.closing_issues)
+    state = workspace._load_state(layout)
+    mapping = state["issue_mappings"].get(str(claim))
+    if not isinstance(mapping, dict) or not isinstance(mapping.get("worker"), str):
+        raise CycleError("existing worker placement missing; use normal resume-work/claim path")
+    cwd = Path(__file__).resolve().parents[2]
+    executor: publication.CommandExecutor = SubprocessExecutor(timeout_seconds=30)
+    live = closure._pr(executor, cwd, completion.REPOSITORY, int(pr["number"]))
+    branch = live.get("head", {}).get("ref")
+    source = Path(settings["lifecycle_repo"])
+    if (not source.is_absolute() or str(source.resolve()) != str(source) or not source.is_dir()
+            or workspace._is_within(source, layout.root) or not isinstance(branch, str) or not branch):
+        raise CycleError("controller lifecycle repository or PR branch unavailable")
+    # Registry rows are selection hints only; native_authority binds the live Git generation,
+    # claim events, authenticated receipts, transfer history and exact current contract below.
+    records = agent_worktree.load_lifecycle_records(source)
+    owners = [row for row in records.values() if row.get("branch") == branch
+              and row.get("status") == "active" and row.get("owner") == settings["session"]]
+    if len(owners) != 1:
+        raise CycleError("registered session does not own this branch; resume-work/handoff required")
+    executor = _LifecycleDispatcherExecutor(executor, source)
+    mode = _dispatcher_mode(executor, source)
+    coordination: dict[str, Any] = {"coordination_mode": mode}
+    if mode == closure.DISPATCHER_MODE:
+        task_id = github_issue_task_id(completion.REPOSITORY, claim)
+        task, _, lease = closure._dispatcher_inspect(executor, source, task_id)
+        owner = closure._dispatcher_snapshot_from_task(task, task_id, repository=completion.REPOSITORY,
+            issue_number=claim, pr_number=int(pr["number"]), lease=lease)
+        if owner["lease_holder"] != settings["claimant"]:
+            raise CycleError("another active claimant owns this PR; resume-work/handoff required")
+        coordination["lease_id"] = owner["lease_id"]
+    else:
+        # Select only an existing receipt for this registered owner. The normal native
+        # reader rechecks authentication, latest claimant, continuous ownership and handoff.
+        comments = _api_pages(executor, source, f"/issues/{claim}/comments")
+        matching = []
+        for comment in comments:
+            body = comment.get("body") if isinstance(comment, dict) else None
+            match = closure.PICKUP_RECEIPT_RE.fullmatch(body) if isinstance(body, str) else None
+            if match and match.groupdict() == {
+                    "agent": settings["claimant"], "session": settings["session"], "branch": branch,
+                    "worktree": owners[0]["path"], "mode": closure.DEGRADED_MODE,
+                    "reason": "dispatcher_db_missing", "issue": str(claim)}:
+                at = _fallback_comment(comments, comment_id=comment.get("id"), issue=claim,
+                    agent=settings["claimant"], session=settings["session"], branch=branch,
+                    path=owners[0]["path"], reason="dispatcher_db_missing")
+                matching.append((at, comment["id"]))
+        if not matching:
+            raise CycleError("existing authenticated fallback pickup for registered owner is missing; resume-work/handoff required")
+        coordination.update(fallback_reason="dispatcher_db_missing",
+                            coordination_evidence=f"github-comment:{max(matching)[1]}")
+    context, material = _review_context(pr)
+    issues = material["issues"] or {str(authority.governing_issue): pr["governing_issue"]}
+    targets = _contract_verify_targets(issues, Path(owners[0]["path"]))
+    entry = {**settings, "number": pr["number"], "head_sha": pr["head_sha"], "worker": mapping["worker"],
+             "native_session_owned": True, **coordination, "owner_worktree": owners[0]["path"],
+             "verify_targets": targets, "_automatic_native": dict(settings),
+             "_automatic_context": _digest({"observation": completion.work_identity(pr), "context": context})}
+    entry = _validate_admission([entry])[pr["number"]]
+    _test_venv_source(layout, entry["test_venv"])
+    entry["_automatic_owner_binding"] = _automatic_review_worker(layout, pr, entry)
+    native_authority(layout, pr, entry, purpose="admission")
+    return entry
+
+
+def _review_quota_candidate(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                            result: Mapping[str, Any], *,
+                            http: Callable[..., tuple[int, Any]]) -> tuple[int, str, dict[str, Any]] | None:
+    """Find an already-admitted review operation; do not create another producer or task."""
+    if pr.get("draft") is not False or pr.get("restrictions"):
+        return None
+    worker = entry["worker"]
+    state = workspace._load_state(layout)
+    issue = workspace._issue_for_worker(state, worker)
+    mapping = workspace._worker_mapping(state, worker)
+    handoff = mapping.get("engine_handoff")
+    pending = isinstance(handoff, Mapping) and handoff.get("status") == "pending"
+    conversation = mapping.get("conversation")
+    operation = cast(Mapping[str, Any], handoff).get("operation_id") if pending else (
+        conversation.get("operation_id") if isinstance(conversation, Mapping) else None)
+    if not isinstance(operation, str):
+        return None
+    if not pending:
+        if (mapping.get("state") != "running" or not isinstance(conversation, Mapping)
+                or conversation.get("engine") != "claude-code" or conversation.get("status") != "created"):
+            return None
+        status = workspace.conversation_status(layout, worker, http=http, runner=_worker_runner, include_messages=False)
+        if status.get("failure_class") != "quota_exhausted" or status.get("failure_current") is not True:
+            return None
+    identity = result.get("identity")
+    if not isinstance(identity, str):
+        identity = completion.work_identity(pr)
+    if _find(layout, pr["number"], identity).get("review_operation") != operation:
+        return None
+    return issue, worker, workspace.assignment_of(mapping)
+
+
+def _reserve_repair(layout: workspace.Layout, saved: dict[str, Any], entry: Mapping[str, Any],
+                    candidate: Mapping[str, Any], authority: Mapping[str, Any],
+                    mapping: Mapping[str, Any]) -> str:
+    """Reserve the one author attempt with the review and stopped assignment in one update."""
+    operation = "pr-completion-" + _digest({"identity": saved["identity"], "request": "repair-author",
+                                           "report_sha256": candidate["report_sha256"]})
+    def update(state: dict[str, Any]) -> dict[str, Any]:
+        issue = workspace._issue_for_worker(state, entry["worker"])
+        current = workspace._worker_mapping(state, entry["worker"])
+        if (not workspace._same_assignment(current, mapping) or current.get("stop_id") != mapping.get("stop_id")
+                or current.get("work_at_stop") != mapping.get("work_at_stop")):
+            raise CycleError("reviewer stop changed before repair reservation")
+        records = state["dispatch_decisions"]
+        related = [r for r in records if isinstance(r, dict) and r.get("kind") == "openhands_pr_completion"
+                   and r.get("number") == saved["number"] and r.get("repository") == completion.REPOSITORY]
+        if any(not isinstance(r.get("operation_id"), str) or not r["operation_id"] for r in related):
+            raise CycleError("an earlier PR effect has no usable operation identity")
+        if any(r.get("outcome") not in ("completed", "no_effect") for r in related):
+            raise CycleError("an earlier PR effect is unresolved; reconcile it before repair")
+        reviews = [r for r in related if r.get("operation_id") == saved.get("review_operation")
+                   and r.get("request") == "independent-review" and r.get("identity") == saved["identity"]
+                   and r.get("outcome") == "completed"]
+        if len(reviews) != 1:
+            raise CycleError("completed review reservation is unavailable or contradictory")
+        if any(r.get("operation_id") == operation for r in related):
+            raise CycleError("repair reservation already exists; reconcile it")
+        rows = [r for r in state["compact_receipts"] if isinstance(r, dict) and r.get("kind") == "pr_cycle"
+                and r.get("number") == saved["number"] and r.get("identity") == saved["identity"]]
+        if len(rows) != 1 or rows[0] != saved:
+            raise CycleError("review evidence changed before repair reservation")
+        rows[0]["repair_operation"] = operation
+        rows[0]["repair_authority_binding"] = dict(authority)
+        rows[0]["repair_review_sha256"] = candidate["report_sha256"]
+        rows[0]["repair_work_at_stop"] = mapping.get("work_at_stop")
+        rows[0]["repair_claim_issue"] = issue
+        rows[0]["repair_owner_binding"] = {field: mapping.get(field) for field in
+                                           ("lifecycle_owner", "owner", "builder_session")}
+        rows[0]["repair_engine"] = entry["engine"]
+        rows[0]["repair_model"] = entry["model"]
+        if entry.get("effort") is not None:
+            rows[0]["repair_effort"] = entry["effort"]
+        rows[0]["repair_admission_selection"] = entry["_repair_admission_selection"]
+        rows[0]["repair_handoff_binding"] = entry["_repair_handoff_binding"]
+        records.append({"kind": "openhands_pr_completion", "operation_id": operation,
+                        "repository": completion.REPOSITORY, "number": saved["number"],
+                        "identity": saved["identity"], "route": "native", "request": "repair-author",
+                        "attempt": 1, "outcome": "unknown", "review_sha256": candidate["report_sha256"]})
+        return state
+    epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=update,
+                                         expected_epic_issue_number=layout.epic)
+    return operation
+
+
+def _repair_authority_continues(saved: Any, fresh: Mapping[str, Any]) -> bool:
+    """Compare validated readbacks, ignoring only renewable observations with stable identity.
+
+    Old reservations lack a registration epoch; their worktree expiry remains fenced
+    exactly because continuity across an expired/re-registered worktree is unprovable.
+    """
+    if not isinstance(saved, Mapping):
+        return False
+    old, new = dict(saved), dict(fresh)
+    for value in (old, new):
+        owner = value.get("owner")
+        if isinstance(owner, Mapping):
+            owner = dict(owner)
+            owner.pop("lease_expires_at", None)
+            value["owner"] = owner
+    old_tree, new_tree = old.get("worktree_owner"), new.get("worktree_owner")
+    if isinstance(old_tree, Mapping) and isinstance(new_tree, Mapping):
+        old_tree, new_tree = dict(old_tree), dict(new_tree)
+        if "registration_epoch" in old_tree:
+            old_tree.pop("expires_at", None)
+            new_tree.pop("expires_at", None)
+        else:
+            new_tree.pop("registration_epoch", None)
+        old["worktree_owner"], new["worktree_owner"] = old_tree, new_tree
+    return old == new
+
+
+def _effective_repair_entry(entry: Mapping[str, Any], mapping: Mapping[str, Any],
+                            saved: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve the exact review handoff equally for initial reservation and resume."""
+    selection = {key: entry[key] for key in ("engine", "model", "effort") if key in entry}
+    handoff = mapping.get("engine_handoff")
+    matches = (isinstance(handoff, Mapping) and handoff.get("status") in ("awaiting_pr_cycle", "complete")
+               and saved.get("review_operation") is not None
+               and handoff.get("operation_id") == saved.get("review_operation"))
+    binding = _digest(handoff) if matches else None
+    # The digest is historical evidence; the handoff producer's operation and
+    # confirmation, rather than all mutable handoff metadata, bind continuation.
+    if saved.get("repair_handoff_binding") is not None and not matches:
+        raise CycleError("repair handoff changed after reservation")
+    effective = dict(entry)
+    original = saved.get("repair_admission_selection", selection)
+    if matches and isinstance(original, Mapping) and original.get("engine") == "claude-code":
+        confirmation = cast(Mapping[str, Any], handoff).get("confirmation")
+        if confirmation is not None and (not isinstance(confirmation, Mapping)
+                or confirmation.get("engine") != original.get("engine")
+                or confirmation.get("model") != original.get("model")):
+            raise CycleError("repair handoff does not bind the admitted engine and model")
+    if matches and selection["engine"] == "claude-code":
+        confirmation = cast(Mapping[str, Any], handoff).get("confirmation")
+        if confirmation is not None and (not isinstance(confirmation, Mapping)
+                or confirmation.get("engine") != selection["engine"]
+                or confirmation.get("model") != selection["model"]):
+            raise CycleError("repair handoff does not bind the admitted engine and model")
+        effective.update(engine="codex", model="gpt-6.1-terra")
+    effective["_repair_admission_selection"] = selection
+    effective["_repair_handoff_binding"] = binding
+    return effective
+
+
+def _assert_repair_publications_settled(mapping: Mapping[str, Any]) -> None:
+    operations = mapping.get("publication_ops", [])
+    if not isinstance(operations, list):
+        raise CycleError("earlier publication remains unresolved; reconcile it before repair")
+    for op in operations:
+        result = op.get("result") if isinstance(op, Mapping) else None
+        sha = result.get("sha") if isinstance(result, Mapping) else None
+        if (not isinstance(op, Mapping) or op.get("status") != "confirmed" or op.get("kind") not in workspace.PUBLICATION_KINDS
+                or not isinstance(op.get("id"), str) or not op["id"] or op.get("branch") != mapping.get("branch")
+                or not isinstance(result, Mapping) or result.get("branch") != op.get("branch")
+                or not isinstance(sha, str) or not workspace._OID.fullmatch(sha)
+                or op.get("expect_sha") not in (None, sha)
+                or (op.get("kind") == "pr_create" and (type(result.get("number")) is not int or result["number"] <= 0))):
+            raise CycleError("earlier publication remains unresolved; reconcile it before repair")
+
+
+@workspace._serialized_worker
+def _advance_repair(layout: workspace.Layout, worker: str, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                    saved: dict[str, Any], *, candidate: Mapping[str, Any] | None,
+                    http: Callable[..., tuple[int, Any]], codex_home: Path | None) -> dict[str, Any]:
+    """Start or reconcile one repair author through the existing stopped-worker lifecycle."""
+    identity = saved["identity"]
+    mapping = _mapping(layout, worker)
+    op = saved.get("repair_operation")
+    if op is not None:
+        records = workspace._load_state(layout)["dispatch_decisions"]
+        matches = [r for r in records if isinstance(r, dict) and r.get("operation_id") == op]
+        report = saved.get("review")
+        expected_op = "pr-completion-" + _digest({"identity": identity, "request": "repair-author",
+                                                  "report_sha256": saved.get("repair_review_sha256")})
+        if (op != expected_op or not isinstance(report, dict) or _digest(report) != saved.get("repair_review_sha256")
+                or len(matches) != 1 or matches[0].get("request") != "repair-author"
+                or matches[0].get("repository") != completion.REPOSITORY or matches[0].get("number") != pr["number"]
+                or matches[0].get("route") != "native"
+                or matches[0].get("identity") != identity or matches[0].get("outcome") != "unknown"
+                or matches[0].get("review_sha256") != saved.get("repair_review_sha256")):
+            raise CycleError("repair reservation is unavailable or contradictory")
+        conversation = mapping.get("conversation")
+        if isinstance(conversation, Mapping) and conversation.get("operation_id") == op:
+            if conversation.get("status") in ("creating", "unknown"):
+                conversation = workspace._reconcile_worker_conversation_locked(layout, worker, http=http, runner=_worker_runner)
+            return _consume_repair_author(layout, worker, pr, entry, saved, conversation, http=http)
+    # Readback above cannot create a writer. Resolve fresh write policy only
+    # after checking for the already-attempted exact operation.
+    entry = _effective_repair_entry(entry, mapping, saved)
+    if op is None:
+        if candidate is None or entry["engine"] != "codex":
+            raise CycleError("a bound Codex repair candidate is required")
+        _review_stop_checkpoint(mapping, saved, require_receipt=True)
+        _assert_stopped(layout, worker, mapping)
+        authority = native_authority(layout, pr, entry, purpose="repair")
+        work = mapping.get("work_at_stop")
+        issue = workspace._issue_for_worker(workspace._load_state(layout), worker)
+        recorded_owner = mapping.get("lifecycle_owner") or mapping.get("owner")
+        if (authority.get("claim_issue") != issue or not isinstance(entry.get("claimant"), str)
+                or not isinstance(entry.get("session"), str)
+                or (recorded_owner is not None and recorded_owner != entry["claimant"])
+                or (mapping.get("builder_session") is not None and mapping.get("builder_session") != entry["session"])):
+            raise CycleError("repair worker does not bind the claimed Issue and Builder owner")
+        if (not isinstance(work, Mapping) or not isinstance(authority.get("branch"), str)
+                or mapping.get("branch") != authority.get("branch") or work.get("branch") != authority.get("branch")
+                or work.get("head") != pr.get("head_sha")):
+            raise CycleError("review checkpoint does not bind the authorized source branch and head")
+        _assert_repair_publications_settled(mapping)
+        op = _reserve_repair(layout, saved, entry, candidate, authority, mapping)
+        saved = _find(layout, pr["number"], identity)
+    if (entry["engine"] != saved.get("repair_engine") or entry["model"] != saved.get("repair_model")
+            or entry.get("effort") != saved.get("repair_effort")):
+        raise CycleError("repair engine selection changed after reservation")
+    owner_binding = saved.get("repair_owner_binding")
+    issue = workspace._issue_for_worker(workspace._load_state(layout), worker)
+    if (issue != saved.get("repair_claim_issue") or not isinstance(owner_binding, dict)
+            or set(owner_binding) != {"lifecycle_owner", "owner", "builder_session"}
+            or any(mapping.get(field) != value for field, value in owner_binding.items())):
+        raise CycleError("repair worker owner, Issue or Builder session changed")
+    intent = saved.get("stop_intent")
+    if not isinstance(intent, Mapping) or not saved.get("stop_verified"):
+        raise CycleError("repair lacks the exact reviewer stop")
+    _assert_repair_publications_settled(mapping)
+    if mapping.get("state") == "stopped_verified":
+        _review_stop_checkpoint(mapping, saved, require_receipt=True)
+        if not _repair_authority_continues(saved.get("repair_authority_binding"),
+                                           native_authority(layout, pr, entry, purpose="repair")):
+            raise CycleError("repair authority changed after reservation")
+        budget = mapping.get("budget")
+        image, network = mapping.get("image"), mapping.get("network")
+        if (not isinstance(budget, Mapping) or not isinstance(image, str) or not isinstance(network, str)):
+            raise CycleError("repair worker launch configuration is unavailable")
+        workspace._takeover_locked(layout, worker, reason="bounded PR review repair", runner=_worker_runner,
+                                   stop_intent=intent, expected_container_id=intent.get("container_id"))
+        mapping = _mapping(layout, worker)
+        _review_stop_checkpoint(mapping, saved, require_receipt=True)
+        if (workspace._issue_for_worker(workspace._load_state(layout), worker) != issue
+                or any(mapping.get(field) != value for field, value in owner_binding.items())):
+            raise CycleError("repair worker owner, Issue or Builder session changed")
+        _assert_repair_publications_settled(mapping)
+        if not _repair_authority_continues(saved.get("repair_authority_binding"),
+                                           native_authority(layout, pr, entry, purpose="repair")):
+            raise CycleError("repair authority changed before worker launch")
+        workspace._start_openhands_worker_locked(
+            layout, worker, budget=workspace.Budget(cast(str, budget.get("cpus")), cast(str, budget.get("memory")), cast(int, budget.get("pids"))),
+            codex_home=codex_home or Path.home() / ".config/epic-workspace/codex",
+            image=image, network=network, runner=_worker_runner, http=http)
+        mapping = _mapping(layout, worker)
+    if mapping.get("state") != "running":
+        raise CycleError("repair worker launch is unresolved; reconcile its exact container")
+    prior = mapping.get("conversation")
+    if (not isinstance(prior, Mapping) or prior.get("status") != workspace.CONVERSATION_ENDED
+            or prior.get("id") != saved.get("public_report_conversation")):
+        raise CycleError("repair predecessor conversation is not proven ended")
+    writer = {"assignment": workspace.assignment_of(mapping), "stop_id": intent.get("stop_id"),
+              "predecessor_container": intent.get("container_id"), "work_at_stop": saved.get("repair_work_at_stop")}
+    if not _repair_authority_continues(saved.get("repair_authority_binding"),
+                                       native_authority(layout, pr, entry, purpose="repair", repair_writer=writer)):
+        raise CycleError("repair authority changed before author conversation")
+    report = saved.get("review")
+    if not isinstance(report, dict) or _digest(report) != saved.get("repair_review_sha256"):
+        raise CycleError("repair review evidence changed")
+    prompt = (f"Repair the bounded P0/P1 findings for PR #{pr['number']} at {pr['head_sha']} "
+              f"and contract identity {identity}. Follow the existing Issue scope and builder workflow. "
+              "Make necessary in-scope source corrections and focused tests. Do not publish, push, create a PR, "
+              "change claims or access host credentials. Preserve unrelated work. Report changed paths and tests.\n"
+              f"Issue contract: {pr['governing_issue']['body']}\nReview: {json.dumps(report, sort_keys=True)}")
+    conversation = workspace._start_conversation_locked(layout, worker, engine=entry["engine"], model=entry["model"],
+                                                         effort=entry.get("effort"), prompt=prompt, operation_id=op, http=http, runner=_worker_runner,
+                                                         expected_owner_binding=owner_binding)
+    return {"number": pr["number"], "identity": identity, "action": "repair-author", "operation_id": op,
+            "reason": f"conversation {conversation.get('id')} {conversation.get('status')}"}
+
+
+def _consume_repair_author(layout: workspace.Layout, worker: str, pr: Mapping[str, Any],
+                           entry: Mapping[str, Any], saved: dict[str, Any],
+                           conversation: Mapping[str, Any], *,
+                           http: Callable[..., tuple[int, Any]]) -> dict[str, Any]:
+    """Consume only the reserved author's live proof and ID-bound preserved stop."""
+    op, identity = saved["repair_operation"], saved["identity"]
+    result = {"number": pr["number"], "identity": identity, "action": "repair-author", "operation_id": op}
+    mapping = _mapping(layout, worker)
+    if saved.get("repair_publication") is not None:
+        return {**result, "action": "wait",
+                "reason": "reconcile the existing trusted publication before changing its candidate"}
+    if "repair_candidate" in saved:
+        # A candidate is a point-in-time observation and must be revalidated each tick.
+        saved.pop("repair_candidate")
+        _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    cid = conversation.get("id")
+    if not isinstance(cid, str) or not cid:
+        raise CycleError("repair author conversation identity unavailable")
+    # A persisted intent is the boundary after which live proof may no longer be available.
+    if saved.get("repair_stop_intent") is None:
+        if conversation.get("status") != "created":
+            return {**result, "reason": f"conversation {cid} {conversation.get('status')}"}
+        status = workspace.conversation_status(layout, worker, http=http, runner=_worker_runner,
+                                               include_messages=False)
+        observed = status.get("conversation")
+        if (not isinstance(observed, Mapping) or observed.get("id") != cid
+                or observed.get("operation_id") != op or status.get("reachable") is not True
+                or status.get("events_reachable") is not True):
+            return {**result, "reason": "author status unavailable; reconcile the original conversation"}
+        if status.get("errors"):
+            failure = status.get("failure_class") or "unclassified"
+            saved["repair_result"] = {"status": "engine_failure", "operation_id": op,
+                                      "conversation_id": cid, "failure_class": failure,
+                                      "next_action": "reconcile the original author and preserve its work"}
+            _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+            return {**result, "reason": f"author engine failure: {failure}; preserve and reconcile original work"}
+        if status.get("execution_status") not in ("finished", "FINISHED"):
+            return {**result, "reason": f"conversation {cid} {status.get('execution_status') or 'unknown'}"}
+        effective = {"engine": saved.get("repair_engine"), "model": saved.get("repair_model"),
+                     "effort": saved.get("repair_effort")}
+        # The repair advancement already owns this worker lifecycle lock.
+        proof_fn = getattr(native_execution_proof, "__wrapped__", native_execution_proof)
+        try:
+            proof = proof_fn(layout, worker, op, effective, http=http)
+            if (not isinstance(proof, dict) or proof.get("conversation_id") != cid
+                    or proof.get("operation_id") != op or proof.get("container_id") != mapping.get("container_id")
+                    or proof.get("engine") != effective["engine"] or proof.get("model") != effective["model"]):
+                raise CycleError("repair author native proof does not bind its operation and effective selection")
+        except (CycleError, workspace.EpicWorkspaceError, OSError, ValueError):
+            saved["repair_result"] = {"status": "native_proof_unavailable", "operation_id": op,
+                                      "conversation_id": cid,
+                                      "next_action": "reconcile native proof for the original author"}
+            _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+            raise
+        saved["repair_execution_proof"] = proof
+        _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    _release_reviewer(layout, worker, saved, _mapping(layout, worker), prefix="repair_", locked=True)
+    mapping = _mapping(layout, worker)
+    work = workspace._completed_stop(mapping, saved["repair_stop_intent"]["stop_id"])
+    continuation = {"status": "stopped", "repository": completion.REPOSITORY, "number": pr["number"],
+                    "identity": identity, "head_sha": pr["head_sha"], "worker": worker,
+                    "operation_id": op, "conversation_id": cid, "container_id": mapping.get("container_id"),
+                    "engine": saved["repair_engine"], "model": saved["repair_model"],
+                    "native_proof": saved["repair_execution_proof"], "stop_intent": saved["repair_stop_intent"],
+                    "work_at_stop": dict(work), "owner_binding": saved.get("repair_owner_binding"),
+                    "next_action": "refresh authority and admission, then reconcile preserved source for trusted publication"}
+    saved["repair_result"] = continuation
+    _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    owner = saved.get("repair_owner_binding")
+    recorded_owner = (owner.get("lifecycle_owner") or owner.get("owner")) if isinstance(owner, dict) else None
+    recorded_session = owner.get("builder_session") if isinstance(owner, dict) else None
+    if (not isinstance(owner, dict) or any(mapping.get(k) != v for k, v in owner.items())
+            or (recorded_owner is not None and entry.get("claimant") != recorded_owner)
+            or (recorded_session is not None and entry.get("session") != recorded_session)):
+        return {**result, "action": "wait", "reason": "repair source preserved; owner changed; reconcile before trusted publication"}
+    if work.get("branch") != mapping.get("branch") or work.get("branch") != saved.get("repair_authority_binding", {}).get("branch"):
+        return {**result, "action": "wait", "reason": "repair source preserved; branch drift requires reconciliation"}
+    _assert_repair_publications_settled(mapping)
+    continuation["status"] = "pending_trusted_publication"
+    saved["repair_result"] = continuation
+    _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    return _bind_stopped_repair_candidate(layout, worker, pr, entry, saved, mapping)
+
+
+def _repair_source_base(saved: Mapping[str, Any], pr: Mapping[str, Any]) -> str:
+    base = saved.get("repair_source_base_head")
+    if base is None:
+        return pr["head_sha"]
+    history = saved.get("candidate_repair_history")
+    latest = history[-1] if isinstance(history, list) and history else None
+    previous = latest.get("fields") if isinstance(latest, Mapping) else None
+    candidate = previous.get("repair_candidate") if isinstance(previous, Mapping) else None
+    review = previous.get("candidate_review_result") if isinstance(previous, Mapping) else None
+    if (not isinstance(base, str) or not workspace._OID.fullmatch(base)
+            or not isinstance(candidate, Mapping) or candidate.get("candidate_head") != base
+            or candidate.get("old_head") != pr.get("head_sha")
+            or not isinstance(review, Mapping) or review.get("state") not in
+            ("pending_candidate_repair", "awaiting_verify_evidence")
+            or review.get("candidate_head") != base or review.get("candidate_tree") != candidate.get("tree")):
+        raise CycleError("candidate repair source base does not bind the retained predecessor review")
+    return base
+
+
+def _verify_failure_cause(layout: workspace.Layout, saved: Mapping[str, Any],
+                          binding: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the retained failed command and exact stopped verifier before author writes."""
+    verification = saved.get("candidate_verification")
+    candidate = binding.get("candidate")
+    if (not isinstance(verification, Mapping) or not isinstance(candidate, Mapping)
+            or verification.get("state") != "failed" or verification.get("stop_verified") is not True
+            or verification.get("binding_sha256") != _digest(binding)
+            or verification.get("candidate_head") != candidate.get("candidate_head")
+            or verification.get("candidate_tree") != candidate.get("tree")):
+        raise CycleError("candidate Verify failure binding changed")
+    commands, targets = verification.get("commands"), verification.get("targets")
+    if (not isinstance(commands, list) or not commands or not isinstance(targets, list)
+            or len(commands) > len(targets)):
+        raise CycleError("candidate Verify failure command history changed")
+    for index, row in enumerate(commands):
+        if (not isinstance(row, Mapping) or row.get("state") != "finished"
+                or row.get("target") != targets[index] or type(row.get("exit_code")) is not int
+                or not isinstance(row.get("stdout"), str) or not isinstance(row.get("stderr"), str)
+                or not isinstance(row.get("command_id"), str)
+                or not isinstance(row.get("output_event_ids"), list) or not row["output_event_ids"]
+                or not isinstance(row.get("output_events_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", row["output_events_sha256"])):
+            raise CycleError("candidate Verify failure output lineage changed")
+        try:
+            uuid.UUID(row["command_id"])
+            event_ids = [str(uuid.UUID(str(event_id))) for event_id in row["output_event_ids"]]
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise CycleError("candidate Verify failure event identity changed") from exc
+        if len(set(event_ids)) != len(event_ids):
+            raise CycleError("candidate Verify failure event identity is ambiguous")
+        if index < len(commands) - 1 and (row["exit_code"] != 0 or not delivery._pytest_pass_count(
+                row["stdout"] + "\n" + row["stderr"])):
+            raise CycleError("candidate Verify continued after an incomplete result")
+    failed = commands[-1]
+    if (failed["exit_code"] == 0 and delivery._pytest_pass_count(failed["stdout"] + "\n" + failed["stderr"])):
+        raise CycleError("candidate Verify result is not a failure")
+    if (verification.get("failing_target") != failed["target"]
+            or verification.get("failing_exit") != failed["exit_code"]):
+        raise CycleError("candidate Verify failure result changed")
+    worker, stop = verification.get("worker"), verification.get("stop_intent")
+    if not isinstance(worker, str) or not isinstance(stop, Mapping):
+        raise CycleError("candidate Verify stop is unavailable")
+    mapping = _mapping(layout, worker)
+    if (stop.get("container_id") != mapping.get("container_id")
+            or not isinstance(stop.get("assignment"), Mapping)
+            or any(stop["assignment"].get(field) != mapping.get(field)
+                   for field in workspace.ASSIGNMENT_FIELDS if field != "state")):
+        raise CycleError("candidate Verify stop assignment changed")
+    _assert_stopped(layout, worker, mapping)
+    work = workspace._completed_stop(mapping, stop.get("stop_id"))
+    if work.get("head") != candidate.get("candidate_head") or work.get("uncommitted_count") != 0:
+        raise CycleError("candidate Verify stopped source changed")
+    observed, _ = workspace._inspect(layout, worker, runner=_worker_runner, image=workspace.DEFAULT_IMAGE)
+    if workspace._checkout_identity(observed) != workspace._checkout_identity(work):
+        raise CycleError("candidate Verify source changed after its stop")
+    return {"kind": "verify_failure", "verification_sha256": _digest(verification),
+            "binding_sha256": _digest(binding), "target": failed["target"],
+            "exit_code": failed["exit_code"], "command_id": failed["command_id"],
+            "output_event_ids": failed["output_event_ids"], "output_events_sha256": failed["output_events_sha256"]}
+
+
+def _verify_candidate_repair_history(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                                     saved: Mapping[str, Any], *, scope_check: bool = True) -> None:
+    history = saved.get("candidate_repair_history")
+    if not isinstance(history, list) or not history:
+        raise CycleError("candidate repair predecessor history is unavailable")
+    context = None
+    cwd, executor = Path(__file__).resolve().parents[2], SubprocessExecutor(timeout_seconds=30)
+    if scope_check:
+        context, _ = _review_context(pr)
+        live = closure._pr(executor, cwd, completion.REPOSITORY, int(pr["number"]))
+        if (live.get("head", {}).get("sha") != pr.get("head_sha")
+                or live.get("base", {}).get("sha") != pr.get("base_sha")
+                or live.get("body") != pr.get("body") or live.get("title") != pr.get("title")):
+            raise CycleError("candidate repair PR scope changed")
+    for row in history:
+        fields = row.get("fields") if isinstance(row, Mapping) else None
+        if not isinstance(fields, dict):
+            raise CycleError("candidate repair predecessor is malformed")
+        previous = {**fields, "identity": saved["identity"]}
+        candidate, dispatch = previous.get("repair_candidate"), previous.get("candidate_review_dispatch")
+        receipt, gate = previous.get("candidate_review_receipt"), previous.get("candidate_review_result")
+        if (not isinstance(candidate, Mapping) or not isinstance(dispatch, Mapping)
+                or not isinstance(receipt, Mapping) or not isinstance(gate, Mapping)
+                or gate.get("state") not in ("pending_candidate_repair", "awaiting_verify_evidence")
+                or gate.get("candidate_head") != candidate.get("candidate_head")
+                or gate.get("candidate_tree") != candidate.get("tree")
+                or receipt.get("binding_sha256") != dispatch.get("binding_sha256")
+                or not isinstance(dispatch.get("binding"), Mapping)
+                or _digest(dispatch["binding"]) != dispatch.get("binding_sha256")
+                or dispatch["binding"].get("candidate") != candidate
+                or not isinstance(receipt.get("raw_response"), str)
+                or hashlib.sha256(receipt["raw_response"].encode("utf-8")).hexdigest() != receipt.get("raw_sha256")
+                or _public_report(receipt["raw_response"]) != receipt.get("report")
+                or receipt.get("native_proof") != previous.get("candidate_review_execution_proof")
+                or receipt.get("report_sha256") != _digest(receipt.get("report"))):
+            raise CycleError("candidate repair predecessor review changed")
+        binding = dispatch["binding"]
+        if gate.get("state") == "pending_candidate_repair":
+            if (not isinstance(gate.get("bounded_repair"), Mapping)
+                    or gate["bounded_repair"].get("report_sha256") != receipt.get("report_sha256")):
+                raise CycleError("candidate repair predecessor findings changed")
+        elif (receipt.get("report", {}).get("verdict") != "pass"
+              or row.get("cause") != _verify_failure_cause(layout, previous, binding)):
+            raise CycleError("candidate repair predecessor Verify failure changed")
+        if scope_check:
+            assert context is not None
+            governing = binding.get("authority_binding", {}).get("governing_issue")
+            issue = closure._issue(executor, cwd, completion.REPOSITORY, governing)
+            current_scope = {**context["closing_issue_hashes"], str(governing): closure._issue_hashes(issue)}
+            if (issue.get("state") != "open" or binding.get("old_review_context") != context
+                    or binding.get("scope_hashes") != current_scope or binding.get("old_head") != pr.get("head_sha")
+                    or binding.get("base_sha") != pr.get("base_sha")
+                    or binding.get("pr_body_sha256") != hashlib.sha256(pr["body"].encode()).hexdigest()
+                    or binding.get("pr_title") != pr.get("title")):
+                raise CycleError("candidate repair Issue or PR binding changed")
+        worker = previous.get("repair_worker", entry["worker"])
+        mapping = _mapping(layout, worker)
+        _review_stop_checkpoint(mapping, previous, require_receipt=True, prefix="repair_")
+        _assert_stopped(layout, worker, mapping)
+        if candidate.get("source_kind") in ("versioned_projection", "versioned_projection_explicit"):
+            _verify_repair_candidate_projection_locked(layout, worker, pr, previous, mapping, candidate)
+        else:
+            work = workspace._completed_stop(mapping, candidate.get("stop_id"))
+            checkpoint = work.get("checkpoint")
+            if (not isinstance(checkpoint, Mapping) or checkpoint.get("tree") != candidate.get("tree")
+                    or checkpoint not in mapping.get("checkpoints", [])
+                    or not workspace._checkpoint_present(layout.checkout(worker), workspace._checkpoint_repo(layout, worker),
+                                                         checkpoint, _worker_runner, workspace.DEFAULT_IMAGE)):
+                raise CycleError("candidate repair predecessor checkpoint changed")
+            observed, _ = workspace._inspect(layout, worker, runner=_worker_runner, image=workspace.DEFAULT_IMAGE)
+            if workspace._checkout_identity(observed) != workspace._checkout_identity(work):
+                raise CycleError("candidate repair predecessor source changed")
+        reviewer = dispatch.get("worker")
+        if not isinstance(reviewer, str):
+            raise CycleError("candidate repair predecessor reviewer is unavailable")
+        reviewed_mapping = _mapping(layout, reviewer)
+        _review_stop_checkpoint(reviewed_mapping, previous, require_receipt=True, prefix="candidate_review_")
+        _assert_stopped(layout, reviewer, reviewed_mapping)
+
+
+def _prepare_stopped_repair_commit_locked(
+    layout: workspace.Layout, worker: str, pr: Mapping[str, Any], entry: Mapping[str, Any],
+    saved: dict[str, Any], mapping: Mapping[str, Any], *,
+    executor: publication.CommandExecutor | None = None,
+) -> dict[str, Any]:
+    """Prepare one additive publisher commit while the cycle and worker locks are held."""
+    runner = executor or publication.SubprocessExecutor(timeout_seconds=120)
+    stop = saved.get("repair_stop_intent")
+    result = saved.get("repair_result")
+    if (not isinstance(stop, Mapping) or not isinstance(result, Mapping)
+            or result.get("status") != "pending_trusted_publication"
+            or result.get("identity") != saved.get("identity") or result.get("head_sha") != pr.get("head_sha")
+            or result.get("operation_id") != saved.get("repair_operation")
+            or result.get("native_proof") != saved.get("repair_execution_proof")):
+        raise CycleError("stopped repair result is unavailable or changed")
+    owner = saved.get("repair_owner_binding")
+    if (not isinstance(owner, Mapping) or set(owner) != {"lifecycle_owner", "owner", "builder_session"}
+            or any(mapping.get(key) != value for key, value in owner.items())
+            or ((owner.get("lifecycle_owner") or owner.get("owner")) is not None
+                and (owner.get("lifecycle_owner") or owner.get("owner")) != entry.get("claimant"))
+            or (owner.get("builder_session") is not None and owner.get("builder_session") != entry.get("session"))):
+        raise CycleError("repair worker owner or Builder session changed")
+    _review_stop_checkpoint(mapping, saved, require_receipt=True, prefix="repair_")
+    work = workspace._completed_stop(mapping, stop.get("stop_id"))
+    checkpoint = work.get("checkpoint")
+    if (result.get("work_at_stop") != work or not isinstance(checkpoint, Mapping)
+            or checkpoint.get("status") != "preserved" or checkpoint not in mapping.get("checkpoints", [])):
+        raise CycleError("preserved repair checkpoint is unavailable")
+    _assert_repair_publications_settled(mapping)
+    authority = native_authority(layout, pr, entry, purpose="repair")
+    if not _repair_authority_continues(saved.get("repair_authority_binding"), authority):
+        raise CycleError("repair publisher authority changed")
+    if authority.get("claim_issue") != workspace._issue_for_worker(workspace._load_state(layout), worker):
+        raise CycleError("repair claim no longer owns this worker")
+    registration = authority.get("worktree_owner")
+    path = registration.get("path") if isinstance(registration, Mapping) else None
+    branch, old = authority.get("branch"), _repair_source_base(saved, pr)
+    if (not isinstance(path, str) or not Path(path).is_absolute() or str(Path(path).resolve()) != path
+            or workspace._is_within(Path(path), layout.root.resolve()) or path != entry.get("owner_worktree")
+            or branch != work.get("branch") or not isinstance(branch, str)
+            or not isinstance(old, str) or not workspace._OID.fullmatch(old)):
+        raise CycleError("registered publisher branch or worktree is unavailable")
+    publisher = Path(path)
+    prefix = ["git", "--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false",
+              "-c", "core.hooksPath=/dev/null"]
+
+    def git(*args: str) -> str:
+        return publication._checked(runner, [*prefix, *args], publisher).stdout
+
+    def refresh() -> None:
+        current = _mapping(layout, worker)
+        if (not workspace._same_assignment(current, mapping) or current.get("stop_id") != mapping.get("stop_id")
+                or current.get("work_at_stop") != work
+                or any(current.get(key) != value for key, value in owner.items())):
+            raise CycleError("repair worker changed during candidate preparation")
+        _review_stop_checkpoint(current, saved, require_receipt=True, prefix="repair_")
+        _assert_repair_publications_settled(current)
+        if not _repair_authority_continues(saved.get("repair_authority_binding"),
+                                           native_authority(layout, pr, entry, purpose="repair")):
+            raise CycleError("repair publisher authority changed during preparation")
+        if (Path(git("rev-parse", "--show-toplevel").strip()).resolve() != publisher
+                or git("branch", "--show-current").strip() != branch):
+            raise CycleError("publisher branch or worktree changed")
+
+    def tree_entries(revision: str) -> dict[str, tuple[str, str]]:
+        raw = git("ls-tree", "-r", "-z", "--full-tree", revision).encode("utf-8", "surrogateescape")
+        return {os.fsdecode(p): value for p, value in workspace._projection_entries(raw).items()}
+
+    def index_entries() -> dict[str, tuple[str, str]]:
+        hints = git("ls-files", "-v", "-z")
+        if any(len(item) < 3 or item[:2] != "H " for item in hints.split("\0") if item):
+            raise CycleError("publisher index contains nonstandard worktree flags")
+        raw = git("ls-files", "--stage", "-z")
+        values: dict[str, tuple[str, str]] = {}
+        for item in raw.split("\0"):
+            if not item:
+                continue
+            meta, name = item.split("\t", 1)
+            mode, oid, stage = meta.split(" ")
+            if stage != "0" or name in values or not workspace._projection_path_valid(os.fsencode(name)):
+                raise CycleError("publisher index is unmerged or unsafe")
+            values[name] = (mode, oid)
+        return values
+
+    def physical(name: str, alternatives: Sequence[tuple[str, str] | None]) -> tuple[str, str] | None:
+        parts = os.fsencode(name).split(b"/")
+        fds: list[int] = []
+        try:
+            fd = os.open(publisher, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            fds.append(fd)
+            for part in parts[:-1]:
+                try:
+                    fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                except FileNotFoundError:
+                    return None
+                fds.append(fd)
+            try:
+                os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return None
+            for value in alternatives:
+                if value is not None:
+                    try:
+                        if workspace._projection_matches_blob(publisher, os.fsencode(name), *value):
+                            return value
+                    except workspace.TakeoverRefused:
+                        pass
+            raise CycleError(f"publisher path differs from recorded preparation: {name!r}")
+        except OSError as exc:
+            raise CycleError(f"publisher path is unsafe: {name!r}") from exc
+        finally:
+            for fd in reversed(fds):
+                os.close(fd)
+
+    def check_filters(names: Sequence[str]) -> None:
+        # The existing branch gate invokes Git status. Refuse configured filters
+        # before that host command; never execute worker-selected filter code.
+        for offset in range(0, len(names), 100):
+            chunk = names[offset:offset + 100]
+            if not chunk:
+                continue
+            fields = git("--literal-pathspecs", "check-attr", "-z", "filter", "--", *chunk).split("\0")
+            if (len(fields) != 3 * len(chunk) + 1
+                    or any(fields[i] not in ("unspecified", "unset") for i in range(2, len(fields) - 1, 3))):
+                raise CycleError("publisher filter requires contained reconciliation before staging")
+
+    def gate(names: Sequence[str]) -> None:
+        check_filters(names)
+        command = ["env", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_REPLACE_OBJECTS=1", "GIT_CONFIG_COUNT=2",
+                   "GIT_CONFIG_KEY_0=core.fsmonitor",
+                   "GIT_CONFIG_VALUE_0=false", "GIT_CONFIG_KEY_1=core.hooksPath",
+                   "GIT_CONFIG_VALUE_1=/dev/null",
+                   str(Path(__file__).resolve().parents[2] / "scripts/agent_workspace_preflight.sh"),
+                   "--cwd", path, "--expected-branch", branch, "--expected-worktree", path,
+                   "--base-branch", "main", "--allow-dirty"]
+        publication._checked(runner, command, publisher)
+
+    refresh()
+    projection = workspace._project_stopped_versioned_source_locked(
+        layout, worker, stop_id=stop["stop_id"], checkpoint_ref=checkpoint["ref"], branch=branch, head=old,
+        runner=_worker_runner, image=workspace.DEFAULT_IMAGE)
+    target = {item["path"]: (item["mode"], item["oid"]) for item in projection["entries"]}
+    base = tree_entries(old)
+    changes = sorted(name for name in base.keys() | target.keys() if base.get(name) != target.get(name))
+    if not changes:
+        raise CycleError("stopped repair has no additive publisher change")
+    all_names = sorted(base.keys() | target.keys())
+    name_set = set(all_names)
+    if any("/".join(parts[:index]) in name_set for name in all_names
+           for parts in [name.split("/")] for index in range(1, len(parts))):
+        raise CycleError("publisher file/directory transition needs preservation reconciliation")
+    prior = saved.get("repair_candidate_preparation")
+    temporary = {name: str(Path(name).parent / (".6618-prep-" + _digest(
+        {"old": old, "stop": stop["stop_id"], "path": name})[:32]))
+        for name in changes if name in target}
+    if any(name in base or name in target for name in temporary.values()) or len(set(temporary.values())) != len(temporary):
+        raise CycleError("publisher preparation temporary path collides with versioned source")
+    identity = {"old_head": old, "tree": projection["versioned_tree"], "checkpoint_tree": checkpoint["tree"],
+                "stop_id": stop["stop_id"], "checkpoint_ref": checkpoint["ref"],
+                "identity": saved["identity"], "operation_id": saved["repair_operation"],
+                "native_proof_sha256": _digest(saved["repair_execution_proof"]),
+                "projection_sha256": _digest(projection), "authority": saved.get("repair_authority_binding"),
+                "worktree": path, "branch": branch,
+                "changes": [{"path": name, "before": base.get(name), "after": target.get(name),
+                             "temporary": temporary.get(name)} for name in changes]}
+    # Persist JSON-native lists so a reloaded intent compares exactly to a fresh one.
+    identity = json.loads(json.dumps(identity, sort_keys=True))
+    marker = _digest(identity)
+    if prior is not None and (not isinstance(prior, dict) or prior.get("intent") != identity):
+        raise CycleError("candidate preparation intent changed; reconcile the existing operation")
+    head = git("rev-parse", "HEAD").strip()
+    if prior is not None and head != old:
+        parents = git("show", "-s", "--format=%P%n%T%n%B", "HEAD").splitlines()
+        if (len(parents) < 3 or parents[0] != old or parents[1] != projection["versioned_tree"]
+                or f"Candidate-Preparation: {marker}" not in parents[2:]
+                or index_entries() != target):
+            raise CycleError("publisher HEAD differs from the recorded candidate intent")
+        for name in all_names:
+            if physical(name, [target.get(name)]) != target.get(name):
+                raise CycleError("committed publisher source changed")
+        if git("ls-files", "--others", "--exclude-standard", "-z"):
+            raise CycleError("publisher has unrelated untracked work after candidate commit")
+        saved["repair_candidate_preparation"] = {"intent": identity, "status": "complete", "head": head}
+        _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+        return saved["repair_candidate_preparation"]
+    if head != old:
+        raise CycleError("publisher HEAD is not the bound repair source base")
+    if prior is not None and prior.get("status") in ("committing", "complete"):
+        raise CycleError("candidate commit outcome is unresolved; reconcile the recorded intent")
+    index = index_entries()
+    if prior is None:
+        if index != base or git("ls-files", "--others", "--exclude-standard", "-z"):
+            raise CycleError("publisher has unrelated staged or untracked work")
+        for name in all_names:
+            before = base.get(name)
+            if physical(name, [before]) != before:
+                raise CycleError("publisher has unrelated dirty or ignored work")
+        for name in temporary.values():
+            if physical(name, [None]) is not None:
+                raise CycleError("publisher preparation temporary path already exists")
+        gate(all_names)
+        saved["repair_candidate_preparation"] = {"intent": identity, "status": "preparing"}
+        _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    else:
+        for name in all_names:
+            if index.get(name) not in (base.get(name), target.get(name)):
+                raise CycleError("publisher index differs from preparation intent")
+            if physical(name, [base.get(name), target.get(name)]) not in (base.get(name), target.get(name)):
+                raise CycleError("publisher source differs from preparation intent")
+        if git("ls-files", "--others", "--exclude-standard", "-z"):
+            untracked = set(git("ls-files", "--others", "--exclude-standard", "-z").split("\0")) - {""}
+            if not untracked.issubset(set(changes) | set(temporary.values())):
+                raise CycleError("publisher has unrelated untracked work")
+
+    contents = workspace._read_projected_source_blobs_locked(
+        layout, worker, projection, [name for name in changes if name in target],
+        runner=_worker_runner, image=workspace.DEFAULT_IMAGE)
+    for name in changes:
+        before, after = base.get(name), target.get(name)
+        current = physical(name, [before, after])
+        temp_name = temporary.get(name)
+        temp_state = physical(temp_name, [None, after]) if temp_name is not None else None
+        if current == after:
+            if temp_state is not None:
+                assert temp_name is not None
+                refresh()
+                if git("rev-parse", "HEAD").strip() != old:
+                    raise CycleError("publisher HEAD changed before temporary reconciliation")
+                descriptors: list[int] = []
+                try:
+                    directory = os.open(publisher, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    descriptors.append(directory)
+                    parts = os.fsencode(name).split(b"/")
+                    for part in parts[:-1]:
+                        directory = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                        descriptors.append(directory)
+                    target_stat = os.stat(parts[-1], dir_fd=directory, follow_symlinks=False)
+                    temp_leaf = os.fsencode(Path(temp_name).name)
+                    temp_stat = os.stat(temp_leaf, dir_fd=directory, follow_symlinks=False)
+                    if (target_stat.st_dev, target_stat.st_ino) != (temp_stat.st_dev, temp_stat.st_ino):
+                        raise CycleError("publisher has an unresolved preparation temporary file")
+                    os.unlink(temp_leaf, dir_fd=directory)
+                except OSError as exc:
+                    raise CycleError("publisher temporary file requires reconciliation") from exc
+                finally:
+                    for descriptor in reversed(descriptors):
+                        os.close(descriptor)
+            continue
+        if current != before:
+            raise CycleError("publisher path changed during materialization")
+        refresh()
+        if git("rev-parse", "HEAD").strip() != old:
+            raise CycleError("publisher HEAD changed before materialization")
+        if physical(name, [before]) != before:
+            raise CycleError("publisher path changed before materialization")
+        parts = os.fsencode(name).split(b"/")
+        fds: list[int] = []
+        try:
+            directory = os.open(publisher, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            fds.append(directory)
+            for part in parts[:-1]:
+                try:
+                    next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                except FileNotFoundError:
+                    os.mkdir(part, dir_fd=directory)
+                    next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                directory = next_fd
+                fds.append(directory)
+            leaf = parts[-1]
+            if after is None:
+                os.unlink(leaf, dir_fd=directory)
+            else:
+                assert temp_name is not None
+                temp_leaf = os.fsencode(Path(temp_name).name)
+                if temp_state is None:
+                    if after[0] == "120000":
+                        os.symlink(contents[name], temp_leaf, dir_fd=directory)
+                    else:
+                        fd = os.open(temp_leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                     0o600, dir_fd=directory)
+                        with os.fdopen(fd, "wb") as output:
+                            output.write(contents[name])
+                            output.flush()
+                            os.fchmod(output.fileno(), 0o755 if after[0] == "100755" else 0o644)
+                            os.fsync(output.fileno())
+                if physical(temp_name, [after]) != after or physical(name, [before]) != before:
+                    raise CycleError("publisher source or preparation temporary file changed")
+                if before is None:
+                    os.link(temp_leaf, leaf, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+                    os.unlink(temp_leaf, dir_fd=directory)
+                else:
+                    os.replace(temp_leaf, leaf, src_dir_fd=directory, dst_dir_fd=directory)
+        except OSError as exc:
+            raise CycleError(f"publisher materialization stopped at {name!r}; preserve and reconcile") from exc
+        finally:
+            for fd in reversed(fds):
+                os.close(fd)
+    refresh()
+    if git("rev-parse", "HEAD").strip() != old:
+        raise CycleError("publisher HEAD changed before staging")
+    if _digest(workspace._project_stopped_versioned_source_locked(
+            layout, worker, stop_id=stop["stop_id"], checkpoint_ref=checkpoint["ref"], branch=branch, head=old,
+            runner=_worker_runner, image=workspace.DEFAULT_IMAGE)) != identity["projection_sha256"]:
+        raise CycleError("stopped source changed before staging")
+    for name in all_names:
+        if physical(name, [target.get(name)]) != target.get(name):
+            raise CycleError("publisher source changed before staging")
+    gate(all_names)
+    for name in changes:
+        before, after = base.get(name), target.get(name)
+        if physical(name, [after]) != after:
+            raise CycleError("materialized publisher path changed")
+        current_index = index_entries().get(name)
+        if current_index == after:
+            continue
+        if current_index != before:
+            raise CycleError("publisher index changed during staging")
+        refresh()
+        if git("rev-parse", "HEAD").strip() != old:
+            raise CycleError("publisher HEAD changed during staging")
+        if after is None:
+            git("--literal-pathspecs", "update-index", "--force-remove", "--", name)
+        else:
+            with tempfile.NamedTemporaryFile(dir=workspace._controller_dir(layout, "scratch")) as temp:
+                temp.write(contents[name])
+                temp.flush()
+                actual_oid = git("hash-object", "-w", "--no-filters", "--", temp.name).strip()
+            if actual_oid != after[1]:
+                raise CycleError("publisher blob differs from retained source")
+            git("update-index", "--add", "--cacheinfo", after[0], after[1], name)
+    if index_entries() != target or git("write-tree").strip() != projection["versioned_tree"]:
+        raise CycleError("publisher staged tree differs from versioned source")
+    refresh()
+    if git("rev-parse", "HEAD").strip() != old:
+        raise CycleError("publisher HEAD changed before commit")
+    if _digest(workspace._project_stopped_versioned_source_locked(
+            layout, worker, stop_id=stop["stop_id"], checkpoint_ref=checkpoint["ref"], branch=branch, head=old,
+            runner=_worker_runner, image=workspace.DEFAULT_IMAGE)) != identity["projection_sha256"]:
+        raise CycleError("stopped source changed before commit")
+    for name in all_names:
+        if physical(name, [target.get(name)]) != target.get(name):
+            raise CycleError("publisher source changed before commit")
+    if git("ls-files", "--others", "--exclude-standard", "-z"):
+        raise CycleError("publisher has unrelated untracked work before commit")
+    gate(all_names)
+    refresh()
+    if git("rev-parse", "HEAD").strip() != old or index_entries() != target:
+        raise CycleError("publisher changed after the pre-commit gate")
+    saved["repair_candidate_preparation"] = {"intent": identity, "status": "committing"}
+    _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    runner.run([*prefix, "-c", "commit.gpgsign=false", "commit", "--no-verify",
+                "-m", f"Repair issue #{authority['claim_issue']}", "-m", f"Refs #{authority['claim_issue']}",
+                "-m", f"Candidate-Preparation: {marker}"], cwd=publisher)
+    head = git("rev-parse", "HEAD").strip()
+    if head == old:
+        raise CycleError("candidate commit outcome unresolved; reconcile the recorded intent")
+    parents = git("show", "-s", "--format=%P%n%T%n%B", "HEAD").splitlines()
+    if (len(parents) < 3 or parents[0] != old or parents[1] != projection["versioned_tree"]
+            or f"Candidate-Preparation: {marker}" not in parents[2:] or index_entries() != target):
+        raise CycleError("candidate commit readback does not match preparation intent")
+    for name in all_names:
+        if physical(name, [target.get(name)]) != target.get(name):
+            raise CycleError("candidate worktree changed during commit")
+    if git("ls-files", "--others", "--exclude-standard", "-z"):
+        raise CycleError("publisher has unrelated untracked work after candidate commit")
+    saved["repair_candidate_preparation"] = {"intent": identity, "status": "complete", "head": head}
+    _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    return saved["repair_candidate_preparation"]
+
+
+def _verify_repair_candidate_projection_locked(
+    layout: workspace.Layout, worker: str, pr: Mapping[str, Any], saved: Mapping[str, Any],
+    mapping: Mapping[str, Any], candidate: Mapping[str, Any],
+) -> None:
+    """Revalidate the delivery tree and its separate preserved checkpoint custody."""
+    stop = saved.get("repair_stop_intent")
+    preparation = saved.get("repair_candidate_preparation")
+    if not isinstance(stop, Mapping):
+        raise CycleError("candidate stop intent is unavailable")
+    intent = preparation.get("intent") if isinstance(preparation, Mapping) else None
+    work = workspace._completed_stop(mapping, stop.get("stop_id"))
+    checkpoint = work.get("checkpoint")
+    if not isinstance(checkpoint, Mapping):
+        raise CycleError("candidate checkpoint is unavailable")
+    source_base = candidate.get("source_base_head", pr.get("head_sha"))
+    expected = {"old_head": source_base, "tree": candidate.get("tree"),
+                "checkpoint_tree": checkpoint.get("tree"), "stop_id": stop.get("stop_id"),
+                "checkpoint_ref": checkpoint.get("ref"), "identity": saved.get("identity"),
+                "operation_id": saved.get("repair_operation"),
+                "native_proof_sha256": _digest(saved.get("repair_execution_proof")),
+                "authority": saved.get("repair_authority_binding"),
+                "worktree": candidate.get("worktree"), "branch": candidate.get("branch")}
+    if candidate.get("checkpoint_tree") != checkpoint.get("tree"):
+        raise CycleError("candidate checkpoint no longer binds the stopped source")
+    if candidate.get("source_kind") == "versioned_projection" and (
+            not isinstance(preparation, Mapping) or not isinstance(intent, Mapping)
+            or preparation.get("status") != "complete" or preparation.get("head") != candidate.get("candidate_head")
+            or any(intent.get(key) != value for key, value in expected.items())
+            or candidate.get("projection_sha256") != intent.get("projection_sha256")
+            or candidate.get("preparation_intent_sha256") != _digest(intent)):
+        raise CycleError("candidate preparation no longer binds the stopped source")
+    projection = workspace._project_stopped_versioned_source_locked(
+        layout, worker, stop_id=stop["stop_id"], checkpoint_ref=checkpoint["ref"],
+        branch=candidate["branch"], head=source_base, runner=_worker_runner, image=workspace.DEFAULT_IMAGE)
+    if (projection.get("checkpoint_tree") != checkpoint.get("tree")
+            or projection.get("versioned_tree") != candidate.get("tree")
+            or _digest(projection) != candidate.get("projection_sha256")):
+        raise CycleError("stopped source projection or checkpoint custody changed")
+
+
+def _bind_stopped_repair_candidate(layout: workspace.Layout, worker: str, pr: Mapping[str, Any],
+                                   entry: Mapping[str, Any], saved: dict[str, Any],
+                                   mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Prepare or bind the registered publisher candidate to stopped source."""
+    request = entry.get("repair_publication")
+    if request is not None and not isinstance(request, Mapping):
+        raise CycleError("trusted publication candidate configuration is invalid")
+    expected = request.get("candidate_head") if isinstance(request, Mapping) else None
+    if expected is not None and (not isinstance(expected, str) or not workspace._OID.fullmatch(expected)):
+        raise CycleError("trusted publication candidate head is unavailable")
+    result = saved.get("repair_result")
+    intent = saved.get("repair_stop_intent")
+    if (not isinstance(result, Mapping) or result.get("status") != "pending_trusted_publication"
+            or not isinstance(intent, Mapping) or saved.get("repair_stop_verified") is not True
+            or result.get("operation_id") != saved.get("repair_operation")
+            or result.get("identity") != saved.get("identity") or result.get("head_sha") != pr.get("head_sha")):
+        raise CycleError("stopped repair result is unavailable or has drifted")
+    _review_stop_checkpoint(mapping, saved, require_receipt=True, prefix="repair_")
+    _assert_stopped(layout, worker, mapping)
+    work = workspace._completed_stop(mapping, intent.get("stop_id"))
+    checkpoint = work.get("checkpoint")
+    if (result.get("work_at_stop") != work or not isinstance(checkpoint, Mapping)
+            or checkpoint.get("status") != "preserved" or checkpoint not in mapping.get("checkpoints", [])
+            or not isinstance(checkpoint.get("tree"), str) or not workspace._OID.fullmatch(checkpoint["tree"])):
+        raise CycleError("preserved repair checkpoint is unavailable or changed")
+    authority = native_authority(layout, pr, entry, purpose="repair")
+    if not _repair_authority_continues(saved.get("repair_authority_binding"), authority):
+        raise CycleError("repair claim or worktree authority changed before candidate binding")
+    registration = authority.get("worktree_owner")
+    path = registration.get("path") if isinstance(registration, Mapping) else None
+    if (not isinstance(path, str) or not Path(path).is_absolute() or str(Path(path).resolve()) != path
+            or workspace._is_within(Path(path), layout.root.resolve()) or path != entry.get("owner_worktree")
+            or authority.get("branch") != work.get("branch")):
+        raise CycleError("trusted publisher worktree or branch is unavailable")
+    projection_fields: dict[str, Any] = {}
+    if expected is None:
+        prepared = _prepare_stopped_repair_commit_locked(layout, worker, pr, entry, saved, mapping)
+        prepared_intent = prepared["intent"]
+        head, tree, branch = prepared["head"], prepared_intent["tree"], prepared_intent["branch"]
+        projection_fields = {"source_kind": "versioned_projection", "checkpoint_tree": checkpoint["tree"],
+                             "projection_sha256": prepared_intent["projection_sha256"],
+                             "preparation_intent_sha256": _digest(prepared_intent)}
+    else:
+        projected = None
+        if checkpoint.get("ignored_count") != 0:
+            projected = workspace._project_stopped_versioned_source_locked(
+                layout, worker, stop_id=intent["stop_id"], checkpoint_ref=checkpoint["ref"],
+                branch=authority["branch"], head=pr["head_sha"], runner=_worker_runner, image=workspace.DEFAULT_IMAGE)
+        worktree = Path(path)
+        runner = SubprocessExecutor(timeout_seconds=30)
+        top = publication._git_text(runner, worktree, "rev-parse", "--show-toplevel")
+        branch = publication._git_text(runner, worktree, "branch", "--show-current")
+        head = publication._git_text(runner, worktree, "rev-parse", "HEAD")
+        tree = publication._git_text(runner, worktree, "rev-parse", "HEAD^{tree}")
+        if (Path(top).resolve() != worktree or branch != authority["branch"] or head != expected
+                or tree != (projected["versioned_tree"] if projected is not None else checkpoint["tree"])
+                or head == pr["head_sha"]
+                or any(publication._changed_path_sets(runner, worktree))):
+            raise CycleError("publisher candidate does not match the clean preserved repair tree")
+        ancestor = runner.run(["git", "merge-base", "--is-ancestor", pr["head_sha"], head], cwd=worktree)
+        if ancestor.returncode != 0:
+            raise CycleError("publisher candidate is not additive to the admitted PR head")
+        if projected is not None:
+            projection_fields = {"source_kind": "versioned_projection_explicit", "checkpoint_tree": checkpoint["tree"],
+                                 "projection_sha256": _digest(projected)}
+    candidate = {"status": "awaiting_independent_review", "repository": completion.REPOSITORY,
+                 "number": pr["number"], "identity": saved["identity"], "old_head": pr["head_sha"],
+                 "candidate_head": head, "tree": tree, "branch": branch, "worktree": path,
+                 "generation": cast(Mapping[str, Any], registration).get("generation"),
+                 "registration_epoch": cast(Mapping[str, Any], registration).get("registration_epoch"),
+                 "claim_issue": authority.get("claim_issue"), "stop_id": intent["stop_id"],
+                 "checkpoint_ref": checkpoint.get("ref"), "operation_id": saved["repair_operation"],
+                 "native_proof_sha256": _digest(saved["repair_execution_proof"]),
+                 "next_action": "obtain independent candidate review and Verify evidence for the trusted full publisher",
+                 **projection_fields}
+    if saved.get("repair_source_base_head") is not None:
+        candidate["source_base_head"] = _repair_source_base(saved, pr)
+        candidate["source_worker"] = worker
+    if projection_fields:
+        _verify_repair_candidate_projection_locked(layout, worker, pr, saved, mapping, candidate)
+        if not _repair_authority_continues(saved.get("repair_authority_binding"),
+                                           native_authority(layout, pr, entry, purpose="repair")):
+            raise CycleError("repair publisher authority changed before candidate binding")
+    saved["repair_candidate"] = candidate
+    _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    return {"number": pr["number"], "identity": saved["identity"], "action": "awaiting-candidate-review",
+            "operation_id": saved["repair_operation"], "reason": candidate["next_action"]}
+
+
+
+def _refresh_published_admission(layout: workspace.Layout, path: Path, entry: Mapping[str, Any],
+                                 old_head: str, new_head: str) -> None:
+    """Atomically advance only the confirmed PR, under the existing cycle lock."""
+    _read_admissions(layout, path)
+    raw = path.read_text(encoding="utf-8")
+    config = json.loads(raw)
+    if "_automatic_native" in entry and _automatic_settings(config.get("automatic_native")) != entry["_automatic_native"]:
+        raise CycleError("automatic admission configuration changed before confirmed head refresh")
+    rows = config.get("admissions")
+    if not isinstance(rows, list):
+        raise CycleError("admissions unavailable for confirmed head refresh")
+    matching = [row for row in rows if isinstance(row, dict) and row.get("number") == entry["number"]]
+    if len(matching) != 1:
+        raise CycleError("admission identity changed before confirmed head refresh")
+    row = matching[0]
+    if row.get("head_sha") == new_head:
+        return
+    if row.get("head_sha") != old_head or _validate_admission([row]).get(entry["number"]) != entry:
+        raise CycleError("admission changed before confirmed head refresh")
+    row["head_sha"] = new_head
+    row.pop("review_disposition", None)
+    row.pop("repair_publication", None)
+    _write_configuration(path, config, raw)
+
+
+def _candidate_git(cwd: Path, *args: str) -> str:
+    """Run local Git with no inherited credential, filter or user configuration."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent",
+           "LANG": "C.UTF-8", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+           "GIT_TERMINAL_PROMPT": "0", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_LFS_SKIP_SMUDGE": "1",
+           "GIT_ATTR_NOSYSTEM": "1"}
+    command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null",
+               "-c", "protocol.file.allow=always", *args]
+    try:
+        result = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True,
+                                check=False, timeout=120)
+    except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
+        raise CycleError("candidate Git operation unavailable") from exc
+    if result.returncode:
+        raise CycleError(f"candidate Git {args[0]} failed; preserve the reviewer checkout")
+    return result.stdout
+
+
+def _candidate_review_snapshot(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                               saved: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Re-observe the complete source, authority and PR/Issue contract before dispatch."""
+    candidate = saved.get("repair_candidate")
+    worker = saved.get("repair_worker", entry["worker"])
+    if not isinstance(candidate, Mapping) or candidate.get("status") != "awaiting_independent_review":
+        raise CycleError("stopped candidate is not awaiting review")
+    if worker != entry["worker"]:
+        if candidate.get("source_worker") != worker or candidate.get("source_base_head") != _repair_source_base(saved, pr):
+            raise CycleError("candidate repair source worker or base changed")
+        _verify_candidate_repair_history(layout, pr, entry, saved)
+    if (candidate.get("old_head") != pr.get("head_sha") or candidate.get("number") != pr.get("number")
+            or pr.get("draft") is not False or pr.get("restrictions")):
+        raise CycleError("candidate PR observation changed")
+    mapping = _mapping(layout, worker)
+    _review_stop_checkpoint(mapping, saved, require_receipt=True, prefix="repair_")
+    _assert_stopped(layout, worker, mapping)
+    work = workspace._completed_stop(mapping, candidate.get("stop_id"))
+    result, proof = saved.get("repair_result"), saved.get("repair_execution_proof")
+    if (not isinstance(result, Mapping) or result.get("status") != "pending_trusted_publication"
+            or result.get("identity") != saved.get("identity") or result.get("head_sha") != pr.get("head_sha")
+            or result.get("operation_id") != saved.get("repair_operation") or result.get("native_proof") != proof
+            or result.get("work_at_stop") != work or candidate.get("native_proof_sha256") != _digest(proof)):
+        raise CycleError("candidate author result or native proof changed")
+    engine, model = saved.get("repair_engine"), saved.get("repair_model")
+    if (not isinstance(proof, Mapping) or proof.get("source") != "native-session-metadata"
+            or proof.get("engine") != engine or proof.get("model") != model
+            or (saved.get("repair_effort") is not None and proof.get("effort") != saved["repair_effort"])
+            or proof.get("image") != mapping.get("image")
+            or not isinstance(proof.get("native_session_id"), str) or not proof["native_session_id"]
+            or not isinstance(proof.get("timestamp"), str) or not proof["timestamp"]
+            or not ((engine == "codex" and proof.get("auth") == "chatgpt"
+                     and proof.get("effort") in ("high", "xhigh", "max", "ultra"))
+                    or (engine == "claude-code" and proof.get("auth") == "claude-subscription"
+                        and proof.get("effort") is None))):
+        raise CycleError("candidate author native execution proof is unavailable")
+    owner = saved.get("repair_owner_binding")
+    if (not isinstance(owner, Mapping) or set(owner) != {"lifecycle_owner", "owner", "builder_session"}
+            or any(mapping.get(k) != v for k, v in owner.items())
+            or ((owner.get("lifecycle_owner") or owner.get("owner")) is not None
+                and (owner.get("lifecycle_owner") or owner.get("owner")) != entry.get("claimant"))
+            or (owner.get("builder_session") is not None and owner.get("builder_session") != entry.get("session"))):
+        raise CycleError("stopped author owner changed")
+    _assert_repair_publications_settled(mapping)
+    authority = native_authority(layout, pr, entry, purpose="repair")
+    if not _repair_authority_continues(saved.get("repair_authority_binding"), authority):
+        raise CycleError("candidate owner or authority changed")
+    if candidate.get("source_kind") in ("versioned_projection", "versioned_projection_explicit"):
+        _verify_repair_candidate_projection_locked(layout, worker, pr, saved, mapping, candidate)
+    else:
+        work = workspace._completed_stop(mapping, candidate.get("stop_id"))
+        checkpoint = work.get("checkpoint")
+        if (not isinstance(checkpoint, Mapping) or checkpoint.get("tree") != candidate.get("tree")
+                or checkpoint not in mapping.get("checkpoints", [])
+                or not workspace._checkpoint_present(layout.checkout(worker), workspace._checkpoint_repo(layout, worker),
+                                                     checkpoint, _worker_runner, workspace.DEFAULT_IMAGE)):
+            raise CycleError("candidate checkpoint custody changed")
+        observed, _ = workspace._inspect(layout, worker, runner=_worker_runner, image=workspace.DEFAULT_IMAGE)
+        if workspace._checkout_identity(observed) != workspace._checkout_identity(work):
+            raise CycleError("stopped author source changed")
+    publisher = Path(str(candidate.get("worktree", "")))
+    head, tree, base = candidate.get("candidate_head"), candidate.get("tree"), pr.get("base_sha")
+    if (not publisher.is_absolute() or str(publisher.resolve()) != str(publisher)
+            or str(publisher) != entry.get("owner_worktree")
+            or any(not isinstance(x, str) or not workspace._OID.fullmatch(x) for x in (head, tree, base))
+            or _candidate_git(publisher, "rev-parse", "HEAD").strip() != head
+            or _candidate_git(publisher, "rev-parse", "HEAD^{tree}").strip() != tree
+            or _candidate_git(publisher, "status", "--porcelain=v1", "-z", "--untracked-files=all")):
+        raise CycleError("registered publisher candidate changed")
+    cwd, executor = Path(__file__).resolve().parents[2], SubprocessExecutor(timeout_seconds=30)
+    live = closure._pr(executor, cwd, completion.REPOSITORY, int(pr["number"]))
+    if (live.get("head", {}).get("sha") != pr["head_sha"] or live.get("base", {}).get("sha") != base
+            or live.get("body") != pr.get("body") or live.get("title") != pr.get("title")):
+        raise CycleError("PR changed before candidate review")
+    context, material = _review_context(pr)
+    issue_number = cast(int, authority.get("governing_issue"))
+    issue = closure._issue(executor, cwd, completion.REPOSITORY, issue_number)
+    if issue.get("state") != "open" or issue.get("body") != pr.get("governing_issue", {}).get("body"):
+        raise CycleError("governing Issue changed before candidate review")
+    governing_hashes = closure._issue_hashes(issue)
+    if (str(issue_number) in context["closing_issue_hashes"]
+            and context["closing_issue_hashes"][str(issue_number)] != governing_hashes):
+        raise CycleError("governing and closing Issue readbacks disagree")
+    scope = {**context["closing_issue_hashes"], str(issue_number): governing_hashes}
+    diff = _candidate_git(publisher, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", base, head, "--")
+    names = _candidate_git(publisher, "diff", "--no-ext-diff", "--no-textconv", "--no-renames",
+                           "--name-only", "-z", base, head, "--")
+    paths = sorted(p for p in names.split("\0") if p)
+    if (not paths or not diff or len(diff.encode()) > 2_000_000 or "Binary files " in diff
+            or "GIT binary patch" in diff):
+        raise CycleError("complete candidate review diff unavailable")
+    material = {**material, "diff": diff, "paths": paths}
+    binding = {"repository": completion.REPOSITORY, "number": pr["number"], "old_identity": saved["identity"],
+               "old_head": pr["head_sha"], "base_sha": base, "pr_body_sha256": hashlib.sha256(pr["body"].encode()).hexdigest(),
+               "pr_title": pr["title"], "candidate": dict(candidate), "scope_hashes": scope,
+               "old_review_context": context, "candidate_diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),
+               "paths": paths, "author_stop": saved.get("repair_stop_intent"),
+               "author_proof": saved.get("repair_execution_proof"), "owner": dict(owner),
+               "authority_binding": saved.get("repair_authority_binding"),
+               "engine": entry["engine"], "model": entry["model"], "verify_targets": entry["verify_targets"]}
+    if entry.get("effort") is not None:
+        binding["effort"] = entry["effort"]
+    material["candidate_binding"] = {"base_sha": base, "old_head": pr["head_sha"], "candidate_head": head,
+                                     "candidate_tree": tree, "scope_hashes": scope,
+                                     "pr_body_sha256": binding["pr_body_sha256"],
+                                     "author_stop_id": candidate.get("stop_id"),
+                                     "author_operation": saved.get("repair_operation"),
+                                     "author_proof_sha256": _digest(saved.get("repair_execution_proof")),
+                                     "owner": dict(owner)}
+    candidate_pr = {**pr, "head_sha": head, "review_material": material}
+    return binding, candidate_pr
+
+
+def _assert_reviewer_git_config(config: Path) -> None:
+    parser = configparser.ConfigParser(interpolation=None, strict=True)
+    try:
+        parser.read_string(config.read_text(encoding="utf-8"))
+    except (OSError, configparser.Error, UnicodeError) as exc:
+        raise CycleError("reviewer Git config is unreadable; preserve it") from exc
+    if (set(parser.sections()) != {"core"} or set(parser["core"]) -
+            {"repositoryformatversion", "filemode", "bare", "logallrefupdates"}):
+        raise CycleError("reviewer Git config contains unowned work")
+    core = parser["core"]
+    if (core.get("repositoryformatversion", "0") != "0"
+            or core.get("bare", "false").lower() != "false"
+            or core.get("filemode", "true").lower() not in ("true", "false")
+            or core.get("logallrefupdates", "true").lower() != "true"):
+        raise CycleError("reviewer Git config does not match an independent worktree")
+
+
+def _materialize_candidate_reviewer(layout: workspace.Layout, saved: dict[str, Any],
+                                     candidate: Mapping[str, Any], worker: str, branch: str, *,
+                                     intent_key: str = "candidate_review_dispatch",
+                                     next_action: str = "independent candidate review") -> None:
+    """Reconcile an intent-owned checkout using copied Git objects and no remote config."""
+    directory, checkout, home = layout.worker_dir(worker), layout.checkout(worker), layout.home(worker)
+    if directory.is_symlink() or checkout.is_symlink() or home.is_symlink():
+        raise CycleError("reviewer path is a symlink; preserve it")
+    directory.mkdir(parents=True, exist_ok=True)
+    checkout.mkdir(exist_ok=True)
+    if not checkout.is_dir() or not directory.is_dir():
+        raise CycleError("reviewer path is unavailable")
+    gitdir = checkout / ".git"
+    marker = gitdir / "candidate-review-intent"
+    marker_text = f"{worker} {candidate['candidate_head']} {candidate['tree']}\n"
+    if not gitdir.exists():
+        if any(checkout.iterdir()):
+            raise CycleError("reviewer checkout contains unowned work")
+        gitdir.mkdir()
+    if gitdir.is_symlink() or not gitdir.is_dir():
+        raise CycleError("reviewer Git directory is unavailable; preserve it")
+    if not marker.exists():
+        if any(gitdir.iterdir()):
+            raise CycleError("reviewer Git directory has no ownership marker; preserve it")
+        with marker.open("x", encoding="ascii") as handle:
+            handle.write(marker_text)
+            handle.flush()
+            os.fsync(handle.fileno())
+    if marker.is_symlink() or not marker.is_file() or marker.read_text(encoding="ascii") != marker_text:
+        raise CycleError("reviewer Git ownership marker is unavailable; preserve it")
+    if any((gitdir / name).is_symlink() for name in ("HEAD", "config", "info", "objects", "refs")):
+        raise CycleError("reviewer Git metadata contains a symlink; preserve it")
+    if not (gitdir / "HEAD").is_file() or not (gitdir / "config").is_file():
+        if any(p.name != ".git" for p in checkout.iterdir()):
+            raise CycleError("reviewer initialization contains unowned checkout work")
+        allowed_dirs = {"hooks", "info", "objects", "objects/info", "objects/pack",
+                        "refs", "refs/heads", "refs/tags", "branches"}
+        for item in gitdir.rglob("*"):
+            name = item.relative_to(gitdir).as_posix()
+            if item.is_symlink():
+                raise CycleError("reviewer initialization contains a symlink")
+            if item.is_dir() and name in allowed_dirs:
+                continue
+            if item.is_file() and (name in {"candidate-review-intent", "HEAD", "config", "description", "info/exclude"}
+                                   or (name.startswith("hooks/") and name.endswith(".sample") and name.count("/") == 1)):
+                continue
+            raise CycleError("reviewer initialization contains unowned Git work")
+        config = gitdir / "config"
+        if config.exists():
+            _assert_reviewer_git_config(config)
+        _candidate_git(checkout, "init", "--quiet")
+    _assert_reviewer_git_config(gitdir / "config")
+    attributes = gitdir / "info" / "attributes"
+    attributes_text = "* -text -filter -ident -working-tree-encoding\n"
+    if not attributes.exists():
+        with attributes.open("x", encoding="ascii") as handle:
+            handle.write(attributes_text)
+            handle.flush()
+            os.fsync(handle.fileno())
+    if (attributes.is_symlink() or not attributes.is_file()
+            or attributes.read_text(encoding="ascii") != attributes_text):
+        raise CycleError("reviewer Git attributes are not controller-owned")
+    allowed = {"checkout", "home"}
+    if any(p.name not in allowed for p in directory.iterdir()):
+        raise CycleError("reviewer directory contains unowned work")
+    if (gitdir / "objects" / "info" / "alternates").exists():
+        raise CycleError("reviewer Git objects borrow another repository")
+    head = candidate["candidate_head"]
+    # A completed checkout is only adopted if exact and clean. An interrupted fetch is replayable;
+    # no checkout command runs over files that could belong to another writer.
+    existing = _candidate_git(checkout, "rev-parse", "--verify", "HEAD") if (gitdir / "refs" / "heads" / branch).is_file() else None
+    if existing is None:
+        if any(p.name != ".git" for p in checkout.iterdir()):
+            raise CycleError("partial reviewer checkout contains unowned work")
+        if _candidate_git(checkout, "for-each-ref", "--format=%(refname)").strip() or _candidate_git(checkout, "ls-files", "-z"):
+            raise CycleError("partial reviewer Git state contains unowned work")
+        _candidate_git(checkout, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules",
+                       "--", candidate["worktree"], head)
+        _candidate_git(checkout, "checkout", "--quiet", "-b", branch, head)
+    if (_candidate_git(checkout, "rev-parse", "HEAD").strip() != head
+            or _candidate_git(checkout, "rev-parse", "HEAD^{tree}").strip() != candidate["tree"]
+            or _candidate_git(checkout, "branch", "--show-current").strip() != branch
+            or _candidate_git(checkout, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")):
+        raise CycleError("reviewer checkout is not clean at the candidate")
+    entries = workspace._projection_entries(os.fsencode(
+        _candidate_git(checkout, "ls-tree", "-r", "-z", "--full-tree", head)))
+    if any(not workspace._projection_matches_blob(checkout, path, mode, oid)
+           for path, (mode, oid) in entries.items()):
+        raise CycleError("reviewer checkout bytes or modes differ from the candidate tree")
+    _candidate_git(checkout, "fsck", "--connectivity-only", "--no-reflogs")
+    for item in (gitdir / "objects").rglob("*"):
+        if item.is_symlink() or (item.is_file() and item.stat().st_nlink != 1):
+            raise CycleError("reviewer Git objects are not independently owned")
+    home.mkdir(exist_ok=True)
+    if not home.is_dir() or any(home.iterdir()):
+        raise CycleError("reviewer home contains unowned work")
+    owner = saved.get("repair_owner_binding")
+    mapping = _mapping(layout, worker)
+    if (not isinstance(owner, Mapping) or set(owner) != {"lifecycle_owner", "owner", "builder_session"}
+            or any(key in mapping and mapping[key] != value for key, value in owner.items())):
+        raise CycleError("reviewer owner or Builder session changed")
+    workspace._record_assigned_worker(layout, candidate["claim_issue"], worker, state="created", branch=branch,
+                                      checkout=str(checkout), next_action=next_action, **owner)
+    saved[intent_key]["materialized"] = True
+    _save(layout, saved)
+
+
+def _advance_candidate_review(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                              saved: dict[str, Any], *, http: Callable[..., tuple[int, Any]],
+                              codex_home: Path | None) -> dict[str, Any]:
+    author = entry["worker"]
+    with workspace._worker_lifecycle_lock(layout, author):
+        pending = saved.get("candidate_repair")
+        if isinstance(pending, Mapping) and pending.get("status") == "preparing":
+            return _finalize_candidate_repair(layout, pr, entry, saved)
+        binding, candidate_pr = _candidate_review_snapshot(layout, pr, entry, saved)
+        digest = _digest(binding)
+        operation = "pr-completion-" + _digest({"request": "candidate-independent-review", "binding": digest})
+        worker = "review-" + digest[:24]
+        branch = "candidate-review-" + digest[:16]
+        dispatch = saved.get("candidate_review_dispatch")
+        if dispatch is None:
+            if layout.worker_dir(worker).exists() or layout.worker_dir(worker).is_symlink():
+                raise CycleError("reviewer path already exists without an intent")
+            dispatch = {"binding": binding, "binding_sha256": digest, "operation_id": operation,
+                        "worker": worker, "branch": branch, "materialized": False}
+            saved["candidate_review_dispatch"] = dispatch
+            _save(layout, saved, expected_worker=author, expected_assignment=_mapping(layout, author))
+        elif (not isinstance(dispatch, dict) or dispatch.get("binding") != binding
+              or dispatch.get("operation_id") != operation or dispatch.get("worker") != worker
+              or dispatch.get("branch") != branch):
+            raise CycleError("candidate review binding changed; preserve the original operation")
+        receipt = saved.get("candidate_review_receipt")
+        if receipt is not None:
+            finished = _finish_candidate_review(layout, pr, entry, saved, binding, candidate_pr, receipt)
+            if finished["action"] == "awaiting-candidate-repair":
+                return _advance_candidate_repair(layout, pr, entry, saved, binding, candidate_pr,
+                                                 http=http, codex_home=codex_home)
+            if finished["action"] == "awaiting-candidate-verify":
+                verification = saved.get("candidate_verification")
+                if isinstance(verification, Mapping) and verification.get("state") == "failed":
+                    return _advance_candidate_repair(layout, pr, entry, saved, binding, candidate_pr,
+                                                     http=http, codex_home=codex_home)
+                return _advance_candidate_verify(layout, pr, entry, saved, binding, candidate_pr, http=http)
+            return finished
+        workspace._reserve_review_worker(layout, binding["candidate"]["claim_issue"], author, worker)
+        mapping = _mapping(layout, worker)
+        if dispatch.get("materialized") is not True or mapping.get("state") == "created":
+            if mapping.get("state") not in ("reserved", "created"):
+                raise CycleError("reviewer materialization state changed")
+            _materialize_candidate_reviewer(layout, saved, saved["repair_candidate"], worker, branch)
+            mapping = _mapping(layout, worker)
+        if mapping.get("state") == "created":
+            author_mapping = _mapping(layout, author)
+            budget = author_mapping.get("budget")
+            image, network = author_mapping.get("image"), author_mapping.get("network")
+            if (author_mapping.get("runtime") != "openhands" or not isinstance(budget, Mapping)
+                    or not isinstance(image, str) or not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image)
+                    or not isinstance(network, str)):
+                raise CycleError("author OpenHands launch settings are unavailable")
+            workspace.start_openhands_worker(layout, worker,
+                budget=workspace.Budget(cast(str, budget.get("cpus")), cast(str, budget.get("memory")), cast(int, budget.get("pids"))),
+                image=image, network=network, codex_home=codex_home or Path.home() / ".config/epic-workspace/codex",
+                runner=_worker_runner, http=http)
+        current_binding, current_pr = _candidate_review_snapshot(layout, pr, entry, saved)
+        if current_binding != binding:
+            raise CycleError("candidate scope changed before reviewer conversation")
+        result = start_or_reconcile_review(layout, worker, operation, current_pr, digest,
+                                           {**entry, "worker": worker}, http=http,
+                                           expected_owner_binding=saved["repair_owner_binding"])
+        if result.get("status") == "created":
+            response = review_result(layout, worker, operation, current_pr, digest, entry,
+                                     http=http, include_raw=True)
+            if response is None:
+                status = workspace.conversation_status(layout, worker, http=http, runner=_worker_runner,
+                                                       include_messages=False)
+                if status.get("errors") or str(status.get("execution_status", "")).lower() in ("error", "failed"):
+                    raise CycleError("candidate review conversation failed; preserve and stop its worker")
+            if response is not None:
+                raw, report = response
+                proof = native_execution_proof(layout, worker, operation, entry, http=http)
+                latest_binding, latest_pr = _candidate_review_snapshot(layout, pr, entry, saved)
+                if latest_binding != binding:
+                    raise CycleError("candidate scope changed while reading reviewer result")
+                mapping = _mapping(layout, worker)
+                conversation = mapping.get("conversation")
+                if (not isinstance(conversation, dict) or conversation.get("id") != result.get("id")
+                        or proof.get("conversation_id") != conversation.get("id")
+                        or proof.get("operation_id") != operation or proof.get("container_id") != mapping.get("container_id")):
+                    raise CycleError("finished review proof does not match the dispatched reviewer")
+                receipt = {"binding_sha256": digest, "operation_id": operation, "worker": worker,
+                           "conversation_id": conversation["id"], "raw_response": raw,
+                           "raw_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                           "report": report, "report_sha256": _digest(report), "native_proof": proof}
+                saved["candidate_review_receipt"] = receipt
+                saved["candidate_review_execution_proof"] = proof
+                _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+                return _finish_candidate_review(layout, pr, entry, saved, binding, latest_pr, receipt)
+        return {"number": pr["number"], "identity": saved["identity"], "action": "candidate-review-dispatched",
+                "candidate_identity": digest, "worker": worker, "conversation_id": result.get("id"),
+                "conversation_status": result.get("status"), "operation_id": operation,
+                "reason": ("creation outcome unknown; reconcile the same conversation ID"
+                           if result.get("status") in ("unknown", "creating")
+                           else "awaiting a reachable finished candidate review")}
+
+
+def _finish_candidate_review(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                             saved: dict[str, Any], binding: Mapping[str, Any], candidate_pr: Mapping[str, Any],
+                             receipt: Any) -> dict[str, Any]:
+    """Resume the same persisted response and stop before qualifying its report."""
+    dispatch = saved["candidate_review_dispatch"]
+    if (not isinstance(receipt, dict) or receipt.get("binding_sha256") != _digest(binding)
+            or receipt.get("operation_id") != dispatch["operation_id"] or receipt.get("worker") != dispatch["worker"]
+            or not isinstance(receipt.get("raw_response"), str)
+            or receipt.get("raw_sha256") != hashlib.sha256(receipt["raw_response"].encode("utf-8")).hexdigest()
+            or receipt.get("report") != _public_report(receipt["raw_response"])
+            or receipt.get("report_sha256") != _digest(receipt.get("report"))
+            or receipt.get("native_proof") != saved.get("candidate_review_execution_proof")):
+        raise CycleError("persisted candidate review receipt changed")
+    worker = dispatch["worker"]
+    mapping = _mapping(layout, worker)
+    conversation = mapping.get("conversation")
+    proof = receipt["native_proof"]
+    if (not isinstance(conversation, dict) or conversation.get("id") != receipt.get("conversation_id")
+            or not isinstance(proof, dict) or proof.get("conversation_id") != receipt.get("conversation_id")
+            or proof.get("operation_id") != dispatch["operation_id"] or proof.get("container_id") != mapping.get("container_id")
+            or proof.get("source") != "native-session-metadata"):
+        raise CycleError("persisted candidate reviewer identity changed")
+    _release_reviewer(layout, worker, saved, mapping, prefix="candidate_review_")
+    latest_binding, candidate_pr = _candidate_review_snapshot(layout, pr, entry, saved)
+    if latest_binding != binding:
+        raise CycleError("candidate scope changed during reviewer stop")
+    # Expectations are read from the registered publisher, never the agent-writable reviewer Git checkout.
+    expected = report_expectations(layout, entry, candidate_pr, dispatch["binding_sha256"],
+                                   repo_root=Path(binding["candidate"]["worktree"]))
+    report = receipt.get("report")
+    gate = _review_gate(report, expected)
+    if gate["outcome"] == "pass" and isinstance(report, dict) and _report_items(report):
+        # Nonempty informational items still need the ordinary controller disposition.
+        gate = review_gate(report, expected)
+    if not isinstance(report, dict) or report.get("report_contract") != REPORT_CONTRACT:
+        gate = {**gate, "outcome": "reconcile_report", "grammar": [*gate["grammar"], "current report contract required"]}
+    repair = _bounded_repair_candidate(report, gate) if isinstance(report, dict) else None
+    if gate["outcome"] == "pass":
+        state, action = "awaiting_verify_evidence", "awaiting-candidate-verify"
+        next_action = "produce actual candidate-bound Verify and full publication evidence"
+    elif repair:
+        state, action = "pending_candidate_repair", "awaiting-candidate-repair"
+        next_action = "continue the author against this exact candidate and its bounded findings"
+    else:
+        state, action = "review_held", "candidate-review-held"
+        next_action = "reconcile the retained candidate review and its reported blockers"
+    saved["candidate_review_result"] = {"state": state, "binding_sha256": dispatch["binding_sha256"],
+        "candidate_head": binding["candidate"]["candidate_head"], "candidate_tree": binding["candidate"]["tree"],
+        "attempt": len(saved.get("candidate_repair_history", [])) + 1,
+        "gate": gate, "bounded_repair": repair, "next_action": next_action}
+    _save(layout, saved, expected_worker=worker, expected_assignment=_mapping(layout, worker))
+    return {"number": pr["number"], "identity": saved["identity"], "action": action,
+            "candidate_identity": dispatch["binding_sha256"], "worker": worker, "reason": next_action}
+
+
+def _candidate_verify_targets(layout: workspace.Layout, entry: Mapping[str, Any],
+                              candidate_pr: Mapping[str, Any], publisher: Path) -> list[str]:
+    material = candidate_pr.get("review_material")
+    issues = material.get("issues") if isinstance(material, Mapping) else None
+    if not isinstance(issues, Mapping) or not issues:
+        raise CycleError("exact closing Issue contracts are unavailable for Verify")
+    return _contract_verify_targets(issues, publisher, admitted=entry["verify_targets"])
+
+
+def _contract_verify_targets(issues: Mapping[str, Any], publisher: Path, *,
+                             admitted: list[str] | None = None) -> list[str]:
+    targets: list[str] = []
+    pattern = r"tests/[A-Za-z0-9_./-]+\.py(?:::[A-Za-z_][A-Za-z0-9_]*(?:\[[A-Za-z0-9_.-]+\])?)*"
+    for issue in issues.values():
+        criteria = closure._acceptance_criteria(issue.get("body") if isinstance(issue, Mapping) else None,
+                                                repo_root=publisher)
+        for row in criteria:
+            for raw in row["verify_targets"]:
+                target = raw.strip("`")
+                if (not re.fullmatch(pattern, target) or ".." in Path(target.split("::")[0]).parts
+                        or (admitted is not None and not any(target == allowed or target.startswith(allowed + "::")
+                                                            for allowed in admitted))):
+                    raise CycleError("closing Issue Verify target needs the existing specialized owning workflow")
+                if target not in targets:
+                    targets.append(target)
+    if not targets:
+        raise CycleError("closing Issue Verify targets are unavailable")
+    return targets
+
+
+def _bash_event_pages(http: Callable[..., tuple[int, Any]], port: int, key: str,
+                      filters: Mapping[str, str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    cursor: str | None = None
+    seen: set[str] = set()
+    for _ in range(20):
+        params = {**filters, "sort_order": "TIMESTAMP", "limit": "100"}
+        if cursor is not None:
+            params["page_id"] = cursor
+        try:
+            code, page = http("GET", port, key, "/bash/bash_events/search?" + urlencode(params), None, 10.0)
+        except (OSError, ValueError) as exc:
+            raise VerifyReadbackPending("OpenHands Verify event readback is unavailable") from exc
+        if code != 200 or not isinstance(page, dict) or not isinstance(page.get("items"), list):
+            raise VerifyReadbackPending("OpenHands Verify event readback is unavailable")
+        if any(not isinstance(row, dict) for row in page["items"]):
+            raise CycleError("OpenHands Verify event readback is malformed")
+        rows.extend(page["items"])
+        cursor = page.get("next_page_id")
+        if cursor is None:
+            return rows
+        if not isinstance(cursor, str) or not cursor or cursor in seen:
+            raise CycleError("OpenHands Verify event pagination is ambiguous")
+        seen.add(cursor)
+    raise CycleError("OpenHands Verify event history exceeds the bounded readback")
+
+
+def _candidate_evidence_dir(layout: workspace.Layout, digest: str, publisher: Path) -> Path:
+    root = layout.root.resolve()
+    publisher = publisher.resolve()
+    candidates = (root.parent / ".openhands-pr-cycle-evidence",
+                  Path.home() / ".local" / "state" / "openhands-pr-cycle-evidence")
+    parent = next((p for p in candidates if not workspace._is_within(p, root)
+                   and not workspace._is_within(p, publisher)), None)
+    if parent is None or any(p.is_symlink() for p in (parent, *parent.parents)):
+        raise CycleError("controller evidence location is unavailable outside writable worktrees")
+    parent.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for path in (parent, parent / f"epic-{layout.epic}-{digest}"):
+        if path.is_symlink():
+            raise CycleError("controller evidence directory is a symlink")
+        path.mkdir(mode=0o700, exist_ok=True)
+        info = path.stat()
+        if not path.is_dir() or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
+            raise CycleError("controller evidence directory is not private")
+    return parent / f"epic-{layout.epic}-{digest}"
+
+
+def _write_candidate_evidence(path: Path, data: str) -> str:
+    raw = data.encode("utf-8")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != raw:
+            raise CycleError("candidate evidence file changed; preserve the original")
+    else:
+        with os.fdopen(fd, "wb") as output:
+            output.write(raw)
+            output.flush()
+            os.fsync(output.fileno())
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _candidate_verify_command(target: str, token: str, minor: int) -> str:
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise CycleError("candidate Verify command token is malformed")
+    script = ("import sys; "
+              f"sys.version_info[:2] == (3, {minor}) or sys.exit('unsupported test interpreter'); "
+              "import pytest; raise SystemExit(pytest.main(['-q', '-p', 'no:cacheprovider', *sys.argv[1:]]))")
+    return ": " + token + "; exec " + shlex.join(["env", "PYTHONPATH=/workspace", "HOME=/tmp",
+        "PYTHONDONTWRITEBYTECODE=1", f"{CONTAINER_TEST_VENV}/bin/python", "-c", script, target])
+
+
+def _advance_candidate_verify(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                              saved: dict[str, Any], binding: Mapping[str, Any], candidate_pr: Mapping[str, Any],
+                              *, http: Callable[..., tuple[int, Any]]) -> dict[str, Any]:
+    """Execute exact closing targets through the pinned agent-server Bash event API."""
+    from app.builderops import openhands_delivery as delivery
+
+    candidate = binding["candidate"]
+    digest = _digest(binding)
+    result = saved.get("candidate_review_result")
+    if (not isinstance(result, Mapping) or result.get("state") != "awaiting_verify_evidence"
+            or result.get("binding_sha256") != digest or saved.get("candidate_review_stop_verified") is not True):
+        raise CycleError("clean candidate review is unavailable")
+    targets = _candidate_verify_targets(layout, entry, candidate_pr, Path(candidate["worktree"]))
+    venv = _test_venv_source(layout, entry["test_venv"])
+    paths = sorted(publication._candidate_paths(publication.SubprocessExecutor(timeout_seconds=30),
+                                               Path(candidate["worktree"]), pr["base_sha"], candidate["candidate_head"]))
+    if not paths:
+        raise CycleError("candidate publication paths are unavailable")
+    worker = "verify-" + digest[:24]
+    branch = "candidate-verify-" + digest[:16]
+    operation = "pr-completion-" + _digest({"request": "candidate-verify", "binding": digest, "targets": targets})
+    fixed = {"worker": worker, "operation_id": operation, "binding_sha256": digest,
+             "candidate_head": candidate["candidate_head"], "candidate_tree": candidate["tree"],
+             "targets": targets, "test_venv": str(venv), "paths": paths}
+    intent = saved.get("candidate_verification")
+    if intent is None:
+        if layout.worker_dir(worker).exists() or layout.worker_dir(worker).is_symlink():
+            raise CycleError("candidate Verify path already exists without an intent")
+        intent = {**fixed, "materialized": False, "commands": []}
+        saved["candidate_verification"] = intent
+        _save(layout, saved)
+    elif not isinstance(intent, dict) or any(intent.get(k) != v for k, v in fixed.items()):
+        raise CycleError("candidate Verify intent changed")
+    if intent.get("state") == "artifact_ready":
+        path = Path(intent.get("evidence_file", ""))
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != intent.get("evidence_sha256"):
+            raise CycleError("candidate Verify evidence artifact changed")
+        return {"number": pr["number"], "identity": saved["identity"], "action": "candidate-verification-ready"}
+    workspace._reserve_review_worker(layout, candidate["claim_issue"], entry["worker"], worker)
+    mapping = _mapping(layout, worker)
+    if intent.get("materialized") is not True or mapping.get("state") == "created":
+        if mapping.get("state") not in ("reserved", "created"):
+            raise CycleError("candidate Verify checkout state changed")
+        _materialize_candidate_reviewer(layout, saved, candidate, worker, branch,
+                                        intent_key="candidate_verification", next_action="candidate Verify")
+        mapping = _mapping(layout, worker)
+    if mapping.get("state") == "created":
+        author = _mapping(layout, entry["worker"])
+        budget, image, network = author.get("budget"), author.get("image"), author.get("network")
+        if not isinstance(budget, Mapping) or not isinstance(image, str) or not isinstance(network, str):
+            raise CycleError("candidate Verify launch settings are unavailable")
+        workspace.start_openhands_worker(layout, worker,
+            budget=workspace.Budget(cast(str, budget.get("cpus")), cast(str, budget.get("memory")), cast(int, budget.get("pids"))),
+            image=image, network=network, verification_venv=venv, runner=_worker_runner, http=http)
+        mapping = _mapping(layout, worker)
+    commands = intent["commands"]
+    if not isinstance(commands, list) or len(commands) > len(targets):
+        raise CycleError("candidate Verify command history is malformed")
+    for index, target in enumerate(targets):
+        if len(commands) <= index:
+            token = uuid.uuid4().hex
+            command = _candidate_verify_command(target, token, _venv_python_minor(venv))
+            commands.append({"target": target, "command": command, "token": token, "state": "intent"})
+            _save(layout, saved)
+        record = commands[index]
+        if (not isinstance(record, dict) or record.get("target") != target
+                or not isinstance(record.get("token"), str)
+                or record.get("command") != _candidate_verify_command(target, record["token"], _venv_python_minor(venv))
+                or record.get("state") not in ("intent", "sent_unknown", "finished")):
+            raise CycleError("candidate Verify command identity changed")
+        if record.get("state") == "finished":
+            if record.get("exit_code") != 0 or not delivery._pytest_pass_count(record.get("stdout", "") + "\n" + record.get("stderr", "")):
+                break
+            continue
+        if mapping.get("state") != "running":
+            raise CycleError("candidate Verify server stopped before command readback")
+        current, _ = _candidate_review_snapshot(layout, pr, entry, saved)
+        if current != binding:
+            raise CycleError("candidate scope changed before Verify command readback or dispatch")
+        with workspace._endpoint_session(layout, worker, candidate["claim_issue"], mapping, _worker_runner) as (port, key):
+            if record["state"] == "intent":
+                # The pinned runtime may differ from the locally inspected SDK release.
+                # Establish the model-free event endpoint before issuing any command.
+                _bash_event_pages(http, port, key, {"kind__eq": "BashCommand"})
+                record["state"] = "sent_unknown"
+                _save(layout, saved)
+                try:
+                    code, response = http("POST", port, key, "/bash/start_bash_command",
+                                          {"command": record["command"], "cwd": "/workspace", "timeout": 600}, 15.0)
+                except (OSError, ValueError):
+                    code, response = 0, None
+                if (code == 200 and isinstance(response, dict) and response.get("kind") == "BashCommand"
+                        and response.get("command") == record["command"] and response.get("cwd") == "/workspace"
+                        and response.get("timeout") == 600 and isinstance(response.get("id"), str)):
+                    record["command_id"] = response["id"]
+                    _save(layout, saved)
+            if not record.get("command_id"):
+                events = _bash_event_pages(http, port, key, {"kind__eq": "BashCommand"})
+                matches = [e for e in events if e.get("kind") == "BashCommand" and e.get("command") == record["command"]
+                           and e.get("cwd") == "/workspace" and e.get("timeout") == 600]
+                if len(matches) > 1:
+                    raise CycleError("candidate Verify command creation is ambiguous")
+                if not matches:
+                    return {"number": pr["number"], "identity": saved["identity"], "action": "candidate-verify-pending",
+                            "reason": "reconcile the same OpenHands command; creation outcome is unknown"}
+                record["command_id"] = matches[0].get("id")
+                _save(layout, saved)
+            try:
+                command_id = str(uuid.UUID(str(record["command_id"])))
+            except (ValueError, KeyError, TypeError) as exc:
+                raise CycleError("OpenHands Verify command ID is malformed") from exc
+            output = _bash_event_pages(http, port, key, {"kind__eq": "BashOutput", "command_id__eq": command_id})
+            if not output:
+                return {"number": pr["number"], "identity": saved["identity"], "action": "candidate-verify-pending",
+                        "reason": "awaiting the recorded OpenHands command result"}
+            try:
+                output_ids = [str(uuid.UUID(str(e.get("command_id")))) for e in output]
+                event_ids = [str(uuid.UUID(str(e.get("id")))) for e in output]
+            except (ValueError, TypeError) as exc:
+                raise CycleError("OpenHands Verify output command ID is malformed") from exc
+            if (any(e.get("kind") != "BashOutput" for e in output) or any(x != command_id for x in output_ids)
+                    or len(set(event_ids)) != len(event_ids)
+                    or [e.get("order") for e in output] != list(range(len(output)))
+                    or any(e.get("exit_code") is not None for e in output[:-1])):
+                raise CycleError("OpenHands Verify output lineage is ambiguous")
+            exit_code = output[-1].get("exit_code")
+            if exit_code is None:
+                return {"number": pr["number"], "identity": saved["identity"], "action": "candidate-verify-pending",
+                        "reason": "awaiting the recorded OpenHands command exit"}
+            if type(exit_code) is not int or any(e.get(k) is not None and not isinstance(e[k], str)
+                    for e in output for k in ("stdout", "stderr")):
+                raise CycleError("OpenHands Verify output is malformed")
+            stdout = "".join(e.get("stdout") or "" for e in output)
+            stderr = "".join(e.get("stderr") or "" for e in output)
+            if len(stdout.encode()) + len(stderr.encode()) > 1_000_000:
+                raise CycleError("OpenHands Verify output exceeds the retained bound")
+            record.update(state="finished", exit_code=exit_code, stdout=stdout, stderr=stderr,
+                          output_event_ids=event_ids, output_events_sha256=_digest(output))
+            _save(layout, saved)
+            if exit_code != 0 or not delivery._pytest_pass_count(stdout + "\n" + stderr):
+                break
+    stop = intent.get("stop_intent")
+    mapping = _mapping(layout, worker)
+    if stop is None:
+        if mapping.get("state") != "running":
+            raise CycleError("candidate Verify worker stopped before its intent")
+        stop = {"stop_id": uuid.uuid4().hex, "previous_stop_id": mapping.get("stop_id"),
+                "container_id": mapping.get("container_id"), "assignment": workspace.assignment_of(mapping)}
+        intent["stop_intent"] = stop
+        _save(layout, saved)
+    with workspace._worker_lifecycle_lock(layout, worker):
+        workspace._stop_worker(layout, worker, reason="candidate Verify completed", runner=_worker_runner,
+            image=workspace.DEFAULT_IMAGE, expected_container_id=stop.get("container_id"), stop_intent=stop)
+        mapping = _mapping(layout, worker)
+        _assert_stopped(layout, worker, mapping)
+        work = workspace._completed_stop(mapping, stop["stop_id"])
+        if work.get("head") != candidate["candidate_head"] or work.get("uncommitted_count") != 0:
+            raise CycleError("candidate Verify checkout changed while executing")
+        intent["stop_verified"] = True
+        _save(layout, saved)
+    current, _ = _candidate_review_snapshot(layout, pr, entry, saved)
+    if current != binding:
+        raise CycleError("candidate scope changed during Verify")
+    if len(commands) != len(targets) and all(row.get("exit_code") == 0 and delivery._pytest_pass_count(
+            row.get("stdout", "") + "\n" + row.get("stderr", "")) for row in commands):
+        raise CycleError("candidate Verify command history is incomplete")
+    if any(row.get("exit_code") != 0 or not delivery._pytest_pass_count(
+            row.get("stdout", "") + "\n" + row.get("stderr", "")) for row in commands):
+        failed = next(row for row in commands if row.get("exit_code") != 0 or not delivery._pytest_pass_count(
+            row.get("stdout", "") + "\n" + row.get("stderr", "")))
+        reason = ("incomplete or ambiguous pytest summary" if failed["exit_code"] == 0
+                  else "pytest exited nonzero")
+        intent.update(state="failed", failing_target=failed["target"], failing_exit=failed["exit_code"],
+                      next_action=(f"continue candidate-aware repair at {candidate['candidate_head']} for "
+                                   f"{failed['target']}: {reason}; use the retained OpenHands output "
+                                   f"and exit {failed['exit_code']}"))
+        _save(layout, saved)
+        return {"number": pr["number"], "identity": saved["identity"], "action": "candidate-verify-failed",
+                "reason": intent["next_action"]}
+    evidence_dir = _candidate_evidence_dir(layout, digest, Path(candidate["worktree"]))
+    review = saved["candidate_review_receipt"]
+    review_text = json.dumps({"binding": binding, "review": review}, sort_keys=True, indent=2) + "\n"
+    review_path = evidence_dir / "review.json"
+    review_hash = _write_candidate_evidence(review_path, review_text)
+    verification = []
+    for index, row in enumerate(commands):
+        output_path = evidence_dir / f"verify-{index}.txt"
+        output_text = (f"candidate {candidate['candidate_head']}\ntree {candidate['tree']}\nbinding {digest}\n"
+                  f"target {row['target']}\ncommand {row['command_id']}\n"
+                  f"events {','.join(row['output_event_ids'])}\nevents_sha256 {row['output_events_sha256']}\n"
+                  f"stop {stop['stop_id']}\nexit {row['exit_code']}\n{row['stdout']}\n{row['stderr']}\n")
+        output_hash = _write_candidate_evidence(output_path, output_text)
+        verification.append({"target": row["target"], "head_sha": candidate["candidate_head"], "result": "pass",
+                             "evidence": {"path": str(output_path), "sha256": output_hash}})
+    authority = binding["authority_binding"]
+    body_hashes = {number: hashes["body_sha256"] for number, hashes in binding["scope_hashes"].items()}
+    reviewer = review["native_proof"]["native_session_id"] + ":" + review["conversation_id"]
+    evidence = {"version": 1, "repository": completion.REPOSITORY, "issue": authority["governing_issue"],
+        "base_sha": pr["base_sha"], "head_sha": candidate["candidate_head"],
+        "risk_surfaces": ["concurrency", "state-machine"],
+        "review": {"reviewer": reviewer, "verdict": "pass", "head_sha": candidate["candidate_head"],
+                   "blocking_findings": [], "scope_issue_body_sha256": body_hashes,
+                   "evidence": {"path": str(review_path), "sha256": review_hash}}, "verification": verification}
+    evidence_path = evidence_dir / "evidence.json"
+    evidence_hash = _write_candidate_evidence(evidence_path, json.dumps(evidence, sort_keys=True, indent=2) + "\n")
+    contracts = {int(number): issue["body"] for number, issue in candidate_pr["review_material"]["issues"].items()}
+    delivery._full_evidence(evidence_path, {"worktree": candidate["worktree"], "issue": authority["governing_issue"],
+        "agent_id": entry.get("claimant"), "session_id": entry.get("session")}, candidate["candidate_head"],
+        pr["base_sha"], pr["governing_issue"]["body"], excluded_roots=(layout.root.resolve(),),
+        closing_contracts=contracts)
+    intent.update(state="artifact_ready", evidence_file=str(evidence_path), evidence_sha256=evidence_hash)
+    _save(layout, saved)
+    return {"number": pr["number"], "identity": saved["identity"], "action": "candidate-verification-ready"}
+
+
+def _advance_candidate_repair(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                              saved: dict[str, Any], binding: Mapping[str, Any], candidate_pr: Mapping[str, Any],
+                              *, http: Callable[..., tuple[int, Any]], codex_home: Path | None) -> dict[str, Any]:
+    verification = saved.get("candidate_verification")
+    if isinstance(verification, Mapping) and verification.get("state") == "failed":
+        worker = verification.get("worker")
+        if not isinstance(worker, str):
+            raise CycleError("candidate Verify worker is unavailable")
+        # Keep the stopped verifier generation stable through author materialization and POST.
+        with workspace._worker_lifecycle_lock(layout, worker):
+            return _advance_candidate_repair_locked(layout, pr, entry, saved, binding, candidate_pr,
+                                                    http=http, codex_home=codex_home)
+    return _advance_candidate_repair_locked(layout, pr, entry, saved, binding, candidate_pr,
+                                            http=http, codex_home=codex_home)
+
+
+def _advance_candidate_repair_locked(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                                     saved: dict[str, Any], binding: Mapping[str, Any], candidate_pr: Mapping[str, Any],
+                                     *, http: Callable[..., tuple[int, Any]], codex_home: Path | None) -> dict[str, Any]:
+    """Start one isolated author at the reviewed local candidate, preserving both predecessors."""
+    review = saved.get("candidate_review_receipt")
+    result = saved.get("candidate_review_result")
+    candidate = binding["candidate"]
+    dispatch = saved["candidate_review_dispatch"]
+    reviewer = dispatch["worker"]
+    reviewer_mapping = _mapping(layout, reviewer)
+    _review_stop_checkpoint(reviewer_mapping, saved, require_receipt=True, prefix="candidate_review_")
+    _assert_stopped(layout, reviewer, reviewer_mapping)
+    if (not isinstance(review, Mapping) or not isinstance(result, Mapping)
+            or result.get("binding_sha256") != _digest(binding)
+            or result.get("candidate_head") != candidate.get("candidate_head")
+            or result.get("candidate_tree") != candidate.get("tree")):
+        raise CycleError("candidate repair findings or review binding changed")
+    if result.get("state") == "pending_candidate_repair":
+        if (not isinstance(result.get("bounded_repair"), Mapping)
+                or result["bounded_repair"].get("report_sha256") != review.get("report_sha256")):
+            raise CycleError("candidate repair findings changed")
+        cause = {"kind": "review_findings", "report_sha256": review["report_sha256"]}
+    elif result.get("state") == "awaiting_verify_evidence" and review.get("report", {}).get("verdict") == "pass":
+        cause = _verify_failure_cause(layout, saved, binding)
+        verification = saved["candidate_verification"]
+        if (verification.get("targets") != _candidate_verify_targets(layout, entry, candidate_pr, Path(candidate["worktree"]))
+                or verification.get("test_venv") != str(_test_venv_source(layout, entry["test_venv"]))):
+            raise CycleError("candidate Verify target or environment changed")
+    else:
+        raise CycleError("candidate repair cause is unavailable")
+    if entry.get("engine") != "codex" or workspace.resolve_engine("codex", entry.get("model"))[1] != entry.get("model"):
+        raise CycleError("candidate repair requires the admitted native Codex model")
+    attempt = result.get("attempt")
+    if type(attempt) is not int or attempt < 1:
+        raise CycleError("candidate repair attempt identity is unavailable")
+    operation_data = {"request": "candidate-repair-author", "binding": _digest(binding),
+                      "report": review["report_sha256"], "attempt": attempt}
+    if cause["kind"] == "verify_failure":
+        operation_data["cause"] = cause
+    operation = "pr-completion-" + _digest(operation_data)
+    worker = "repair-" + _digest({"operation": operation})[:24]
+    expected = {"operation_id": operation, "worker": worker, "attempt": attempt,
+                "review_binding_sha256": _digest(binding), "report_sha256": review["report_sha256"],
+                "source_base_head": candidate["candidate_head"], "source_base_tree": candidate["tree"],
+                "remote_head": pr["head_sha"], "branch": candidate["branch"]}
+    if cause["kind"] == "verify_failure":
+        expected["cause"] = cause
+    intent = saved.get("candidate_repair")
+    if intent is None:
+        if layout.worker_dir(worker).exists() or layout.worker_dir(worker).is_symlink():
+            raise CycleError("candidate repair path already exists without an intent")
+        intent = {**expected, "materialized": False}
+        saved["candidate_repair"] = intent
+        _save(layout, saved, expected_worker=entry["worker"], expected_assignment=_mapping(layout, entry["worker"]))
+    elif not isinstance(intent, dict) or any(intent.get(key) != value for key, value in expected.items()):
+        raise CycleError("candidate repair intent changed; preserve the original operation")
+    workspace._reserve_review_worker(layout, candidate["claim_issue"], entry["worker"], worker)
+    mapping = _mapping(layout, worker)
+    if intent.get("materialized") is not True or mapping.get("state") == "created":
+        if mapping.get("state") not in ("reserved", "created"):
+            raise CycleError("candidate repair materialization state changed")
+        _materialize_candidate_reviewer(layout, saved, candidate, worker, candidate["branch"],
+                                        intent_key="candidate_repair", next_action="bounded candidate repair")
+        mapping = _mapping(layout, worker)
+    if mapping.get("state") == "created":
+        predecessor = _mapping(layout, entry["worker"])
+        budget, image, network = predecessor.get("budget"), predecessor.get("image"), predecessor.get("network")
+        if (not isinstance(budget, Mapping) or not isinstance(image, str)
+                or not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image) or not isinstance(network, str)):
+            raise CycleError("candidate repair launch settings are unavailable")
+        workspace.start_openhands_worker(layout, worker,
+            budget=workspace.Budget(cast(str, budget.get("cpus")), cast(str, budget.get("memory")), cast(int, budget.get("pids"))),
+            image=image, network=network, codex_home=codex_home or Path.home() / ".config/epic-workspace/codex",
+            runner=_worker_runner, http=http)
+        mapping = _mapping(layout, worker)
+    if saved.get("candidate_repair_stop_intent") is not None:
+        with workspace._worker_lifecycle_lock(layout, worker):
+            return _consume_candidate_repair_author(layout, pr, entry, saved, operation, worker, http=http)
+    if mapping.get("state") != "running":
+        raise CycleError("candidate repair worker is not running; reconcile its recorded lifecycle")
+    with workspace._worker_lifecycle_lock(layout, worker):
+        mapping = _mapping(layout, worker)
+        conversation = mapping.get("conversation")
+        if isinstance(conversation, Mapping):
+            if conversation.get("operation_id") != operation:
+                raise CycleError("candidate repair conversation belongs to another operation")
+            if conversation.get("status") in ("creating", "unknown"):
+                conversation = workspace._reconcile_worker_conversation_locked(layout, worker, http=http, runner=_worker_runner)
+        else:
+            current_binding, _ = _candidate_review_snapshot(layout, pr, entry, saved)
+            if current_binding != binding:
+                raise CycleError("candidate scope changed before repair conversation")
+            if cause["kind"] == "verify_failure":
+                failed = saved["candidate_verification"]["commands"][-1]
+                task = (f"Repair the failed required Verify target {failed['target']} (exit {failed['exit_code']}).\n"
+                        f"stdout:\n{failed['stdout']}\nstderr:\n{failed['stderr']}\n"
+                        "Make the bounded correction and run the target again.")
+            else:
+                task = f"Bounded findings: {json.dumps(result['bounded_repair'], sort_keys=True)}\nFull review: {json.dumps(review['report'], sort_keys=True)}"
+            prompt = (f"Repair the bounded issue for PR #{pr['number']}. The actual remote PR head is "
+                      f"{pr['head_sha']}; this workspace starts at reviewed local candidate "
+                      f"{candidate['candidate_head']} with tree {candidate['tree']}. Preserve scope and unrelated work. "
+                      "Do not publish, push, change claims or access host credentials. Report changes and tests.\n"
+                      f"Issue contracts and candidate scope: {json.dumps(candidate_pr['review_material']['issues'], sort_keys=True)}\n"
+                      f"Scope binding: {json.dumps(binding['scope_hashes'], sort_keys=True)}\n{task}")
+            conversation = workspace._start_conversation_locked(layout, worker, engine=entry["engine"],
+                model=entry["model"], effort=entry.get("effort"), prompt=prompt, operation_id=operation,
+                expected_owner_binding=saved["repair_owner_binding"], http=http, runner=_worker_runner)
+        if conversation.get("status") == "created":
+            return _consume_candidate_repair_author(layout, pr, entry, saved, operation, worker, http=http)
+    return {"number": pr["number"], "identity": saved["identity"], "action": "candidate-repair-author",
+            "operation_id": operation, "worker": worker, "conversation_id": conversation.get("id"),
+            "conversation_status": conversation.get("status"),
+            "reason": "reconcile the recorded candidate repair author and preserve its work"}
+
+
+def _consume_candidate_repair_author(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                                     saved: dict[str, Any], operation: str, worker: str, *,
+                                     http: Callable[..., tuple[int, Any]]) -> dict[str, Any]:
+    """Retain the actual author proof and reconcile its exact stop before preparation."""
+    mapping = _mapping(layout, worker)
+    conversation = mapping.get("conversation")
+    if not isinstance(conversation, Mapping) or conversation.get("operation_id") != operation:
+        raise CycleError("candidate repair conversation identity changed")
+    result = {"number": pr["number"], "identity": saved["identity"], "action": "candidate-repair-author",
+              "operation_id": operation, "worker": worker, "conversation_id": conversation.get("id"),
+              "conversation_status": conversation.get("status")}
+    if saved.get("candidate_repair_stop_intent") is None:
+        status = workspace.conversation_status(layout, worker, http=http, runner=_worker_runner, include_messages=False)
+        if status.get("errors"):
+            raise CycleError("candidate repair author failed; preserve its worker")
+        if (status.get("reachable") is not True or status.get("events_reachable") is not True
+                or status.get("execution_status") not in ("finished", "FINISHED")):
+            return {**result, "reason": "awaiting the recorded candidate repair author"}
+        proof_fn = getattr(native_execution_proof, "__wrapped__", native_execution_proof)
+        proof = proof_fn(layout, worker, operation, entry, http=http)
+        if (not isinstance(proof, dict) or proof.get("operation_id") != operation
+                or proof.get("conversation_id") != conversation.get("id")
+                or proof.get("container_id") != mapping.get("container_id")):
+            raise CycleError("candidate repair author proof does not match its assignment")
+        saved["candidate_repair_execution_proof"] = proof
+        _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    _release_reviewer(layout, worker, saved, _mapping(layout, worker), prefix="candidate_repair_", locked=True)
+    mapping = _mapping(layout, worker)
+    work = workspace._completed_stop(mapping, saved["candidate_repair_stop_intent"]["stop_id"])
+    current_binding, _ = _candidate_review_snapshot(layout, pr, entry, saved)
+    if current_binding != saved["candidate_review_dispatch"]["binding"]:
+        raise CycleError("candidate scope changed during repair author stop")
+    intent = saved["candidate_repair"]
+    intent["status"] = "stopped_pending_preparation"
+    intent["work_at_stop"] = dict(work)
+    intent["next_action"] = "prepare an additive publisher commit whose parent is the reviewed local candidate"
+    _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
+    _promote_candidate_repair(layout, pr, entry, saved, worker, operation, work)
+    return _finalize_candidate_repair(layout, pr, entry, saved, locked=True)
+
+
+def _promote_candidate_repair(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                              saved: dict[str, Any], worker: str, operation: str, work: Mapping[str, Any]) -> None:
+    intent = saved["candidate_repair"]
+    previous_candidate = saved["repair_candidate"]
+    if (intent.get("source_base_head") != previous_candidate.get("candidate_head")
+            or intent.get("source_base_tree") != previous_candidate.get("tree")
+            or intent.get("remote_head") != pr.get("head_sha")
+            or saved.get("candidate_repair_stop_verified") is not True):
+        raise CycleError("candidate repair stop does not bind its reviewed source base")
+    fields = {key: value for key, value in saved.items()
+              if key.startswith("repair_") or key.startswith("candidate_review_") or key == "candidate_verification"}
+    history = saved.setdefault("candidate_repair_history", [])
+    if not isinstance(history, list):
+        raise CycleError("candidate repair history is malformed")
+    history.append({"fields": fields, **({"cause": intent["cause"]} if "cause" in intent else {})})
+    for key in list(saved):
+        if key.startswith("candidate_review_") or key in ("repair_candidate_preparation", "candidate_verification"):
+            del saved[key]
+    intent["status"] = "preparing"
+    saved.update(repair_worker=worker, repair_source_base_head=intent["source_base_head"],
+                 repair_operation=operation, repair_engine=entry["engine"], repair_model=entry["model"],
+                 repair_effort=entry.get("effort"), repair_execution_proof=saved["candidate_repair_execution_proof"],
+                 repair_stop_intent=saved["candidate_repair_stop_intent"], repair_stop_verified=True)
+    saved["repair_result"] = {"status": "pending_trusted_publication", "identity": saved["identity"],
+        "head_sha": pr["head_sha"], "operation_id": operation, "native_proof": saved["repair_execution_proof"],
+        "work_at_stop": dict(work)}
+    _save(layout, saved, expected_worker=worker, expected_assignment=_mapping(layout, worker))
+
+
+def _finalize_candidate_repair(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                               saved: dict[str, Any], *, locked: bool = False) -> dict[str, Any]:
+    intent = saved.get("candidate_repair")
+    if not isinstance(intent, dict) or intent.get("status") != "preparing":
+        raise CycleError("candidate repair preparation intent is unavailable")
+    worker, operation = intent.get("worker"), intent.get("operation_id")
+    if (not isinstance(worker, str) or saved.get("repair_worker") != worker
+            or saved.get("repair_operation") != operation or intent.get("remote_head") != pr.get("head_sha")
+            or intent.get("source_base_head") != _repair_source_base(saved, pr)):
+        raise CycleError("candidate repair preparation binding changed")
+    _verify_candidate_repair_history(layout, pr, entry, saved)
+    with workspace._worker_lifecycle_lock(layout, worker, reentrant=locked):
+        mapping = _mapping(layout, worker)
+        candidate = saved.get("repair_candidate")
+        if not isinstance(candidate, Mapping) or candidate.get("operation_id") != operation:
+            outcome = _bind_stopped_repair_candidate(layout, worker, pr, entry, saved, mapping)
+        else:
+            outcome = {"number": pr["number"], "identity": saved["identity"],
+                       "action": "awaiting-candidate-review", "operation_id": operation,
+                       "reason": "obtain independent review of the prepared candidate"}
+        for key in ("candidate_repair", "candidate_repair_execution_proof",
+                    "candidate_repair_stop_intent", "candidate_repair_stop_verified"):
+            saved.pop(key, None)
+        _save(layout, saved, expected_worker=worker, expected_assignment=_mapping(layout, worker))
+        return outcome
+
+
+def _hold_candidate_reviewer(layout: workspace.Layout, saved: dict[str, Any]) -> None:
+    """Stop the exact possibly running reviewer after its source or authority stops qualifying."""
+    dispatch = saved.get("candidate_review_dispatch")
+    if not isinstance(dispatch, dict) or not isinstance(dispatch.get("worker"), str):
+        return
+    worker = dispatch["worker"]
+    try:
+        mapping = _mapping(layout, worker)
+    except workspace.EpicWorkspaceError:
+        return  # The durable intent may precede the assignment reservation.
+    existing_intent = saved.get("candidate_review_stop_intent") or dispatch.get("hold_stop_intent")
+    if mapping.get("state") == "stopped_verified" and existing_intent:
+        intent = existing_intent
+        if (not isinstance(intent, Mapping) or mapping.get("stop_id") != intent.get("stop_id")
+                or mapping.get("container_id") != intent.get("container_id")):
+            raise CycleError("candidate reviewer stop generation changed")
+        try:
+            workspace._completed_stop(mapping, intent.get("stop_id"))
+        except workspace.TakeoverRefused:
+            with workspace._worker_lifecycle_lock(layout, worker):
+                workspace._stop_worker(layout, worker, reason="resume held candidate reviewer stop",
+                    runner=_worker_runner, image=workspace.DEFAULT_IMAGE,
+                    expected_container_id=intent.get("container_id"), stop_intent=intent, allow_starting=True)
+        dispatch["held"] = True
+        _save(layout, saved)
+        return
+    if mapping.get("state") not in ("starting", "running"):
+        return
+    intent = existing_intent
+    if intent is None:
+        intent = {"stop_id": uuid.uuid4().hex, "previous_stop_id": mapping.get("stop_id"),
+                  "container_id": mapping.get("container_id"), "assignment": workspace.assignment_of(mapping)}
+        dispatch["hold_stop_intent"] = intent
+        _save(layout, saved)
+    if (not isinstance(intent, Mapping) or intent.get("container_id") != mapping.get("container_id")
+            or not workspace._same_assignment(intent.get("assignment", {}), mapping)):
+        raise CycleError("candidate reviewer stop assignment changed")
+    with workspace._worker_lifecycle_lock(layout, worker):
+        workspace._stop_worker(layout, worker, reason="candidate review source or authority held",
+            runner=_worker_runner, image=workspace.DEFAULT_IMAGE,
+            expected_container_id=intent.get("container_id"), expected_assignment=mapping,
+            stop_intent=intent, allow_starting=True)
+    dispatch["held"] = True
+    _save(layout, saved)
+
+
+def _hold_candidate_repair_author(layout: workspace.Layout, saved: dict[str, Any]) -> None:
+    intent = saved.get("candidate_repair")
+    if not isinstance(intent, dict) or not isinstance(intent.get("worker"), str):
+        return
+    worker = intent["worker"]
+    try:
+        mapping = _mapping(layout, worker)
+    except workspace.EpicWorkspaceError:
+        return
+    if mapping.get("state") not in ("starting", "running"):
+        return
+    stop = saved.get("candidate_repair_stop_intent") or intent.get("hold_stop_intent")
+    if stop is None:
+        stop = {"stop_id": uuid.uuid4().hex, "previous_stop_id": mapping.get("stop_id"),
+                "container_id": mapping.get("container_id"), "assignment": workspace.assignment_of(mapping)}
+        intent["hold_stop_intent"] = stop
+        _save(layout, saved)
+    if (not isinstance(stop, Mapping) or stop.get("container_id") != mapping.get("container_id")
+            or not workspace._same_assignment(stop.get("assignment", {}), mapping)):
+        raise CycleError("candidate repair stop assignment changed")
+    with workspace._worker_lifecycle_lock(layout, worker):
+        workspace._stop_worker(layout, worker, reason="candidate repair source or authority held",
+            runner=_worker_runner, image=workspace.DEFAULT_IMAGE, expected_container_id=stop.get("container_id"),
+            expected_assignment=mapping, stop_intent=stop, allow_starting=True)
+    intent["held"] = True
+    _save(layout, saved)
+
+
+def _hold_candidate_verifier(layout: workspace.Layout, saved: dict[str, Any]) -> None:
+    intent = saved.get("candidate_verification")
+    if not isinstance(intent, dict) or not isinstance(intent.get("worker"), str):
+        return
+    worker = intent["worker"]
+    try:
+        mapping = _mapping(layout, worker)
+    except workspace.EpicWorkspaceError:
+        return
+    if mapping.get("state") not in ("starting", "running"):
+        return
+    stop = intent.get("stop_intent")
+    if stop is None:
+        stop = {"stop_id": uuid.uuid4().hex, "previous_stop_id": mapping.get("stop_id"),
+                "container_id": mapping.get("container_id"), "assignment": workspace.assignment_of(mapping)}
+        intent["stop_intent"] = stop
+        _save(layout, saved)
+    if (not isinstance(stop, Mapping) or stop.get("container_id") != mapping.get("container_id")
+            or not workspace._same_assignment(stop.get("assignment", {}), mapping)):
+        raise CycleError("candidate Verify stop assignment changed")
+    with workspace._worker_lifecycle_lock(layout, worker):
+        workspace._stop_worker(layout, worker, reason="candidate Verify source or authority held",
+            runner=_worker_runner, image=workspace.DEFAULT_IMAGE, expected_container_id=stop.get("container_id"),
+            expected_assignment=mapping, stop_intent=stop, allow_starting=True)
+    intent["held"] = True
+    _save(layout, saved)
+
+
+def _advance_bound_publication(layout: workspace.Layout, path: Path | None, pr: Mapping[str, Any],
+                               entry: Mapping[str, Any], saved: dict[str, Any], *,
+                               executor: publication.CommandExecutor | None) -> dict[str, Any]:
+    """Resume the exact bound candidate before applying the ordinary head filter."""
+    from app.builderops import openhands_delivery as delivery
+
+    number, worker = pr["number"], entry["worker"]
+    candidate = saved.get("repair_candidate")
+    request = entry.get("repair_publication")
+    if not isinstance(candidate, dict):
+        raise CycleError("bound repair candidate is unavailable")
+    generated = saved.get("candidate_verification")
+    automatic = ({"evidence_file": generated.get("evidence_file"), "paths": generated.get("paths")}
+                 if isinstance(generated, Mapping) and generated.get("state") == "artifact_ready" else {})
+    request = {**automatic, **(dict(request) if isinstance(request, Mapping) else {})}
+    if path is None:
+        raise CycleError("reconcile the existing trusted publication using a controller-owned admissions file")
+    evidence, paths = request.get("evidence_file"), request.get("paths")
+    if (not isinstance(evidence, str) or not Path(evidence).is_absolute()
+            or not isinstance(paths, list) or not paths or any(not isinstance(p, str) or not p for p in paths)):
+        return {"number": number, "identity": saved["identity"], "action": "awaiting-candidate-review",
+                "reason": "supply independent current-candidate full evidence and intended paths in repair_publication"}
+    if saved.get("repair_publication") is None and not Path(evidence).is_file():
+        return {"number": number, "identity": saved["identity"], "action": "awaiting-candidate-review",
+                "reason": "provide the host-controlled full evidence artifact for the reviewed candidate"}
+    old, new = candidate.get("old_head"), candidate.get("candidate_head")
+    original = saved.get("repair_publication_original_pr")
+    if original is None:
+        if pr.get("head_sha") != old or saved.get("repair_publication") is not None:
+            raise CycleError("original pre-publication PR observation is unavailable")
+        original = dict(pr)
+        saved["repair_publication_original_pr"] = original
+        _save(layout, saved)
+    if (not isinstance(original, dict) or original.get("number") != number or original.get("head_sha") != old
+            or pr.get("head_sha") not in (old, new) or pr.get("draft") is not False or pr.get("restrictions")
+            or any(pr.get(k) != original.get(k) for k in ("repository", "head_repository", "base_ref", "base_sha", "body", "title", "governing_issue"))):
+        raise CycleError("PR observation or governing contract changed during publication")
+    source_worker = saved.get("repair_worker", worker)
+    if not isinstance(source_worker, str):
+        raise CycleError("repair source worker is unavailable")
+    with workspace._worker_lifecycle_lock(layout, worker), (
+            workspace._worker_lifecycle_lock(layout, source_worker) if source_worker != worker else nullcontext()):
+        result = delivery._publish_native_repair_locked(layout, original, entry, saved["identity"], paths,
+                                                        Path(evidence), executor=executor)
+        if result.get("pr_number") != number or result.get("commit_sha") != new:
+            raise CycleError("confirmed publication readback does not match candidate")
+        _refresh_published_admission(layout, path, entry, cast(str, old), cast(str, new))
+    return {"number": number, "identity": saved["identity"], "action": "published-awaiting-new-head-review",
+            "head_sha": new, "reason": "admission refreshed; obtain fresh new-head review, Verify and CI"}
+
+
+def _pending_repair_candidates(state: Mapping[str, Any], number: int,
+                               entry: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Discover original operations by PR, even when their admission was lost or replaced.
+
+    Only the bound publisher's terminal readback settles a candidate. An old-head
+    row still needs its confirmed refresh; otherwise ordinary admission can resume.
+    """
+    pending = []
+    for row in state["compact_receipts"]:
+        if not isinstance(row, dict) or row.get("kind") != "pr_cycle" or row.get("number") != number:
+            continue
+        candidate, attempt = row.get("repair_candidate"), row.get("repair_publication")
+        if not isinstance(candidate, dict) and attempt is None:
+            continue
+        if isinstance(candidate, dict) and isinstance(attempt, dict):
+            head = candidate.get("candidate_head")
+            bound = attempt.get("candidate")
+            original = attempt.get("previous_candidate")
+            if (attempt.get("state") == "native_published" and isinstance(head, str)
+                    and re.fullmatch(r"[0-9a-f]{40}", head) and attempt.get("published_head") == head
+                    and attempt.get("pr_number") == number and isinstance(bound, dict)
+                    and bound.get("head") == head and bound.get("identity") == row.get("identity")
+                    and isinstance(original, dict) and original.get("head") == candidate.get("old_head")
+                    and bound.get("repair_operation") == candidate.get("operation_id") == row.get("repair_operation")
+                    and (entry is None or entry.get("head_sha") != candidate.get("old_head"))):
+                continue
+        pending.append(row)
+    return pending
+
+
+def advance(layout: workspace.Layout, admissions: list[dict[str, Any]] | Path, *,
+            fetch: observation.Fetch = github_fetch, http: Callable[..., tuple[int, Any]] = workspace._http,
+            codex_home: Path | None = None,
+            publisher_executor: publication.CommandExecutor | None = None) -> dict[str, Any]:
+    """Advance with direct admissions, or read a controller-owned file under the cycle lock."""
     with _single_advancement(layout):
+        config = _read_configuration(layout, admissions) if isinstance(admissions, Path) else {"admissions": admissions}
+        admitted = _validate_admission(config.get("admissions", []))
+        automatic = _automatic_settings(config["automatic_native"]) if "automatic_native" in config else None
         state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
         if state["epic_issue_number"] != layout.epic:
             raise CycleError("epic owner mismatch")
         scan = observation.collect(fetch)
         results: list[dict[str, Any]] = []
+        handoffs: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
         reconciling: dict[int, list[tuple[str, str, str] | None]] = {}
+        observations = {pr["number"]: pr for pr in scan["observations"]}
+        admission_holds: dict[int, str] = {}
+        generated = {n: row for n, row in admitted.items() if "_automatic_native" in row}
+        for auto_number in generated:
+            del admitted[auto_number]
+            admission_holds[auto_number] = "automatic admission disabled or observation unavailable"
+        if automatic is not None:
+            original_config = admissions.read_text(encoding="utf-8") if isinstance(admissions, Path) else None
+            if original_config is not None and json.loads(original_config) != config:
+                raise CycleError("admission configuration changed before automatic derivation")
+            rows = list(config.get("admissions", []))
+            for pr in scan["observations"]:
+                auto_number = pr["number"]
+                if auto_number in admitted:  # Explicit entries retain their exact-head semantics.
+                    continue
+                try:
+                    previous = generated.get(auto_number)
+                    candidates = _pending_repair_candidates(state, auto_number, previous)
+                    if candidates:
+                        if previous is None:
+                            raise CycleError("existing candidate/publication requires its persisted admission; restore through resume-work")
+                        if (len(candidates) != 1 or not isinstance(candidates[0].get("repair_candidate"), dict)
+                                or previous["head_sha"] != candidates[0]["repair_candidate"].get("old_head")):
+                            raise CycleError("existing candidate/publication requires its original admission; restore through resume-work")
+                        if previous["_automatic_native"] != automatic:
+                            raise CycleError("automatic scope changed during candidate reconciliation")
+                        # Preserve the old-head entry until the existing candidate/publication
+                        # path reconciles and refreshes it. A newly observed head is not a receipt.
+                        admitted[auto_number] = previous
+                        continue
+                    auto_entry = _automatic_admission(layout, pr, automatic)
+                    if previous is not None and all(previous.get(k) == value for k, value in auto_entry.items()):
+                        auto_entry = previous  # Retain the owning workflow's bound disposition/publication input.
+                    admitted[auto_number] = auto_entry
+                    rows = [r for r in rows if r["number"] != auto_number] + [auto_entry]
+                except (CycleError, closure.ClosureError, workspace.EpicWorkspaceError,
+                        agent_worktree.WorktreeLifecycleError, OSError, ValueError, KeyError,
+                        TypeError, RuntimeError) as exc:
+                    admission_holds[auto_number] = f"automatic admission held: {exc}"
+            if rows != config.get("admissions", []):
+                if not isinstance(admissions, Path) or original_config is None:
+                    raise CycleError("automatic admission requires the controller-owned configuration file")
+                _write_configuration(admissions, {**config, "admissions": rows}, original_config)
+        for saved in state["compact_receipts"]:
+            if (not isinstance(saved, dict) or saved.get("kind") != "pr_cycle"
+                    or not isinstance(saved.get("candidate_review_dispatch"), dict)
+                    or saved.get("repair_publication") is not None
+                    or type(saved.get("number")) is not int):
+                continue
+            candidate_number = cast(int, saved.get("number"))
+            entry = admitted.get(candidate_number)
+            candidate = saved.get("repair_candidate")
+            observed = observations.get(candidate_number)
+            if (isinstance(candidate, Mapping) and isinstance(entry, Mapping) and isinstance(observed, Mapping)
+                    and entry.get("head_sha") == candidate.get("old_head") == observed.get("head_sha")):
+                continue
+            try:
+                _hold_candidate_verifier(layout, dict(saved))
+                saved = _find(layout, candidate_number, saved["identity"])
+                _hold_candidate_repair_author(layout, dict(saved))
+                _hold_candidate_reviewer(layout, _find(layout, candidate_number, saved["identity"]))
+                reason = "candidate PR observation or admission is unavailable or changed; reviewer held"
+            except (workspace.EpicWorkspaceError, CycleError, OSError, ValueError) as exc:
+                reason = f"candidate reviewer stop unresolved: {exc}"
+            results.append({"number": candidate_number, "action": "wait", "reason": reason})
         for saved in state["compact_receipts"]:
             if (not isinstance(saved, dict) or saved.get("kind") != "pr_cycle"
                     or not isinstance(saved.get("merge_intent"), dict) or saved.get("reconciled") is True):
@@ -2786,31 +5947,96 @@ def advance(layout: workspace.Layout, admissions: list[dict[str, Any]], *,
                    for item in obligations):
                 continue
             entry = admitted.get(number)
+            pending_publications = _pending_repair_candidates(state, number, entry)
+            if pending_publications:
+                try:
+                    if len(pending_publications) != 1 or obligations:
+                        raise CycleError("publication or merge reconciliation is ambiguous")
+                    saved = dict(pending_publications[0])
+                    if entry is None:
+                        raise CycleError("existing candidate/publication requires its persisted admission; restore through resume-work")
+                    if (not isinstance(saved.get("repair_candidate"), dict)
+                            or saved["repair_candidate"].get("old_head") != entry.get("head_sha")):
+                        raise CycleError("existing candidate/publication requires its original admission; restore through resume-work")
+                    requested = entry.get("repair_publication")
+                    explicit = (isinstance(requested, Mapping) and isinstance(requested.get("evidence_file"), str)
+                                and isinstance(requested.get("paths"), list))
+                    if saved.get("repair_publication") is not None or explicit:
+                        if explicit:
+                            _hold_candidate_verifier(layout, saved)
+                            saved = _find(layout, number, saved["identity"])
+                        result = _advance_bound_publication(layout, admissions if isinstance(admissions, Path) else None,
+                                                            pr, entry, saved, executor=publisher_executor)
+                    else:
+                        result = _advance_candidate_review(layout, pr, entry, saved, http=http,
+                                                           codex_home=codex_home)
+                        if result.get("action") == "candidate-verification-ready":
+                            result = _advance_bound_publication(layout, admissions if isinstance(admissions, Path) else None,
+                                pr, entry, _find(layout, number, saved["identity"]), executor=publisher_executor)
+                except (CycleError, closure.ClosureError, workspace.EpicWorkspaceError, publication.PublicationRefusal,
+                        publication.PublicationCommandError, OSError, ValueError, KeyError, AttributeError,
+                        TypeError, RecursionError, RuntimeError) as exc:
+                    if len(pending_publications) == 1 and pending_publications[0].get("repair_publication") is None:
+                        try:
+                            original = pending_publications[0]
+                            fresh = _find(layout, number, original["identity"])
+                            if not isinstance(exc, (VerifyReadbackPending, workspace.EndpointUnavailable)):
+                                _hold_candidate_verifier(layout, fresh)
+                            fresh = _find(layout, number, original["identity"])
+                            _hold_candidate_repair_author(layout, fresh)
+                            _hold_candidate_reviewer(layout, _find(layout, number, original["identity"]))
+                        except (workspace.EpicWorkspaceError, CycleError, OSError, ValueError) as stop_exc:
+                            exc = CycleError(f"{exc}; reviewer stop unresolved: {stop_exc}")
+                    result = {"number": number, "action": "wait", "reason": str(exc)}
+                results.append(result)
+                continue
             if entry is None or entry["head_sha"] != pr["head_sha"]:
-                results.append({"number": number, "action": "wait", "reason": "not admitted at this head"})
+                results.append({"number": number, "action": "wait",
+                                "reason": admission_holds.get(number, "not admitted at this head")})
                 continue
             try:
                 pending = [(item[0], item[1]) for item in obligations if item is not None]
                 if pending:
-                    results.append(_advance_one(layout, pr, entry, http=http, merge_obligations=pending))
+                    result = _advance_one(layout, pr, entry, http=http, merge_obligations=pending, codex_home=codex_home)
                 else:
-                    results.append(_advance_one(layout, pr, entry, http=http))
+                    result = _advance_one(layout, pr, entry, http=http, codex_home=codex_home)
+                eligible_for_handoff = not obligations
             except (CycleError, closure.ClosureError, observation.ObservationError, workspace.EpicWorkspaceError,
-                    OSError, ValueError, KeyError, AttributeError, TypeError, RecursionError) as exc:
-                results.append({"number": number, "action": "wait", "reason": str(exc)})
+                    publication.PublicationRefusal, publication.PublicationCommandError, OSError, ValueError, KeyError, AttributeError, TypeError,
+                    RecursionError) as exc:
+                result = {"number": number, "action": "wait", "reason": str(exc)}
+                eligible_for_handoff = False
+            results.append(result)
+            if eligible_for_handoff:
+                handoffs.append((pr, entry, result))
+        # This is part of the existing one-shot advancement, after other admitted PRs have advanced.
+        # The scheduled read-only collector remains unchanged until the trusted workflow adopts it.
+        from app.builderops import epic_coordination
+
+        for pr, entry, result in handoffs:
+            try:
+                candidate = _review_quota_candidate(layout, pr, entry, result, http=http)
+                if candidate is not None:
+                    issue, worker, observed = candidate
+                    result["engine_handoff"] = epic_coordination.continue_quota_handoff(
+                        layout, issue, worker, observed,
+                        codex_home=codex_home or Path.home() / ".config/epic-workspace/codex",
+                        runner=_worker_runner, http=http, fetch=fetch)
+            except Exception as exc:  # noqa: BLE001 - keep this review's uncertainty local to it
+                result["engine_handoff"] = {"state": "held", "error": str(exc)[:300] or type(exc).__name__}
         return {"repository": completion.REPOSITORY, "inventory_complete": scan["inventory_complete"],
                 "failures": scan["failures"], "results": results}
 
 
 def _review_stop_checkpoint(mapping: Mapping[str, Any], saved: Mapping[str, Any], *,
-                            require_receipt: bool) -> Any:
-    intent = saved.get("stop_intent")
+                            require_receipt: bool, prefix: str = "") -> Any:
+    intent = saved.get(prefix + "stop_intent")
     if (not isinstance(intent, dict) or not isinstance(intent.get("stop_id"), str)
             or not re.fullmatch(r"[0-9a-f]{32}", intent["stop_id"])
             or "previous_stop_id" not in intent):
         raise CycleError("reviewer stop intent has no exact stop generation; reconcile the old record")
     assignment = intent.get("assignment")
-    proof = saved.get("execution_proof")
+    proof = saved.get(prefix + "execution_proof")
     conversation = mapping.get("conversation")
     if (not isinstance(assignment, dict) or not isinstance(proof, dict)
             or intent.get("container_id") != mapping.get("container_id")
@@ -2832,7 +6058,7 @@ def _review_stop_checkpoint(mapping: Mapping[str, Any], saved: Mapping[str, Any]
     except workspace.TakeoverRefused as exc:
         raise CycleError(str(exc)) from exc
     checkpoint = work["checkpoint"]
-    if require_receipt and (saved.get("stop_verified") is not True or "checkpoint" not in intent
+    if require_receipt and (saved.get(prefix + "stop_verified") is not True or "checkpoint" not in intent
                             or intent["checkpoint"] != checkpoint):
         raise CycleError("review stop receipt does not match the current completed checkpoint; reconcile it")
     return checkpoint
@@ -2849,19 +6075,19 @@ def _review_verification_lineage(mapping: Mapping[str, Any], saved: Mapping[str,
 
 
 def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, Any],
-                      observed: Mapping[str, Any]) -> None:
+                      observed: Mapping[str, Any], *, prefix: str = "", locked: bool = False) -> None:
     """Stop the reviewed assignment and reconcile an uncertain stop through the lifecycle."""
-    reason = "review completed; release model capacity"
+    reason = "repair author completed; preserve source" if prefix == "repair_" else "review completed; release model capacity"
     mapping = _mapping(layout, worker)
     if not workspace._same_assignment(mapping, observed):
         raise CycleError("reviewer assignment changed before release")
-    proof = saved.get("execution_proof")
+    proof = saved.get(prefix + "execution_proof")
     conversation = mapping.get("conversation")
     if (not isinstance(proof, dict) or proof.get("container_id") != mapping.get("container_id")
             or not isinstance(conversation, dict) or proof.get("conversation_id") != conversation.get("id")
             or proof.get("operation_id") != conversation.get("operation_id")):
         raise CycleError("review proof does not bind the current worker assignment")
-    intent = saved.get("stop_intent")
+    intent = saved.get(prefix + "stop_intent")
     if intent is None:
         if mapping.get("state") != "running":
             raise CycleError("reviewer is no longer running before release")
@@ -2871,7 +6097,11 @@ def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, An
         _assert_live_container(layout, worker, mapping)
         intent = {"container_id": ident, "assignment": workspace.assignment_of(mapping),
                   "previous_stop_id": mapping.get("stop_id"), "stop_id": uuid.uuid4().hex}
-        saved["stop_intent"] = intent
+        saved[prefix + "stop_intent"] = intent
+        if prefix == "repair_":
+            saved["repair_result"] = {"status": "stop_pending", "operation_id": proof["operation_id"],
+                                      "conversation_id": proof["conversation_id"],
+                                      "next_action": "resume and verify the original author stop"}
         _save(layout, saved, expected_worker=worker, expected_assignment=mapping)
     if (not isinstance(intent, dict) or not isinstance(intent.get("container_id"), str)
             or not workspace._CONTAINER_ID.fullmatch(intent["container_id"])
@@ -2896,19 +6126,24 @@ def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, An
                 or (current_mapping.get("state") != "stopped_verified" and before != current)):
             raise CycleError("reviewer assignment changed since stop intent")
     check_lineage(mapping)
-    if not saved.get("stop_verified"):
+    if not saved.get(prefix + "stop_verified"):
         if (mapping.get("stop_id") != intent["stop_id"]
                 and (mapping.get("state") != "running" or mapping.get("stop_id") != intent["previous_stop_id"])):
             raise CycleError("a newer reviewer stop requires reconciliation")
         # An interrupted ID-bound stop can be retried safely through the existing
         # stop/checkpoint path; absence alone must not manufacture its completion.
         try:
-            workspace.stop_worker(layout, worker, reason=reason, expected_container_id=intent["container_id"],
-                                  expected_assignment=mapping, stop_intent=intent)
+            stop = getattr(workspace.stop_worker, "__wrapped__", workspace.stop_worker) if locked else workspace.stop_worker
+            if prefix in ("candidate_review_", "candidate_repair_"):
+                stop(layout, worker, reason=reason, runner=_worker_runner,
+                     expected_container_id=intent["container_id"], expected_assignment=mapping, stop_intent=intent)
+            else:
+                stop(layout, worker, reason=reason, expected_container_id=intent["container_id"],
+                     expected_assignment=mapping, stop_intent=intent)
         except workspace.EpicWorkspaceError:
             check_lineage(_mapping(layout, worker))
             raise
-    with workspace._worker_lifecycle_lock(layout, worker):
+    with workspace._worker_lifecycle_lock(layout, worker, reentrant=locked):
         mapping = _mapping(layout, worker)
         check_lineage(mapping)
         if (mapping.get("container_id") != intent["container_id"]
@@ -2916,15 +6151,84 @@ def _release_reviewer(layout: workspace.Layout, worker: str, saved: dict[str, An
                 or mapping["conversation"].get("id") != proof["conversation_id"]):
             raise CycleError("reviewer assignment changed after stop")
         _assert_stopped(layout, worker, mapping)
-        checkpoint = _review_stop_checkpoint(mapping, saved, require_receipt=bool(saved.get("stop_verified")))
-        verified = {**saved, "stop_intent": {**intent, "checkpoint": checkpoint}, "stop_verified": True}
+        checkpoint = _review_stop_checkpoint(mapping, saved, require_receipt=bool(saved.get(prefix + "stop_verified")), prefix=prefix)
+        verified = {**saved, prefix + "stop_intent": {**intent, "checkpoint": checkpoint}, prefix + "stop_verified": True}
         _save(layout, verified, expected_worker=worker, expected_assignment=mapping)
         saved.update(verified)
 
 
+# One review attempt's fields. A report reconciliation moves them verbatim into history.
+_REVIEW_ATTEMPT_FIELDS = ("review_operation", "review", "public_report_conversation", "conversation_provenance",
+                          "execution_proof", "stop_intent", "stop_verified", "review_gate", "review_disposition",
+                          "disposition_request", "verification", "ci")
+
+
+def _reconciliation(saved: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The one report reconciliation recorded for the current report contract, if any."""
+    rows = saved.get("report_reconciliations", [])
+    if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+        raise CycleError("report reconciliation history is malformed; reconcile the record")
+    if any(row.get("contract") != REPORT_CONTRACT for row in rows):
+        raise CycleError("report reconciliation contract history is unknown; reconcile the record")
+    matches = [r for r in rows if r.get("contract") == REPORT_CONTRACT]
+    if len(matches) > 1:
+        raise CycleError("report reconciliation history is ambiguous; reconcile the record")
+    return matches[0] if matches else None
+
+
+def _bound_reconciliation(layout: workspace.Layout, saved: Mapping[str, Any]) -> dict[str, Any] | None:
+    pending = _reconciliation(saved)
+    state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
+    records = [row for row in state["dispatch_decisions"] if isinstance(row, dict)
+               and row.get("kind") == "openhands_pr_completion" and row.get("request") == "independent-review"
+               and row.get("repository") == completion.REPOSITORY and row.get("route") == "native"
+               and row.get("number") == saved.get("number") and row.get("identity") == saved.get("identity")]
+    matches = [row for row in records if row.get("operation_id") == saved.get("review_operation")]
+    expected_attempts = [1] if pending is None else [1, 2]
+    if (len(records) != len(expected_attempts)
+            or any(type(row.get("attempt")) is not int for row in records)
+            or sorted(row["attempt"] for row in records) != expected_attempts
+            or len(matches) != 1 or type(matches[0].get("attempt")) is not int
+            or matches[0]["attempt"] not in (1, 2)
+            or (matches[0]["attempt"] == 1) != (pending is None)):
+        raise CycleError("review operation reservation history is unknown or contradictory")
+    if pending is not None:
+        archive = pending.get("archived")
+        prior_stop = archive.get("stop_intent") if isinstance(archive, dict) else None
+        stop = saved.get("stop_intent")
+        original = [row for row in records if row.get("operation_id") == pending.get("original_operation")]
+        if (pending.get("operation") != saved.get("review_operation") or not isinstance(prior_stop, dict)
+                or not isinstance(stop, dict) or not isinstance(prior_stop.get("stop_id"), str)
+                or stop.get("previous_stop_id") != prior_stop["stop_id"]
+                or len(original) != 1 or original[0].get("attempt") != 1
+                or original[0].get("outcome") != "completed"):
+            raise CycleError("review reconciliation operation or stop lineage is unknown")
+    return pending
+
+
+def _begin_reconciliation(layout: workspace.Layout, saved: dict[str, Any], gate: Mapping[str, Any],
+                          head_sha: str) -> None:
+    """Record one bounded correction of a non-conforming report at the same identity.
+
+    The original report, proof, stop and gate stay byte-for-byte in the record's history. The
+    previous reviewer is already proven stopped, so the successor conversation cannot conflict.
+    """
+    if saved.get("merge_intent") is not None or saved.get("stop_verified") is not True:
+        raise CycleError("report reconciliation requires a verified reviewer stop and no merge intent")
+    archived = {key: saved.pop(key) for key in _REVIEW_ATTEMPT_FIELDS if key in saved}
+    digest = hashlib.sha256(json.dumps(archived["review"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    saved.setdefault("report_reconciliations", []).append({
+        "contract": REPORT_CONTRACT, "original_operation": archived["review_operation"],
+        "identity": saved["identity"], "head_sha": head_sha, "original_report_sha256": digest,
+        "original_attempt_sha256": _digest(archived),
+        "gate": dict(gate), "archived": archived, "operation": None})
+    _save(layout, saved)
+
+
 def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, Any], *,
                  http: Callable[..., tuple[int, Any]],
-                 merge_obligations: Sequence[tuple[str, str]] = ()) -> dict[str, Any]:
+                 merge_obligations: Sequence[tuple[str, str]] = (), codex_home: Path | None = None) -> dict[str, Any]:
+    observation_identity = completion.work_identity(pr) if "_automatic_context" in entry else None
     # Until independently observed, route/owner are unknown. Explicit trial admission
     # selects native session-owned review only; it does not assert merge eligibility.
     if re.search(r"\b(?:draft[ -]only|do[ -]not[ -]merge|do not merge|merge hold)\b", pr["body"], re.I):
@@ -2932,19 +6236,46 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     pr.update(route="native", owner="unknown", effect_outcome="none", review_outcome="missing",
               check_config={"verify_targets": entry["verify_targets"], "test_venv": entry["test_venv"]})
     pr["review_context"], pr["review_material"] = _review_context(pr)
+    if "_automatic_context" in entry:
+        if _digest({"observation": observation_identity, "context": pr["review_context"]}) != entry["_automatic_context"]:
+            raise CycleError("automatic admission head or contract changed before advancement")
     _add_transfer_review_context(layout, entry, pr)
     identity = completion.work_identity(pr)
     if any(old_identity == identity for old_identity, _ in merge_obligations):
         return {"number": pr["number"], "action": "wait", "identity": identity,
                 "reason": "merge outcome remains unknown; do not repeat"}
+    same_head_merge_unknown = any(old_head == pr["head_sha"] for _, old_head in merge_obligations)
     saved = _find(layout, pr["number"], identity)
+    worker_record = _mapping(layout, entry["worker"])
+    if saved.get("repair_operation"):
+        if merge_obligations:
+            return {"number": pr["number"], "identity": identity, "action": "wait",
+                    "reason": "earlier merge outcome remains unknown; reconcile before repair"}
+        return _advance_repair(layout, entry["worker"], pr, entry, saved, candidate=None,
+                               http=http, codex_home=codex_home)
+    entry = _effective_repair_entry(entry, worker_record, saved)
     operation_id = saved.get("review_operation")
+    handoff = worker_record.get("engine_handoff")
+    if (isinstance(handoff, Mapping) and handoff.get("status") == "pending"
+            and operation_id is not None and handoff.get("operation_id") == operation_id):
+        return {"number": pr["number"], "action": "wait", "identity": identity,
+                "reason": "resume the existing quota handoff before observing the review"}
+    exhausted: dict[str, Any] | None = None
+    owner_wait: str | None = None
+    repair_candidate: dict[str, Any] | None = None
+    verified_this_advancement = False
     if operation_id:
         worker_record = _mapping(layout, entry["worker"])
         conversation = worker_record.get("conversation")
         cid = conversation.get("id") if isinstance(conversation, dict) else None
         review = saved.get("review") if saved.get("public_report_conversation") == cid and cid else None
-        if review is None:
+        pending = _reconciliation(saved)
+        # A reserved reconciliation has no conversation until its reviewer runs again.
+        awaiting_successor = (isinstance(handoff, Mapping) and handoff.get("status") == "awaiting_pr_cycle"
+                              and handoff.get("operation_id") == operation_id and isinstance(conversation, Mapping)
+                              and conversation.get("status") == workspace.CONVERSATION_ENDED)
+        if review is None and not awaiting_successor and (pending is None or pending.get("operation") != operation_id
+                                                          or worker_record.get("state") == "running"):
             review = review_result(layout, entry["worker"], operation_id, pr, identity, entry, http=http)
         if review is not None:
             saved["review"] = review
@@ -2963,27 +6294,115 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                 raise CycleError("public report and native execution proof do not bind the same conversation")
             _save(layout, saved)
             pr["effect_outcomes"][operation_id] = _outcome(operation_id, f"openhands:{operation_id}")
-            pr["review_outcome"] = "pass" if review["verdict"] == "pass" and not review["findings"] else "changes_requested"
-            pr["independent_review_identity"] = identity
+            # Capacity is released before classification, so a contract-side read failure cannot hold it.
             _release_reviewer(layout, entry["worker"], saved, worker_record)
-            if pr["review_outcome"] == "pass":
-                if "verification" not in saved:
+            # The saved report stays verbatim; the policy gate is re-derived from it on every tick.
+            expectations = report_expectations(layout, entry, pr, identity)
+            bound_reconciliation = _bound_reconciliation(layout, saved)
+            gate = review_gate(review, expectations,
+                               disposition=entry.get("review_disposition"),
+                               reconciliation=bound_reconciliation)
+            repair_candidate = _bounded_repair_candidate(review, _review_gate(review, expectations))
+            if gate["outcome"] == "changes_requested" and _review_gate(review, expectations)["outcome"] == "pass":
+                owner_wait = gate["blocking"][0]
+                try:
+                    saved["disposition_request"] = _disposition_request(review, bound_reconciliation)
+                except (KeyError, TypeError, ValueError):
+                    saved.pop("disposition_request", None)
+            else:
+                saved.pop("disposition_request", None)
+            if (gate["outcome"] == "changes_requested"
+                    or (isinstance(saved.get("verification"), dict)
+                        and saved["verification"].get("disposition_sha256") != gate.get("disposition_sha256")
+                        and gate["outcome"] == "pass")):
+                saved.pop("verification", None)
+                saved.pop("ci", None)
+            if saved.get("review_gate") != gate:
+                saved["review_gate"] = gate
+            _save(layout, saved)
+            pr["review_outcome"] = gate["outcome"]
+            pr["independent_review_identity"] = identity
+            if gate["outcome"] == "reconcile_report":
+                if pending is None:
+                    _begin_reconciliation(layout, saved, gate, pr["head_sha"])
+                    operation_id = None
+                    pr["review_outcome"] = "missing"
+                else:
+                    pr["review_outcome"] = "changes_requested"
+                    exhausted = gate
+            if pr["review_outcome"] == "pass" and not same_head_merge_unknown:
+                authority = entry.get("review_disposition")
+                if authority is not None:
+                    saved["review_disposition"] = authority  # audit copy, never an authority input
+                else:
+                    saved.pop("review_disposition", None)
+                # A venv path does not identify its mutable contents. A saved result
+                # cannot authorize a later advancement's merge.
+                # Clear it before even checking CI so an interruption cannot leave an
+                # earlier pass eligible after a failed or unknown verification.
+                saved.pop("verification", None)
+                saved.pop("ci", None)
+                _save(layout, saved)
+                saved["ci"] = ci_once(pr["number"], Path(__file__).resolve().parents[2])
+                _save(layout, saved)
+                if saved["ci"].get("exit_code") == 0:
                     verification = sandbox_verify(layout, entry["worker"], pr["head_sha"],
                                                   entry["verify_targets"], entry["test_venv"], saved)
                     with workspace._worker_lifecycle_lock(layout, entry["worker"]):
                         current = _mapping(layout, entry["worker"])
                         _review_stop_checkpoint(current, saved, require_receipt=True)
-                        saved["verification"] = {**verification, "stop_id": saved["stop_intent"]["stop_id"]}
+                        after_verify = review_gate(review, expectations,
+                                                   disposition=entry.get("review_disposition"),
+                                                   reconciliation=_bound_reconciliation(layout, saved))
+                        if (after_verify["outcome"] != "pass"
+                                or after_verify.get("disposition_sha256") != gate.get("disposition_sha256")):
+                            raise CycleError("review disposition changed during sandbox verification")
+                        saved["verification"] = {**verification, "stop_id": saved["stop_intent"]["stop_id"],
+                                                 "disposition_sha256": gate.get("disposition_sha256")}
                         _save(layout, saved, expected_worker=entry["worker"], expected_assignment=current)
-                with workspace._worker_lifecycle_lock(layout, entry["worker"]):
-                    _review_verification_lineage(_mapping(layout, entry["worker"]), saved)
-                if saved["verification"].get("passed") is True:
-                    saved["ci"] = ci_once(pr["number"], Path(__file__).resolve().parents[2])
-                    _save(layout, saved)
+                    with workspace._worker_lifecycle_lock(layout, entry["worker"]):
+                        _review_verification_lineage(_mapping(layout, entry["worker"]), saved)
+                    verified_this_advancement = True
+    pending = _reconciliation(saved)
+    if pending is not None:
+        # The archived review finished; restate it so a crash before intake cannot leave it unresolved.
+        original = pending["original_operation"]
+        pr["effect_outcomes"][original] = _outcome(original, f"openhands:{original}")
+    if pending is not None and pending.get("operation") is None and not operation_id:
+        # Retry is authorized only for the one recorded reconciliation of this contract version.
+        pr["retry_authorization"] = {**_receipt(identity, f"report-contract:{REPORT_CONTRACT}:"
+                                                + pending["original_report_sha256"]),
+                                     "operation_id": pending["original_operation"]}
     decision = completion.intake([pr], run_id=layout.run_id, root=layout.run_state_dir,
                                  expected_run_id=layout.run_id, expected_root=layout.run_state_dir,
                                  expected_epic_issue_number=layout.epic)[0]
-    if (pr["review_outcome"] == "pass" and isinstance(saved.get("verification"), dict)
+    if (repair_candidate is not None and decision["action"] == "wait"
+            and decision["reason"] == "review repair belongs to current owner"):
+        # Evidence for the owning workflow only. It cannot authorize a successor
+        # or publication and is recomputed against the current report each pass.
+        decision["repair_candidate"] = {**repair_candidate, "identity": identity,
+                                        "head_sha": pr["head_sha"], "review_operation": operation_id}
+        try:
+            native_authority(layout, pr, entry, purpose="repair")
+        except (CycleError, OSError, ValueError, KeyError, TypeError) as exc:
+            decision["repair_authority"] = {"status": "unavailable", "reason": str(exc)[:300]}
+        else:
+            # This is a point-in-time read, not a lease or permission for a later effect.
+            decision["repair_authority"] = {"status": "observed", "reason": "recheck before any writer starts"}
+            if not merge_obligations:
+                current_handoff = _mapping(layout, entry["worker"]).get("engine_handoff")
+                if (isinstance(current_handoff, Mapping) and current_handoff.get("status") == "awaiting_pr_cycle"
+                        and current_handoff.get("operation_id") == saved.get("review_operation")):
+                    return {"number": pr["number"], "identity": identity, "action": "wait",
+                            "reason": "complete the existing review handoff before repair"}
+                admission = {**entry, **entry["_repair_admission_selection"]}
+                return _advance_repair(layout, entry["worker"], pr, admission, saved,
+                                       candidate=repair_candidate, http=http, codex_home=codex_home)
+    if (same_head_merge_unknown and pr["review_outcome"] == "pass" and decision["action"] == "wait"
+            and decision["reason"] == "active or unknown writable owner"):
+        return {"number": pr["number"], "action": "wait", "identity": identity,
+                "reason": "earlier merge at this head remains unknown; do not repeat"}
+    if (verified_this_advancement and pr["review_outcome"] == "pass" and isinstance(saved.get("verification"), dict)
             and saved["verification"].get("passed") is True and isinstance(saved.get("ci"), dict)
             and saved["ci"].get("exit_code") == 0 and decision["action"] == "wait"
             and decision["reason"] == "active or unknown writable owner"):
@@ -2999,11 +6418,27 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                             and r.get("outcome") == "unknown"
                             for r in records)
         if op and reserved_here and (operation_id in (None, op)):
+            if pending is not None and op == pending["original_operation"]:
+                raise CycleError("report reconciliation cannot reuse the archived review operation")
             saved["review_operation"] = op
+            if pending is not None and pending.get("operation") in (None, op):
+                pending["operation"] = op
+            else:
+                pending = None
             _save(layout, saved)
-            started = start_or_reconcile_review(layout, entry["worker"], op, pr, identity, entry, http=http)
+            started = start_or_reconcile_review(layout, entry["worker"], op, pr, identity, entry, http=http,
+                                                reconciliation=pending,
+                                                expected_owner_binding=entry.get("_automatic_owner_binding"))
             decision["reason"] = f"conversation {started.get('id')} {started.get('status')}"
-    return dict(decision)
+    response = dict(decision)
+    if exhausted is not None and response["action"] == "wait":
+        response["reason"] = (f"report reconciliation under {REPORT_CONTRACT} did not produce a conforming report ("
+                              + "; ".join(exhausted["grammar"]) + "); the owning review workflow must repair it")
+    elif owner_wait is not None and response["action"] == "wait":
+        response["reason"] = "owning workflow must resolve review disposition: " + owner_wait
+        if "disposition_request" in saved:
+            response["disposition_request"] = saved["disposition_request"]
+    return response
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -3014,15 +6449,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--config", required=True, help="controller-owned JSON admission file")
     args = parser.parse_args(argv)
     try:
-        path = Path(args.config)
-        info = path.lstat()
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022
-                or workspace._is_within(path, Path(args.root).resolve() / f"epic-{args.epic}" / "workers")):
-            raise CycleError("admission configuration must be controller-owned and outside worker directories")
-        config = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(config, dict):
-            raise CycleError("invalid configuration")
-        result = advance(workspace.Layout(Path(args.root).resolve(), args.epic), config.get("admissions", []))
+        result = advance(workspace.Layout(Path(args.root).resolve(), args.epic), Path(args.config))
     except (OSError, ValueError, CycleError, workspace.EpicWorkspaceError) as exc:
         print(json.dumps({"error": type(exc).__name__, "detail": str(exc)}), file=sys.stderr)
         return 2

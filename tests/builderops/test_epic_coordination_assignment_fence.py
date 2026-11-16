@@ -444,6 +444,18 @@ def test_active_no_progress_is_diagnosed_then_held_without_interrupting(harness,
     assert h.posts == []
 
 
+def test_looping_active_worker_is_not_directed_without_bound_failure(harness):
+    h = harness()
+    h.execution = "running"
+    cid = h.cids[ISSUE]
+    for tick in ("base", "diagnose", "loop"):
+        h.events[cid].append({"id": str(uuid.uuid4()), "kind": "ActionEvent", "source": "agent",
+                              "timestamp": datetime.now(timezone.utc).isoformat()})
+        h.run(tick)
+    assert [d["action"] for d in _ladder(h)] == ["bounded_diagnosis"]
+    assert h.posts == []
+
+
 def test_active_repeated_errors_require_investigation_then_inactive_work_can_be_directed(harness):
     h = harness()
     h.execution = "running"

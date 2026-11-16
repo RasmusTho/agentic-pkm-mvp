@@ -181,8 +181,23 @@ def test_every_contained_git_call_is_hardened_and_read_only(tmp_path, capsys):
     (checkout / "partial.txt").write_text("x\n")
     assert _cli(root, 6615, engine, "worker-stop", "--worker", "w-a", "--reason", "r") == 0
     assert _cli(root, 6615, engine, "status") == 0
+    record = _mapping(root, 6617)["checkpoints"][-1]
+    assert ew._checkpoint_present(checkout, ew._checkpoint_repo(_layout(root), "w-a"),
+                                  record, engine, ew.DEFAULT_IMAGE)
     assert engine.inspections
-    for argv in engine.inspections:
+    # Inspect production argv, not FakeEngine's normalized create -> run replay.
+    calls = [argv for argv in engine.calls if argv[1] in ("run", "create")
+             and "epic-workspace.inspect=1" in argv]
+    assert {argv[1] for argv in calls} == {"run", "create"}
+    assert any(argv[1] == "create" and "repack" in argv for argv in calls)
+    assert any(argv[1] == "run" and "fsck" in argv
+               and any(f"target={ew.SCRATCH_TARGET},readonly" in arg for arg in argv) for argv in calls)
+    for argv in calls:
+        assert "--read-only" in argv
+        for flag, value in (("--memory", "768m"), ("--network", "none"), ("--cap-drop", "ALL"),
+                            ("--security-opt", "no-new-privileges"), ("--pids-limit", "64"),
+                            ("--tmpfs", "/tmp:rw,nosuid,size=16m")):
+            assert argv[argv.index(flag) + 1] == value
         text = " ".join(argv)
         for needle in ("core.ignoreStat=false", "core.fsmonitor=false", "core.hooksPath=/dev/null", "core.commitGraph=false", "GIT_NO_REPLACE_OBJECTS=1"):
             assert needle in text, (needle, text)
