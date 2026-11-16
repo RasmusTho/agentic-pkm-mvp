@@ -31,6 +31,14 @@ services:
       MIGRATION_GATE_TOKEN_ONLY: "0"
 
   api:
+    # Replace the base env-file list so a shell or prod.env cannot inject the
+    # non-production YouTube handles into a production service.
+    env_file: !override
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+      - path: ${HOST_SECRET_RUNTIME_ENV_FILE_API:-/dev/null}
+        required: false
     environment:
       # Product task policy selects the route (Luna for chat/planning and
       # Ollama for embeddings). Keep a harmless import-time default while
@@ -65,6 +73,10 @@ services:
         condition: service_healthy
 
   worker:
+    env_file: !override
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
     environment:
       LLM_PROVIDER: mock
       LLM_PROVIDER_ENFORCE: "0"
@@ -93,6 +105,10 @@ services:
         condition: service_healthy
 
   watcher:
+    env_file: !override
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
     environment:
       LLM_PROVIDER: mock
       LLM_PROVIDER_ENFORCE: "0"

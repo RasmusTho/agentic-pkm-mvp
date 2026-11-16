@@ -353,6 +353,90 @@ case "${FAKE_SECURITY_MODE:-matching}" in
 esac
 """,
     )
+    # The production Keychain reader intentionally uses Security.framework for
+    # exact-byte token bindings. Linux CI has no framework, so provide a
+    # fixture-only ctypes seam that delegates to the existing security-command
+    # stub. This keeps the harness deterministic without weakening the
+    # production fail-closed provider boundary or adding credential values.
+    _write_executable(
+        bin_dir / "sitecustomize.py",
+        """from __future__ import annotations
+
+import ctypes
+import subprocess
+
+
+_real_cdll = ctypes.CDLL
+_buffers: dict[int, ctypes.Array[ctypes.c_char]] = {}
+
+
+class _Function:
+    def __init__(self, callback):
+        self._callback = callback
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *args):
+        return self._callback(*args)
+
+
+class _SecurityFramework:
+    def __init__(self):
+        self.SecKeychainFindGenericPassword = _Function(self._find)
+        self.SecKeychainItemFreeContent = _Function(self._free)
+
+    @staticmethod
+    def _find(_keychain, service_length, service, account_length, account,
+              password_length, password_data, _item):
+        service_value = ctypes.string_at(service, int(service_length)).decode()
+        account_value = ctypes.string_at(account, int(account_length)).decode()
+        result = subprocess.run(
+            [
+                "security",
+                "find-generic-password",
+                "-s",
+                service_value,
+                "-a",
+                account_value,
+                "-w",
+            ],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode == 44:
+            return -25300
+        if result.returncode != 0:
+            return 1
+        raw_value = result.stdout
+        if raw_value.endswith(b"\\n"):
+            raw_value = raw_value[:-1]
+            if raw_value.endswith(b"\\r"):
+                raw_value = raw_value[:-1]
+        buffer = ctypes.create_string_buffer(raw_value, len(raw_value))
+        address = ctypes.addressof(buffer)
+        _buffers[address] = buffer
+        password_length._obj.value = len(raw_value)
+        password_data._obj.value = address
+        return 0
+
+    @staticmethod
+    def _free(_allocator, password_data):
+        address = int(password_data.value or 0)
+        _buffers.pop(address, None)
+        return 0
+
+
+def _cdll(path, *args, **kwargs):
+    if path == "/System/Library/Frameworks/Security.framework/Security":
+        return _SecurityFramework()
+    return _real_cdll(path, *args, **kwargs)
+
+
+ctypes.CDLL = _cdll
+""",
+    )
     _write_executable(
         bin_dir / "docker",
         f"""#!/usr/bin/env bash
@@ -606,6 +690,7 @@ exec {sys.executable!s} "$@"
     env.update(
         {
             "PATH": f"{bin_dir}:{env['PATH']}",
+            "PYTHONPATH": f"{bin_dir}:{env.get('PYTHONPATH', '')}",
             "HOST_SECRET_PROVIDER": "keychain",
             "PYTHON": str(python_wrapper),
             "FAKE_SHA": sha,
@@ -1598,7 +1683,15 @@ def _configure_prod_retry_preflight(
     # process-wide. Symlinking only `app/` sidesteps that entirely.
     if not (pylib_dir / "app").exists():
         (pylib_dir / "app").symlink_to(REPO_ROOT / "app")
-    env["PYTHONPATH"] = str(pylib_dir)
+    # Keep the fixture-only Security.framework shim ahead of the fake psycopg
+    # module. Production code still selects the real provider; only this
+    # isolated subprocess receives the mocked native boundary.
+    shim_paths = [
+        path
+        for path in env.get("PYTHONPATH", "").split(os.pathsep)
+        if path and (Path(path) / "sitecustomize.py").is_file()
+    ]
+    env["PYTHONPATH"] = os.pathsep.join([*shim_paths, str(pylib_dir)])
 
     # H3 (#3903 round 6): always-on connect-attempt log so a test can assert
     # the EXACT host:port a connect() call received, not just "not poison".

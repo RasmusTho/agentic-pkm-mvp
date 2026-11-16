@@ -382,12 +382,12 @@ def test_transport_preserves_primary_failure_when_cleanup_also_fails(monkeypatch
 def test_host_reconcile_transport_failure_keeps_original_pending(monkeypatch, tmp_path, capsys, channel, outcome):
     from app.ops import postgres_deploy_host as host
     from app.ops.host_secret_controller import HostSecretController, HostSecretOperation
-    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
 
     monkeypatch.setattr(linux, '_NORMAL_SSH_EXCHANGE_SECONDS', 0.15)
     controller = HostSecretController(tmp_path / 'controller')
     plan = DeployPlan(channel, 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress', *youtube_runtime_consumers(channel)))
     with controller.deploy_operation(channel, allow_bootstrap=False) as (operation, _resumed):
         operation_id = operation.operation_id
         operation.prepare_mutation()

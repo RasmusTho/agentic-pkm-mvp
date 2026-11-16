@@ -70,6 +70,17 @@ def test_check_scopes_required_set_to_selected_consumers(setup, capsys):
     assert PRIOR not in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    'secret',
+    ['youtube.oauth-client-id', 'youtube.oauth-client-secret', 'youtube.token-store-key'],
+)
+def test_youtube_secret_writer_rejects_prod(setup, secret):
+    admin, provider, _ = setup
+    with pytest.raises(SecretAdminError):
+        admin._identity('prod', secret)
+    assert provider.calls == []
+
+
 def test_inactive_optional_provider_credentials_do_not_block_check(setup):
     admin, provider, _ = setup
     provider.seed('dev/heimdal.raw-store-key', 'a' * 64, ('non-prod',))
@@ -77,6 +88,30 @@ def test_inactive_optional_provider_credentials_do_not_block_check(setup):
     assert statuses == [{'secret': 'github.token', 'status': 'skipped'},
                         {'secret': 'heimdal.raw-store-key', 'status': 'ok'}]
     assert not any('openai' in identity for _, _, identity in provider.calls)
+
+
+def test_youtube_partial_group_is_missing_before_deploy_admission(setup):
+    admin, provider, _ = setup
+    provider.seed('dev/youtube.oauth-client-id', '1234567890.apps.googleusercontent.com', ('non-prod',))
+
+    statuses = admin.check('dev', ['youtube-runtime-api'])
+
+    assert statuses == [
+        {'secret': 'youtube.oauth-client-id', 'status': 'ok'},
+        {'secret': 'youtube.oauth-client-secret', 'status': 'missing'},
+        {'secret': 'youtube.token-store-key', 'status': 'missing'},
+    ]
+
+
+def test_youtube_auth_cli_check_refuses_bws_store(setup):
+    admin, provider, _ = setup
+    provider.seed('dev/youtube.oauth-client-id', 'client', ('non-prod',))
+    provider.seed('dev/youtube.oauth-client-secret', 'secret', ('non-prod',))
+    provider.seed('dev/youtube.token-store-key', '0' * 64, ('non-prod',))
+
+    with pytest.raises(SecretAdminError):
+        admin.check('dev', ['youtube-auth-cli'])
+    assert provider.calls == []
 
 
 def test_malformed_optional_provider_credential_blocks_check(setup):
@@ -763,7 +798,11 @@ def test_route_environment_consumers_is_local_metadata_only(route_tripwires, cap
         assert code == 0, (channel, consumer)
         payload = json.loads(out)
         assert {r['secret'] for r in payload['routes']} == secrets_
-        assert all(r['handoff']['delivery'] == 'environment' for r in payload['routes'])
+        if consumer == 'youtube-auth-cli':
+            assert all(r['handoff']['delivery'] == 'keychain' for r in payload['routes'])
+            assert all('project' not in r and 'identity' not in r for r in payload['routes'])
+        else:
+            assert all(r['handoff']['delivery'] == 'environment' for r in payload['routes'])
         assert payload['values_read'] is False and payload['live_access_verified'] is False
     code, out, _ = _route(capsys, 'dev', '--consumer', 'marr-server-dev')
     assert json.loads(out)['routes'] == [{

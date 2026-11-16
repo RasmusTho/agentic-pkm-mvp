@@ -22,10 +22,11 @@ docs, .git, ops). Contracts guarded here:
    the one docs/ subtree read at runtime (settings registries: model/tool/
    agent/graph/event/prompt loaders in app/components/settings/, plus
    app/settings/ fallbacks and panel-action wiring).
-6. scripts/ is NOT dev-only wholesale: app/** imports scripts.<module>
+6. scripts/ is NOT dev-only wholesale: product-runtime app/** imports scripts.<module>
    Python modules at module top level (scripts.yaml_roundtrip in
    app/services/companion_note.py, app/chat/session_log.py,
-   app/promotion/queue.py, ...; scripts.validate_* in app/builderops/).
+   app/promotion/queue.py, ...). BuilderOps has a separate image and is
+   excluded from this Product-runtime closure.
    Every such module (plus scripts/__init__.py, so `scripts` resolves as a
    package) must be re-included in .dockerignore and COPYed by the runtime
    stage or the worker/watcher/heimdal compose services crash at boot with
@@ -57,6 +58,16 @@ COMPOSE_RUNTIME_SCRIPTS = ("scripts/start_api.sh", "scripts/run_migrations.sh")
 # import reachable from these trees must be baked into the image too, or the
 # importing service crashes at boot (contract 6 in the module docstring).
 RUNTIME_PACKAGE_DIRS = ("app", "mimer_runtime", "companion-ui/companion-app")
+
+# BuilderOps has an independent image and Dockerfile.  Its controller modules
+# are intentionally absent from the Product runtime closure; keep this guard
+# aligned with that ownership boundary instead of requiring BuilderOps-only
+# scripts in the Product image.
+PRODUCT_RUNTIME_EXCLUDED_DIRS = (REPO_ROOT / "app" / "builderops",)
+
+
+def _is_product_runtime_path(path: Path) -> bool:
+    return not any(path.is_relative_to(excluded) for excluded in PRODUCT_RUNTIME_EXCLUDED_DIRS)
 
 
 def _runtime_imported_repo_packages() -> set[str]:
@@ -201,6 +212,7 @@ def _runtime_imported_scripts_modules() -> set[str]:
         path
         for package_dir in RUNTIME_PACKAGE_DIRS
         for path in sorted((REPO_ROOT / package_dir).rglob("*.py"))
+        if _is_product_runtime_path(path)
     ]
     while pending:
         path = pending.pop()
@@ -229,9 +241,11 @@ def _runtime_imported_scripts_modules() -> set[str]:
 
 
 def test_runtime_imported_scripts_modules_are_baked_into_image() -> None:
-    """app/** imports scripts.yaml_roundtrip and scripts.validate_* at module
+    """Product runtime code imports scripts.yaml_roundtrip and scripts.validate_* at module
     top level (app/services/companion_note.py, app/chat/session_log.py,
-    app/promotion/queue.py, app/builderops/model_inquiry_promotion.py, ...).
+    app/promotion/queue.py, ...). BuilderOps controller imports are owned by
+    Dockerfile.builderops and are intentionally outside this Product image
+    closure.
     If the image bakes only the two .sh entrypoints, the worker
     (`python -m app.workers.outbox_worker`), watcher (`python -m app.cli
     watcher run`) and heimdal-capture-watch compose services all die at boot
@@ -240,7 +254,7 @@ def test_runtime_imported_scripts_modules_are_baked_into_image() -> None:
     a future scripts.<module> import cannot silently reopen the gap."""
     modules = _runtime_imported_scripts_modules()
     assert modules, (
-        f"expected runtime packages {RUNTIME_PACKAGE_DIRS} to import "
+        f"expected Product runtime packages {RUNTIME_PACKAGE_DIRS} to import "
         "scripts.<module>; if that is no longer true this guard (and the "
         "scripts/*.py COPY in the Dockerfile) can be retired"
     )
@@ -257,14 +271,14 @@ def test_runtime_imported_scripts_modules_are_baked_into_image() -> None:
         )
         assert f"!{needed}" in patterns, (
             f".dockerignore must re-include {needed} (negation pattern under "
-            f"the scripts/ exclusion) — app/** imports it at runtime"
+            f"the scripts/ exclusion) — Product runtime code imports it"
         )
         assert re.search(
             rf"^\s*COPY\s[^\n]*{re.escape(needed)}(\s|$)",
             final_stage,
             flags=re.MULTILINE,
         ), (
-            f"runtime stage must COPY {needed} — app/** imports it at runtime "
+            f"runtime stage must COPY {needed} — Product runtime code imports it "
             "(worker/watcher/heimdal services crash at boot without it)"
         )
 

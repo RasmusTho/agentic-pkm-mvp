@@ -21,19 +21,31 @@ Takeout/RSS import, backfill command, analytics view, or full-media route.
 ## Dev command
 
 Provision `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET`, and
-`YOUTUBE_TOKEN_STORE_KEY` through the local host-secret boundary, then select the explicit dev
-environment. Do not place credential values in arguments, shell history, logs, or receipts. The
-supported entrypoint refuses any environment other than `dev` before it constructs an OAuth or
-YouTube API client:
+`YOUTUBE_TOKEN_STORE_KEY` through the local host-secret boundary, then select the explicit `dev`
+or `test` environment. Do not place credential values in arguments, shell history, logs, or
+receipts. The supported connect entrypoint refuses `prod` and any environment mismatch before it
+constructs an OAuth or YouTube API client:
 
 ```bash
-PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev connect
-PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev select \
+PKM_ENVIRONMENT=dev python -m app.cli youtube-auth connect --environment dev
+PKM_ENVIRONMENT=test python -m app.cli youtube-auth connect --environment test
+```
+
+After connecting, use the dev-only Inbox route for the existing manual operations. Rematerialize
+the declared binding for each invocation; the connect command's temporary file is removed when it
+exits:
+
+```bash
+PKM_ENVIRONMENT=dev python -m app.ops.host_secret_bootstrap --channel dev --consumer youtube-auth-cli -- \
+  python -m app.cli youtube-inbox-dev select \
   --account-binding-id <binding-id> --playlist-id <owned-playlist-id>
-PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev sync \
+PKM_ENVIRONMENT=dev python -m app.ops.host_secret_bootstrap --channel dev --consumer youtube-auth-cli -- \
+  python -m app.cli youtube-inbox-dev sync \
   --account-binding-id <binding-id>
-PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev drain --max 5
-PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev status \
+PKM_ENVIRONMENT=dev python -m app.ops.host_secret_bootstrap --channel dev --consumer youtube-auth-cli -- \
+  python -m app.cli youtube-inbox-dev drain --max 5
+PKM_ENVIRONMENT=dev python -m app.ops.host_secret_bootstrap --channel dev --consumer youtube-auth-cli -- \
+  python -m app.cli youtube-inbox-dev status \
   --account-binding-id <binding-id>
 ```
 
@@ -50,14 +62,28 @@ authentication surface and exposes no scheduler, backfill, or multi-playlist ope
 ## One-time local OAuth setup
 
 Use a user-owned Google Cloud OAuth client with the YouTube Data API v3 enabled and the minimal
-`youtube.readonly` scope. Provision client identifiers and `YOUTUBE_TOKEN_STORE_KEY` through the
-local secret boundary. Values never belong in tracked config, vault content, logs, events, or
-receipts. Start and complete device consent only through
-`PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev connect`, which composes the shared
-`YouTubeAccountBinder` writer boundary and retains the returned non-secret binding id. The binder
-owns channel-wide writer admission, one-account enforcement, and restart reconciliation; the CLI
-does not implement a second lock or credential state machine. Calling binder methods directly is
-an internal application route, not a supported operator invocation.
+`youtube.readonly` scope. Provision the three declared bindings through the existing host-secret
+boundary, using the selected channel and the `youtube-auth-cli` consumer:
+
+```text
+<channel>:youtube-auth-cli:youtube.oauth-client-id
+<channel>:youtube-auth-cli:youtube.oauth-client-secret
+<channel>:youtube-auth-cli:youtube.token-store-key
+```
+
+The client id, client secret, and 32-byte token-store key are never written to tracked config,
+vault content, logs, events, or receipts. `youtube-auth connect --environment <channel>`
+materializes the mode-0600 temporary binding and composes the shared `YouTubeAccountBinder`
+writer boundary; it does not implement a second lock or credential state machine. The same
+channel-scoped declarations are delivered only to the API and watcher runtime consumers when
+configured; the outbox worker receives no YouTube grant. Calling binder methods directly is an
+internal application route, not a supported operator invocation.
+
+For the two non-production channels, the owner-selected OAuth client id and client secret may be
+the same Google client in both `dev` and `test`. The token-store key must remain distinct per
+channel, and each channel must keep isolated account and token runtime state; neither channel may
+read or reuse the other channel's token state. This exception never creates a YouTube grant for
+`prod`.
 
 ## Manual Inbox route
 

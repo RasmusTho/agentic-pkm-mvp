@@ -27,7 +27,7 @@ from app.ops.bws_token_push import TokenPushAdmin, load_token_push_targets
 from app.ops.host_secret_bootstrap import validate_secret_value
 from app.ops.host_secret_contract import (
     BWS_IDENTITIES, CHANNEL_PROJECTS, DATABASE_CONSUMERS, KARAKEEP_SECRETS, SOURCE_WITNESS_CONSUMER,
-    HostSecretContract, load_host_secret_contract,
+    YOUTUBE_KEYCHAIN_CONSUMER, YOUTUBE_SECRET_IDS, HostSecretContract, load_host_secret_contract,
 )
 from app.ops.host_secret_controller import (
     HostSecretController, HostSecretOperation, TerminalEvidence,
@@ -141,6 +141,8 @@ class SecretAdmin:
             raise SecretAdminError()
         if secret == 'typesafe.api-key' and channel != 'dev':
             raise SecretAdminError()
+        if secret in YOUTUBE_SECRET_IDS and channel not in {'dev', 'test'}:
+            raise SecretAdminError()
         if secret in KARAKEEP_SECRETS and channel not in {'dev', 'test'}:
             raise SecretAdminError()
         if BWS_IDENTITIES[secret] == 'shared':
@@ -167,6 +169,10 @@ class SecretAdmin:
             raise SecretAdminError()
         selected: dict[str, set[str]] = {}
         for consumer in consumers:
+            if consumer == YOUTUBE_KEYCHAIN_CONSUMER:
+                # OAuth bootstrap is a macOS Keychain route; BWS readiness must
+                # never report that local-only consumer as provisioned remotely.
+                raise SecretAdminError()
             if consumer in DATABASE_CONSUMERS:
                 self.contract.file_binding(channel=channel, consumer=consumer, secret='postgres.password')
                 selected.setdefault('postgres.password', set()).add(consumer)
@@ -202,6 +208,13 @@ class SecretAdmin:
             elif not absent and len({copy.value for copy in copies if copy is not None}) > 1:
                 status = 'divergent'
             statuses.append({'secret': secret, 'status': status})
+        youtube_statuses = [
+            row for row in statuses if row['secret'] in YOUTUBE_SECRET_IDS
+        ]
+        if youtube_statuses and any(row['status'] != 'skipped' for row in youtube_statuses):
+            for row in youtube_statuses:
+                if row['status'] == 'skipped':
+                    row['status'] = 'missing'
         return statuses
 
     def check(self, channel: str, consumers: Sequence[str]) -> list[dict[str, str]]:
@@ -353,6 +366,21 @@ def route_metadata(contract: HostSecretContract, channel: str, consumer: str) ->
             raise SecretAdminError()
         for secret in sorted(secret for ch, name, secret in contract.allowed
                              if ch == channel and name == consumer):
+            if consumer == YOUTUBE_KEYCHAIN_CONSUMER:
+                routes.append({
+                    'secret': secret,
+                    'handoff': {
+                        'delivery': 'keychain',
+                        'service': contract.keychain_service,
+                        'account': contract.keychain_account(
+                            channel=channel, consumer=consumer, secret=secret,
+                        ),
+                    },
+                    'optional': contract.is_optional_for_consumer(
+                        channel=channel, consumer=consumer, secret=secret,
+                    ),
+                })
+                continue
             project, identity = contract.bws_identity(channel=channel, consumer=consumer, secret=secret)
             routes.append({'secret': secret, 'project': project, 'identity': identity,
                            'handoff': {'delivery': 'environment',

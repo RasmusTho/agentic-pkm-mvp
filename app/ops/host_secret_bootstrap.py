@@ -35,6 +35,7 @@ from app.ops.host_secret_controller import (
 from app.ops.host_secret_contract import (
     BWS_ONLY_SECRETS,
     KARAKEEP_SECRETS,
+    YOUTUBE_SECRET_IDS,
     HostSecretContract,
     load_host_secret_contract,
 )
@@ -72,6 +73,14 @@ class HostSecretCredentialUnavailableError(HostSecretBootstrapError):
             f"host secret bootstrap failed for declared secret: {credential_identity_ref}"
         )
         self.credential_identity_ref = credential_identity_ref
+
+
+class HostSecretItemAbsentError(HostSecretBootstrapError):
+    """The provider positively reported that one declared item is absent."""
+
+
+class HostSecretProviderUnavailableError(HostSecretBootstrapError):
+    """The provider could not answer; this is not an optional absence."""
 
 
 class HostSecretBootstrapTerminated(HostSecretBootstrapError):
@@ -154,15 +163,17 @@ def _security_keychain_lookup(service: str, account: str) -> str:
             text=True,
         )
     except OSError as exc:
-        raise HostSecretBootstrapError(
+        raise HostSecretProviderUnavailableError(
             "host secret bootstrap failed for declared consumer"
         ) from exc
 
 
     if result.returncode != 0:
-        raise HostSecretBootstrapError(
-            "host secret bootstrap failed for declared consumer"
-        )
+        # `security` uses 44 for errSecItemNotFound. Every other failure,
+        # including a locked/unavailable Keychain, must remain fail-closed.
+        if result.returncode == 44:
+            raise HostSecretItemAbsentError("host secret item absent")
+        raise HostSecretProviderUnavailableError("host secret provider unavailable")
     value = result.stdout
     if value.endswith("\n"):
         value = value[:-1]
@@ -208,22 +219,22 @@ def _security_framework_keychain_lookup(service: str, account: str) -> str:
             None,
         )
         if status != 0 or password_data.value is None:
-            raise HostSecretBootstrapError(
-                "host secret bootstrap failed for declared consumer"
-            )
+            if status == -25300:  # errSecItemNotFound
+                raise HostSecretItemAbsentError("host secret item absent")
+            raise HostSecretProviderUnavailableError("host secret provider unavailable")
         try:
             raw_value = ctypes.string_at(password_data, password_length.value)
         finally:
             free_status = free_content(None, password_data)
             if free_status != 0:
-                raise HostSecretBootstrapError(
+                raise HostSecretProviderUnavailableError(
                     "host secret bootstrap failed for declared consumer"
                 )
         return raw_value.decode("utf-8", errors="strict")
     except HostSecretBootstrapError:
         raise
     except Exception as exc:
-        raise HostSecretBootstrapError(
+        raise HostSecretProviderUnavailableError(
             "host secret bootstrap failed for declared consumer"
         ) from exc
 
@@ -280,6 +291,23 @@ def _validate_secret(kind: str, value: str) -> bool:
         return re.fullmatch(r"[A-Za-z0-9_-]{32,128}", value) is not None
     if kind == "raw-store-key":
         return _RAW_STORE_KEY_PATTERN.fullmatch(value) is not None
+    if kind == "token-store-key":
+        return _RAW_STORE_KEY_PATTERN.fullmatch(value) is not None
+    if kind in {"oauth-client-id", "oauth-client-secret"}:
+        return (
+            value == value.strip()
+            and bool(value)
+            and len(value) <= 512
+            # These credentials are written to a Compose env_file. Keep the
+            # opaque provider value bounded while excluding syntax characters
+            # that Compose could interpolate or parse as quoting/comments.
+            and all(
+                char.isprintable()
+                and not char.isspace()
+                and char not in {"'", '"', "\\", "$", "#", "`"}
+                for char in value
+            )
+        )
     # `token` shares the api-key grammar deliberately (#4489): both are opaque
     # provider-issued bearer strings, and a second near-identical grammar would
     # be a place for the two to drift apart rather than a real distinction. The
@@ -409,7 +437,8 @@ def _secret_failure(*, secret: str, kind: str) -> HostSecretBootstrapError:
 def _shared_domain_comparable_bytes(kind: str, value: str) -> bytes:
     """Normalize *value* to the bytes the cipher domain actually uses.
 
-    `raw-store-key` values are hex text that the raw store decodes with
+    `raw-store-key` and `token-store-key` values are hex text that their
+    consumers decode with
     `bytes.fromhex` before use as key material (`app/heimdal/raw_store.py`), so
     two hex strings that differ only in case are the *same* key. Comparing the
     raw text would flag that pair as diverged even though the domain agrees;
@@ -420,7 +449,7 @@ def _shared_domain_comparable_bytes(kind: str, value: str) -> bytes:
     it does not COMPARE EQUAL to a well-formed sibling by accident, and text
     bytes never collide with decoded key bytes here.
     """
-    if kind == "raw-store-key":
+    if kind in {"raw-store-key", "token-store-key"}:
         try:
             return bytes.fromhex(value)
         except ValueError:
@@ -472,6 +501,8 @@ def _check_shared_domain_agreement(
         )
         try:
             sibling_value = keychain_lookup(contract.keychain_service, sibling_account)
+        except HostSecretProviderUnavailableError:
+            raise
         except HostSecretBootstrapError:
             continue
         if not hmac.compare_digest(_shared_domain_digest(kind, sibling_value), own_digest):
@@ -486,12 +517,10 @@ def _resolve_consumer_environment(
     keychain_lookup: KeychainLookup,
 ) -> dict[str, str]:
     resolved: dict[str, str] = {}
+    declared = _declared_secrets(contract, channel=channel, consumer=consumer)
+    resolved_secret_ids: set[str] = set()
     try:
-        for secret in _declared_secrets(
-            contract,
-            channel=channel,
-            consumer=consumer,
-        ):
+        for secret in declared:
             if secret in contract.keychain_only_secrets and sys.platform != "darwin":
                 raise HostSecretBootstrapError("host secret provider unavailable")
             if secret in BWS_ONLY_SECRETS:
@@ -505,15 +534,41 @@ def _resolve_consumer_environment(
             )
             try:
                 value = keychain_lookup(contract.keychain_service, account)
+            except HostSecretProviderUnavailableError:
+                # Preserve the existing value-free Model Inquiry handoff for
+                # required API credentials, while keeping an unavailable
+                # provider fail-closed for optional runtime bindings (notably
+                # the non-production YouTube group).  Provider-unavailable is
+                # not an optional absence; the typed credential error carries
+                # only the logical id and never secret material.
+                if (
+                    kind in {"api-key", "token"}
+                    and not contract.is_optional_for_consumer(
+                        channel=channel, consumer=consumer, secret=secret
+                    )
+                ):
+                    raise _secret_failure(secret=secret, kind=kind)
+                raise
             except Exception as exc:
-                # An optional declaration for this consumer tolerates absence only, and the
-                # lookup cannot distinguish "no such item" from any other
-                # failure, so an unresolvable optional secret simply does not
-                # bind. Its consumer runs without it; a required one still
-                # fails the whole bootstrap (#4489).
+                # Test/injected lookup seams historically report an absent item
+                # as the redacted base bootstrap error. The default Keychain
+                # provider uses the typed absence subclass above, while this
+                # compatibility branch keeps those seams fail-closed for
+                # required declarations and optional only for a confirmed
+                # (typed or legacy) absence.
                 if contract.is_optional_for_consumer(
                     channel=channel, consumer=consumer, secret=secret
                 ):
+                    # YouTube's optional runtime group is all-or-nothing:
+                    # an unexpected provider failure must not look like an
+                    # absent item and silently remove a configured binding.
+                    # Keep the historical generic absence seam for unrelated
+                    # optional declarations, but require the typed provider
+                    # signal for this external-API credential group.
+                    if secret in YOUTUBE_SECRET_IDS and not isinstance(
+                        exc, HostSecretItemAbsentError
+                    ):
+                        raise _secret_failure(secret=secret, kind=kind) from exc
                     continue
                 raise _secret_failure(secret=secret, kind=kind) from exc
             # Validation is deliberately outside that tolerance: a value that
@@ -535,6 +590,12 @@ def _resolve_consumer_environment(
                 keychain_lookup=keychain_lookup,
             )
             resolved[env_name] = value
+            resolved_secret_ids.add(secret)
+        youtube_declared = set(declared) & YOUTUBE_SECRET_IDS
+        if youtube_declared and resolved_secret_ids & YOUTUBE_SECRET_IDS and (
+            resolved_secret_ids & YOUTUBE_SECRET_IDS
+        ) != youtube_declared:
+            raise HostSecretBootstrapError("host secret bootstrap failed for declared consumer")
     except HostSecretBootstrapError:
         raise
     except Exception as exc:
@@ -653,6 +714,7 @@ def _resolve_bws_consumer_values(
     else:
         secrets = _declared_secrets(contract, channel=channel, consumer=consumer)
     resolved = {}
+    resolved_secret_ids: set[str] = set()
     for secret in secrets:
         project, identity = contract.bws_identity(channel=channel, consumer=consumer, secret=secret)
         cache_key = (project, identity)
@@ -678,6 +740,12 @@ def _resolve_bws_consumer_values(
         if not _validate_secret(kind, value):
             raise HostSecretBootstrapError("host secret value unavailable")
         resolved[secret] = value
+        resolved_secret_ids.add(secret)
+    youtube_declared = set(secrets) & YOUTUBE_SECRET_IDS
+    if youtube_declared and resolved_secret_ids & YOUTUBE_SECRET_IDS and (
+        resolved_secret_ids & YOUTUBE_SECRET_IDS
+    ) != youtube_declared:
+        raise HostSecretBootstrapError("host secret value unavailable")
     return resolved
 
 

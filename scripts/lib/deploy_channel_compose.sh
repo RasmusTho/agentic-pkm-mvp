@@ -891,7 +891,10 @@ _deploy_channel_api_ingress_bootstrap_available() {
       && PYTHONPATH="${root}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON:-python3}" - "${channel}" <<'PY' 2>/dev/null
 import sys
 
-from app.ops.host_secret_bootstrap import _security_keychain_lookup
+from app.ops.host_secret_bootstrap import (
+    HostSecretItemAbsentError,
+    _security_keychain_lookup,
+)
 from app.ops.host_secret_contract import load_host_secret_contract
 
 contract = load_host_secret_contract()
@@ -928,6 +931,112 @@ _deploy_channel_needs_api_ingress_secret() {
   done
   [ "${saw_service}" = "0" ] && return 0
   return 1
+}
+
+# YouTube runtime consumers are deliberately non-production only. A bare
+# Compose invocation remains valid when all three declarations are absent;
+# partial or malformed material is handed to the fail-closed bootstrap and
+# therefore aborts before any service starts.
+_deploy_channel_needs_youtube_secret() {
+  local channel="${1:?channel required}"
+  shift
+  { [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; } || return 1
+  [ "${1:-}" = "up" ] || return 1
+  shift
+  local arg saw_service=0
+  for arg in "$@"; do
+    case "${arg}" in
+      -*) continue ;;
+    esac
+    saw_service=1
+    case "${arg}" in
+      api|worker|watcher) return 0 ;;
+    esac
+  done
+  [ "${saw_service}" = "0" ]
+}
+
+_deploy_channel_youtube_secret_bootstrap_available() {
+  local channel="${1:?channel required}"
+  local root="${2:?repo root required}"
+  local probe_output
+  # Synthetic callers and legacy Compose overlays that do not declare the
+  # YouTube runtime env-file handles have no YouTube consumer to provision.
+  # Keep those ordinary invocations provider-independent; the canonical
+  # runtime declares the handles in its base Compose file.
+  if [ ! -f "${root}/docker-compose.yaml" ] || ! grep -Eq 'YOUTUBE_RUNTIME_ENV_FILE_(API|WATCHER)' "${root}/docker-compose.yaml"; then
+    return 1
+  fi
+  if ! probe_output="$(
+    cd "${root}" \
+      && PYTHONPATH="${root}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON:-python3}" - "${channel}" <<'PY' 2>/dev/null
+import sys
+
+from app.ops.host_secret_bootstrap import (
+    HostSecretItemAbsentError,
+    _security_keychain_lookup,
+)
+from app.ops.host_secret_contract import (
+    YOUTUBE_SECRET_IDS,
+    YOUTUBE_KEYCHAIN_CONSUMER,
+    load_host_secret_contract,
+)
+
+contract = load_host_secret_contract()
+found = 0
+for secret in sorted(YOUTUBE_SECRET_IDS):
+    account = contract.keychain_account(
+        channel=sys.argv[1], consumer=YOUTUBE_KEYCHAIN_CONSUMER, secret=secret
+    )
+    try:
+        _security_keychain_lookup(contract.keychain_service, account)
+    except HostSecretItemAbsentError:
+        continue
+    except Exception:
+        raise SystemExit(2)
+    found += 1
+print("present" if found else "absent")
+PY
+  )"; then
+    echo "deploy: YouTube runtime secret provider unavailable; refusing to guess that the group is unconfigured" >&2
+    return 2
+  else
+    case "${probe_output}" in
+      present) return 0 ;;
+      absent) ;;
+      *)
+        echo "deploy: YouTube runtime secret probe returned an invalid result" >&2
+        return 2
+        ;;
+    esac
+  fi
+  echo "deploy: YouTube runtime secret layer unavailable; continuing without it when unconfigured" >&2
+  return 1
+}
+
+_deploy_channel_reject_prod_youtube_aliases() {
+  local channel_env_file="${1:?channel env file required}"
+  local key
+  [ -f "${channel_env_file}" ] || return 0
+  for key in YOUTUBE_RUNTIME_ENV_FILE_API YOUTUBE_RUNTIME_ENV_FILE_WATCHER; do
+    if awk -v key="${key}" '
+      {
+        line = $0
+        sub(/^[[:space:]]*export[[:space:]]+/, "", line)
+        if (line ~ ("^[[:space:]]*" key "[[:space:]]*=")) {
+          sub("^[[:space:]]*" key "[[:space:]]*=", "", line)
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+          if (line != "" && line != "/dev/null") {
+            found = 1
+          }
+        }
+      }
+      END { exit(found ? 0 : 1) }
+    ' "${channel_env_file}"; then
+      echo "deploy: PROD YouTube runtime alias declaration is not permitted" >&2
+      return 78
+    fi
+  done
 }
 
 _deploy_channel_principal_cutover_receipt_requested() {
@@ -1044,6 +1153,16 @@ deploy_channel_compose() {
   local -a compose_args
   DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSED=0
   unset DEPLOY_CHANNEL_COMPOSE_GUARD_REFUSAL_FILE
+  # Secret-file aliases are authorized only for the non-production YouTube
+  # consumers. Never let a stale parent shell feed them into PROD Compose.
+  if [ "${channel}" = "prod" ]; then
+    _deploy_channel_reject_prod_youtube_aliases "${channel_env_file}" || return $?
+    # Force the interpolation source as well as the ambient shell to the
+    # inert file. Compose's --env-file has higher precedence than an unset
+    # variable, so merely unsetting inherited aliases is insufficient.
+    export YOUTUBE_RUNTIME_ENV_FILE_API=/dev/null
+    export YOUTUBE_RUNTIME_ENV_FILE_WATCHER=/dev/null
+  fi
   compose_args=(-f "${root}/docker-compose.yaml" -f "${root}/${compose_overlay}")
 
   _deploy_channel_resolve_runtime_env_file "${root}" "${channel}" "${channel_env_file}"
@@ -1299,6 +1418,35 @@ deploy_channel_compose() {
         -- sh -c 'export HOST_SECRET_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"' _
         "${compose_command[@]}"
       )
+    fi
+
+    if [ "${HOST_SECRET_PROVIDER:-}" != "bws" ] && _deploy_channel_needs_youtube_secret "${channel}" "$@"; then
+      if _deploy_channel_youtube_secret_bootstrap_available "${channel}" "${root}"; then
+        # One private materialization feeds the API and watcher aliases.
+        # The child receives only path handles; the bootstrap removes the file
+        # when the Compose invocation exits.
+        compose_command=(
+          sh -c 'cd "$1" && export PYTHONPATH="$1${PYTHONPATH:+:${PYTHONPATH}}" && shift && exec "$@"' _ "${root}"
+          "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
+          --channel "${channel}"
+          --consumer youtube-auth-cli
+          -- sh -c 'export YOUTUBE_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; export YOUTUBE_RUNTIME_ENV_FILE_WATCHER="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"' _
+          "${compose_command[@]}"
+        )
+      else
+        youtube_probe_status=$?
+        # Status 1 is the explicit all-absent/unconfigured case. Any provider
+        # or contract failure must stop before Compose rather than silently
+        # dropping the declared secret layer.
+        if [ "${youtube_probe_status}" -ne 1 ]; then
+          exit "${youtube_probe_status}"
+        fi
+        # An explicitly unconfigured channel must not inherit a runtime
+        # handle selected by another channel or an earlier caller. Keep both
+        # Compose aliases inert for this invocation.
+        export YOUTUBE_RUNTIME_ENV_FILE_API=/dev/null
+        export YOUTUBE_RUNTIME_ENV_FILE_WATCHER=/dev/null
+      fi
     fi
 
     if [ "${HOST_SECRET_PROVIDER:-}" != "bws" ] && _deploy_channel_needs_migration_secret "${channel}" "$@"; then

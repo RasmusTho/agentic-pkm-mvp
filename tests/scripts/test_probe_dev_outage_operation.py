@@ -6247,56 +6247,60 @@ def test_whole_caller_cleanup_remaining_process_refuses_stale_or_foreign_state(s
 def test_whole_caller_cleanup_wrong_profile_refuses_stale_or_foreign_state(self):
     _assert_whole_caller_stale_foreign_case(self, "cleanup_wrong_profile", "inactive")
 
-def test_whole_caller_known_profile_restoration_accepts_one_way_gc_in_every_raw_sample(self):
-    for index, (original_service, reload_number) in enumerate(
-        (
-            ("inactive", 1),
-            ("absent", 1),
-            ("inactive", 2),
-            ("absent", 2),
-        )
-    ):
-        with self.subTest(original_service=original_service, reload=reload_number):
-            if index:
-                self.fresh()
-            state = {"resets": 0, "reloads": 0, "cleared": False}
+def _assert_whole_caller_known_profile_restoration_case(self, original_service, reload_number):
+    state = {"resets": 0, "reloads": 0, "cleared": False}
 
-            def setup(kernel):
-                response = kernel.response
-                kernel.before_profile = target.unit_profile(kernel.unit)
+    def setup(kernel):
+        response = kernel.response
+        kernel.before_profile = target.unit_profile(kernel.unit)
 
-                def manager(argv, payload):
-                    if argv == target.systemd("reset-failed"):
-                        state["resets"] += 1
-                    result = response(argv, payload)
-                    if argv == target.systemd("reload_for_temporary_dev") and state["resets"] == 3:
-                        state["reloads"] += 1
-                        if state["reloads"] == reload_number:
-                            state["cleared"] = True
-                            kernel.unit.update(
-                                InvocationID="",
-                                ExecMainPID="0",
-                                ExecMainCode="0",
-                                ExecMainStatus="0",
-                                ExecMainStartTimestampMonotonic="0",
-                                InactiveEnterTimestampMonotonic="0",
-                                ControlGroup="",
-                            )
-                    return result
+        def manager(argv, payload):
+            if argv == target.systemd("reset-failed"):
+                state["resets"] += 1
+            result = response(argv, payload)
+            if argv == target.systemd("reload_for_temporary_dev") and state["resets"] == 3:
+                state["reloads"] += 1
+                if state["reloads"] == reload_number:
+                    state["cleared"] = True
+                    kernel.unit.update(
+                        InvocationID="",
+                        ExecMainPID="0",
+                        ExecMainCode="0",
+                        ExecMainStatus="0",
+                        ExecMainStartTimestampMonotonic="0",
+                        InactiveEnterTimestampMonotonic="0",
+                        ControlGroup="",
+                    )
+            return result
 
-                kernel.response = manager
+        kernel.response = manager
 
-            kernel = self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
-                whole_worker=True, original_service=original_service, platform_setup=setup
-            )
-            self.assertTrue(state["cleared"])
-            self.assertEqual((3, 2), (state["resets"], state["reloads"]))
-            self.assertEqual(kernel.before_profile, target.unit_profile(kernel.unit))
-            self.assertEqual("inactive", kernel.unit["ActiveState"])
-            self.assertFalse(kernel.os.fds)
-            record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
-            self.assertTrue(record["disarmed"])
-            self.assertTrue(all(row["normalization_confirmed"] for row in record["owned_stops"]))
+    kernel = self.test_actual_local_caller_executes_serialized_dataclass_envelope_with_absolute_tools_and_home(
+        whole_worker=True, original_service=original_service, platform_setup=setup
+    )
+    self.assertTrue(state["cleared"])
+    self.assertEqual((3, 2), (state["resets"], state["reloads"]))
+    self.assertEqual(kernel.before_profile, target.unit_profile(kernel.unit))
+    self.assertEqual("inactive", kernel.unit["ActiveState"])
+    self.assertFalse(kernel.os.fds)
+    record = json.loads(kernel.os.files[kernel.scope.root + "/watchdog.json"])
+    self.assertTrue(record["disarmed"])
+    self.assertTrue(all(row["normalization_confirmed"] for row in record["owned_stops"]))
+
+
+# Bound each complete real-caller case by the unchanged per-test CI timeout,
+# with a fresh TestCase fixture and the same full restoration safety oracle.
+def test_whole_caller_known_profile_restoration_inactive_first_reload_accepts_one_way_gc(self):
+    _assert_whole_caller_known_profile_restoration_case(self, "inactive", 1)
+
+def test_whole_caller_known_profile_restoration_absent_first_reload_accepts_one_way_gc(self):
+    _assert_whole_caller_known_profile_restoration_case(self, "absent", 1)
+
+def test_whole_caller_known_profile_restoration_inactive_second_reload_accepts_one_way_gc(self):
+    _assert_whole_caller_known_profile_restoration_case(self, "inactive", 2)
+
+def test_whole_caller_known_profile_restoration_absent_second_reload_accepts_one_way_gc(self):
+    _assert_whole_caller_known_profile_restoration_case(self, "absent", 2)
 
 
 NativeBindingTests.test_whole_caller_normalizes_three_owned_143_stops_and_restores_original_service = test_whole_caller_normalizes_three_owned_143_stops_and_restores_original_service
@@ -6325,8 +6329,14 @@ del test_whole_caller_cleanup_foreign_inactive_refuses_stale_or_foreign_state
 del test_whole_caller_cleanup_foreign_absent_refuses_stale_or_foreign_state
 del test_whole_caller_cleanup_remaining_process_refuses_stale_or_foreign_state
 del test_whole_caller_cleanup_wrong_profile_refuses_stale_or_foreign_state
-NativeBindingTests.test_whole_caller_known_profile_restoration_accepts_one_way_gc_in_every_raw_sample = test_whole_caller_known_profile_restoration_accepts_one_way_gc_in_every_raw_sample
-del test_whole_caller_known_profile_restoration_accepts_one_way_gc_in_every_raw_sample
+NativeBindingTests.test_whole_caller_known_profile_restoration_inactive_first_reload_accepts_one_way_gc = test_whole_caller_known_profile_restoration_inactive_first_reload_accepts_one_way_gc
+NativeBindingTests.test_whole_caller_known_profile_restoration_absent_first_reload_accepts_one_way_gc = test_whole_caller_known_profile_restoration_absent_first_reload_accepts_one_way_gc
+NativeBindingTests.test_whole_caller_known_profile_restoration_inactive_second_reload_accepts_one_way_gc = test_whole_caller_known_profile_restoration_inactive_second_reload_accepts_one_way_gc
+NativeBindingTests.test_whole_caller_known_profile_restoration_absent_second_reload_accepts_one_way_gc = test_whole_caller_known_profile_restoration_absent_second_reload_accepts_one_way_gc
+del test_whole_caller_known_profile_restoration_inactive_first_reload_accepts_one_way_gc
+del test_whole_caller_known_profile_restoration_absent_first_reload_accepts_one_way_gc
+del test_whole_caller_known_profile_restoration_inactive_second_reload_accepts_one_way_gc
+del test_whole_caller_known_profile_restoration_absent_second_reload_accepts_one_way_gc
 
 
 def test_whole_caller_accepts_distinct_cursor_equal_time_batch_and_split_reads(self):

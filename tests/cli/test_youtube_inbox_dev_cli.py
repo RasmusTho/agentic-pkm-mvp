@@ -244,7 +244,11 @@ def test_manual_sync_honors_accepted_global_pause_before_registry_or_egress(
 
     monkeypatch.setattr(youtube_cli.httpx, "Client", lambda: object())
     monkeypatch.setattr(youtube_cli, "OAuthClient", _OAuthClient)
-    monkeypatch.setattr(youtube_cli, "YouTubeTokenStore", type("_Tokens", (), {}))
+    monkeypatch.setattr(
+        youtube_cli,
+        "YouTubeTokenStore",
+        type("_Tokens", (), {"__init__": lambda self, **kwargs: None}),
+    )
     monkeypatch.setattr(youtube_cli, "AccountBindingStore", _BindingStore)
     monkeypatch.setattr(youtube_cli, "SourceRegistry", _Registry)
     monkeypatch.setattr(youtube_cli, "YouTubeAccountBinder", _Binder)
