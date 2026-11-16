@@ -49,7 +49,9 @@ def _git(cwd, *args):
 
 def _comment(body, ident, timestamp):
     at = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {"id": ident, "user": {"login": "RasmusTho"}, "author_association": "OWNER",
+    return {"id": ident, "node_id": f"IC_{ident}", "performed_via_github_app": None,
+            "user": {"login": "RasmusTho", "id": 123, "node_id": "U_example", "type": "User"},
+            "author_association": "OWNER",
             "created_at": at, "updated_at": at,
             "issue_url": f"https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/{body['issue']}",
             "body": json.dumps({"operator_reconciliation.v1": body}, sort_keys=True)}
@@ -2455,6 +2457,15 @@ def test_dirty_preflight_refuses_production_fence_and_synthetic_transition(opera
     # A verified H0->H1 push can update the body, and its successor body then
     # permits the already-published H1 to be the base for an H2 repair.
     with monkeypatch.context() as patch:
+        original_comment_read = agent_worktree._read_github_transfer_comment
+        intent_reads = []
+        def comment_with_changing_avatar(comment_id, **kwargs):
+            value = copy.deepcopy(original_comment_read(comment_id, **kwargs))
+            if comment_id in {3, 4}:
+                intent_reads.append(comment_id)
+                value['user']['avatar_url'] = f'https://example.invalid/avatar?v={len(intent_reads)}'
+            return value
+        patch.setattr(agent_worktree, '_read_github_transfer_comment', comment_with_changing_avatar)
         original_live = recovery.read_live_publication
         old_live = original_live(cwd=case["cwd"], pr=case["pr"], branch=case["receipt"]["branch"])
         h1_live = {**old_live, "head": head}
@@ -2494,6 +2505,28 @@ def test_dirty_preflight_refuses_production_fence_and_synthetic_transition(opera
         fake_effect_after_proof(**first_patch_args)
         assert effects == ["normal-control-reached"]
         effects.clear()
+        # Both GitHub representations may agree at each read and still drift
+        # between the first and the late authority checkpoint.
+        original_intent_read = publication_gate._body_intent
+        for changed_field in ('user_id', 'body'):
+            previous_comment = copy.deepcopy(case['comments'][3])
+            calls = []
+            def change_before_late_intent(*args, **kwargs):
+                calls.append(True)
+                if len(calls) == 2:
+                    if changed_field == 'user_id':
+                        case['comments'][3]['user']['id'] += 1
+                    else:
+                        case['comments'][3]['body'] += ' '
+                return original_intent_read(*args, **kwargs)
+            patch.setattr(publication_gate, '_body_intent', change_before_late_intent)
+            try:
+                with pytest.raises(publication_gate.PublicationProofError):
+                    fake_effect_after_proof(**first_patch_args)
+                assert len(calls) == 2 and effects == []
+            finally:
+                case['comments'][3] = previous_comment
+                patch.setattr(publication_gate, '_body_intent', original_intent_read)
         current_pr["body"] = successor_body
         current_pr["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         h1_live["body_sha256"] = expected_body
@@ -2558,6 +2591,7 @@ def test_dirty_preflight_refuses_production_fence_and_synthetic_transition(opera
         readback = publication_gate.check(**{**gate_args, 'effect': 'verify', 'head': h2, 'expected_remote_head': h2,
             'prior_body_file': second_file, 'prior_intent_comment_id': 4})
         assert readback['attempt_source'] == 'operator must establish separately'
+        assert intent_reads.count(3) >= 2 and intent_reads.count(4) >= 2
         current_pr['body'] = successor_body
         current_pr['head']['sha'] = head
         h1_live['body_sha256'] = expected_body
