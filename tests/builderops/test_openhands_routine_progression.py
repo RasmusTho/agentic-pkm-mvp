@@ -7,7 +7,11 @@ import copy
 import json
 import subprocess
 import os
+import shutil
+import stat
+import sys
 import venv
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +30,118 @@ REAL_VENV_MINOR = cycle._venv_python_minor
 REAL_THREADS = cycle._assert_review_threads_clear
 
 
+def _create_verifier_venv(verifier):
+    # This security-owned fixture must satisfy the real preflight even under CI's
+    # group-writable outer umask; restore that umask for the rest of the test.
+    previous_umask = os.umask(0o077)
+    try:
+        venv.EnvBuilder(with_pip=False, system_site_packages=True, symlinks=False).create(verifier)
+    finally:
+        os.umask(previous_umask)
+    # install_scripts copies source modes, overriding the restrictive umask.
+    # Only harden fixture-owned regular entries; never chmod or traverse links
+    # (venv may create lib64 as a symlink).
+    def unreadable(error):
+        raise error
+
+    for root, dirs, files in os.walk(verifier, followlinks=False, onerror=unreadable):
+        for name in ['.', *dirs, *files]:
+            path = Path(root) / name
+            mode = path.lstat().st_mode
+            if stat.S_ISREG(mode) or stat.S_ISDIR(mode):
+                path.chmod(stat.S_IMODE(mode) & ~0o022, follow_symlinks=False)
+
+
+def test_verifier_fixture_corrects_copied_modes_under_group_writable_umask(tmp_path, monkeypatch):
+    layout = ew.Layout(tmp_path / 'workspaces', 6618)
+    verifier = tmp_path / 'controller-test-venv'
+    templates = tmp_path / 'templates'
+    (templates / 'common').mkdir(parents=True)
+    for name, mode in [('plain', 0o664), ('executable', 0o775)]:
+        template = templates / 'common' / name
+        template.write_text('#!/bin/sh\nexit 0\n')
+        template.chmod(mode)
+    interpreter = tmp_path / 'upstream-python'
+    shutil.copyfile(sys.executable, interpreter)
+    interpreter.chmod(0o775)
+    inspected = []
+
+    class CopiedModeBuilder(venv.EnvBuilder):
+        def setup_python(self, context):
+            context.executable = str(interpreter)
+            super().setup_python(context)
+
+        def setup_scripts(self, context):
+            super().setup_scripts(context)
+            self.install_scripts(context, str(templates))
+
+        def post_setup(self, context):
+            # Real install_scripts uses copymode: umask 0077 cannot make these safe.
+            assert stat.S_IMODE((verifier / 'bin/plain').stat().st_mode) == 0o664
+            assert stat.S_IMODE((verifier / 'bin/executable').stat().st_mode) == 0o775
+            with pytest.raises(cycle.CycleError, match='test environment ownership or mode is unsafe'):
+                REAL_TEST_VENV(layout, str(verifier))
+            nested = verifier / 'nested'
+            nested.mkdir()
+            nested.chmod(0o775)
+            verifier.chmod(0o775)
+            (nested / 'data').write_text('fixture')
+            (nested / 'data').chmod(0o664)
+            inspected.append(True)
+
+    monkeypatch.setattr(venv, 'EnvBuilder', CopiedModeBuilder)
+    previous_umask = os.umask(0o002)
+    try:
+        _create_verifier_venv(verifier)
+        assert inspected == [True]
+        assert os.umask(0o002) == 0o002
+        assert REAL_TEST_VENV(layout, str(verifier)) == verifier
+        assert stat.S_IMODE((verifier / 'bin/plain').stat().st_mode) == 0o644
+        assert stat.S_IMODE((verifier / 'bin/executable').stat().st_mode) == 0o755
+        assert stat.S_IMODE((verifier / 'nested').stat().st_mode) == 0o755
+        assert stat.S_IMODE((verifier / 'nested/data').stat().st_mode) == 0o644
+        assert (verifier / 'bin/python').stat().st_mode & stat.S_IXUSR
+        subprocess.run([str(verifier / 'bin/python'), '-c', 'pass'], check=True)
+        assert stat.S_IMODE(interpreter.stat().st_mode) == 0o775
+        assert stat.S_IMODE((templates / 'common/plain').stat().st_mode) == 0o664
+        (verifier / 'bin/plain').chmod(0o664)
+        with pytest.raises(cycle.CycleError, match='test environment ownership or mode is unsafe'):
+            REAL_TEST_VENV(layout, str(verifier))
+    finally:
+        os.umask(previous_umask)
+
+
+def test_verifier_fixture_does_not_follow_symlinks(tmp_path, monkeypatch):
+    verifier = tmp_path / 'controller-test-venv'
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    outside.chmod(0o775)
+    (outside / 'data').write_text('untouched')
+    (outside / 'data').chmod(0o664)
+    targets = {'external-dir': outside, 'external-file': outside / 'data',
+               'dangling': outside / 'absent'}
+
+    class SymlinkBuilder(venv.EnvBuilder):
+        def post_setup(self, context):
+            for name, target in targets.items():
+                (verifier / name).symlink_to(target)
+
+    monkeypatch.setattr(venv, 'EnvBuilder', SymlinkBuilder)
+    _create_verifier_venv(verifier)
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o775
+    assert stat.S_IMODE((outside / 'data').stat().st_mode) == 0o664
+    assert (outside / 'data').read_text() == 'untouched'
+    for name, target in targets.items():
+        assert (verifier / name).is_symlink()
+        assert os.readlink(verifier / name) == str(target)
+    layout = ew.Layout(tmp_path / 'workspaces', 6618)
+    with pytest.raises(cycle.CycleError, match='test environment symlink escapes its boundary'):
+        REAL_TEST_VENV(layout, str(verifier))
+    for name in targets:
+        (verifier / name).unlink()
+    assert REAL_TEST_VENV(layout, str(verifier)) == verifier
+
+
 def assembled(tmp_path, monkeypatch, *, nonclosing=False):
     f = _automatic_cycle_fixture(tmp_path, monkeypatch)
     layout, worker = f['layout'], 'reviewer'
@@ -40,13 +156,7 @@ def assembled(tmp_path, monkeypatch, *, nonclosing=False):
     f['pr']['head_sha'] = f['head']
     f['entry']['head_sha'] = f['head']
     verifier = tmp_path / 'controller-test-venv'
-    # This security-owned fixture must satisfy the real preflight even under CI's
-    # group-writable outer umask; restore that umask for the rest of the test.
-    previous_umask = os.umask(0o077)
-    try:
-        venv.EnvBuilder(with_pip=False, system_site_packages=True, symlinks=False).create(verifier)
-    finally:
-        os.umask(previous_umask)
+    _create_verifier_venv(verifier)
     config = json.loads(f['config'].read_text())
     config['automatic_native']['test_venv'] = str(verifier)
     f['entry']['test_venv'] = str(verifier)
