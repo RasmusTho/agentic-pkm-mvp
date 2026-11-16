@@ -122,6 +122,9 @@ COPY alembic.ini ./
 COPY scripts/start_api.sh scripts/run_migrations.sh \
      scripts/prepare_instance_state_permissions.sh \
      scripts/__init__.py scripts/yaml_roundtrip.py scripts/compose_env.py \
+     scripts/agent_worktree.py scripts/codex_session_relations.py \
+     scripts/git_hygiene.py scripts/openhands_native_libraries.py \
+     scripts/review_before_ci_gate.py scripts/workflow_review_risk.py \
      scripts/validate_issue_readiness.py scripts/validate_source_anchors.py \
      scripts/pr_body_generator.py \
      scripts/postmerge_channel_bug.py scripts/postmerge_dev_test.py \
