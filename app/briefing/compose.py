@@ -163,11 +163,14 @@ def compose_briefing(
     vault_context: VaultContext,
     for_date: date,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    create_once: bool = False,
 ) -> WriteReceipt:
     """Compose and atomically replace the dated briefing artifact.
 
     Source failures are isolated to their section. Addressing, guard, and write
     failures are global and leave the previous dated note intact.
+    Explicit pristine-fixture preparation may require create-only publication;
+    it must not adopt an intervening file as a regeneration precondition.
     """
 
     vault_root = _vault_root(vault_context)
@@ -216,7 +219,7 @@ def compose_briefing(
 
     target = briefing_note_path(vault_context=vault_context, for_date=for_date)
     expected_version: str | None = None
-    if target.exists():
+    if not create_once and target.exists():
         # The version token is for the exact bytes observed from the canonical
         # target. A regeneration must never replace an owner edit made after
         # this read.
@@ -230,6 +233,7 @@ def compose_briefing(
         content=content,
         write_guard=write_guard,
         expected_version=expected_version,
+        create_once=create_once,
     )
 
 
@@ -374,6 +378,7 @@ def _atomic_write(
     content: str,
     write_guard: WriteGuard,
     expected_version: str | None,
+    create_once: bool = False,
 ) -> WriteReceipt:
     """Stage through the FS adapter, then atomically install its complete file.
 
@@ -434,7 +439,11 @@ def _atomic_write(
                     content,
                     vault_root=vault_root,
                     action=BRIEFING_WRITE_ACTION,
-                    write_guard=adapter_guard,
+                    # A strict pristine creator carries a live local policy
+                    # ceiling in addition to health. Do not substitute the
+                    # earlier cached snapshot after the profile/path waits.
+                    # Ordinary compose/regenerate keeps its existing cache.
+                    write_guard=write_guard if create_once else adapter_guard,
                     create_once=True,
                 )
                 if receipt.outcome != "written":

@@ -17,6 +17,7 @@ import stat
 from tempfile import NamedTemporaryFile
 from time import time
 from typing import Any
+from uuid import UUID, uuid5
 
 from app.operations.contracts import OperationOutcome, OperationStatus
 from app.operations.execution_kernel import JsonReceiptStore
@@ -39,6 +40,23 @@ DEV_SCENARIOS = ("native_admission", "sdk_profiles", "qualified_reads", "dev_ope
                  "native_doctor", "native_invariants", "source_store_index_links")
 SELECTION_HASH = hashlib.sha256(json.dumps([PROFILE, ROLES, FAMILIES, TEST_SCENARIOS, DEV_SCENARIOS,
                                            MAX_SECONDS], separators=(",", ":")).encode()).hexdigest()
+
+
+def source_templates(operation_id: str) -> dict[str, dict[str, Any]]:
+    namespace = UUID(operation_id)
+    result = {}
+    for role in (*ROLES, "capture"):
+        identity = str(uuid5(namespace, "operations-acceptance:" + role))
+        path = "Notes/operations-acceptance-" + role + ".md"
+        text = (f"---\nuuid: {identity}\nartifact_class: human_knowledge\ntrust: human\n---\n"
+                f"Synthetic operations acceptance {role}.\n")
+        result[role] = {"artifact_id": identity, "path": path, "text": text,
+                        "seed_sha256": hashlib.sha256(text.encode()).hexdigest()}
+    return result
+
+
+def raw_fixture_bytes(operation_id: str) -> bytes:
+    return ("Synthetic operations raw acceptance " + operation_id + ".").encode()
 
 
 class OperationsAcceptanceRefusal(RuntimeError):

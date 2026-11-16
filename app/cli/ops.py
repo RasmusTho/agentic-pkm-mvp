@@ -89,3 +89,27 @@ def ops_bootstrap_test_channel(vault_root: str | None, print_env: bool, as_json:
 
 
 __all__ = ["ops"]
+
+
+@ops.command("prepare-operations-fixture", help="Explicitly prepare the fixed isolated native operations fixture.")
+@click.argument("channel", type=click.Choice(["test", "dev"]))
+@click.argument("operation_id")
+@click.option("--binding-id", required=True, help="Existing initialized isolated synthetic binding.")
+@click.option("--principal-id", required=True, help="Expected existing configured local operator role.")
+@click.option("--instance-id", required=True, help="Expected existing native instance identity.")
+@click.option("--stage-raw", is_flag=True, help="TEST only: insert the exact encrypted RAW seed once; wait for normal archive eligibility.")
+@click.option("--confirm-synthetic-setup", is_flag=True, required=True,
+              help="Explicit intent for this fixture's source, briefing and remembered-selection writes.")
+def ops_prepare_operations_fixture(channel: str, operation_id: str, binding_id: str,
+                                  principal_id: str, instance_id: str,
+                                  stage_raw: bool,
+                                  confirm_synthetic_setup: bool) -> None:
+    from app.ops.native_operations_acceptance_runner import NativeChannel
+    from app.ops.operations_acceptance import OperationsAcceptanceRefusal
+    try:
+        result = NativeChannel(channel, operation_id).prepare_fixture(binding_id=binding_id,
+            principal_id=principal_id, instance_identity=instance_id,
+            confirm_synthetic_setup=confirm_synthetic_setup, stage_raw=stage_raw)
+    except (OperationsAcceptanceRefusal, ValueError):
+        raise click.ClickException("native operations fixture preparation refused; inspect original native receipts") from None
+    click.echo(json.dumps(result, sort_keys=True))

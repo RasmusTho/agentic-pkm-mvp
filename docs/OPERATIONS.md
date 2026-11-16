@@ -71,6 +71,22 @@ restart leaves the required scenario blocked. Temporary fixture proof and delive
 establish deployed acceptance; the qualified same-candidate TEST/short DEV outcome and post-acceptance
 owner-doc/State promotion remain on #5340/#5329.
 
+Explicit source preparation uses the registered `python -m app.ops.native_operations_acceptance_runner
+prepare-fixture test|dev ORIGINAL_NATIVE_OPERATION_UUID --binding-id ...
+--principal-id ... --instance-id ... --confirm-synthetic-setup` command on the qualified native
+host. The [testing procedure](TESTING.md#automated-technical-acceptance) gives its exact commands,
+existing initialized synthetic-binding/operator authority and archive prerequisites. TEST first
+uses `--stage-raw` to insert its encrypted seed through the ordinary RAW owner under existing
+matching consent. Its original receipt records actual ingestion and the eligibility/retention
+handoff; fresh RAW is not archive-ready until the owner's real greater-than-seven-day age gate
+passes. The command without that flag then prepares the finite source/briefing/profile/restore
+composition. The original native operation, actual immutable candidate and existing principal/binding
+authority must remain qualified through that wait; successor candidates never inherit the staging
+receipt. This requirement does not authorize stopping the post-merge controller. The runtime owner
+and #5340 retain any unresolved qualification window. No initialization, principal/consent/key provisioning, timestamp change or implicit
+setup occurs in the qualifier. Partial/UNKNOWN setup retains original receipts and refuses replay;
+source merge alone leaves installation and live acceptance with the parent/runtime owner.
+
 ### Native source-persistence failure receipts
 
 Supervised DEV/TEST source persistence records only fixed, content-free failure stages for worker
