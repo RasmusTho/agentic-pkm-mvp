@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import uuid
 import venv as venv_module
 from urllib.parse import parse_qs, urlsplit
@@ -657,10 +658,10 @@ def _publish_verified_fixture(tmp_path, monkeypatch, fixture, *, lost_push=False
     fakebin = tmp_path / 'fake-bin'
     fakebin.mkdir()
     real_git = shutil.which('git')
-    (fakebin / 'git').write_text('#!/usr/local/bin/python3.12\nimport os,sys\n'
+    (fakebin / 'git').write_text(f'#!{sys.executable}\nimport os,sys\n'
         f'if sys.argv[1:] == ["remote", "get-url", "origin"]: print("https://github.com/{repo}.git"); sys.exit(0)\n'
         f'os.execv({real_git!r}, [{real_git!r}, *sys.argv[1:]])\n')
-    (fakebin / 'gh').write_text('#!/usr/local/bin/python3.12\nimport json,os,sys\n'
+    (fakebin / 'gh').write_text(f'#!{sys.executable}\nimport json,os,sys\n'
         'd=json.load(open(os.environ["SYNTHETIC_GH_DATA"])); p=sys.argv[-1]\n'
         'v=([[]] if "--paginate" in sys.argv else [d["pr"]] if "/pulls?" in p else '
         'd["pr"] if p.endswith("/pulls/10") else d["issue"] if p.endswith("/issues/6617") else None)\n'
