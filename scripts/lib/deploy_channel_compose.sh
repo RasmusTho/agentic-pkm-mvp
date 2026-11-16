@@ -964,7 +964,7 @@ _deploy_channel_youtube_secret_bootstrap_available() {
   # YouTube runtime env-file handles have no YouTube consumer to provision.
   # Keep those ordinary invocations provider-independent; the canonical
   # runtime declares the handles in its base Compose file.
-  if [ ! -f "${root}/docker-compose.yaml" ] || ! grep -Eq 'YOUTUBE_RUNTIME_ENV_FILE_(API|WORKER|WATCHER)' "${root}/docker-compose.yaml"; then
+  if [ ! -f "${root}/docker-compose.yaml" ] || ! grep -Eq 'YOUTUBE_RUNTIME_ENV_FILE_(API|WATCHER)' "${root}/docker-compose.yaml"; then
     return 1
   fi
   if ! probe_output="$(
