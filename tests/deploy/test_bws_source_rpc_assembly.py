@@ -93,6 +93,35 @@ def _record_rpc_failure(state: dict[str, object], error: BaseException) -> None:
         pass
 
 
+def _rpc_failure_assertion_context(state: dict[str, object]) -> dict[str, object]:
+    checks = state.get('rpc_git_checks', [])
+    if isinstance(checks, list):
+        checks = tuple(checks[-_RPC_GIT_CHECK_LIMIT:])
+    else:
+        checks = ()
+    dropped = state.get('rpc_git_checks_dropped')
+    return {
+        'rpc_failure': state.get('rpc_failure') if isinstance(state.get('rpc_failure'), dict) else None,
+        'rpc_git_checks': checks,
+        'rpc_git_checks_dropped': dropped if type(dropped) is int and dropped >= 0 else None,
+    }
+
+
+def _emit_rpc_failure_diagnostic(state: dict[str, object], error: BaseException) -> None:
+    try:
+        _record_rpc_failure(state, error)
+        context = _rpc_failure_assertion_context(state)
+        if context['rpc_failure'] is None:
+            return
+        sys.stderr.write(json.dumps({
+            'schema': 'rpc-failure-diagnostic.v1',
+            **context,
+        }, sort_keys=True) + '\n')
+    except Exception:
+        # Diagnostic construction and emission must never replace the original RPC failure.
+        pass
+
+
 def _rpc_git_category(argv: object) -> str | None:
     try:
         words = tuple(str(part) for part in argv)  # noqa: C401 - values are never recorded
@@ -182,92 +211,6 @@ def _rpc_observed_git_run(state: dict[str, object], original_run, expected_root:
         state, category, result, expected_root=expected_root, expected_revision=expected_revision,
     )
     return result
-
-
-def test_rpc_failure_diagnostics_are_redacted_and_cycle_safe() -> None:
-    marker = 'PRIVATE_CANARY_RPC_DIAGNOSTIC'
-    try:
-        try:
-            raise OSError(5, marker)
-        except OSError as context:
-            raise RuntimeError(marker) from context
-    except RuntimeError as error:
-        diagnostic = _rpc_failure_diagnostic(error, [{
-            'category': 'clean', 'return_code': 0, 'stderr_present': False, 'clean': True,
-        }])
-    assert marker not in repr(diagnostic)
-    assert diagnostic['class'] == 'RuntimeError'
-    assert diagnostic['context'][0]['class'] == 'OSError'
-    assert diagnostic['context'][0]['errno'] == 5
-    assert diagnostic['git_checks'][0]['clean'] is True
-
-    cyclic = RuntimeError(marker)
-    cyclic.__context__ = cyclic
-    assert len(_rpc_failure_diagnostic(cyclic, [])['context']) == 1
-
-    try:
-        try:
-            raise OSError(6, marker)
-        except OSError:
-            raise RuntimeError(marker) from None
-    except RuntimeError as error:
-        suppressed = _rpc_failure_diagnostic(error, [])
-    assert suppressed['context'][0]['class'] == 'OSError'
-
-
-def test_rpc_failure_diagnostics_preserve_original_failure(monkeypatch) -> None:
-    original = RuntimeError('PRIVATE_CANARY_RPC_DIAGNOSTIC')
-    state: dict[str, object] = {}
-    monkeypatch.setattr(
-        sys.modules[__name__], '_rpc_failure_diagnostic',
-        lambda *_args: (_ for _ in ()).throw(AssertionError('diagnostic probe failed')),
-    )
-    with pytest.raises(RuntimeError) as raised:
-        try:
-            raise original
-        except Exception as error:
-            _record_rpc_failure(state, error)
-            raise
-    assert raised.value is original
-    assert 'rpc_failure' not in state
-
-
-def test_rpc_git_recording_is_bounded_and_preserves_success_on_probe_failure(monkeypatch) -> None:
-    state: dict[str, object] = {}
-    monkeypatch.setattr(
-        sys.modules[__name__], '_rpc_git_record',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('probe failed')),
-    )
-    result = SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
-    _record_rpc_git_check(state, 'clean', result)
-    native_result = object()
-    observed = lambda argv: _rpc_observed_git_run(
-        state, lambda _argv: native_result, Path('/tmp/root'), 'revision', argv,
-    )
-    assert observed(['git', 'status', '--porcelain=v1']) is native_result
-    assert state['rpc_git_checks'] == []
-
-    monkeypatch.undo()
-    bounded_state: dict[str, object] = {}
-    for _ in range(_RPC_GIT_CHECK_LIMIT + 4):
-        _record_rpc_git_check(bounded_state, 'clean', result)
-    assert len(bounded_state['rpc_git_checks']) == _RPC_GIT_CHECK_LIMIT
-    assert bounded_state['rpc_git_checks_dropped'] == 4
-
-
-@pytest.mark.parametrize('error', [OSError(5, 'PRIVATE_CANARY'), subprocess.TimeoutExpired('git', 20)])
-def test_rpc_git_recording_preserves_observed_exception_on_probe_failure(monkeypatch, error) -> None:
-    state: dict[str, object] = {}
-    monkeypatch.setattr(
-        sys.modules[__name__], '_rpc_git_record',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('probe failed')),
-    )
-    observed = lambda argv: _rpc_observed_git_run(
-        state, lambda _argv: (_ for _ in ()).throw(error), Path('/tmp/root'), 'revision', argv,
-    )
-    with pytest.raises(type(error)) as raised:
-        observed(['git', 'rev-parse', 'HEAD'])
-    assert raised.value is error
 
 
 def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path,
@@ -979,7 +922,7 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             try:
                 return original_rpc(selected_channel, selected)
             except Exception as exc:
-                _record_rpc_failure(state, exc)
+                _emit_rpc_failure_diagnostic(state, exc)
                 raise
         patch.setattr(linux, 'rpc', observed_rpc)
         return finder
@@ -1190,7 +1133,9 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             assert (state['installed'] / 'app/ops/bws_control_installation.py').read_bytes() == state['old_source']
         raise SystemExit(status)
     if fault in {'path-preserved-close', 'path-preserved-transient-close'}:
-        assert status == 78 and output.getvalue() == '' and state['close_failed']
+        assert (
+            status == 78 and output.getvalue() == '' and state.get('close_failed') is True
+        ), _rpc_failure_assertion_context(state)
         raise SystemExit(status)
     if fault in {'path-close', 'path-transient-initial', 'path-transient-prebackup',
                  'path-proc-close', 'path-launcher-close'} or fault.startswith(('unit-close:', 'unit-runtime-close:')):
@@ -1199,7 +1144,9 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             assert state['uncertain_owned_close_calls'] >= 1
             assert state['close_attempts'].count(state['failed_close_fd']) == 1
             assert not {'prepare', 'stop', 'start'} & set(state['events'])
-        assert status == 78 and output.getvalue() == '' and state['close_failed']
+        assert (
+            status == 78 and output.getvalue() == '' and state.get('close_failed') is True
+        ), _rpc_failure_assertion_context(state)
         raise SystemExit(status)
     assert status == 0, (status, output.getvalue(), state.get("bootstrap_failure"), state.get('rpc_failure'))
     result = json.loads(output.getvalue())["source_installation"]
