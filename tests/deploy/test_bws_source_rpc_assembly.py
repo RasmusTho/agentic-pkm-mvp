@@ -85,12 +85,14 @@ def _rpc_failure_diagnostic(error: BaseException, git_checks: list[dict[str, obj
 
 def _record_rpc_failure(state: dict[str, object], error: BaseException) -> None:
     try:
-        state['rpc_failure'] = _rpc_failure_diagnostic(
+        diagnostic = _rpc_failure_diagnostic(
             error, state.get('rpc_git_checks', []),
         )
     except Exception:
         # Diagnostics must never replace the original RPC failure.
-        pass
+        state.pop('rpc_failure', None)
+        return
+    state['rpc_failure'] = diagnostic
 
 
 def _rpc_failure_assertion_context(state: dict[str, object]) -> dict[str, object]:

@@ -101,6 +101,29 @@ def test_rpc_failure_emission_preserves_original_failure_when_stderr_fails(monke
     assert raised.value is original
 
 
+def test_rpc_failure_emission_does_not_reuse_stale_failure_when_build_fails(
+    monkeypatch, capsys,
+) -> None:
+    state: dict[str, object] = {}
+    first = RuntimeError('PRIVATE_CANARY first')
+    second = RuntimeError('PRIVATE_CANARY second')
+    rpc._emit_rpc_failure_diagnostic(state, first)
+    capsys.readouterr()
+    monkeypatch.setattr(
+        rpc, '_rpc_failure_diagnostic',
+        lambda *_args: (_ for _ in ()).throw(AssertionError('diagnostic probe failed')),
+    )
+    with pytest.raises(RuntimeError) as raised:
+        try:
+            raise second
+        except Exception as error:
+            rpc._emit_rpc_failure_diagnostic(state, error)
+            raise
+    assert raised.value is second
+    assert state.get('rpc_failure') is None
+    assert capsys.readouterr().err == ''
+
+
 def test_rpc_git_recording_is_bounded_and_preserves_success_on_probe_failure(monkeypatch) -> None:
     state: dict[str, object] = {}
     monkeypatch.setattr(
