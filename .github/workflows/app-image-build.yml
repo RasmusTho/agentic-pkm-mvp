@@ -10,6 +10,7 @@ on:
       - 'app/**'
       - 'scripts/start_api.sh'
       - 'Dockerfile'
+      - '.dockerignore'
       - 'Dockerfile.builderops'
       - 'Dockerfile.builderops.dockerignore'
       - 'Dockerfile.builderops-postgres'
