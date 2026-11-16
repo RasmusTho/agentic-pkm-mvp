@@ -831,6 +831,16 @@ The trusted host has its existing GitHub CLI authentication; worker containers d
 Publication stays with the coordinator, which fetches the
 worker branch and uses `publish-pr`.
 
+The #6618 successor recipe `config/builderops/epic-workspace/openhands-worker.Dockerfile` derives
+from the local pinned baseline `epic-worker@sha256:3c3c2472b35ea3ccb0df57df7cc9d2303f582dcb2987b259124c9df946d56644`.
+That baseline runs as UID/GID 1000 without passwd/group records; Python NSS lookups during repository
+imports require a real account. The recipe adds a locked, no-login `worker` account with home
+`/home/worker` and checks NSS identity as runtime user 1000:1000, retaining the parent's tools and
+entrypoint. It must be built and qualified between reconciled runs; actual start, repository import
+and OpenHands/native execution proof remain required. This source change installs no active image
+and establishes no current-head CI result. The separate native-only `worker.Dockerfile` already has
+Node's UID account and remains valid.
+
 OpenHands is the normal execution and session-control surface. The default image in this source is
 the pinned upstream agent-server (`ghcr.io/openhands/agent-server:1.60.1-python`, by digest; it bundles
 claude-agent-acp 0.63.0 and codex-acp 2.2.2). The installed controller and image require separate
