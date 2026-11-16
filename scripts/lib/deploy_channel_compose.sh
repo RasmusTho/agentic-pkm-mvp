@@ -960,6 +960,13 @@ _deploy_channel_youtube_secret_bootstrap_available() {
   local channel="${1:?channel required}"
   local root="${2:?repo root required}"
   local probe_output
+  # Synthetic callers and legacy Compose overlays that do not declare the
+  # YouTube runtime env-file handles have no YouTube consumer to provision.
+  # Keep those ordinary invocations provider-independent; the canonical
+  # runtime declares the handles in its base Compose file.
+  if [ ! -f "${root}/docker-compose.yaml" ] || ! grep -Eq 'YOUTUBE_RUNTIME_ENV_FILE_(API|WORKER|WATCHER)' "${root}/docker-compose.yaml"; then
+    return 1
+  fi
   if ! probe_output="$(
     cd "${root}" \
       && PYTHONPATH="${root}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON:-python3}" - "${channel}" <<'PY' 2>/dev/null

@@ -535,7 +535,19 @@ def _resolve_consumer_environment(
             try:
                 value = keychain_lookup(contract.keychain_service, account)
             except HostSecretProviderUnavailableError:
-                # A locked/unavailable provider is never an optional absence.
+                # Preserve the existing value-free Model Inquiry handoff for
+                # required API credentials, while keeping an unavailable
+                # provider fail-closed for optional runtime bindings (notably
+                # the non-production YouTube group).  Provider-unavailable is
+                # not an optional absence; the typed credential error carries
+                # only the logical id and never secret material.
+                if (
+                    kind in {"api-key", "token"}
+                    and not contract.is_optional_for_consumer(
+                        channel=channel, consumer=consumer, secret=secret
+                    )
+                ):
+                    raise _secret_failure(secret=secret, kind=kind)
                 raise
             except Exception as exc:
                 # Test/injected lookup seams historically report an absent item
