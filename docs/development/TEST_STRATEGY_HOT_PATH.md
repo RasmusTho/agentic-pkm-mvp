@@ -73,6 +73,10 @@ coverage. Unknown sibling config paths remain unowned and refuse; no config
 prefix or text-only runtime exception is introduced. The regression is
 `tests/scripts/test_select_pr_tests.py::test_activation_scope_helper_selects_api_and_native_deploy_coverage`.
 
+The exact `Dockerfile` and `.dockerignore` build inputs select deployment proof and
+retain runtime checks. Similarly named sibling files remain unowned. Workflow
+filters must still schedule the checks for these exact paths.
+
 The fixed operations-acceptance API producer, exact `app/ops/` producer/guard/probe/preparer
 modules and `app/cli/ops.py` operator entrypoint also select the operations suite. This keeps
 their official SDK, preparation, admission, refusal, receipt and assembled TEST/DEV checks attached

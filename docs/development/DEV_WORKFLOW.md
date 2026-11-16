@@ -1654,6 +1654,16 @@ was not stopped by the preceding reboot. Its eight registered commands must have
 results and the identified PIDs must be absent. Record the parent journal prefix length and hash,
 observation times, exact source and relation list, and coordinated no-new-manual-start window.
 The earlier push output, earlier body, historical PPIDs and unrecorded effects remain unknown.
+The later identified child inventory and parent follow-up on 2026-11-15 are checked as a separate
+source-bound turn after the original interruption. Their three observed local JSON outputs remain
+preserved; their point-in-time hashes do not authenticate a predecessor handoff. Two later commands
+ran Git status without a proven effective optional-lock setting or before/after index bytes, so the
+historical index-refresh effect remains `unknown` even when a fresh candidate readback is clean.
+The later parent snapshot is bound to its examined prefix; only validated token accounting may
+follow it. The snapshot includes historical messages to another thread and a comment on another
+issue. Neither the source hash nor a terminal tool result establishes the messages' downstream
+effects or a stopped delegation. Reconcile identified delegations independently before asserting
+they have stopped. The coordinated stopped window must begin after the latest verified activity.
 The narrow host reader rechecks only the named registered target relations in fresh read-only SQLite
 snapshots; it does not prove all processes, unregistered children, future activity, or a lock. A
 missing or contradictory source refuses the transition. The guard runs before claim, prepare, ACK,

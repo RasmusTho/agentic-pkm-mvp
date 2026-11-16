@@ -49,7 +49,9 @@ def _git(cwd, *args):
 
 def _comment(body, ident, timestamp):
     at = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {"id": ident, "user": {"login": "RasmusTho"}, "author_association": "OWNER",
+    return {"id": ident, "node_id": f"IC_{ident}", "performed_via_github_app": None,
+            "user": {"login": "RasmusTho", "id": 123, "node_id": "U_example", "type": "User"},
+            "author_association": "OWNER",
             "created_at": at, "updated_at": at,
             "issue_url": f"https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/{body['issue']}",
             "body": json.dumps({"operator_reconciliation.v1": body}, sort_keys=True)}
@@ -2455,6 +2457,15 @@ def test_dirty_preflight_refuses_production_fence_and_synthetic_transition(opera
     # A verified H0->H1 push can update the body, and its successor body then
     # permits the already-published H1 to be the base for an H2 repair.
     with monkeypatch.context() as patch:
+        original_comment_read = agent_worktree._read_github_transfer_comment
+        intent_reads = []
+        def comment_with_changing_avatar(comment_id, **kwargs):
+            value = copy.deepcopy(original_comment_read(comment_id, **kwargs))
+            if comment_id in {3, 4}:
+                intent_reads.append(comment_id)
+                value['user']['avatar_url'] = f'https://example.invalid/avatar?v={len(intent_reads)}'
+            return value
+        patch.setattr(agent_worktree, '_read_github_transfer_comment', comment_with_changing_avatar)
         original_live = recovery.read_live_publication
         old_live = original_live(cwd=case["cwd"], pr=case["pr"], branch=case["receipt"]["branch"])
         h1_live = {**old_live, "head": head}
@@ -2494,6 +2505,28 @@ def test_dirty_preflight_refuses_production_fence_and_synthetic_transition(opera
         fake_effect_after_proof(**first_patch_args)
         assert effects == ["normal-control-reached"]
         effects.clear()
+        # Both GitHub representations may agree at each read and still drift
+        # between the first and the late authority checkpoint.
+        original_intent_read = publication_gate._body_intent
+        for changed_field in ('user_id', 'body'):
+            previous_comment = copy.deepcopy(case['comments'][3])
+            calls = []
+            def change_before_late_intent(*args, **kwargs):
+                calls.append(True)
+                if len(calls) == 2:
+                    if changed_field == 'user_id':
+                        case['comments'][3]['user']['id'] += 1
+                    else:
+                        case['comments'][3]['body'] += ' '
+                return original_intent_read(*args, **kwargs)
+            patch.setattr(publication_gate, '_body_intent', change_before_late_intent)
+            try:
+                with pytest.raises(publication_gate.PublicationProofError):
+                    fake_effect_after_proof(**first_patch_args)
+                assert len(calls) == 2 and effects == []
+            finally:
+                case['comments'][3] = previous_comment
+                patch.setattr(publication_gate, '_body_intent', original_intent_read)
         current_pr["body"] = successor_body
         current_pr["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         h1_live["body_sha256"] = expected_body
@@ -2558,6 +2591,7 @@ def test_dirty_preflight_refuses_production_fence_and_synthetic_transition(opera
         readback = publication_gate.check(**{**gate_args, 'effect': 'verify', 'head': h2, 'expected_remote_head': h2,
             'prior_body_file': second_file, 'prior_intent_comment_id': 4})
         assert readback['attempt_source'] == 'operator must establish separately'
+        assert intent_reads.count(3) >= 2 and intent_reads.count(4) >= 2
         current_pr['body'] = successor_body
         current_pr['head']['sha'] = head
         h1_live['body_sha256'] = expected_body
@@ -2882,6 +2916,13 @@ def test_6560_late_ack_during_intent_read_prevents_intent(operator_case, tmp_pat
     assert 'ack_intent' not in row['operator_registration'] and 2 not in case['comments']
 
 
+def _prepare_later_6561_case(case, source_bound, monkeypatch):
+    common = Path(_git(case["worktree"], "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    with (common / "info/exclude").open("a") as exclude:
+        exclude.write("\n.codex-tmp/\n")
+    sources_6561._add_later_inventory(source_bound, monkeypatch, worktree=case["worktree"])
+
+
 def _bind_6561_sources(case, source_bound, monkeypatch):
     from app.builderops import legacy_codex_6561_guard as guard
     monkeypatch.setattr(guard, "WORKTREE", str(case["worktree"]))
@@ -2901,7 +2942,7 @@ def _bind_6561_sources(case, source_bound, monkeypatch):
     evidence = copy.deepcopy(source_bound["receipt"]["writer"]["codex_custody"])
     evidence["child_sha256"] = hashlib.sha256(source_bound["child_path"].read_bytes()).hexdigest()
     case["receipt"]["writer"].update({"boot": "2026-11-14T21:48:30Z",
-        "last_activity": "2026-11-15T08:03:36.536Z", "codex_custody": evidence})
+        "last_activity": source_bound["receipt"]["writer"]["last_activity"], "codex_custody": evidence})
     case["comments"][1] = _comment(case["receipt"], 1, time.time() - 5)
     monkeypatch.setattr(agent_worktree, "_read_github_transfer_comment", lambda ident, *, cwd: case["comments"][ident])
     def github(args, *, cwd):
@@ -2915,7 +2956,8 @@ def _bind_6561_sources(case, source_bound, monkeypatch):
 
 @pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)
 @pytest.mark.parametrize("projection", [None, "6562"])
-def test_6561_real_pickup_and_lost_ack_resume_with_synthetic_sources(operator_case, codex_6561_source, monkeypatch, projection):
+@pytest.mark.parametrize("timeline", ["original", "later"])
+def test_6561_real_pickup_and_lost_ack_resume_with_synthetic_sources(operator_case, codex_6561_source, monkeypatch, projection, timeline):
     case = operator_case
     if projection is None:
         task_id = case["receipt"]["predecessor"]["task_id"]
@@ -2924,6 +2966,8 @@ def test_6561_real_pickup_and_lost_ack_resume_with_synthetic_sources(operator_ca
             conn.execute("DELETE FROM dispatcher_events WHERE event_id=?", ("fixture-linked-pr",))
         case["receipt"]["predecessor"] = recovery.read_live_predecessor(cwd=case["cwd"], issue=case["issue"])
     source_bound = codex_6561_source
+    if timeline == "later":
+        _prepare_later_6561_case(case, source_bound, monkeypatch)
     guard = _bind_6561_sources(case, source_bound, monkeypatch)
     from scripts import legacy_operator_evidence
     draft = legacy_operator_evidence.build_draft(cwd=case["cwd"], issue=6561, pr=6562,
@@ -2931,6 +2975,7 @@ def test_6561_real_pickup_and_lost_ack_resume_with_synthetic_sources(operator_ca
         session=case["session"])["operator_reconciliation.v1"]
     assert draft["writer"]["codex_custody"]["observed_at"] is None
     assert draft["writer"]["codex_custody"]["unrecorded_effects"] == "unknown"
+    assert draft["writer"]["codex_custody"]["later_git_status_index_effect"] == "unknown"
     original = guard.check
     checks = []
     def check(**kwargs):
@@ -2955,6 +3000,7 @@ def test_6561_real_pickup_and_lost_ack_resume_with_synthetic_sources(operator_ca
     assert result["state"] == "pinned" and len(posts) == 1
     assert before_resume >= 3 and len(checks) > before_resume
     assert all(item["unrecorded_effects"] == "UNKNOWN" for item in checks)
+    assert all(item["later_git_status_index_effect"] == "UNKNOWN" for item in checks)
 
     from app.builderops import openhands_pr_cycle as cycle
     from scripts import verify_operator_successor
@@ -3024,6 +3070,36 @@ def test_6561_real_pickup_and_lost_ack_resume_with_synthetic_sources(operator_ca
         with pytest.raises((cycle.CycleError, cycle.closure.ClosureError)):
             verify_operator_successor.verify(**args)
     assert len(checks) == 2
+
+
+@pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)
+@pytest.mark.parametrize("drift", ["child", "parent", "local_file"])
+def test_6561_later_source_drift_during_guard_refuses_before_claim(operator_case, codex_6561_source, monkeypatch, drift):
+    case, source = operator_case, codex_6561_source
+    _prepare_later_6561_case(case, source, monkeypatch)
+    guard = _bind_6561_sources(case, source, monkeypatch)
+    original_host = guard._check_host
+    injected = []
+    def drift_during_host():
+        original_host()
+        if injected:
+            return
+        injected.append(True)
+        if drift == "child":
+            with source["child_path"].open("ab") as out:
+                out.write(b'{"ordinal":9999,"type":"turn_context","payload":{"turn_id":"new"}}\n')
+        elif drift == "parent":
+            with source["parent_path"].open("ab") as out:
+                out.write(b'{"ordinal":9999,"type":"response_item","payload":{"type":"function_call"}}\n')
+        else:
+            name = next(iter(guard.LATER_LOCAL_FILES))
+            (case["worktree"] / name).write_text("changed after observation")
+    monkeypatch.setattr(guard, "_check_host", drift_during_host)
+    with pytest.raises(recovery.RecoveryEvidenceError, match="UNKNOWN"):
+        recovery.execute_operator_pickup(**_args(case))
+    assert injected
+    assert case["store"].get_task(case["receipt"]["predecessor"]["task_id"]).lease_id == case["old_lease"].lease_id
+    assert 2 not in case["comments"]
 
 
 @pytest.mark.parametrize("operator_case", [(6561, 6562, "codex-issue6561-normal-transport", 9)], indirect=True)

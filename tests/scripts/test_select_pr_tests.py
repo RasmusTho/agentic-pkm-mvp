@@ -16,6 +16,21 @@ from scripts.select_pr_tests import select_tests
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_operations_preparation_entrypoints_select_real_operations_proof() -> None:
+    for path in ("app/cli/ops.py", "app/ops/native_operations_fixture.py"):
+        selection = select_tests([path])
+
+        assert selection.full_suite is False
+        assert selection.unowned_paths == ()
+        assert "operations" in selection.subsystems
+        assert "tests/operations" in selection.targets
+        assert "tests/architecture/test_autonomous_operations_boundaries.py" in selection.targets
+
+    # Keep the runtime fail-closed boundary for an undeclared CLI sibling.
+    unknown = "app/cli/unowned_operations.py"
+    assert select_tests([unknown]).unowned_paths == (unknown,)
+
+
 @pytest.mark.parametrize("path", ("scripts/await_pr_checks.sh", "scripts/ci_stall_classifier.py"))
 def test_read_only_ci_wait_helpers_select_covering_governance_contracts(path: str) -> None:
     selection = select_tests([
@@ -78,6 +93,33 @@ def test_activation_scope_helper_selects_api_and_native_deploy_coverage() -> Non
     assert {"tests/api", "tests/deploy"} <= set(selection.targets)
     for sibling in ("app/config/activation_scope_extra.py", "app/config/activation_scope.py.backup"):
         assert select_tests([sibling]).unowned_paths == (sibling,)
+
+
+@pytest.mark.parametrize("path", ("Dockerfile", ".dockerignore"))
+def test_image_build_inputs_select_deploy_coverage(path: str, tmp_path: Path) -> None:
+    selection = select_tests([path])
+
+    assert selection.unowned_paths == ()
+    assert selection.subsystems == ("ops_deploy",)
+    assert "tests/deploy" in selection.targets
+    assert "tests/deploy" not in selection.deferred_targets
+    assert selector.requires_runtime_checks([path]) is True
+
+    output = tmp_path / "output"
+    result = subprocess.run(
+        [sys.executable, "scripts/select_pr_tests.py", "--changed-file", path,
+         "--github-output", str(output)],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert fields["runtime_checks"] == "true"
+    assert "tests/deploy" in fields["pytest_args"].split()
+
+
+@pytest.mark.parametrize("path", ("Dockerfile.backup", ".dockerignore.backup"))
+def test_image_build_owner_does_not_include_siblings(path: str) -> None:
+    assert select_tests([path]).unowned_paths == (path,)
 
 
 def test_companion_note_helper_selects_source_boundary_coverage() -> None:

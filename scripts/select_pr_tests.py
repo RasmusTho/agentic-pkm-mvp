@@ -1480,9 +1480,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
     "governance": CI_CONTRACT_PATHS,
     # Native request admission and API assembly share this finite scope helper.
-    # Own only this file; unknown sibling config modules still fail closed.
+    # Unknown sibling config modules still fail closed. The two exact image
+    # build inputs also retain deployment proof and normal runtime checks.
     "companion_ui": frozenset({"app/config/activation_scope.py"}),
-    "ops_deploy": frozenset({"app/config/activation_scope.py"}),
+    "ops_deploy": frozenset({"app/config/activation_scope.py", "Dockerfile", ".dockerignore"}),
     # The companion/source predicate is shared by watcher traversal, queued
     # workers and Alpha ingestion. A helper-only edit must execute all three
     # existing source-boundary owners without claiming sibling services.
