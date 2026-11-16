@@ -23,7 +23,12 @@ from app.config.database import resolve_database_url, normalize_database_url
 from app.ops.bws_secret_admin import SecretCopy
 from app.ops.bws_secret_reader import BwsItemAbsent
 from app.ops.host_secret_bootstrap import _resolve_bws_consumer_values, validate_secret_value
-from app.ops.host_secret_contract import CHANNEL_PROJECTS, DATABASE_CONSUMERS, load_host_secret_contract
+from app.ops.host_secret_contract import (
+    CHANNEL_PROJECTS,
+    DATABASE_CONSUMERS,
+    is_legacy_youtube_consumer_upgrade,
+    load_host_secret_contract,
+)
 from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
 from app.ops.pg_acceptance import PROFILE_VERSION, SELECTION_HASH, require_pass
 from app.ops.secret_admin import SecretAdmin, SecretHistory, _note
@@ -252,9 +257,14 @@ class TestRecoveryRequest:
                 or failed_plan.authority_cutover != self.authority_cutover):
                 raise PostgresDeployError()
             # The first automatic successor is bound to the retained cutover.
-            for field in ('channel', 'revision', 'services', 'consumers'):
+            for field in ('channel', 'revision', 'services'):
                 if getattr(failed_plan, field) != getattr(self.plan, field):
                     raise PostgresDeployError()
+            if (failed_plan.consumers != self.plan.consumers
+                    and not is_legacy_youtube_consumer_upgrade(
+                        self.plan.channel, failed_plan.consumers, self.plan.consumers
+                    )):
+                raise PostgresDeployError()
             if (failed_plan.image_digest is not None
                 and failed_plan.image_digest != self.plan.image_digest):
                 raise PostgresDeployError()
@@ -268,9 +278,14 @@ class TestRecoveryRequest:
             or failed_plan.principal_cutover
             or failed_plan.image_digest is None):
             raise PostgresDeployError()
-        for field in ('channel', 'services', 'consumers'):
+        for field in ('channel', 'services'):
             if getattr(failed_plan, field) != getattr(self.plan, field):
                 raise PostgresDeployError()
+        if (failed_plan.consumers != self.plan.consumers
+                and not is_legacy_youtube_consumer_upgrade(
+                    self.plan.channel, failed_plan.consumers, self.plan.consumers
+                )):
+            raise PostgresDeployError()
 
     def validate_source_plan(self, source_plan: DeployPlan) -> None:
         """Validate the host-retained request for the completed reset."""
@@ -283,9 +298,14 @@ class TestRecoveryRequest:
             or source_plan.principal_cutover
             or source_plan.image_digest is None):
             raise PostgresDeployError()
-        for field in ('channel', 'services', 'consumers'):
+        for field in ('channel', 'services'):
             if getattr(source_plan, field) != getattr(self.plan, field):
                 raise PostgresDeployError()
+        if (source_plan.consumers != self.plan.consumers
+                and not is_legacy_youtube_consumer_upgrade(
+                    self.plan.channel, source_plan.consumers, self.plan.consumers
+                )):
+            raise PostgresDeployError()
 
     def payload(self) -> dict[str, Any]:
         self.validate()

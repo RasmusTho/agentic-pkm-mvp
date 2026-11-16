@@ -570,6 +570,14 @@ actual Verify evidence. The source cycle can run exact supported closing-Issue p
 separate credential-free OpenHands workspace using its Bash command/event API and a controller-owned
 read-only test environment. It records command intent before dispatch, reconciles the same server
 command after an unknown reply, retains actual output and exit status, and stops the exact workspace.
+For an explicitly admitted native PR with canonical `Issue-Lifecycle: non-closing` provenance and
+authenticated empty GitHub closing references, candidate Verify instead runs the controller's exact
+admitted pytest scope. Full evidence distinguishes that explicit empty closing set from the legacy
+single-Issue default, requires the governor's current body hash in both the review map and source,
+and covers every admitted target. An empty model assessment alone supplies no authority. Missing
+closing-child contracts still hold verification. This enabling scope neither asserts runtime receipts
+nor closes the governor; automatic admission still routes non-pytest targets to their specialized
+owning workflow. The source change requires independent review and runtime qualification before adoption.
 A passing pytest result requires a single complete summary across retained output; multiple
 summary-like lines or a no-tests result are ambiguous or incomplete and hold verification, even
 when an additional line looks like a pass. Ordinary diagnostic text remains usable.

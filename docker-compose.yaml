@@ -223,6 +223,10 @@ services:
       # sufficient; the plane performs GET requests only and persists nothing.
       - path: ${HOST_SECRET_RUNTIME_ENV_FILE_API:-/dev/null}
         required: false
+      # Optional non-production YouTube OAuth layer. The governed host
+      # boundary supplies the file handle; values never enter tracked config.
+      - path: ${YOUTUBE_RUNTIME_ENV_FILE_API:-/dev/null}
+        required: false
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       # Dispatcher remains host-owned operational state. Mount its one shared
@@ -468,6 +472,8 @@ services:
     env_file:
       - ./config/runtime.defaults.env
       - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+      - path: ${YOUTUBE_RUNTIME_ENV_FILE_WATCHER:-/dev/null}
         required: false
     volumes:
       # Legacy /app/vault compatibility mount moved to docker-compose.legacy-vault.yml

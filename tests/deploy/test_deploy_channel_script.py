@@ -1686,6 +1686,74 @@ def test_api_service_receives_raw_store_key() -> None:
     assert run.stdout == "/tmp/api-layer.env|scrubbed", run.stderr
 
 
+def test_youtube_secret_probe_distinguishes_absent_complete_and_provider_failure(tmp_path: Path) -> None:
+    """A missing group may skip Compose; provider failure must stop before it."""
+    security = tmp_path / "security"
+    security.write_text(
+        "#!/bin/sh\n"
+        "case \"${FAKE_KEYCHAIN_MODE:-absent}\" in\n"
+        "  absent) exit 44 ;;\n"
+        "  provider) exit 50 ;;\n"
+        "  partial) case \"$*\" in *oauth-client-id*) printf 'client-id\\n'; exit 0;; esac; exit 44 ;;\n"
+        "  complete) printf 'opaque\\n'; exit 0 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    security.chmod(0o700)
+    lib_path = str(REPO_ROOT / "scripts/lib/deploy_channel_compose.sh")
+    probe = 'source "$1"; _deploy_channel_youtube_secret_bootstrap_available dev "$2"'
+
+    def run(mode: str) -> subprocess.CompletedProcess[str]:
+        env = dict(os.environ)
+        env["PATH"] = str(tmp_path) + ":" + env.get("PATH", "")
+        env["FAKE_KEYCHAIN_MODE"] = mode
+        return subprocess.run(
+            ["bash", "-c", probe, "_", lib_path, str(REPO_ROOT)],
+            cwd=REPO_ROOT,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    assert run("absent").returncode == 1
+    assert run("partial").returncode == 0
+    assert run("complete").returncode == 0
+    provider = run("provider")
+    assert provider.returncode == 2
+    assert "refusing to guess" in provider.stderr
+
+    interpreter = subprocess.run(
+        ["bash", "-c", probe, "_", lib_path, str(REPO_ROOT)],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PYTHON": "false"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert interpreter.returncode == 2
+
+    prod_pin = tmp_path / "prod.env"
+    prod_pin.write_text(
+        "export YOUTUBE_RUNTIME_ENV_FILE_API=\n"
+        "YOUTUBE_RUNTIME_ENV_FILE_API=/dev/null\n"
+        "YOUTUBE_RUNTIME_ENV_FILE_API=/tmp/foreign.env\n",
+        encoding="utf-8",
+    )
+    reject = subprocess.run(
+        [
+            "bash", "-c",
+            'source "$1"; _deploy_channel_reject_prod_youtube_aliases "$2"',
+            "_", lib_path, str(prod_pin),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert reject.returncode == 78
+
+
 def test_capture_watch_secret_gate_fires_for_every_channel() -> None:
     """#4362: heimdal-capture-watch's host-secret bootstrap wrap must fire on
     every channel host_secret_contract.json declares the consumer for
@@ -3081,7 +3149,7 @@ def test_missing_active_raw_key_stops_supervisor_before_activation(
 
     from app.ops import postgres_deploy_linux as linux
     from app.ops.bws_secret_reader import BwsItemAbsent
-    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
     from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
 
     root = tmp_path / 'repo'
@@ -3105,7 +3173,7 @@ def test_missing_active_raw_key_stops_supervisor_before_activation(
     )
     plan = DeployPlan(
         'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress', *youtube_runtime_consumers('test')),
     )
     monkeypatch.setattr(
         linux, 'database_input_files', lambda _config: [root / 'pin', root / 'runtime']
@@ -4458,7 +4526,7 @@ def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_p
     from uuid import uuid4
 
     from app.ops import postgres_deploy_host as host
-    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
     from app.ops.postgres_deploy import (
         AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
     )
@@ -4467,7 +4535,8 @@ def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_p
     digest = 'sha256:' + '1' * 64
     plan = DeployPlan(
         'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress', *youtube_runtime_consumers('test')),
+        False, digest, True,
     )
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
     controller = SimpleNamespace(directory=tmp_path)
@@ -4537,14 +4606,15 @@ def test_missing_instance_state_recovery_reconstructs_dormant_registry_and_start
     from uuid import uuid4
 
     from app.ops import postgres_deploy_host as host
-    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
     from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
 
     failed_operation_id = str(uuid4())
     digest = 'sha256:' + 'a' * 64
     plan = DeployPlan(
         'test', 'b' * 40, tuple(DATABASE_CONSUMERS.values()),
-        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress', *youtube_runtime_consumers('test')),
+        False, digest, True,
     )
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
     controller = SimpleNamespace(directory=tmp_path)
@@ -4733,14 +4803,15 @@ def test_missing_instance_state_recovery_is_crash_idempotent(monkeypatch, tmp_pa
     from uuid import uuid4
 
     from app.ops import postgres_deploy_host as host
-    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
     from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, TestRecoveryRequest
 
     operation_id = str(uuid4())
     digest = 'sha256:' + 'd' * 64
     plan = DeployPlan(
         'test', 'e' * 40, tuple(DATABASE_CONSUMERS.values()),
-        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress', *youtube_runtime_consumers('test')),
+        False, digest, True,
     )
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
     controller = SimpleNamespace(directory=tmp_path)
@@ -4842,7 +4913,7 @@ def test_test_recovery_accepts_exact_failed_cutover_plan_with_automatic_successo
     from uuid import uuid4
 
     from app.ops import postgres_deploy_linux as linux
-    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
     from app.ops.postgres_deploy import (
         AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
     )
@@ -4850,7 +4921,7 @@ def test_test_recovery_accepts_exact_failed_cutover_plan_with_automatic_successo
     operation_id = str(uuid4())
     successor = DeployPlan(
         'test', 'f' * 40, tuple(DATABASE_CONSUMERS.values()),
-        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress', *youtube_runtime_consumers('test')), False,
         'sha256:' + 'f' * 64, True,
     )
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
@@ -5009,7 +5080,7 @@ def test_recover_test_source_rejects_plan_mismatch_before_host_marker(monkeypatc
 
 def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monkeypatch, tmp_path):
     from app.ops import postgres_deploy_host as host
-    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
     from app.ops.host_secret_controller import HostSecretController
     from app.ops.postgres_deploy import (
         AuthorityCutover, DeployPlan, DeployReceipt,
@@ -5024,7 +5095,8 @@ def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monke
     digest = 'sha256:' + '4' * 64
     plan = DeployPlan(
         'test', 'c' * 40, tuple(DATABASE_CONSUMERS.values()),
-        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress', *youtube_runtime_consumers('test')),
+        False, digest, True,
     )
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
     request = TestRecoveryRequest(failed_operation_id, plan, authority)
@@ -5081,6 +5153,68 @@ def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monke
     assert recovered == [request]
     assert deploy_attempts == [fresh_operation_id, fresh_operation_id]
     assert deployed == [fresh_operation_id]
+
+
+def test_test_recovery_ready_legacy_marker_uses_current_consumer_profile(monkeypatch, tmp_path):
+    """A reset checkpoint does not authorize an unadmitted legacy successor."""
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
+    from app.ops.host_secret_controller import HostSecretController, TerminalEvidence
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, DeployReceipt, TestRecoveryRequest
+    from uuid import uuid4
+
+    controller = HostSecretController(tmp_path / 'controller')
+    failed_operation_id = str(uuid4())
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert resumed is False
+        failed_operation_id = operation.operation_id
+        operation.prepare_mutation()
+        operation.finish(TerminalEvidence(
+            failed_operation_id, 'deploy', 'test', 'failed', 'remote-terminal',
+        ))
+    digest = 'sha256:' + '5' * 64
+    old_plan = DeployPlan(
+        'test', 'd' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    current_plan = DeployPlan(
+        'test', old_plan.revision, old_plan.services,
+        (*old_plan.consumers, *youtube_runtime_consumers('test')),
+        old_plan.ack_forward_only, old_plan.image_digest, old_plan.automatic,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    old_request = TestRecoveryRequest(failed_operation_id, old_plan, authority)
+    host._write_test_recovery_marker(
+        controller, old_request, 'ready', str(uuid4()),
+    )
+    selected: list[DeployPlan] = []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+    def deploy(_admin, _remote, plan, *, qualified, allow_bootstrap, operation_id):
+        selected.append(plan)
+        qualified()
+        assert allow_bootstrap is False
+        return DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, '_configured_deploy_admin', lambda _plan, _controller: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+    args = [
+        'test', current_plan.revision, '--automatic', '--image-digest', digest,
+        '--existing-secrets-only', '--recover-test-source',
+        '--failed-operation-id', failed_operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+
+    assert host.main(args) == 0
+    assert selected == [current_plan]
 
 
 def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch, tmp_path):
@@ -6003,6 +6137,7 @@ def test_deploy_journal_retains_late_source_failure_on_failed_terminal(tmp_path)
 
 def _unknown_deploy_supervisor(
     tmp_path, monkeypatch, *, latest_mismatch=False, predecessor_terminal=False, lock=True,
+    consumers=None, services=None,
 ):
     from types import SimpleNamespace
     from uuid import uuid4
@@ -6014,7 +6149,10 @@ def _unknown_deploy_supervisor(
     deploy_dir.mkdir(parents=True)
     journal = DeployJournal(tmp_path / 'journal', 'test')
     operation_id = str(uuid4())
-    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',))
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(services or ('db',)),
+        tuple(consumers or ('postgres-db',)),
+    )
     if predecessor_terminal:
         prior_id = str(uuid4())
         prior_plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',))
@@ -6184,6 +6322,39 @@ def test_reconciled_unknown_deploy_is_idempotent_and_cannot_replay(tmp_path, mon
             supervisor.request({**request, 'action': action})
     with pytest.raises(PostgresDeployError):
         journal.bind_request(operation_id, plan, False, create=True)
+
+
+def test_unknown_reconciliation_accepts_legacy_tombstone_without_retained_request(
+    tmp_path, monkeypatch,
+):
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
+    from app.ops.postgres_deploy import DeployPlan
+
+    journal, legacy_plan, operation_id, supervisor, _lock_dir = _unknown_deploy_supervisor(
+        tmp_path, monkeypatch,
+        consumers=(*DATABASE_CONSUMERS, 'heimdal-api-ingress'),
+        services=tuple(DATABASE_CONSUMERS.values()),
+    )
+    exact = {
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': legacy_plan.payload(), 'bootstrap': False,
+    }
+    assert supervisor.request(exact)['outcome'] == 'unknown'
+    (journal.directory / f'{operation_id}.request.json').unlink(missing_ok=True)
+    current_plan = DeployPlan(
+        legacy_plan.channel,
+        legacy_plan.revision,
+        legacy_plan.services,
+        tuple(sorted(set(legacy_plan.consumers) | set(youtube_runtime_consumers('test')))),
+    )
+
+    result = supervisor.request({
+        'action': 'reconcile-unknown', 'operation_id': operation_id,
+        'plan': current_plan.payload(), 'bootstrap': False,
+    })
+
+    assert result['outcome'] == 'unknown'
+    assert result['historical_plan'] == legacy_plan.payload()
 
 
 def test_unknown_fenced_latest_allows_fresh_id_without_terminalizing_old_id(tmp_path, monkeypatch):
@@ -6679,7 +6850,7 @@ def test_host_reconciles_unknown_deploy_only_after_exact_native_fence(
     import json
     from app.ops import postgres_deploy_host as host
     from app.ops.host_secret_controller import HostSecretController
-    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
     from app.ops.postgres_deploy import DeployJournal, DeployPlan
 
     controller = HostSecretController(tmp_path / 'controller')
@@ -6689,7 +6860,7 @@ def test_host_reconciles_unknown_deploy_only_after_exact_native_fence(
         operation.prepare_mutation()
     expected_plan = DeployPlan(
         channel, 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress', *youtube_runtime_consumers(channel)),
     )
     remote_calls = []
 

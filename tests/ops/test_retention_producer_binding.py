@@ -17,7 +17,7 @@ from app.ops import bws_installation_admission as admission
 from app.ops import bws_source_image_cache as cache
 from app.ops import postgres_deploy_host as host
 from app.ops.host_secret_controller import HostSecretAdmissionError, HostSecretController, TerminalEvidence
-from app.ops.host_secret_contract import DATABASE_CONSUMERS
+from app.ops.host_secret_contract import DATABASE_CONSUMERS, youtube_runtime_consumers
 from app.ops.pg_acceptance import IMAGE_REPOSITORY
 from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, DeployReceipt
 from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host, host_deploy_image_binding
@@ -881,6 +881,21 @@ def test_bound_host_pending_can_only_reconcile_exact_plan(monkeypatch, tmp_path,
     with controller.deploy_operation("test", allow_bootstrap=False, operation_id=operation_id,
                                      deploy_image_binding=binding) as (operation, _):
         operation.prepare_mutation()
+    upgraded = replace(plan, consumers=(*plan.consumers, *youtube_runtime_consumers("test")))
+    with controller.deploy_operation(
+        "test", allow_bootstrap=False, operation_id=operation_id,
+        deploy_image_binding=host_deploy_image_binding(upgraded),
+        allow_legacy_terminal=True, reconciliation_only=True,
+    ) as (operation, resumed):
+        assert resumed is True
+    changed_scope = replace(upgraded, activation_scope="text-capture")
+    with pytest.raises(HostSecretAdmissionError):
+        with controller.deploy_operation(
+            "test", allow_bootstrap=False, operation_id=operation_id,
+            deploy_image_binding=host_deploy_image_binding(changed_scope),
+            allow_legacy_terminal=True,
+        ):
+            pytest.fail("a pending fingerprint mismatch must remain read-only")
     with controller.deploy_operation("test", allow_bootstrap=False, operation_id=operation_id,
                                      deploy_image_binding=binding, reconciliation_only=True) as (operation, _):
         with pytest.raises(HostSecretAdmissionError):
@@ -907,7 +922,10 @@ def test_bound_host_pending_can_only_reconcile_exact_plan(monkeypatch, tmp_path,
     assert host.main([*args[:-1], "sha256:" + "c" * 64]) == 78
     assert observed == []
     assert host.main(args) == 0
-    assert observed == [(operation_id, plan)]
+    expected_plan = replace(
+        plan, consumers=(*plan.consumers, *youtube_runtime_consumers("test"))
+    )
+    assert observed == [(operation_id, expected_plan)]
     with controller._locked_journal() as descriptor:
         assert controller._pending(descriptor) is None
 
@@ -921,6 +939,34 @@ def test_legacy_unknown_is_not_replayed_without_terminal_receipt(tmp_path):
     with pytest.raises(PostgresDeployError):
         deploy_from_host(admin, remote, plan, qualified=lambda: None, allow_bootstrap=False)
     assert remote.events == []
+
+
+def test_bound_host_legacy_terminal_accepts_consumer_only_successor(tmp_path):
+    controller = HostSecretController(tmp_path / "terminal-host")
+    operation_id = str(uuid4())
+    digest = "sha256:" + "b" * 64
+    old = DeployPlan(
+        "test", "a" * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, "heimdal-api-ingress"), image_digest=digest, automatic=True,
+    )
+    current = replace(old, consumers=(*old.consumers, *youtube_runtime_consumers("test")))
+    with controller.deploy_operation(
+        "test", allow_bootstrap=False, operation_id=operation_id,
+        deploy_image_binding=host_deploy_image_binding(old),
+    ) as (operation, resumed):
+        assert resumed is False
+        operation.prepare_mutation()
+        operation.finish(TerminalEvidence(
+            operation_id, "deploy", "test", "committed", "remote-terminal",
+        ))
+
+    with controller.deploy_operation(
+        "test", allow_bootstrap=False, operation_id=operation_id,
+        deploy_image_binding=host_deploy_image_binding(current),
+        allow_legacy_terminal=True,
+    ) as (operation, resumed):
+        assert resumed is True
+        assert operation.completed_result == "committed"
 
 
 @pytest.mark.parametrize("receipt_available", [True, False])

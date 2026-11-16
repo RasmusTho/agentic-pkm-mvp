@@ -1270,6 +1270,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # cli-shaped owner. Without it the file fell through the SUBSYSTEMS
             # loop into `unowned` (exit 2) on PR #5614.
             "app/cli/youtube_inbox_dev.py",
+            # The non-production YouTube auth CLI shares the same acquisition
+            # and token-boundary contracts, so keep its focused acceptance
+            # test on this subsystem's PR lane instead of failing closed as
+            # an unowned CLI module.
+            "app/cli/youtube_auth.py",
             "docs/HEIMDAL/",
             "docs/KARAKEEP_MIMER_ACQUISITION/",
             "docs/KNOWLEDGE_ACQUISITION/",
@@ -1278,11 +1283,13 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/heimdal/",
             "tests/knowledge_acquisition/",
             "tests/cli/test_youtube_inbox_dev_cli.py",
+            "tests/cli/test_youtube_auth_connect_cli.py",
         ),
         (
             "tests/heimdal",
             "tests/knowledge_acquisition",
             "tests/cli/test_youtube_inbox_dev_cli.py",
+            "tests/cli/test_youtube_auth_connect_cli.py",
         ),
     ),
     (

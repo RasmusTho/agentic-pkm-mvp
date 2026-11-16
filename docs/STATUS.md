@@ -201,6 +201,22 @@ Last reviewed (#6618 Verify source): 2026-11-14 UTC. Last verified against:
 `app/builderops/openhands_pr_cycle.py` and the focused Python 3.12 cycle tests with synthetic
 external-effect ports; no running-controller or activation result is implied.
 
+Scoped continuation (2026-11-16): parent-authenticated readback records #6619 closed via
+PR #6628 (`e3755db237a4da2435c614be730142bccfa1226b`) and non-closing PR #6639 merged
+(`af0a49adf4a6af86cfa77e7aad97c4bfafd453c4`) with independent review and current-head CI
+success. The subsequent source candidate `ab0a8ab33ee8b44ee99f902af7d0d85b998f37dc` supports
+explicitly admitted, authenticated empty-closing candidate Verify and full evidence, retaining
+governor binding and legacy `None`/real-closing contract requirements. The workflow linked above
+remains normative; the earlier dated evidence is historical.
+
+Last reviewed (#6618 non-closing source only): 2026-11-16 UTC. Last verified against: that
+candidate's 18 unique focused author tests, with real local Git/pytest and synthetic external
+GitHub/engine ports. Fresh independent review of the completed candidate, full pinned `mypy app`,
+publication/current-head CI and actual admitted automatic delivery, recovery, disconnect and
+activation qualification remain pending. #6618, #6615 and #6620 remain open. The frozen
+controller/image are unchanged; this source evidence establishes no live-runtime or unattended
+acceptance.
+
 **Scoped legacy Builder recovery repository candidate (2026-11-15).** Issue #6637 adds an
 operator-led path for the two recorded stopped OpenHands runs #6601 and #6597, preserving their
 predecessor claims and existing PR identities while admitting a verified successor. This is a

@@ -48,6 +48,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from collections.abc import Mapping
 from typing import Any, Callable
 from urllib.parse import urlencode, urlsplit
 
@@ -203,14 +204,26 @@ class ReconnectChannelMismatchError(RuntimeError):
 # --- Credential + redaction helpers -----------------------------------------
 
 
-def resolve_oauth_client_credentials() -> tuple[str, str]:
+def resolve_oauth_client_credentials(
+    environment: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
     """Resolve ``(client_id, client_secret)`` from env; fail loud if absent.
 
     Their *values* are never persisted or printed; only the env-var *names* may
     appear in settings/receipts (INV-YSS-5).
     """
-    client_id = (os.environ.get(CLIENT_ID_ENV) or "").strip()
-    client_secret = (os.environ.get(CLIENT_SECRET_ENV) or "").strip()
+    source = os.environ if environment is None else environment
+    client_id = (source.get(CLIENT_ID_ENV) or "").strip()
+    client_secret = (source.get(CLIENT_SECRET_ENV) or "").strip()
+    if not client_id or not client_secret:
+        # Runtime consumers receive a private, mode-0600 env-file pointer from
+        # the host-secret bootstrap. Ambient bindings remain a compatibility
+        # seam for the existing dev-only command and focused tests.
+        from app.ops.host_secret_bootstrap import load_runtime_secret_values
+
+        runtime = load_runtime_secret_values(source)
+        client_id = client_id or (runtime.get(CLIENT_ID_ENV) or "").strip()
+        client_secret = client_secret or (runtime.get(CLIENT_SECRET_ENV) or "").strip()
     if not client_id or not client_secret:
         missing = [n for n, v in ((CLIENT_ID_ENV, client_id), (CLIENT_SECRET_ENV, client_secret)) if not v]
         raise OAuthClientCredentialsMissingError(
@@ -426,8 +439,14 @@ class OAuthClient:
         self._timeout = timeout
 
     @classmethod
-    def from_env(cls, *, http: httpx.Client, timeout: float = _DEFAULT_TIMEOUT_SECONDS) -> "OAuthClient":
-        client_id, client_secret = resolve_oauth_client_credentials()
+    def from_env(
+        cls,
+        *,
+        http: httpx.Client,
+        timeout: float = _DEFAULT_TIMEOUT_SECONDS,
+        environment: Mapping[str, str] | None = None,
+    ) -> "OAuthClient":
+        client_id, client_secret = resolve_oauth_client_credentials(environment)
         return cls(client_id=client_id, client_secret=client_secret, http=http, timeout=timeout)
 
     def _guard_host(self, url: str) -> None:

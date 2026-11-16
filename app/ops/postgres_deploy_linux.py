@@ -28,7 +28,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, BinaryIO, Callable, Iterator, cast
+from typing import Any, BinaryIO, Callable, Iterator, NoReturn, cast
 from uuid import UUID, uuid4
 from urllib.parse import urlencode, quote
 
@@ -39,7 +39,11 @@ from app.config.database import (
 )
 from app.ops.bws_secret_reader import BwsReaderConfig, BwsSecretReader
 from app.ops.bws_source_image_cache import SourceImageCapacityUnavailable
-from app.ops.host_secret_contract import DATABASE_CONSUMERS
+from app.ops.host_secret_contract import (
+    DATABASE_CONSUMERS,
+    is_legacy_youtube_consumer_upgrade,
+    youtube_runtime_consumers,
+)
 from app.ops.host_secret_controller import PreserveJournalBodyError
 from app.ops.native_web_acceptance import NativeWebRefusal, WEB_PROFILE
 from app.ops.postgres_deploy import (
@@ -512,7 +516,11 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
         checkpoint['name'] = 'selected_bws_consumer_scope'
         # Recheck the same selected scope before every Compose call, including
         # calls made by the preserved migration/pin/rollback machinery.
-        consumers = [*DATABASE_CONSUMERS, 'heimdal-api-ingress']
+        # Recheck the exact consumer set authenticated by the bound request.
+        # Historical terminal plans predating YouTube remain readable and
+        # supersedable; they must not be silently upgraded or made to resolve
+        # a new secret group during readback.
+        consumers = list(bound_plan.consumers)
         if expected_capture == '1':
             consumers.append('heimdal-capture-watch')
         if expected_migration == '1':
@@ -1027,7 +1035,81 @@ def _runtime_user_ownership_state_dir(runtime_uid: int, xdg_state_home: str | No
     return home / '.local' / 'state' / 'agentic-pkm' / 'instance-ownership'
 
 
-_BASE_DEPLOY_CONSUMERS = frozenset((*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+def _base_deploy_consumers(channel: str) -> frozenset[str]:
+    del channel
+    return frozenset((*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+
+
+def _full_deploy_consumers(channel: str) -> frozenset[str]:
+    return _base_deploy_consumers(channel) | set(youtube_runtime_consumers(channel))
+
+
+def _compatible_retained_plan(
+    retained: tuple[dict[str, Any], object] | None,
+    requested: DeployPlan,
+    bootstrap: bool,
+) -> DeployPlan | None:
+    """Return an authenticated pre-YouTube plan for read-only recovery."""
+    if retained is None or not isinstance(retained[1], DeployPlan):
+        return None
+    historical = retained[1]
+    if (
+        historical == requested
+        or retained[0].get('bootstrap') is not bootstrap
+        or not is_legacy_youtube_consumer_upgrade(
+            requested.channel, historical.consumers, requested.consumers
+        )
+        or any(
+            getattr(historical, field) != getattr(requested, field)
+            for field in (
+                'channel', 'revision', 'services', 'ack_forward_only', 'image_digest',
+                'automatic', 'authority_cutover', 'promotion_plan',
+                'principal_cutover', 'activation_scope',
+            )
+        )
+    ):
+        return None
+    return historical
+
+
+def _compose_env_value(value: str) -> str:
+    """Validate the bounded unquoted env-file grammar used by Compose."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > 512
+        or any(
+            not char.isprintable()
+            or char.isspace()
+            or char in {'\x00', '\r', '\n', "'", '"', '\\', '$', '#', '`'}
+            for char in value
+        )
+    ):
+        raise PostgresDeployError()
+    return value
+
+
+def _is_authenticated_historical_terminal_plan(
+    effects: "LinuxEffects", plan: DeployPlan,
+) -> bool:
+    """Return true only for an exact retained terminal pre-YouTube request."""
+    operation_id = effects.operation_id
+    if not operation_id:
+        return False
+    try:
+        request = effects.config.journal.operation_request(operation_id)
+        receipt = effects.config.journal.operation_receipt(operation_id)
+    except Exception:
+        return False
+    return bool(
+        receipt is not None
+        and receipt.terminal_result in {"committed", "aborted", "failed"}
+        and request is not None
+        and isinstance(request[1], DeployPlan)
+        and request[1] == plan
+        and set(plan.consumers) == _base_deploy_consumers(plan.channel)
+    )
 
 
 def require_existing_authority_binding(data: dict[str, Any]) -> None:
@@ -1370,6 +1452,11 @@ class LinuxEffects:
                 credential_free_database_fields(env[key])
         if any(env.get(key) for key in ('POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE')):
             raise PostgresDeployError()
+        for key in (
+            'YOUTUBE_RUNTIME_ENV_FILE_API',
+            'YOUTUBE_RUNTIME_ENV_FILE_WATCHER',
+        ):
+            env.pop(key, None)
         # The systemd supervisor has HOME=/root, but the host-global ledger is
         # owned and traversed by the configured non-root Compose identity. Keep
         # the same default path as a deploy run by that identity; an explicit
@@ -1523,8 +1610,23 @@ class LinuxEffects:
 
     def validate_plan(self, plan: DeployPlan) -> None:
         plan.validate()
+        consumer_set = set(plan.consumers)
+        allowed_consumer_sets = {_full_deploy_consumers(plan.channel)}
+        strict_admission = bool(self.operation_id) and not (
+            plan.authority_cutover is not None or plan.principal_cutover
+        )
+        if plan.channel == 'prod' or plan.authority_cutover is not None or plan.principal_cutover:
+            # Cutover/recovery helpers are authenticated existing-authority
+            # paths and do not acquire a new YouTube runtime group. A regular
+            # non-production request must always carry the complete parity set.
+            allowed_consumer_sets.add(_base_deploy_consumers(plan.channel))
+        elif _is_authenticated_historical_terminal_plan(self, plan) or not strict_admission:
+            allowed_consumer_sets.add(_base_deploy_consumers(plan.channel))
+        legacy_shape = consumer_set == _base_deploy_consumers(plan.channel)
         if (set(plan.services) != set(DATABASE_CONSUMERS.values())
-            or set(plan.consumers) != _BASE_DEPLOY_CONSUMERS):
+            or consumer_set not in allowed_consumer_sets
+            or (strict_admission and plan.channel != 'prod' and legacy_shape
+                and not _is_authenticated_historical_terminal_plan(self, plan))):
             raise PostgresDeployError()
         validate_database_inputs(os.environ, database_input_files(self.config))
         if plan.automatic:
@@ -2302,7 +2404,7 @@ class LinuxEffects:
             self.config.channel,
             revision,
             tuple(DATABASE_CONSUMERS.values()),
-            tuple(_BASE_DEPLOY_CONSUMERS),
+            tuple(_base_deploy_consumers(self.config.channel)),
             image_digest=image_digest,
             authority_cutover=selected,
         )
@@ -2878,6 +2980,9 @@ class LinuxEffects:
         capture = _capture_watch_configured(self.config)
         migration = (_raw_representation_migration_pending(self.config, plan.revision, automatic=True)
                      if plan.automatic else _raw_representation_migration_pending(self.config, plan.revision))
+        # New host plans carry the dedicated YouTube consumers explicitly.
+        # Historical terminal plans remain readable and selectable without
+        # rewriting their consumer list or replaying their effects.
         selected = list(plan.consumers)
         if capture:
             selected.append('heimdal-capture-watch')
@@ -3036,6 +3141,14 @@ class LinuxEffects:
         handles = {'heimdal-api-ingress': 'HOST_SECRET_RUNTIME_ENV_FILE_API',
                    'heimdal-capture-watch': 'HOST_SECRET_RUNTIME_ENV_FILE',
                    'heimdal-raw-migrate': 'BWS_MIGRATE_SECRET_ENV_FILE'}
+        if (
+            plan.channel in {'dev', 'test'}
+            and set(youtube_runtime_consumers(plan.channel)) <= set(self.active_consumers)
+        ):
+            handles.update({
+                'youtube-runtime-api': 'YOUTUBE_RUNTIME_ENV_FILE_API',
+                'youtube-runtime-watcher': 'YOUTUBE_RUNTIME_ENV_FILE_WATCHER',
+            })
         try:
             for consumer, handle in handles.items():
                 values = self.consumer_values.get(consumer)
@@ -3043,12 +3156,19 @@ class LinuxEffects:
                     if consumer in self.active_consumers:
                         raise PostgresDeployError()
                     values = {}
+                if consumer.startswith('youtube-runtime-'):
+                    values = {
+                        secret: value for secret, value in values.items()
+                        if secret.startswith('youtube.')
+                    }
                 path = self.config.source_directory / (consumer + '.env')
                 descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 paths.append(path)
                 with os.fdopen(descriptor, 'w') as stream:
                     for secret, value in values.items():
-                        stream.write(contract.binding_for(secret) + '=' + value + '\n')
+                        binding = contract.binding_for(secret)
+                        rendered = _compose_env_value(value) if consumer.startswith('youtube-runtime-') else value
+                        stream.write(binding + '=' + rendered + '\n')
                     stream.flush()
                     os.fsync(stream.fileno())
                 env[handle] = str(path)
@@ -4270,7 +4390,7 @@ class SupervisedOperation:
             from app.ops.host_secret_bootstrap import _resolve_bws_consumer_values
             from app.ops.host_secret_contract import load_host_secret_contract
             for consumer in selected_plan.consumers:
-                if consumer not in DATABASE_CONSUMERS:
+                if consumer not in DATABASE_CONSUMERS or consumer in youtube_runtime_consumers(self.plan.channel):
                     self.effects.consumer_values[consumer] = _resolve_bws_consumer_values(
                         self.plan.channel, consumer, load_host_secret_contract(), reader
                     )
@@ -4340,14 +4460,35 @@ class DeploymentSupervisor:
             previous = current
         if previous is None:
             raise PostgresDeployError()
-        self.config.journal.bind_request(operation_id, plan, bootstrap)
-        previous.require_profile(plan)
+        # A host upgrade may ask to read back a retained terminal operation
+        # using the current non-production consumer profile. Preserve the
+        # journal-bound historical plan and fingerprint exactly; this branch is
+        # read-only and must never bind, clean up, or replay an old operation.
+        retained = self.config.journal.operation_request(operation_id)
+        historical_plan = _compatible_retained_plan(retained, plan, bootstrap)
+        if historical_plan is not None and previous.terminal_result in {'committed', 'aborted'}:
+            previous.require_profile(historical_plan)
+            return {
+                'receipt': previous.payload(),
+                'historical_plan': historical_plan.payload(),
+            }
+        if historical_plan is not None:
+            previous.require_profile(historical_plan)
+            # Keep the old request immutable, but use its authenticated plan
+            # for all non-terminal recovery and failed-operation cleanup.
+            plan = historical_plan
+        else:
+            self.config.journal.bind_request(operation_id, plan, bootstrap)
+            previous.require_profile(plan)
         if previous.terminal_result is not None:
             if current is None or current.operation_id != operation_id:
                 # A superseded terminal is historical evidence. Returning it
                 # must not inspect, retire, or otherwise affect the current
                 # operation's shared channel lock or journal slots.
-                return {'receipt': previous.payload()}
+                response = {'receipt': previous.payload()}
+                if historical_plan is not None:
+                    response['historical_plan'] = historical_plan.payload()
+                return response
             current_request = self.config.journal.current_request()
             if current_request is None:
                 raise PostgresDeployError()
@@ -4356,7 +4497,10 @@ class DeploymentSupervisor:
                 # Request publication precedes the successor's prepared
                 # receipt. A crash in that window still makes this terminal
                 # historical, so do not inspect the successor's lock.
-                return {'receipt': previous.payload()}
+                response = {'receipt': previous.payload()}
+                if historical_plan is not None:
+                    response['historical_plan'] = historical_plan.payload()
+                return response
             if (not isinstance(current_plan, DeployPlan) or current_plan != plan
                 or bound['bootstrap'] != bootstrap):
                 raise PostgresDeployError()
@@ -4371,7 +4515,10 @@ class DeploymentSupervisor:
                 try:
                     os.stat(lock_path, follow_symlinks=False)
                 except FileNotFoundError:
-                    return {'receipt': previous.payload()}
+                    response = {'receipt': previous.payload()}
+                    if historical_plan is not None:
+                        response['historical_plan'] = historical_plan.payload()
+                    return response
                 effects = LinuxEffects(self.config)
                 with effects.failed_reconciliation_lock() as lock:
                     if plan.automatic:
@@ -4385,7 +4532,10 @@ class DeploymentSupervisor:
                         raise PostgresDeployError()
                     previous = recovered
                     effects.retire_reconciled_channel_lock(lock)
-            return {'receipt': previous.payload()}
+            response = {'receipt': previous.payload()}
+            if historical_plan is not None:
+                response['historical_plan'] = historical_plan.payload()
+            return response
         if plan.authority_cutover is not None or plan.principal_cutover:
             # Quiescent services cannot establish the outcome of authority cutover.
             # Preserve the request, journal and admission lock for operator recovery.
@@ -4410,7 +4560,10 @@ class DeploymentSupervisor:
 
     def _reconcile_unknown(self, operation_id: str, plan: DeployPlan, bootstrap: bool) -> dict[str, Any]:
         """Fence one unknown ordinary deploy ID without changing channel history."""
-        def refuse(predicate: str) -> None:
+        requested_plan = plan
+        historical_plan: DeployPlan | None = None
+
+        def refuse(predicate: str) -> NoReturn:
             raise UnknownDeployFenceRefused(predicate)
 
         try:
@@ -4423,12 +4576,12 @@ class DeploymentSupervisor:
             refuse('request_scope_is_allowed')
 
         def response(tombstone: dict[str, Any]) -> dict[str, Any]:
-            return {
+            result = {
                 'contract': 'native-unknown-deploy-fence.v1',
                 'operation_id': operation_id,
-                'channel': plan.channel,
-                'candidate_sha': plan.revision,
-                'image_digest': plan.image_digest or '',
+                'channel': requested_plan.channel,
+                'candidate_sha': requested_plan.revision,
+                'image_digest': requested_plan.image_digest or '',
                 'plan_sha256': tombstone['plan_sha256'],
                 'outcome': 'unknown',
                 'native_worker_quiescent_at_fence': True,
@@ -4437,12 +4590,39 @@ class DeploymentSupervisor:
                 'native_owned_one_offs_quiescent_at_fence': True,
                 'native_replay_fence_durable': True,
             }
+            if historical_plan is not None:
+                result['historical_plan'] = historical_plan.payload()
+            return result
+
+        try:
+            request = self.config.journal.operation_request(operation_id)
+        except Exception:
+            refuse('original_plan_matches_retained_request')
+        if request is not None and request[0]['bootstrap'] is not False:
+            refuse('original_plan_matches_retained_request')
+        if request is not None and request[1] != plan:
+            historical_plan = _compatible_retained_plan(request, plan, bootstrap)
+            if historical_plan is None:
+                refuse('original_plan_matches_retained_request')
+            plan = historical_plan
 
         try:
             existing = self.config.journal.unknown_tombstone(operation_id)
         except Exception:
             refuse('unknown_tombstone_is_valid')
         if existing is not None:
+            if existing['plan_sha256'] != self.config.journal.plan_fingerprint(plan):
+                try:
+                    tombstone_plan = DeployPlan.from_payload(existing['plan'])
+                except Exception:
+                    refuse('unknown_tombstone_matches_supplied_plan')
+                historical = _compatible_retained_plan(
+                    ({'bootstrap': False}, tombstone_plan), requested_plan, bootstrap,
+                )
+                if historical is None:
+                    refuse('unknown_tombstone_matches_supplied_plan')
+                historical_plan = tombstone_plan
+                plan = tombstone_plan
             if existing['plan_sha256'] != self.config.journal.plan_fingerprint(plan):
                 refuse('unknown_tombstone_matches_supplied_plan')
             identity = existing['proof']['channel_lock_identity']
@@ -4497,14 +4677,6 @@ class DeploymentSupervisor:
             raise
         except Exception:
             refuse('operation_has_no_terminal_receipt')
-        try:
-            request = self.config.journal.operation_request(operation_id)
-        except Exception:
-            refuse('original_plan_matches_retained_request')
-        if request is not None and (
-            request[1] != plan or request[0]['bootstrap'] is not False
-        ):
-            refuse('original_plan_matches_retained_request')
         operation = self.operation
         if operation is not None:
             if not operation.finished.is_set():
@@ -4541,10 +4713,12 @@ class DeploymentSupervisor:
                     request = self.config.journal.operation_request(operation_id)
                 except Exception:
                     refuse('original_plan_matches_retained_request')
-                if request is not None and (
-                    request[1] != plan or request[0]['bootstrap'] is not False
-                ):
+                if request is not None and request[0]['bootstrap'] is not False:
                     refuse('original_plan_matches_retained_request')
+                if request is not None and request[1] != plan:
+                    historical_plan = _compatible_retained_plan(request, requested_plan, bootstrap)
+                    if historical_plan is None or historical_plan != plan:
+                        refuse('original_plan_matches_retained_request')
                 lock_info = os.fstat(lock[2])
                 lock_identity = (lock_info.st_dev, lock_info.st_ino, lock_info.st_ctime_ns)
                 try:
@@ -5782,7 +5956,13 @@ class SshDeployRemote:
         response = self._request('reconcile-failed', operation_id, plan)
         receipt = DeployReceipt(**response['receipt'])
         receipt.validate()
-        receipt.require_profile(plan)
+        profile = plan
+        historical_payload = response.get('historical_plan')
+        if historical_payload is not None:
+            profile = DeployPlan.from_payload(historical_payload)
+            if profile.channel not in {'dev', 'test'} or set(profile.consumers) != _base_deploy_consumers(profile.channel):
+                raise PostgresDeployError()
+        receipt.require_profile(profile)
         if (receipt.operation_id != operation_id or receipt.channel != plan.channel
             or receipt.terminal_result not in {'committed', 'aborted', 'failed'}):
             raise PostgresDeployError()
@@ -5792,13 +5972,35 @@ class SshDeployRemote:
         """Read back a durable ID-specific UNKNOWN fence, never a deploy result."""
         self.bootstrap = False
         response = self._request('reconcile-unknown', operation_id, plan)
+        profile = plan
+        historical_payload = response.get('historical_plan')
+        if historical_payload is not None:
+            try:
+                profile = DeployPlan.from_payload(historical_payload)
+            except Exception:
+                raise UnknownDeployFenceRefused('durable_replay_fence_is_written') from None
+            if (
+                profile.channel not in {'dev', 'test'}
+                or not is_legacy_youtube_consumer_upgrade(
+                    plan.channel, profile.consumers, plan.consumers
+                )
+                or any(
+                    getattr(profile, field) != getattr(plan, field)
+                    for field in (
+                        'channel', 'revision', 'services', 'ack_forward_only', 'image_digest',
+                        'automatic', 'authority_cutover', 'promotion_plan',
+                        'principal_cutover', 'activation_scope',
+                    )
+                )
+            ):
+                raise UnknownDeployFenceRefused('durable_replay_fence_is_written')
         expected: dict[str, Any] = {
             'contract': 'native-unknown-deploy-fence.v1',
             'operation_id': operation_id,
             'channel': plan.channel,
             'candidate_sha': plan.revision,
             'image_digest': plan.image_digest or '',
-            'plan_sha256': DeployJournal.plan_fingerprint(plan),
+            'plan_sha256': DeployJournal.plan_fingerprint(profile),
             'outcome': 'unknown',
             'native_worker_quiescent_at_fence': True,
             'native_thread_absent_at_fence': True,
@@ -5806,6 +6008,9 @@ class SshDeployRemote:
             'native_owned_one_offs_quiescent_at_fence': True,
             'native_replay_fence_durable': True,
         }
+        if historical_payload is not None:
+            # The RPC is JSON-framed, so tuple fields are lists on readback.
+            expected['historical_plan'] = json.loads(json.dumps(profile.payload()))
         if response != expected:
             raise UnknownDeployFenceRefused('durable_replay_fence_is_written')
         return expected
