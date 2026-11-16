@@ -559,6 +559,16 @@ def _resolve_consumer_environment(
                 if contract.is_optional_for_consumer(
                     channel=channel, consumer=consumer, secret=secret
                 ):
+                    # YouTube's optional runtime group is all-or-nothing:
+                    # an unexpected provider failure must not look like an
+                    # absent item and silently remove a configured binding.
+                    # Keep the historical generic absence seam for unrelated
+                    # optional declarations, but require the typed provider
+                    # signal for this external-API credential group.
+                    if secret in YOUTUBE_SECRET_IDS and not isinstance(
+                        exc, HostSecretItemAbsentError
+                    ):
+                        raise _secret_failure(secret=secret, kind=kind) from exc
                     continue
                 raise _secret_failure(secret=secret, kind=kind) from exc
             # Validation is deliberately outside that tolerance: a value that

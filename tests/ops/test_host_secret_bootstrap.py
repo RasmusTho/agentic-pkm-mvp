@@ -2625,6 +2625,25 @@ def test_youtube_nonprod_consumer_is_scoped_and_redacted(tmp_path: Path) -> None
     assert list(tmp_path.iterdir()) == []
 
 
+def test_youtube_optional_provider_failure_fails_closed(tmp_path: Path) -> None:
+    """Unexpected Keychain failures cannot masquerade as absent YouTube bindings."""
+
+    def lookup(_service: str, _account: str) -> str:
+        raise UnicodeDecodeError("utf-8", bytes([0xFF]), 0, 1, "synthetic provider failure")
+
+    with pytest.raises(HostSecretBootstrapError):
+        with materialize_consumer_environment(
+            channel="dev",
+            consumer="youtube-runtime-api",
+            contract=host_secret_bootstrap.load_host_secret_contract(),
+            keychain_lookup=lookup,
+            directory=tmp_path,
+        ):
+            pytest.fail("an unexpected provider failure must not materialize a layer")
+
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_youtube_shared_token_key_agreement_decodes_hex_case(tmp_path: Path) -> None:
     """Runtime siblings compare token-store keys by decoded key bytes."""
     values = {
