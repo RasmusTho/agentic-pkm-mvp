@@ -60,6 +60,30 @@ def _json_no_duplicates(data: str) -> Any:
     return json.loads(data, object_pairs_hook=unique)
 
 
+def _intent_comment_identity(comment: Any) -> tuple[Any, ...]:
+    """Keep authority and content stable across GitHub's comment representations."""
+    if not isinstance(comment, dict) or not isinstance(comment.get('user'), dict):
+        raise PublicationProofError('body intent comment identity is unavailable')
+    user = comment['user']
+    if (type(comment.get('id')) is not int or comment['id'] < 1
+            or not isinstance(comment.get('node_id'), str) or not comment['node_id']
+            or type(user.get('id')) is not int or user['id'] < 1
+            or not isinstance(user.get('node_id'), str) or not user['node_id']
+            or user.get('type') != 'User' or not isinstance(user.get('login'), str)
+            or 'performed_via_github_app' not in comment):
+        raise PublicationProofError('body intent comment identity is unavailable')
+    app = comment['performed_via_github_app']
+    if app is not None:
+        if (not isinstance(app, dict) or type(app.get('id')) is not int or app['id'] < 1
+                or not isinstance(app.get('node_id'), str) or not app['node_id']
+                or not isinstance(app.get('slug'), str) or not app['slug']):
+            raise PublicationProofError('body intent comment app identity is unavailable')
+        app = (app['id'], app['node_id'], app['slug'])
+    return (comment['id'], comment['node_id'], comment.get('issue_url'), comment.get('body'),
+            comment.get('created_at'), comment.get('updated_at'), comment.get('author_association'),
+            user['login'], user['id'], user['node_id'], user['type'], app)
+
+
 def _body_intent(*, cwd: Path, worktree: Path, comment_id: int, body_file: Path,
                  branch: str, session: str, agent: str, lease: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """Read an existing account-authenticated, attempt-specific body intent.
@@ -112,7 +136,7 @@ def _body_intent(*, cwd: Path, worktree: Path, comment_id: int, body_file: Path,
         candidate = parsed.get('operator_publication_intent.v1') if isinstance(parsed, dict) else None
         if isinstance(candidate, dict) and candidate.get('attempt_id') == value['attempt_id']:
             matches.append(item)
-    if len(matches) != 1 or matches[0] != comment:
+    if len(matches) != 1 or _intent_comment_identity(matches[0]) != _intent_comment_identity(comment):
         raise PublicationProofError('body attempt comment is missing or ambiguous')
     return value, comment
 
@@ -295,7 +319,7 @@ def check(*, cwd: Path, worktree: Path, session: str, agent: str, head: str,
         for intent_id, earlier_comment, body_file in intent_comments:
             _, fresh_comment = _body_intent(cwd=cwd, worktree=worktree, comment_id=intent_id,
                     body_file=body_file, branch=branch, session=session, agent=agent, lease=lease)
-            if (fresh_comment != earlier_comment
+            if (_intent_comment_identity(fresh_comment) != _intent_comment_identity(earlier_comment)
                     or recovery._timestamp(fresh_comment['created_at']) < ack_at):
                 raise PublicationProofError('body intent changed or predates the pinned acknowledgment')
         if recovery._git_read(worktree, 'rev-parse', '--verify', 'HEAD^{commit}').decode().strip() != head:
