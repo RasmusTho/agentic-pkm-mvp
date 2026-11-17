@@ -17,6 +17,7 @@ import pytest
 
 from app.ops import pg_acceptance as profile
 from app.ops import pg_acceptance_runner as runner_module
+from app.ops import bws_installation_transaction as installation_transaction
 from app.ops import postgres_deploy_linux as linux
 from app.ops.postgres_deploy import DeployJournal, DeployPlan, DeployReceipt, DeployWorker, PostgresDeployError
 from scripts import postmerge_dev_test as driver
@@ -41,7 +42,25 @@ def _repository(tmp_path):
             path.mkdir()
             (path / 'fixture.txt').write_text('exact resource')
         else:
-            path.write_text('exact resource')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if name == 'docker-compose.yaml':
+                path.write_text(
+                    'services:\n'
+                    '  api: {}\n'
+                    '  companion-ui: {}\n'
+                    '  db: {}\n'
+                    '  heimdal-capture-watch: {}\n'
+                    '  instance-state-init: {}\n'
+                    '  migrate: {}\n'
+                    '  ollama: {}\n'
+                    '  source-identity-db-witness: {}\n'
+                    '  watcher: {}\n'
+                    '  worker: {}\n'
+                )
+            else:
+                path.write_text('exact resource')
+            if name.endswith('.sh') and name.startswith('scripts/'):
+                path.chmod(0o755)
     for selector in profile.SELECTORS:
         path = root / selector.split('::')[0]
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -295,6 +314,168 @@ def test_production_runner_isolates_database_vault_and_credentials(tmp_path, mon
                         observed.append(options) or SimpleNamespace(returncode=0, stdout=b''))
     runner_module._command(['docker', 'version'])
     assert 'persistent-private-secret-canary' not in json.dumps(observed[0]['env'])
+
+
+def test_scalar_rollback_resources_are_committed_and_readonly(tmp_path, monkeypatch):
+    runner, boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
+    committed = {
+        name: (runner.repository / name).read_bytes()
+        for name in (
+            'docker-compose.yaml', 'docker-compose.scalar-rollback.yml',
+            'ops/scalar-rollback/nginx.conf', 'scripts/scalar_rollback_native.sh',
+        )
+    }
+    (runner.repository / 'docker-compose.yaml').write_bytes(b'dirty checkout bytes')
+    manifest = runner.resources(IMAGE_ID)
+    source = runner.directory / 'source'
+    for name, content in committed.items():
+        path = source / name
+        assert path.read_bytes() == content
+        assert manifest['files'][name] == hashlib.sha256(content).hexdigest()
+    assert (source / 'scripts/scalar_rollback_native.sh').stat().st_mode & 0o777 == 0o755
+    runner.cleanup()
+
+    runner.verify()
+    calls = [arguments for arguments, _timeout in boundary.commands]
+    tests = next(args for args in calls if args[0] == 'create' and args[args.index('--name') + 1].endswith('-tests'))
+    mounts = {
+        fields['dst']: fields
+        for index, value in enumerate(tests)
+        if value == '--mount'
+        for fields in [dict(part.split('=', 1) for part in tests[index + 1].split(',') if '=' in part)]
+    }
+    assert {
+        '/app/docker-compose.yaml', '/app/docker-compose.scalar-rollback.yml',
+        '/app/ops/scalar-rollback/nginx.conf', '/app/scripts/scalar_rollback_native.sh',
+    } <= mounts.keys()
+    for index, value in enumerate(tests):
+        if value != '--mount':
+            continue
+        fields = dict(part.split('=', 1) for part in tests[index + 1].split(',') if '=' in part)
+        if fields.get('dst') in {
+            '/app/docker-compose.yaml', '/app/docker-compose.scalar-rollback.yml',
+            '/app/ops/scalar-rollback/nginx.conf', '/app/scripts/scalar_rollback_native.sh',
+        }:
+            assert tests[index + 1].endswith(',readonly')
+    assert not boundary.containers
+
+
+def test_native_principal_producer_resources_are_complete_and_readonly(tmp_path, monkeypatch):
+    from app.instance.principal_fence import (
+        AUTH_PRODUCER_ROLES,
+        NATIVE_AUTH_PRODUCERS,
+        discover_auth_producers,
+    )
+
+    runner, boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
+    resources = (
+        'scripts/deploy_channel.sh',
+        'scripts/export_runtime_env.sh',
+        'scripts/start_full_system.sh',
+    )
+    committed = {name: (runner.repository / name).read_bytes() for name in resources}
+    manifest = runner.resources(IMAGE_ID)
+    source = runner.directory / 'source'
+    for name, content in committed.items():
+        path = source / name
+        assert path.read_bytes() == content
+        assert manifest['files'][name] == hashlib.sha256(content).hexdigest()
+        assert path.stat().st_mode & 0o777 == 0o755
+    producers, digest = discover_auth_producers(
+        compose_path=source / 'docker-compose.yaml',
+        repo_root=source,
+    )
+    assert {producer.role for producer in producers} == AUTH_PRODUCER_ROLES
+    assert {producer.source for producer in producers} >= set(NATIVE_AUTH_PRODUCERS)
+    assert {
+        path for path in NATIVE_AUTH_PRODUCERS if path.startswith('scripts/')
+    } <= set(runner_module.RESOURCE_PATHS)
+    assert re.fullmatch(r'[0-9a-f]{64}', digest)
+    assert digest == discover_auth_producers(
+        compose_path=source / 'docker-compose.yaml',
+        repo_root=source,
+    )[1]
+    runner.cleanup()
+
+    runner.verify()
+    calls = [arguments for arguments, _timeout in boundary.commands]
+    tests = next(args for args in calls if args[0] == 'create' and args[args.index('--name') + 1].endswith('-tests'))
+    mounts = {
+        fields['dst']: fields
+        for index, value in enumerate(tests)
+        if value == '--mount'
+        for fields in [dict(part.split('=', 1) for part in tests[index + 1].split(',') if '=' in part)]
+    }
+    destinations = {f'/app/{name}' for name in resources}
+    assert destinations <= mounts.keys()
+    for destination in destinations:
+        mount = next(
+            tests[index + 1]
+            for index, value in enumerate(tests)
+            if value == '--mount'
+            and dict(part.split('=', 1) for part in tests[index + 1].split(',') if '=' in part).get('dst') == destination
+        )
+        assert mount.endswith(',readonly')
+    assert not boundary.containers
+
+
+def test_scalar_rollback_resource_closure_refuses_missing_or_tampered_assets(tmp_path, monkeypatch):
+    runner, _boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
+    manifest = runner.resources(IMAGE_ID)
+    source = runner.directory / 'source'
+    candidate = tmp_path / 'image-root'
+    shutil.copytree(source, candidate)
+    import app
+    monkeypatch.setattr(app, '__file__', str(candidate / 'app/__init__.py'))
+    assets = (
+        'docker-compose.yaml', 'docker-compose.scalar-rollback.yml',
+        'ops/scalar-rollback/nginx.conf', 'scripts/scalar_rollback_native.sh',
+        'scripts/deploy_channel.sh', 'scripts/export_runtime_env.sh',
+        'scripts/start_full_system.sh',
+    )
+    for asset in assets:
+        path = candidate / asset
+        original = path.read_bytes()
+        path.unlink()
+        with pytest.raises(profile.PgAcceptanceError):
+            profile.verify_resources(manifest, root=candidate)
+        path.write_bytes(original + b'\n')
+        with pytest.raises(profile.PgAcceptanceError):
+            profile.verify_resources(manifest, root=candidate)
+        path.write_bytes(original)
+    runner.cleanup()
+
+
+def test_native_principal_producer_resources_refuse_missing_or_tampered_files(tmp_path, monkeypatch):
+    from app.instance.principal_fence import PrincipalFenceError, discover_auth_producers
+
+    runner, _boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
+    manifest = runner.resources(IMAGE_ID)
+    source = runner.directory / 'source'
+    candidate = tmp_path / 'image-root'
+    shutil.copytree(source, candidate)
+    import app
+    monkeypatch.setattr(app, '__file__', str(candidate / 'app/__init__.py'))
+    assets = (
+        'scripts/deploy_channel.sh', 'scripts/export_runtime_env.sh',
+        'scripts/start_full_system.sh',
+    )
+    for asset in assets:
+        path = candidate / asset
+        original = path.read_bytes()
+        path.unlink()
+        with pytest.raises(PrincipalFenceError, match=Path(asset).name):
+            discover_auth_producers(
+                compose_path=candidate / 'docker-compose.yaml',
+                repo_root=candidate,
+            )
+        with pytest.raises(profile.PgAcceptanceError):
+            profile.verify_resources(manifest, root=candidate)
+        path.write_bytes(original + b'\n')
+        with pytest.raises(profile.PgAcceptanceError):
+            profile.verify_resources(manifest, root=candidate)
+        path.write_bytes(original)
+    runner.cleanup()
 
 
 @pytest.mark.parametrize('fault', ['sha', 'digest', 'resource', 'image'])
@@ -604,7 +785,7 @@ def test_native_profile_budget_is_bound_and_finite(tmp_path, monkeypatch):
     runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
     result = runner.verify()
     attach = [(args, timeout) for args, timeout in boundary.commands if args[:2] == ('start', '--attach')]
-    assert len(attach) == 1 and attach[0][1] == profile.PROFILE_DEADLINE == 3600
+    assert len(attach) == 1 and attach[0][1] == profile.PROFILE_DEADLINE == 5400
     profile.require_pass(result, sha, DIGEST, 'dev', operation_id)
     assert profile.TEST_TIMEOUT == 120 and '--timeout=120' in profile.pytest_arguments()
     assert not boundary.containers and not runner.directory.exists()
@@ -642,7 +823,7 @@ def test_deadline_signal_survives_cleanup_refusal(tmp_path, monkeypatch):
 
 
 def test_profile_budget_identity_rejects_old_receipts(tmp_path, monkeypatch):
-    old_hash = '64a82a73f52410361fd0605b6e9a2053d27e05ecc2ead25556d0e7109aa5f503'
+    old_hash = 'ee37e3f865bfcdcb3de2345030bc5df7ab396a72de55d94f280e961887e4c381'
     runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
     observed_manifests = []
     original = boundary.command
@@ -661,3 +842,451 @@ def test_profile_budget_identity_rejects_old_receipts(tmp_path, monkeypatch):
     receipt = DeployReceipt(operation_id, 'dev', 'deploy', 'committed', 'committed', pg_acceptance=result)
     receipt.validate()
     receipt.require_profile(plan)
+
+
+LEGACY_PROFILE_DEADLINE = 3600
+LEGACY_SELECTION_HASH = 'ee37e3f865bfcdcb3de2345030bc5df7ab396a72de55d94f280e961887e4c381'
+
+
+def _legacy_terminal_fixture(
+    tmp_path, *, channel='dev', terminal_result='committed', operation_id=None,
+):
+    """Install one exact retained C2 request/receipt pair without using bind_request."""
+    operation_id = operation_id or str(uuid4())
+    revision = 'a' * 40
+    plan = DeployPlan(channel, revision, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                      image_digest=DIGEST, automatic=True)
+    raw_plan = plan.payload()
+    raw_plan['verification_profile'] = {
+        'version': profile.LEGACY_PROFILE_VERSION,
+        'selection_hash': LEGACY_SELECTION_HASH,
+    }
+    acceptance = None
+    if terminal_result == 'committed':
+        acceptance = _result(revision, channel, operation_id)
+        acceptance['selection_hash'] = LEGACY_SELECTION_HASH
+    receipt = DeployReceipt(operation_id, channel, 'deploy', terminal_result, terminal_result,
+                            pg_acceptance=acceptance)
+    journal = DeployJournal(tmp_path / 'native-history', channel)
+    journal.directory.parent.mkdir(parents=True, exist_ok=True)
+    journal.directory.mkdir(mode=0o700)
+    journal._write_json(journal._operation_name(operation_id, 'request'), {
+        'operation_id': operation_id, 'plan': raw_plan, 'bootstrap': False,
+    })
+    journal._write_json(journal._operation_name(operation_id, 'receipt'), receipt.payload())
+    journal._write_json(f'{channel}.json', receipt.payload())
+    journal._write_json(f'{channel}.request.json', {
+        'operation_id': operation_id, 'plan': raw_plan, 'bootstrap': False,
+    })
+    return journal, operation_id, plan, raw_plan, receipt
+
+
+def test_legacy_terminal_profile_history_allows_fresh_current_prepare(tmp_path):
+    for channel in ('dev', 'test'):
+        journal, operation_id, _legacy_plan, raw_plan, receipt = _legacy_terminal_fixture(
+            tmp_path / channel, channel=channel,
+        )
+        with pytest.raises(PostgresDeployError):
+            DeployPlan.from_payload(raw_plan)
+
+        retained = journal.operation_request(operation_id)
+        assert retained is not None and retained[0]['plan'] == json.loads(json.dumps(raw_plan))
+        assert retained[1].payload()['verification_profile'] == raw_plan['verification_profile']
+        assert journal.operation_receipt(operation_id) == receipt
+
+        current = DeployPlan(channel, 'b' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                             image_digest=DIGEST, automatic=True)
+        fresh_id = str(uuid4())
+        # A fresh prepare first asks whether its ID has a retained receipt while
+        # the channel slot still contains the exact old terminal pair.  This must
+        # return no receipt without strict-reading the old profile as new state.
+        assert journal.operation_receipt(fresh_id) is None
+        retained_bytes = (journal.directory / f'{operation_id}.request.json').read_bytes()
+        journal.bind_request(fresh_id, current, False, create=True)
+        journal.write(fresh_id, 'prepared')
+        assert journal.current_request()[1] == current
+        assert (journal.directory / f'{operation_id}.request.json').read_bytes() == retained_bytes
+        assert journal.operation_request(operation_id)[0]['plan'] == json.loads(json.dumps(raw_plan))
+
+
+def test_legacy_terminal_profile_history_allows_real_supervisor_fresh_worker(
+    tmp_path, monkeypatch, admitted_bws_caller,
+):
+    """Fresh workers supersede only exact failed-DEV/committed-TEST terminal pairs."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from tests.deploy.test_deploy_channel_script import _BwsVmEffects
+
+    for channel, terminal_result in (('dev', 'failed'), ('test', 'committed')):
+        journal, old_id, old_plan, _raw_plan, _old_receipt = _legacy_terminal_fixture(
+            tmp_path / channel, channel=channel, terminal_result=terminal_result,
+        )
+        old_request_bytes = (journal.directory / f'{old_id}.request.json').read_bytes()
+        old_receipt_bytes = (journal.directory / f'{old_id}.receipt.json').read_bytes()
+        current = DeployPlan(channel, 'b' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                             image_digest=DIGEST, automatic=True)
+        fresh_id = str(uuid4())
+        effects = _BwsVmEffects()
+        effects.config = SimpleNamespace(channel=channel, journal=journal)
+        if channel == 'dev':
+            effects.require_promotion_admission = lambda _plan: None
+        effects.validate_plan = lambda selected: selected.validate()
+        effects.select_active_plan = lambda selected: selected
+        effects.verify = lambda operation_id, plan: {
+            **profile.identity(plan.revision, plan.image_digest or '', plan.channel, operation_id),
+            'result': 'passed', 'selected': len(profile.SELECTORS), 'passed': len(profile.SELECTORS),
+            'resource_tree': 'd' * 40, 'app_image_id': IMAGE_ID, 'report_hash': 'e' * 64,
+        }
+        effects.cleanup_verification = lambda *_args: None
+
+        @contextmanager
+        def channel_lock():
+            yield
+            receipt = journal.read()
+            assert receipt is not None and receipt.operation_id == fresh_id
+
+        effects.channel_lock = channel_lock
+        monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: effects.config)
+        monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: effects)
+        supervisor = linux.DeploymentSupervisor(effects.config)
+        request = {
+            'action': 'prepare', 'operation_id': fresh_id,
+            'plan': json.loads(json.dumps(current.payload())), 'bootstrap': False,
+        }
+        assert supervisor.request(request)['ready']
+        operation = supervisor.operation
+        assert operation is not None
+        operation.activation.set()
+        result = supervisor.request({**request, 'action': 'join'})
+        assert result['receipt']['terminal_result'] == 'committed'
+        assert journal.read().operation_id == fresh_id
+        assert (journal.directory / f'{old_id}.request.json').read_bytes() == old_request_bytes
+        assert (journal.directory / f'{old_id}.receipt.json').read_bytes() == old_receipt_bytes
+        retained_old = journal.operation_request(old_id)
+        assert retained_old is not None and retained_old[1].revision == old_plan.revision
+        assert retained_old[1].verification_profile == {
+            'version': profile.LEGACY_PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
+        }
+
+
+def test_legacy_terminal_profile_history_refuses_failed_bootstrap_before_publication(
+    tmp_path, monkeypatch, admitted_bws_caller,
+):
+    """A failed legacy pair with bootstrap authority cannot publish a fresh ID."""
+    from contextlib import contextmanager
+    from tests.deploy.test_deploy_channel_script import _BwsVmEffects
+
+    journal, old_id, _old_plan, _raw_plan, _old_receipt = _legacy_terminal_fixture(
+        tmp_path, channel='dev', terminal_result='failed',
+    )
+    for name in (f'{old_id}.request.json', 'dev.request.json'):
+        request = json.loads((journal.directory / name).read_text())
+        request['bootstrap'] = True
+        (journal.directory / name).write_text(json.dumps(request))
+    current = DeployPlan('dev', 'b' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                         image_digest=DIGEST, automatic=True)
+    fresh_id = str(uuid4())
+    effects = _BwsVmEffects()
+    effects.config = SimpleNamespace(channel='dev', journal=journal)
+    reached_worker = []
+
+    @contextmanager
+    def channel_lock():
+        reached_worker.append(True)
+        yield
+
+    effects.channel_lock = channel_lock
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: effects.config)
+    monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: effects)
+    supervisor = linux.DeploymentSupervisor(effects.config)
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({
+            'action': 'prepare', 'operation_id': fresh_id,
+            'plan': json.loads(json.dumps(current.payload())), 'bootstrap': False,
+        })
+    assert supervisor.operation is None
+    assert reached_worker == []
+    assert not (journal.directory / f'{fresh_id}.request.json').exists()
+    # The old failed C2 record is historical-only, and its deliberately
+    # malformed bootstrap binding must not be admitted even by the historical
+    # reader.
+    with pytest.raises(PostgresDeployError):
+        journal.read()
+
+
+def test_legacy_terminal_profile_history_qualifies_source_preflight(tmp_path):
+    from app.ops import native_source_admission
+
+    # Source admission and the writer census must both qualify the two
+    # supported terminal states.  The failed DEV envelope has no PG payload;
+    # the committed TEST envelope must still satisfy the pinned historical
+    # profile.  Neither reader may turn the old request into current state.
+    for channel, terminal_result in (('dev', 'failed'), ('test', 'committed')):
+        journal, operation_id, _legacy_plan, _raw_plan, receipt = _legacy_terminal_fixture(
+            tmp_path / channel, channel=channel, terminal_result=terminal_result,
+        )
+        effects = SimpleNamespace(config=SimpleNamespace(journal=journal), operation_id=operation_id)
+
+        native_source_admission.require_terminal_deployment(effects)
+        assert journal.read(historical=True) == receipt
+        with pytest.raises(PostgresDeployError):
+            journal.read()
+
+        runtime = SimpleNamespace(
+            installed_fingerprint='1' * 64, execution_fingerprint='2' * 64,
+            running_writers=('api', 'worker', 'watcher'), existing_writers=('api', 'worker', 'watcher'),
+            census_fingerprint='3' * 64, retained_state_fingerprint='4' * 64,
+            container_root='/srv/app', vault_overlay='docker-compose.full-host-vault.yml',
+        )
+        effects = SimpleNamespace(
+            config=SimpleNamespace(channel=channel, journal=journal),
+            source_identity_runtime_snapshot=lambda *_args, **_kwargs: runtime,
+            quiescent=lambda: True,
+        )
+        snapshot = installation_transaction._current_writer_snapshot(effects, {
+            'channel': channel, 'candidate_sha': 'b' * 40, 'image_digest': DIGEST,
+        })
+        assert snapshot.terminal_revision == 'a' * 40
+        assert snapshot.terminal_image_digest == DIGEST
+
+
+def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_path, monkeypatch):
+    def expect_refusal(journal, operation):
+        before = {path.name: path.read_bytes() for path in journal.directory.iterdir()}
+        with pytest.raises(PostgresDeployError):
+            operation()
+        assert {path.name: path.read_bytes() for path in journal.directory.iterdir()} == before
+
+    journal, operation_id, legacy_plan, raw_plan, _receipt = _legacy_terminal_fixture(tmp_path)
+    expect_refusal(journal, lambda: journal.bind_request(
+        operation_id, DeployPlan('dev', 'b' * 40, ('db', 'api'),
+                                 ('postgres-db', 'postgres-api'),
+                                 image_digest=DIGEST, automatic=True), False,
+    ))
+    # Reusing the old ID with a current-profile plan is not a prepare/join or
+    # reconcile path; even a first current write must leave every old byte
+    # untouched.
+    expect_refusal(journal, lambda: journal.write(operation_id, 'prepared'))
+    for channel, terminal_result in (('dev', 'failed'), ('test', 'committed')):
+        same_id_journal, same_id, same_legacy, _raw, _receipt = _legacy_terminal_fixture(
+            tmp_path / f'same-source-{channel}', channel=channel, terminal_result=terminal_result,
+        )
+        same_source_current = DeployPlan(
+            same_legacy.channel, same_legacy.revision, same_legacy.services, same_legacy.consumers,
+            image_digest=DIGEST, automatic=True,
+        )
+        wire_plan = json.loads(json.dumps(same_source_current.payload()))
+        assert DeployPlan.from_payload(wire_plan) == same_source_current
+        config = SimpleNamespace(channel=channel, journal=same_id_journal)
+        monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel, config=config: config)
+        worker_calls = []
+        cleanup_calls = []
+
+        def no_worker(*_args, **_kwargs):
+            worker_calls.append(True)
+            raise AssertionError('same-ID current-profile history reached a worker')
+
+        def no_cleanup(*_args, **_kwargs):
+            cleanup_calls.append(True)
+            raise AssertionError('same-ID current-profile history reached cleanup')
+
+        monkeypatch.setattr(linux, 'SupervisedOperation', no_worker)
+        monkeypatch.setattr(linux, 'LinuxEffects', no_cleanup)
+        for action in ('prepare', 'join', 'reconcile-failed'):
+            expect_refusal(same_id_journal, lambda action=action: linux.DeploymentSupervisor(config).request({
+                'action': action, 'operation_id': same_id,
+                'plan': wire_plan, 'bootstrap': False,
+            }))
+        assert worker_calls == [] and cleanup_calls == []
+    expect_refusal(journal, lambda: journal.write(
+        operation_id, 'committed', _result(legacy_plan.revision, 'dev', operation_id),
+    ))
+
+    fresh_journal, fresh_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'fresh-write')
+    # Replace the old fixture with a genuinely current request and advance it
+    # through legal nonterminal stages before testing a new receipt.
+    for name in (f'{fresh_id}.request.json', 'dev.request.json'):
+        (fresh_journal.directory / name).unlink()
+    (fresh_journal.directory / f'{fresh_id}.receipt.json').unlink()
+    (fresh_journal.directory / 'dev.json').unlink()
+    current_plan = DeployPlan(
+        'dev', 'a' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
+        image_digest=DIGEST, automatic=True,
+    )
+    fresh_journal.bind_request(fresh_id, current_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating', 'verifying'):
+        fresh_journal.write(fresh_id, stage)
+    before_bad_receipt = {path.name: path.read_bytes() for path in fresh_journal.directory.iterdir()}
+    bad_current_result = _result(current_plan.revision, 'dev', fresh_id)
+    bad_current_result['selection_hash'] = LEGACY_SELECTION_HASH
+    expect_refusal(fresh_journal, lambda: fresh_journal.write(
+        fresh_id, 'committed', bad_current_result,
+    ))
+    assert {path.name: path.read_bytes() for path in fresh_journal.directory.iterdir()} == before_bad_receipt
+    committed = fresh_journal.write(
+        fresh_id, 'committed', _result(current_plan.revision, 'dev', fresh_id),
+    )
+    assert committed.terminal_result == 'committed'
+
+    foreign, foreign_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'foreign')
+    foreign_receipt = json.loads((foreign.directory / f'{foreign_id}.receipt.json').read_text())
+    foreign_receipt['pg_acceptance']['channel'] = 'test'
+    foreign._write_json(f'{foreign_id}.receipt.json', foreign_receipt)
+    foreign._write_json('dev.json', foreign_receipt)
+    expect_refusal(foreign, lambda: foreign.operation_request(foreign_id))
+
+    named_slot, named_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'named-slot')
+    retained_foreign = json.loads((named_slot.directory / f'{named_id}.receipt.json').read_text())
+    retained_foreign['operation_id'] = str(uuid4())
+    named_slot._write_json(f'{named_id}.receipt.json', retained_foreign)
+    # A UUID-named retained slot is not an optional archive: its embedded ID
+    # must bind the filename before a valid current slot can be considered.
+    expect_refusal(named_slot, lambda: named_slot.operation_request(named_id))
+
+    mixed_non_pg, mixed_non_pg_id, _plan, old_raw_plan, _receipt = _legacy_terminal_fixture(
+        tmp_path / 'mixed-karakeep',
+    )
+    karakeep_request = {
+        'operation_id': mixed_non_pg_id,
+        'plan': {'channel': 'dev', 'revision': 'a' * 40},
+        'bootstrap': False,
+    }
+    manual_receipt = DeployReceipt(
+        mixed_non_pg_id, 'dev', 'deploy', 'committed', 'committed',
+    ).payload()
+    for name in (f'{mixed_non_pg_id}.request.json', 'dev.request.json'):
+        mixed_non_pg._write_json(name, karakeep_request)
+    for name in (f'{mixed_non_pg_id}.receipt.json', 'dev.json'):
+        mixed_non_pg._write_json(name, manual_receipt)
+    # The retained non-EE view must not hide an EE request/receipt that has
+    # appeared in the same-ID current slots.
+    mixed_non_pg._write_json('dev.request.json', {
+        'operation_id': mixed_non_pg_id, 'plan': old_raw_plan, 'bootstrap': False,
+    })
+    mixed_non_pg._write_json('dev.json', DeployReceipt(
+        mixed_non_pg_id, 'dev', 'deploy', 'failed', 'failed',
+    ).payload())
+    expect_refusal(mixed_non_pg, lambda: mixed_non_pg.operation_request(mixed_non_pg_id))
+    expect_refusal(mixed_non_pg, lambda: mixed_non_pg.operation_receipt(mixed_non_pg_id))
+
+    tampered = json.loads((journal.directory / f'{operation_id}.receipt.json').read_text())
+    tampered['pg_acceptance']['source_sha'] = 'c' * 40
+    (journal.directory / f'{operation_id}.receipt.json').write_text(json.dumps(tampered))
+    expect_refusal(journal, lambda: journal.operation_receipt(operation_id))
+
+    expect_refusal(journal, lambda: journal.current_request())
+
+    missing, missing_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'missing')
+    (missing.directory / f'{missing_id}.receipt.json').unlink()
+    (missing.directory / 'dev.json').unlink()
+    expect_refusal(missing, lambda: missing.operation_request(missing_id))
+
+    incomplete, incomplete_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'incomplete')
+    incomplete._write_json(f'{incomplete_id}.receipt.json', DeployReceipt(
+        incomplete_id, 'dev', 'deploy', 'prepared', None,
+    ).payload())
+    expect_refusal(incomplete, lambda: incomplete.operation_request(incomplete_id))
+
+    failed, failed_id, _plan, _raw, _receipt = _legacy_terminal_fixture(
+        tmp_path / 'failed', channel='dev', terminal_result='failed',
+    )
+    assert failed.operation_receipt(failed_id) is not None
+    (failed.directory / f'{failed_id}.request.json').unlink()
+    (failed.directory / 'dev.request.json').unlink()
+    expect_refusal(failed, lambda: failed.operation_receipt(failed_id))
+
+    failed_bootstrap, failed_bootstrap_id, _plan, _raw, _receipt = _legacy_terminal_fixture(
+        tmp_path / 'failed-bootstrap', channel='dev', terminal_result='failed',
+    )
+    for name in (f'{failed_bootstrap_id}.request.json', 'dev.request.json'):
+        request = json.loads((failed_bootstrap.directory / name).read_text())
+        request['bootstrap'] = True
+        (failed_bootstrap.directory / name).write_text(json.dumps(request))
+    expect_refusal(failed_bootstrap, lambda: failed_bootstrap.operation_receipt(str(uuid4())))
+
+    conflict, conflict_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'conflict')
+    conflicting = json.loads((conflict.directory / 'dev.json').read_text())
+    conflicting['stage'] = 'aborted'
+    conflicting['terminal_result'] = 'aborted'
+    (conflict.directory / 'dev.json').write_text(json.dumps(conflicting))
+    expect_refusal(conflict, lambda: conflict.operation_request(conflict_id))
+
+    request_conflict, request_conflict_id, _plan, _raw, _receipt = _legacy_terminal_fixture(
+        tmp_path / 'request-conflict',
+    )
+    conflicting_request = json.loads((request_conflict.directory / 'dev.request.json').read_text())
+    conflicting_request['plan']['revision'] = 'c' * 40
+    (request_conflict.directory / 'dev.request.json').write_text(json.dumps(conflicting_request))
+    expect_refusal(request_conflict, lambda: request_conflict.operation_request(request_conflict_id))
+
+    manual, manual_id, _plan, raw_plan, _receipt = _legacy_terminal_fixture(tmp_path / 'manual')
+    manual_plan = {key: raw_plan[key] for key in (
+        'channel', 'revision', 'services', 'consumers', 'ack_forward_only',
+    )}
+    for name in (f'{manual_id}.request.json', 'dev.request.json'):
+        request = json.loads((manual.directory / name).read_text())
+        request['plan'] = manual_plan
+        (manual.directory / name).write_text(json.dumps(request))
+    expect_refusal(manual, lambda: manual.operation_receipt(manual_id))
+    expect_refusal(manual, lambda: manual.current_request(historical=True))
+    expect_refusal(manual, lambda: manual.bound_plan(manual_id, historical=True))
+
+    malformed, malformed_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'malformed')
+    malformed_receipt = json.loads((malformed.directory / f'{malformed_id}.receipt.json').read_text())
+    malformed_receipt['pg_acceptance']['source_sha'] = 'not-a-sha'
+    (malformed.directory / f'{malformed_id}.receipt.json').write_text(json.dumps(malformed_receipt))
+    expect_refusal(malformed, lambda: malformed.operation_receipt(malformed_id))
+
+    unknown, unknown_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'unknown-profile')
+    for name in (f'{unknown_id}.request.json', 'dev.request.json'):
+        request = json.loads((unknown.directory / name).read_text())
+        request['plan']['verification_profile'] = {
+            'version': 'unknown-profile', 'selection_hash': 'f' * 64,
+        }
+        unknown._write_json(name, request)
+    expect_refusal(unknown, lambda: unknown.operation_request(unknown_id))
+
+    mixed, mixed_id, old_plan, old_raw_plan, old_receipt = _legacy_terminal_fixture(tmp_path / 'mixed-request')
+    current_plan = DeployPlan(
+        old_plan.channel, old_plan.revision, old_plan.services, old_plan.consumers,
+        image_digest=DIGEST, automatic=True,
+    )
+    current_receipt = DeployReceipt(
+        mixed_id, 'dev', 'deploy', 'committed', 'committed',
+        pg_acceptance=_result(old_plan.revision, 'dev', mixed_id),
+    )
+    mixed._write_json(f'{mixed_id}.request.json', {
+        'operation_id': mixed_id, 'plan': current_plan.payload(), 'bootstrap': False,
+    })
+    mixed._write_json(f'{mixed_id}.receipt.json', current_receipt.payload())
+    mixed._write_json('dev.request.json', {
+        'operation_id': mixed_id, 'plan': old_raw_plan, 'bootstrap': False,
+    })
+    mixed._write_json('dev.json', old_receipt.payload())
+    expect_refusal(mixed, lambda: mixed.operation_request(mixed_id))
+
+    mixed_receipt, mixed_receipt_id, old_plan, old_raw_plan, old_receipt = _legacy_terminal_fixture(
+        tmp_path / 'mixed-receipt',
+    )
+    current_plan = DeployPlan(
+        old_plan.channel, old_plan.revision, old_plan.services, old_plan.consumers,
+        image_digest=DIGEST, automatic=True,
+    )
+    mixed_receipt._write_json(f'{mixed_receipt_id}.request.json', {
+        'operation_id': mixed_receipt_id, 'plan': current_plan.payload(), 'bootstrap': False,
+    })
+    mixed_receipt._write_json('dev.request.json', {
+        'operation_id': mixed_receipt_id, 'plan': current_plan.payload(), 'bootstrap': False,
+    })
+    mixed_receipt._write_json(f'{mixed_receipt_id}.receipt.json', DeployReceipt(
+        mixed_receipt_id, 'dev', 'deploy', 'committed', 'committed',
+        pg_acceptance=_result(old_plan.revision, 'dev', mixed_receipt_id),
+    ).payload())
+    mixed_receipt._write_json('dev.json', old_receipt.payload())
+    expect_refusal(mixed_receipt, lambda: mixed_receipt.operation_receipt(mixed_receipt_id))
+
+    bootstrap, bootstrap_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'bootstrap')
+    retained_request = json.loads((bootstrap.directory / f'{bootstrap_id}.request.json').read_text())
+    retained_request['bootstrap'] = True
+    (bootstrap.directory / f'{bootstrap_id}.request.json').write_text(json.dumps(retained_request))
+    expect_refusal(bootstrap, lambda: bootstrap.operation_request(bootstrap_id))

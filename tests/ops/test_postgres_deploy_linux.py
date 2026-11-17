@@ -203,7 +203,7 @@ def test_historical_terminal_reconciliation_preserves_old_consumer_fingerprint(t
     receipt = DeployReceipt(operation_id, "dev", "deploy", "aborted", "aborted")
 
     class _Journal:
-        def read(self):
+        def read(self, **_kwargs):
             return receipt
 
         def operation_receipt(self, selected_id):
@@ -285,7 +285,7 @@ def test_historical_terminal_reconciliation_rejects_revision_change(tmp_path, mo
     receipt = DeployReceipt(operation_id, "dev", "deploy", "committed", "committed")
 
     class _Journal:
-        def read(self):
+        def read(self, **_kwargs):
             return receipt
 
         def operation_receipt(self, selected_id):

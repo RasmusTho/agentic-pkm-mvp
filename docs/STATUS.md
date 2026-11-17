@@ -656,10 +656,16 @@ promote public internet readiness.
   [deployment mechanics](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture)
   and [testing](TESTING.md). Last reviewed (this boundary): 2026-10-11. Last verified against:
   merged PR #5951 and the actual same-candidate native receipt on #5675.
-- Native isolated PG verification uses a shared finite 60-minute aggregate watchdog, bound in
-  the profile hash, while retaining the 120-second per-test watchdog and complete selection (#5950).
-  Attach expiry produces only a fixed native failure signal before owned cleanup. Equivalent
-  both-stage coverage is verified by the dated receipt above; permanent unit activation is separate.
+- Native isolated PG verification uses a shared finite 90-minute (5400-second) aggregate attach
+  watchdog, bound in the profile hash, while retaining the 120-second per-test watchdog and
+  complete selection (#5950). This is a provisional calibration for the corrected profile, not
+  observed capacity: setup/cleanup measurements and complete DEV then TEST acceptance remain
+  required before treating it as qualified. Attach expiry produces only a fixed native failure
+  signal before owned cleanup. Equivalent both-stage coverage is verified by the dated receipt
+  above; permanent unit activation is separate. Retained automatic terminal records from the
+  preceding 3600-second profile remain readable only as exact, lossless request/receipt pairs;
+  new admission, workers, and receipts require the current 5400-second profile, and failed or
+  aborted history never supplies acceptance evidence.
 - Classification evaluation is offline by default. The opt-in live golden-set runner binds an
   exact registered model/transport and reports dataset coverage, mutation-side gate, captured
   usage and dated cost provenance. Unsupported billing or incomplete evidence cannot produce

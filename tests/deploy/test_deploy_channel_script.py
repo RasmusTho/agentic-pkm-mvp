@@ -3203,7 +3203,7 @@ def test_missing_active_raw_key_stops_supervisor_before_activation(
     operation_id = str(uuid4())
     request = {
         'action': 'prepare', 'operation_id': operation_id,
-        'plan': plan.__dict__, 'bootstrap': False,
+        'plan': plan.payload(), 'bootstrap': False,
     }
 
     if quiescent:
@@ -3700,7 +3700,7 @@ def test_vm_selector_failure_records_abort_and_releases_channel_lock(
     supervisor = linux.DeploymentSupervisor(config)
 
     result = supervisor.request({
-        'action': 'prepare', 'operation_id': identifier, 'plan': plan.__dict__, 'bootstrap': False,
+        'action': 'prepare', 'operation_id': identifier, 'plan': plan.payload(), 'bootstrap': False,
     })
     assert supervisor.operation is not None
     assert supervisor.operation.finished.wait(5)
@@ -3740,7 +3740,7 @@ def test_supervisor_rejects_changed_root_config_before_admission(tmp_path, monke
     with pytest.raises(PostgresDeployError):
         supervisor.request({
             'action': 'prepare', 'operation_id': str(uuid4()),
-            'plan': plan.__dict__, 'bootstrap': False,
+            'plan': plan.payload(), 'bootstrap': False,
         })
 
     assert supervisor.operation is None
@@ -3838,7 +3838,7 @@ def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(
     tmp_path, monkeypatch, admitted_bws_caller
 ):
     from contextlib import contextmanager
-    from dataclasses import asdict, replace
+    from dataclasses import replace
     from types import SimpleNamespace
     import threading
     from app.ops import postgres_deploy_linux as linux
@@ -3865,7 +3865,7 @@ def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: effects.config)
     monkeypatch.setattr(linux, 'LinuxEffects', lambda cfg: effects)
     supervisor = linux.DeploymentSupervisor(effects.config)
-    request = {'action': 'prepare', 'operation_id': identifier, 'plan': asdict(plan), 'bootstrap': False}
+    request = {'action': 'prepare', 'operation_id': identifier, 'plan': plan.payload(), 'bootstrap': False}
     assert supervisor.request(request)['ready']
     operation = supervisor.operation
     # Simulate the transport's caller disappearing while its supervised work runs.
@@ -3874,7 +3874,7 @@ def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(
     assert supervisor.request(request)['pending']
     assert supervisor.operation is operation
     with pytest.raises(PostgresDeployError):
-        supervisor.request({**request, 'plan': asdict(replace(plan, revision='b' * 40))})
+        supervisor.request({**request, 'plan': replace(plan, revision='b' * 40).payload()})
     release.set()
     receipt = supervisor.request({**request, 'action': 'join'})['receipt']
     assert receipt['terminal_result'] == 'committed'
@@ -3882,7 +3882,7 @@ def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(
     # A daemon restart may serve the old receipt only for its exact bound inputs.
     restarted = linux.DeploymentSupervisor(effects.config)
     assert restarted.request({**request, 'action': 'join'})['receipt'] == receipt
-    for changed in ({'bootstrap': True}, {'plan': asdict(replace(plan, revision='c' * 40))}):
+    for changed in ({'bootstrap': True}, {'plan': replace(plan, revision='c' * 40).payload()}):
         with pytest.raises(PostgresDeployError):
             restarted.request({**request, **changed, 'action': 'join'})
     assert 'fake-postgres-canary' not in (journal.directory / 'test.request.json').read_text()
@@ -4383,7 +4383,9 @@ def test_source_identity_absence_proof_refuses_partial_ambiguous_or_mismatched_s
     directory.mkdir()
     terminal = SimpleNamespace(operation_id=str(uuid4()), terminal_result="failed")
     config = SimpleNamespace(
-        channel="dev", journal=SimpleNamespace(directory=directory, read=lambda: terminal),
+        channel="dev", journal=SimpleNamespace(
+            directory=directory, read=lambda *args, **kwargs: terminal,
+        ),
     )
     effects = object.__new__(linux.LinuxEffects)
     effects.config = config
@@ -5482,7 +5484,6 @@ def test_test_recovery_reset_refuses_external_database_before_mutation(tmp_path)
 
 def test_source_projection_refusal_retains_authenticated_recoverable_state(tmp_path, monkeypatch):
     import threading
-    from dataclasses import asdict
     from types import SimpleNamespace
     from uuid import uuid4
 
@@ -5509,7 +5510,7 @@ def test_source_projection_refusal_retains_authenticated_recoverable_state(tmp_p
     )
     request = {
         'action': 'reconcile-failed', 'operation_id': operation_id,
-        'plan': asdict(plan), 'bootstrap': False,
+        'plan': plan.payload(), 'bootstrap': False,
     }
     with pytest.raises(PostgresDeployError):
         supervisor.request(request)
@@ -5519,7 +5520,7 @@ def test_source_projection_refusal_retains_authenticated_recoverable_state(tmp_p
 
 
 def test_bws_supervisor_binds_forward_only_ack_and_refuses_changed_retry(tmp_path, monkeypatch):
-    from dataclasses import asdict, replace
+    from dataclasses import replace
     import json
     from types import SimpleNamespace
     from uuid import uuid4
@@ -5557,11 +5558,11 @@ def test_bws_supervisor_binds_forward_only_ack_and_refuses_changed_retry(tmp_pat
     with pytest.raises(PostgresDeployError):
         supervisor.request(transmitted[-1])
 
-    malformed = asdict(plan)
+    malformed = plan.payload()
     malformed['ack_forward_only'] = 1
     with pytest.raises(PostgresDeployError):
         supervisor.request({**request, 'plan': malformed})
-    unknown = {**asdict(plan), 'unbound_authority': True}
+    unknown = {**plan.payload(), 'unbound_authority': True}
     with pytest.raises(PostgresDeployError):
         supervisor.request({**request, 'plan': unknown})
 
@@ -5620,7 +5621,6 @@ def test_bws_activation_uses_only_request_bound_forward_only_ack(tmp_path, monke
 
 
 def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
-    from dataclasses import asdict
     from types import SimpleNamespace
     from app.ops.postgres_deploy_linux import DeploymentSupervisor
     from app.ops.postgres_deploy import PostgresDeployError
@@ -5630,7 +5630,7 @@ def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
     supervisor = DeploymentSupervisor(SimpleNamespace(channel='test', journal=journal))
     for action in ('prepare', 'activate', 'join'):
         with pytest.raises(PostgresDeployError):
-            supervisor.request({'action': action, 'operation_id': identifier, 'plan': asdict(plan), 'bootstrap': False})
+            supervisor.request({'action': action, 'operation_id': identifier, 'plan': plan.payload(), 'bootstrap': False})
     assert supervisor.operation is None
     assert journal.read().terminal_result is None
 
@@ -5790,7 +5790,6 @@ def test_linux_quiescence_waits_for_one_shot_compose_services(monkeypatch, servi
 
 
 def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescence(tmp_path, monkeypatch):
-    from dataclasses import asdict
     import json
     from types import SimpleNamespace
     from app.ops import postgres_deploy_linux as linux
@@ -5824,7 +5823,7 @@ def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescen
 
     request = {
         'action': 'reconcile-failed', 'operation_id': operation_id,
-        'plan': asdict(plan), 'bootstrap': False,
+        'plan': plan.payload(), 'bootstrap': False,
     }
     def source_absent(argv, **kwargs):
         assert argv == ['docker', 'ps', '--all', '--filter',
@@ -6700,7 +6699,7 @@ def test_unknown_fence_retry_preserves_a_later_operation_lock(tmp_path, monkeypa
     'running-instance-state-init', 'changed-request', 'different-operation', 'malformed-journal',
 ])
 def test_failed_bws_activation_reconciliation_preserves_ambiguous_state(tmp_path, monkeypatch, blocker):
-    from dataclasses import asdict, replace
+    from dataclasses import replace
     import fcntl
     import json
     import os
@@ -6757,7 +6756,7 @@ def test_failed_bws_activation_reconciliation_preserves_ambiguous_state(tmp_path
     request = {
         'action': 'reconcile-failed',
         'operation_id': str(uuid4()) if blocker == 'different-operation' else operation_id,
-        'plan': asdict(request_plan), 'bootstrap': False,
+        'plan': request_plan.payload(), 'bootstrap': False,
     }
     held_fd = None
     if blocker == 'held-lock':
@@ -10520,7 +10519,6 @@ def test_native_source_cleanup_requires_current_parent_guard(tmp_path: Path) -> 
     "identity_changed", "inconsistent_state", "duplicate_id",
 ])
 def test_native_source_api_oneoff_blocks_same_id_reconciliation(tmp_path: Path, monkeypatch, capsys, fault: str) -> None:
-    from dataclasses import asdict
     from types import SimpleNamespace
     from uuid import uuid4
     from app.ops import postgres_deploy_linux as linux
@@ -10579,7 +10577,7 @@ def test_native_source_api_oneoff_blocks_same_id_reconciliation(tmp_path: Path, 
         return f"{identity} {state} {running} {paused} {restarting} {pid}"
     monkeypatch.setattr(linux, "_command", command)
     supervisor = linux.DeploymentSupervisor(config)
-    request = {"action":"reconcile-failed", "operation_id":operation, "plan":asdict(plan), "bootstrap":False}
+    request = {"action":"reconcile-failed", "operation_id":operation, "plan":plan.payload(), "bootstrap":False}
     prior = (journal.directory / "test.json").read_bytes()
     with pytest.raises(PostgresDeployError):
         supervisor.request(request)
@@ -10600,7 +10598,6 @@ def test_native_source_api_oneoff_blocks_same_id_reconciliation(tmp_path: Path, 
 
 @pytest.mark.parametrize("state", ["exited", "dead"])
 def test_native_source_completed_oneoff_allows_same_id_reconciliation(tmp_path: Path, monkeypatch, state: str) -> None:
-    from dataclasses import asdict
     from types import SimpleNamespace
     from uuid import uuid4
     from app.ops import postgres_deploy_linux as linux
@@ -10634,7 +10631,7 @@ def test_native_source_completed_oneoff_allows_same_id_reconciliation(tmp_path: 
         return f"{container_id} {state} false false false 0"
     monkeypatch.setattr(linux, "_command", command)
     supervisor = linux.DeploymentSupervisor(config)
-    request = {"action":"reconcile-failed", "operation_id":operation, "plan":asdict(plan), "bootstrap":False}
+    request = {"action":"reconcile-failed", "operation_id":operation, "plan":plan.payload(), "bootstrap":False}
     receipt = supervisor.request(request)
     assert receipt["receipt"]["terminal_result"] == "failed"
     assert not lock.exists()
@@ -11058,7 +11055,6 @@ def _source_terminal_docker(monkeypatch, journal, operation, revision, status, o
     (98, False, 'source_worker_failed'),
     *[(status, False, 'source_worker_failed') for status in (114, 115, 116, 117, 118, 119, 255)]])
 def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliation(tmp_path, monkeypatch, interrupted_before_observation, already_failed, worker_status, oom, reason):
-    from dataclasses import asdict
     from app.ops import postgres_deploy_linux as linux
     from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_CODES
     from app.ops.postgres_deploy import PostgresDeployError
@@ -11078,7 +11074,7 @@ def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliati
     monkeypatch.setattr(linux.LinuxEffects, 'activate', lambda *args: pytest.fail('must not replay'))
     monkeypatch.setattr(linux, '_command', lambda argv, **kwargs: docker(argv, **kwargs).stdout)
     supervisor = linux.DeploymentSupervisor(config)
-    request = {'action': 'reconcile-failed', 'operation_id': operation, 'plan': asdict(plan), 'bootstrap': False}
+    request = {'action': 'reconcile-failed', 'operation_id': operation, 'plan': plan.payload(), 'bootstrap': False}
     result = supervisor.request(request)
     assert result['receipt']['source_failure'] == reason
     assert removed == [reason] and not lock.exists()
@@ -11095,7 +11091,6 @@ def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliati
     'legacy_retained_history_refused', 'legacy_relation_retention_refused',
 ])
 def test_native_legacy_admission_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, reason):
-    from dataclasses import asdict
     from click.testing import CliRunner
     from app.cli import cli, index_rebuild
     from app.ops import native_source_bootstrap as native, postgres_deploy_linux as linux
@@ -11149,7 +11144,7 @@ def test_native_legacy_admission_subreason_survives_terminal_reconciliation(tmp_
     monkeypatch.setattr(linux.LinuxEffects, 'activate', lambda *args: pytest.fail('must not replay'))
     monkeypatch.setattr(linux, '_command', lambda argv, **kwargs: docker(argv, **kwargs).stdout)
     supervisor = linux.DeploymentSupervisor(config)
-    request = {'action': 'reconcile-failed', 'operation_id': operation, 'plan': asdict(plan), 'bootstrap': False}
+    request = {'action': 'reconcile-failed', 'operation_id': operation, 'plan': plan.payload(), 'bootstrap': False}
     result = supervisor.request(request)
     assert result['receipt']['source_failure'] == reason
     assert supervisor.request({**request, 'action': 'join'}) == result
@@ -11166,7 +11161,6 @@ def test_native_legacy_identity_subreason_survives_terminal_reconciliation(tmp_p
 
 
 def test_native_source_same_id_reply_keeps_locked_snapshot_after_admission_retirement(tmp_path, monkeypatch):
-    from dataclasses import asdict
     from app.ops import postgres_deploy_linux as linux
     journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
     journal.record_source_failure(operation, plan.revision, 'source_worker_failed')
@@ -11185,7 +11179,7 @@ def test_native_source_same_id_reply_keeps_locked_snapshot_after_admission_retir
         journal.write(replacement, 'prepared')
     monkeypatch.setattr(linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(replace_after_retirement))
     result = linux.DeploymentSupervisor(config).request({
-        'action': 'reconcile-failed', 'operation_id': operation, 'plan': asdict(plan), 'bootstrap': False,
+        'action': 'reconcile-failed', 'operation_id': operation, 'plan': plan.payload(), 'bootstrap': False,
     })
     assert result['receipt']['operation_id'] == operation
     assert result['receipt']['source_failure'] == 'source_worker_failed'
@@ -11388,7 +11382,6 @@ sys.modules['app.components.llm.fabric'] = module
 
 @pytest.mark.parametrize('status,reason', _EMBEDDING_PROBE_STATUSES + [(42, 'embedding_probe_failed')])
 def test_native_embedding_probe_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, status, reason):
-    from dataclasses import asdict
     from app.ops import postgres_deploy_linux as linux
     root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
     journal, operation, plan = _source_terminal_journal(tmp_path / 'journal-test', monkeypatch)
@@ -11410,7 +11403,7 @@ def test_native_embedding_probe_subreason_survives_terminal_reconciliation(tmp_p
     monkeypatch.setattr(linux.LinuxEffects, 'activate', lambda *args: pytest.fail('must not replay'))
     supervisor = linux.DeploymentSupervisor(config)
     result = supervisor.request({'action': 'join', 'operation_id': operation,
-                                 'plan': asdict(plan), 'bootstrap': False})
+                                 'plan': plan.payload(), 'bootstrap': False})
     assert result['receipt']['source_failure'] == reason
 
 

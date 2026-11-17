@@ -488,6 +488,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "scripts/prod_deploy_retry_preflight.py",
         "scripts/prod_devui_gateway_preflight.py",
         "scripts/run_migrations.sh",
+        "scripts/scalar_rollback_native.sh",
         "scripts/start_api.sh",
         "scripts/start_full_system.sh",
     ),

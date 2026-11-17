@@ -1053,10 +1053,16 @@ def _compatible_retained_plan(
     if retained is None or not isinstance(retained[1], DeployPlan):
         return None
     historical = retained[1]
-    if (
-        historical == requested
-        or retained[0].get('bootstrap') is not bootstrap
-        or not is_legacy_youtube_consumer_upgrade(
+    if historical == requested:
+        return None
+    if retained[0].get('bootstrap') is not bootstrap:
+        return None
+    # A retained legacy profile is read-only evidence. It can never be
+    # adopted as the current requested plan for reconciliation or cleanup;
+    # doing so would turn an old terminal ID into a new acceptance path.
+    if historical.verification_profile is not None:
+        return None
+    if (not is_legacy_youtube_consumer_upgrade(
             requested.channel, historical.consumers, requested.consumers
         )
         or any(
@@ -1066,8 +1072,7 @@ def _compatible_retained_plan(
                 'automatic', 'authority_cutover', 'promotion_plan',
                 'principal_cutover', 'activation_scope',
             )
-        )
-    ):
+        )):
         return None
     return historical
 
@@ -2222,7 +2227,7 @@ class LinuxEffects:
         except (ValueError, TypeError, AttributeError):
             raise PostgresDeployError() from None
         binding = _source_absence_binding(source_request)
-        current = self.config.journal.read()
+        current = self.config.journal.read(historical=True)
         if (
             current is None
             or current.operation_id == operation_id
@@ -4362,7 +4367,10 @@ class SupervisedOperation:
         self.thread = threading.Thread(target=self._run, daemon=False)
 
     def _run_locked(self) -> None:
-        previous = self.effects.config.journal.read()
+        # A fresh operation may supersede one exact retained terminal from the
+        # prior finite profile. Qualification is read-only here; the worker's
+        # newly prepared/current receipt remains strictly validated below.
+        previous = self.effects.config.journal.read(historical=True)
         if previous and previous.terminal_result is None and (
             previous.operation_id == self.operation_id
             or not self.effects.config.journal.can_admit_request_after_current(
@@ -4454,7 +4462,7 @@ class DeploymentSupervisor:
 
     def _reconcile_failed(self, operation_id: str, plan: DeployPlan, bootstrap: bool) -> dict[str, Any]:
         self._require_current_config()
-        current = self.config.journal.read()
+        current = self.config.journal.read(historical=True)
         previous = self.config.journal.operation_receipt(operation_id)
         if previous is None and current is not None and current.operation_id == operation_id:
             previous = current
@@ -4467,13 +4475,13 @@ class DeploymentSupervisor:
         retained = self.config.journal.operation_request(operation_id)
         historical_plan = _compatible_retained_plan(retained, plan, bootstrap)
         if historical_plan is not None and previous.terminal_result in {'committed', 'aborted'}:
-            previous.require_profile(historical_plan)
+            previous.require_profile(historical_plan, historical=True)
             return {
                 'receipt': previous.payload(),
                 'historical_plan': historical_plan.payload(),
             }
         if historical_plan is not None:
-            previous.require_profile(historical_plan)
+            previous.require_profile(historical_plan, historical=True)
             # Keep the old request immutable, but use its authenticated plan
             # for all non-terminal recovery and failed-operation cleanup.
             plan = historical_plan
@@ -4489,7 +4497,7 @@ class DeploymentSupervisor:
                 if historical_plan is not None:
                     response['historical_plan'] = historical_plan.payload()
                 return response
-            current_request = self.config.journal.current_request()
+            current_request = self.config.journal.current_request(historical=True)
             if current_request is None:
                 raise PostgresDeployError()
             bound, current_plan = current_request
@@ -5169,7 +5177,7 @@ class DeploymentSupervisor:
                 if terminal.terminal_result == 'failed':
                     return self._reconcile_failed(operation_id, plan, data['bootstrap'])
                 return {'receipt': terminal.payload()}
-            previous = self.config.journal.read()
+            previous = self.config.journal.read(historical=True)
             retained_request = self.config.journal.operation_request(operation_id)
             if (retained_request is not None
                 and (previous is None or previous.operation_id != operation_id)):

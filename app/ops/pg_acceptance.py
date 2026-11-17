@@ -11,7 +11,7 @@ from uuid import UUID
 
 PROFILE_VERSION = 'postmerge-pg.v1'
 TEST_TIMEOUT = 120
-PROFILE_DEADLINE = 3600
+PROFILE_DEADLINE = 5400
 POSTGRES_IMAGE = 'mirror.gcr.io/pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a'
 IMAGE_REPOSITORY = 'ghcr.io/rasmustho/pkm-app'
 SELECTORS = (
@@ -142,10 +142,48 @@ NIGHTLY_SELECTORS = (
     'tests/integration/test_single_vault_compatibility.py',
 )
 MINIMUM_SELECTED = len(SELECTORS)
-SELECTION_HASH = hashlib.sha256(json.dumps(
-    [PROFILE_VERSION, SELECTORS, 'pg', TEST_TIMEOUT, 'thread', MINIMUM_SELECTED, POSTGRES_IMAGE, PROFILE_DEADLINE],
-    separators=(',', ':'),
-).encode()).hexdigest()
+LEGACY_PROFILE_VERSION = 'postmerge-pg.v1'
+LEGACY_PROFILE_DEADLINE = 3600
+LEGACY_TEST_TIMEOUT = 120
+LEGACY_MINIMUM_SELECTED = 65
+LEGACY_POSTGRES_IMAGE = (
+    'mirror.gcr.io/pgvector/pgvector:pg16@'
+    'sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a'
+)
+
+
+def _selection_hash(
+    deadline: int, *, selectors: tuple[str, ...] = SELECTORS,
+    test_timeout: int = TEST_TIMEOUT, minimum_selected: int = MINIMUM_SELECTED,
+    postgres_image: str = POSTGRES_IMAGE, profile_version: str = PROFILE_VERSION,
+) -> str:
+    return hashlib.sha256(json.dumps(
+        [profile_version, selectors, 'pg', test_timeout, 'thread', minimum_selected, postgres_image, deadline],
+        separators=(',', ':'),
+    ).encode()).hexdigest()
+
+
+SELECTION_HASH = _selection_hash(PROFILE_DEADLINE)
+# The previous finite profile is retained only for authenticated terminal reads.
+# New admission and every newly written receipt remain bound to SELECTION_HASH.
+# This is the immutable C2 envelope hash. It is deliberately pinned rather
+# than recomputed from today's selector inventory: a future selector change
+# must not silently reinterpret retained terminal history.
+LEGACY_SELECTION_HASH = 'ee37e3f865bfcdcb3de2345030bc5df7ab396a72de55d94f280e961887e4c381'
+
+
+def _legacy_policy_is_unchanged() -> bool:
+    """Fail closed if current source no longer describes the retained C2 policy."""
+    return (
+        len(SELECTORS) == LEGACY_MINIMUM_SELECTED
+        and _selection_hash(
+            LEGACY_PROFILE_DEADLINE,
+            test_timeout=LEGACY_TEST_TIMEOUT,
+            minimum_selected=LEGACY_MINIMUM_SELECTED,
+            postgres_image=LEGACY_POSTGRES_IMAGE,
+            profile_version=LEGACY_PROFILE_VERSION,
+        ) == LEGACY_SELECTION_HASH
+    )
 
 
 class PgAcceptanceError(RuntimeError):
@@ -166,18 +204,79 @@ def identity(sha: str, digest: str, channel: str, operation_id: str) -> dict[str
             'source_sha': sha, 'image_digest': digest, 'channel': channel, 'operation_id': operation_id}
 
 
-def require_pass(result: Any, sha: str, digest: str, channel: str, operation_id: str) -> None:
-    expected = identity(sha, digest, channel, operation_id)
+def _profile_identity(
+    sha: str, digest: str, channel: str, operation_id: str, selection_hash: str,
+) -> dict[str, str]:
+    if selection_hash not in {SELECTION_HASH, LEGACY_SELECTION_HASH}:
+        raise PgAcceptanceError()
+    if selection_hash == LEGACY_SELECTION_HASH:
+        if not _legacy_policy_is_unchanged():
+            raise PgAcceptanceError()
+        # Keep the shared identity grammar (SHA, digest, channel and UUID)
+        # even though the policy fields below are pinned to C2.
+        current = identity(sha, digest, channel, operation_id)
+        expected = {
+            'profile_version': LEGACY_PROFILE_VERSION,
+            'selection_hash': LEGACY_SELECTION_HASH,
+            'source_sha': sha, 'image_digest': digest,
+            'channel': channel, 'operation_id': operation_id,
+        }
+        if any(current[key] != expected[key] for key in ('source_sha', 'image_digest', 'channel', 'operation_id')):
+            raise PgAcceptanceError()
+    else:
+        expected = identity(sha, digest, channel, operation_id)
+    return {**expected, 'selection_hash': selection_hash}
+
+
+def _require_pass_for_identity(
+    result: Any, expected: dict[str, str], *, minimum_selected: int = MINIMUM_SELECTED,
+) -> None:
     if (not isinstance(result, dict) or set(result) != set(expected) | {
         'result', 'selected', 'passed', 'resource_tree', 'app_image_id', 'report_hash'
     } or any(result.get(key) != value for key, value in expected.items())
         or result['result'] != 'passed' or type(result['selected']) is not int
-        or result['selected'] < MINIMUM_SELECTED or result['passed'] != result['selected']
+        or result['selected'] < minimum_selected or result['passed'] != result['selected']
         or type(result['passed']) is not int
         or re.fullmatch(r'[0-9a-f]{40}', str(result['resource_tree'])) is None
         or re.fullmatch(r'sha256:[0-9a-f]{64}', str(result['app_image_id'])) is None
         or re.fullmatch(r'[0-9a-f]{64}', str(result['report_hash'])) is None):
         raise PgAcceptanceError()
+
+
+def require_pass(result: Any, sha: str, digest: str, channel: str, operation_id: str) -> None:
+    """Validate a newly produced/current acceptance envelope."""
+    _require_pass_for_identity(result, identity(sha, digest, channel, operation_id))
+
+
+def require_historical_pass(
+    result: Any, sha: str, digest: str, channel: str, operation_id: str,
+    verification_profile: Any,
+) -> None:
+    """Validate one known profile for an authenticated retained terminal receipt."""
+    if (not isinstance(verification_profile, dict)
+        or set(verification_profile) != {'version', 'selection_hash'}
+        or verification_profile.get('selection_hash') not in {SELECTION_HASH, LEGACY_SELECTION_HASH}
+        or (
+            verification_profile.get('selection_hash') == SELECTION_HASH
+            and verification_profile.get('version') != PROFILE_VERSION
+        )
+        or (
+            verification_profile.get('selection_hash') == LEGACY_SELECTION_HASH
+            and verification_profile.get('version') != LEGACY_PROFILE_VERSION
+        )):
+        raise PgAcceptanceError()
+    expected = _profile_identity(
+        sha, digest, channel, operation_id, verification_profile['selection_hash'],
+    )
+    if verification_profile != {
+        'version': expected['profile_version'], 'selection_hash': expected['selection_hash'],
+    }:
+        raise PgAcceptanceError()
+    _require_pass_for_identity(
+        result, expected,
+        minimum_selected=LEGACY_MINIMUM_SELECTED
+        if verification_profile['selection_hash'] == LEGACY_SELECTION_HASH else MINIMUM_SELECTED,
+    )
 
 
 def pytest_arguments(*, nightly: bool = False) -> list[str]:

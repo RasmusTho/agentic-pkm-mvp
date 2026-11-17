@@ -100,15 +100,18 @@ def strict_census(
 
 
 def require_terminal_deployment(effects: LinuxEffects) -> None:
-    receipt = effects.config.journal.read()
+    # Source preflight is an explicit retained-history reader. It may qualify
+    # one exact terminal profile transition, while ordinary current admission
+    # and newly written receipts remain strict-current.
+    receipt = effects.config.journal.read(historical=True)
     if receipt is None or receipt.terminal_result not in {'committed', 'aborted', 'failed'}:
         raise PostgresDeployError()
     # Authenticate the terminal against its existing immutable request; a lone
     # terminal marker is not proof that the supervisor's old operation is over.
     # bound_plan validates the stored bootstrap flag, including a completed
     # first initialization; this reader grants no new bootstrap authority.
-    plan = effects.config.journal.bound_plan(receipt.operation_id)
-    receipt.require_profile(plan)
+    plan = effects.config.journal.bound_plan(receipt.operation_id, historical=True)
+    receipt.require_profile(plan, historical=True)
 
 
 def require_unretired_source_attempt(effects: LinuxEffects, operation_id: str) -> None:

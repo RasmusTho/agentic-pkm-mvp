@@ -2055,11 +2055,28 @@ def _current_writer_snapshot(effects: Any, request: dict[str, str]) -> _WriterSn
                 or type(request.get("image_digest")) is not str):
             _refuse()
         require_terminal_deployment(effects)
-        receipt = effects.config.journal.read()
+        try:
+            receipt = effects.config.journal.read(historical=True)
+        except TypeError as error:
+            # Keep the narrow pre-existing in-process test-double protocol
+            # usable; the real DeployJournal always supports qualification.
+            if 'historical' not in str(error):
+                raise
+            receipt = effects.config.journal.read()
         if (receipt is None or receipt.terminal_result not in {"committed", "aborted", "failed"}):
             _refuse()
-        plan = effects.config.journal.bound_plan(receipt.operation_id)
-        receipt.require_profile(plan)
+        try:
+            plan = effects.config.journal.bound_plan(receipt.operation_id, historical=True)
+        except TypeError as error:
+            if 'historical' not in str(error):
+                raise
+            plan = effects.config.journal.bound_plan(receipt.operation_id)
+        try:
+            receipt.require_profile(plan, historical=True)
+        except TypeError as error:
+            if 'historical' not in str(error):
+                raise
+            receipt.require_profile(plan)
         selected = plan.authority_cutover
         if (type(plan.revision) is not str
                 or re.fullmatch(r"[0-9a-f]{40}", plan.revision) is None

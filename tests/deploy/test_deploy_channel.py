@@ -23,7 +23,6 @@ _DEPLOY_CLEANUP_TIMEOUT_SECONDS = 5
 
 
 def test_failed_reconciliation_remains_quiescent_and_non_replaying(tmp_path, monkeypatch) -> None:
-    from dataclasses import asdict
     from types import SimpleNamespace
     from uuid import uuid4
     from app.ops import postgres_deploy_linux as linux
@@ -64,9 +63,9 @@ def test_failed_reconciliation_remains_quiescent_and_non_replaying(tmp_path, mon
     monkeypatch.setattr(linux, "_command", source_absent)
     supervisor = linux.DeploymentSupervisor(config)
     request = {"action": "reconcile-failed", "operation_id": operation_id,
-               "plan": asdict(plan), "bootstrap": False}
+               "plan": plan.payload(), "bootstrap": False}
     for refused in (request, {**request, "action": "prepare", "operation_id": str(uuid4())},
-                    {**request, "plan": {**asdict(plan), "revision": "b" * 40}}):
+                    {**request, "plan": {**plan.payload(), "revision": "b" * 40}}):
         with pytest.raises(PostgresDeployError):
             supervisor.request(refused)
         assert journal.read().stage == "activating"

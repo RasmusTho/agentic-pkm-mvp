@@ -727,6 +727,14 @@ class Harness:
 class FixedTestAdapterTests(unittest.TestCase):
     def setUp(self):
         archive, manifest, source_hashes = fixture_source()
+        # Keep the probe's transient fixture namespace outside the repository.
+        # The source-RPC process shard concurrently inventories non-ignored
+        # app/scripts Python files; placing these disposable roots under
+        # scripts/ made that inventory race with fixture cleanup.
+        self.prep = tempfile.TemporaryDirectory(prefix="probe-test-prep-")
+        self.prep_root = Path(self.prep.name)
+        self.prep_patch = patch.object(target, "PREP", self.prep_root)
+        self.prep_patch.start()
         self.source_pins = patch.multiple(
             target,
             ARCHIVE_SHA256=target.sha(archive),
@@ -754,6 +762,8 @@ class FixedTestAdapterTests(unittest.TestCase):
             guard.stop()
         self.temp.cleanup()
         self.source_pins.stop()
+        self.prep_patch.stop()
+        self.prep.cleanup()
 
     def fresh(self):
         """Independent hostile case; never clear an original handle's UNKNOWN."""
