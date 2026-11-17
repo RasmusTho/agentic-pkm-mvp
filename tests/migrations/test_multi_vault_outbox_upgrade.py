@@ -156,6 +156,7 @@ def mvr06d_db(tmp_path, monkeypatch):
         use_database(monkeypatch, dsn)
         stub_settings_reload(monkeypatch)
         runtime, first, extra = mvr06b_instance(tmp_path, monkeypatch)
+        use_database(monkeypatch, dsn)
         monkeypatch.setenv("WORKER_CLAIM_LEASE_SECONDS", "30")
         monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "index-outbox.jsonl"))
         yield runtime, first, dsn, str(legacy_pending), str(unprovable)
