@@ -410,6 +410,9 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "app/release_channels/",
         "tests/helpers/runtime_start_harness.py",
         "tests/runtime/test_start_full_system_version_marker.py",
+        # Source-RPC fixture census tests construct ignored worktrees and read
+        # this repository ignore policy directly.
+        ".gitignore",
         ".dockerignore",
         ".github/workflows/app-image-build.yml",
         ".github/workflows/ci-smoke.yaml",

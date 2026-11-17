@@ -3164,6 +3164,7 @@ def test_deploy_heavy_triggers_cover_scripts_referenced_by_deploy_tests() -> Non
     import re
 
     triggers = selector.HEAVY_PR_DEFERRED_TARGETS["tests/deploy"]
+    assert ".gitignore" in triggers
     literal = re.compile(r"[\"']([A-Za-z0-9_./][A-Za-z0-9_./@+=,-]*)[\"']")
     joined = re.compile(r'"([A-Za-z0-9_.@+=,-]+)"\s*/\s*"([A-Za-z0-9_.@+=,-]+)"')
     single = re.compile(r'/\s*"([A-Za-z0-9_.@+=,-]+)"')

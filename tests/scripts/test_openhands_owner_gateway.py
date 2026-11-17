@@ -11,6 +11,64 @@ from pathlib import Path
 
 import pytest
 
+_GATEWAY_STARTUP_DEADLINE_SECONDS = 15.0
+_GATEWAY_PROBE_TIMEOUT_SECONDS = 3.0
+_GATEWAY_DIAGNOSTIC_BYTES = 4096
+
+
+def _wait_for_gateway_readiness(process, probe, *, deadline, clock=time.monotonic, sleep=time.sleep):
+    """Wait for the exact synthetic upstream response without hiding child exits."""
+    while True:
+        returncode = process.poll()
+        if returncode is not None:
+            return False, f"gateway child exited before readiness (returncode={returncode})"
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return False, "gateway readiness deadline expired"
+        try:
+            response = probe(min(_GATEWAY_PROBE_TIMEOUT_SECONDS, remaining))
+        except OSError:
+            response = None
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return False, "gateway readiness deadline expired"
+        if response == (200, b"upstream"):
+            return True, ""
+        sleep(min(0.02, remaining))
+
+
+def _bounded_redacted_output(raw, secret: bytes) -> str:
+    if not isinstance(raw, bytes):
+        raw = str(raw).encode()
+    return raw.replace(secret, b"[redacted]")[:_GATEWAY_DIAGNOSTIC_BYTES].decode(
+        errors="replace"
+    )
+
+
+def _finish_gateway_process(
+    process, secret: bytes
+) -> tuple[int | None, str, str, bool, str | None]:
+    cleanup_error = None
+    try:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5)
+    except Exception as error:  # pragma: no cover - only cleanup failures
+        cleanup_error = f"gateway cleanup failed ({type(error).__name__})"
+        stdout = stderr = b""
+    secret_present = secret in stdout or secret in stderr
+    return (
+        process.poll(),
+        _bounded_redacted_output(stdout, secret),
+        _bounded_redacted_output(stderr, secret),
+        secret_present,
+        cleanup_error,
+    )
+
 
 def test_gateway_admission_and_secret_boundary(tmp_path):
     node = shutil.which("node")
@@ -59,10 +117,10 @@ def test_gateway_admission_and_secret_boundary(tmp_path):
     script = Path(__file__).resolve().parents[2] / "scripts/openhands_owner_gateway.mjs"
     process = subprocess.Popen([node, str(script), str(config)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    def call(path, method="GET", body=None, **override):
+    def call(path, method="GET", body=None, timeout=3, **override):
         headers = {"Host": "owner.example:9443", "Tailscale-User-Login": "owner@example.test"}
         headers.update(override)
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
         try:
             conn.request(method, path, body=body, headers=headers)
             reply = conn.getresponse()
@@ -70,52 +128,204 @@ def test_gateway_admission_and_secret_boundary(tmp_path):
         finally:
             conn.close()
 
+    ready = False
+    readiness_reason = "gateway readiness was not attempted"
+    cleanup_error = None
     try:
-        for _ in range(100):
-            try:
-                call("/")
-                break
-            except OSError:
-                time.sleep(.02)
-        else:
-            pytest.fail("gateway failed to start")
-        seen.clear()
-        assert call("/", **{"Tailscale-User-Login": ""})[0] == 403
-        assert call("/", **{"Tailscale-User-Login": "someone@example.test"})[0] == 403
-        assert call("/", Origin="https://evil.example")[0] == 403
-        assert call("/", Host="other.example")[0] == 403
-        assert call("/api/conversations/search?session_api_key=leak")[0] == 403
-        assert call("/api/bash/execute_bash_command", "POST", Origin="https://owner.example:9443")[0] == 403
-        assert call("/api/conversations", "POST", Origin="https://owner.example:9443")[0] == 403
-        assert call(f"/api/conversations?ids={cid}&ids=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")[0] == 403
-        assert call("/api/conversations?ids=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")[0] == 403
-        assert call("/api/settings/secrets/private")[0] == 403
-        assert call("/api/agent-profiles/private/secrets")[0] == 403
-        assert call(f"/api/conversations/{cid}/run", "POST")[0] == 403
-        assert seen == []
-        assert call("/") == (200, b"upstream")
-        assert seen[-1] == ("/", None)
-        assert call("/api/conversations/search", **{"X-Session-API-Key": "attacker"}) == (200, b"upstream")
-        assert seen[-1] == ("/api/conversations/search", "synthetic-private-key")
-        assert call(f"/api/conversations?ids={cid}")[0] == 200
-        assert call("/api/settings") == (200, b"upstream")
-        assert seen[-1] == ("/api/settings", "synthetic-private-key")
-        with pytest.raises((http.client.IncompleteRead, http.client.RemoteDisconnected)):
-            call(f"/api/conversations/{cid}")
-        assert call("/")[0] == 200
-        preference = {"misc_settings_diff": {"app_preferences": {"user_consents_to_analytics": False}}}
-        assert call("/api/settings", "PATCH", body=json.dumps(preference), Origin="https://owner.example:9443")[0] == 200
-        preference["misc_settings_diff"]["app_preferences"]["user_consents_to_analytics"] = True
-        assert call("/api/settings", "PATCH", body=json.dumps(preference), Origin="https://owner.example:9443")[0] == 403
-        key.chmod(0o644)
-        assert call("/api/conversations/search")[0] == 503
+        ready, readiness_reason = _wait_for_gateway_readiness(
+            process,
+            lambda timeout: call("/", timeout=timeout),
+            deadline=time.monotonic() + _GATEWAY_STARTUP_DEADLINE_SECONDS,
+        )
+        if ready:
+            seen.clear()
+            assert call("/", **{"Tailscale-User-Login": ""})[0] == 403
+            assert call("/", **{"Tailscale-User-Login": "someone@example.test"})[0] == 403
+            assert call("/", Origin="https://evil.example")[0] == 403
+            assert call("/", Host="other.example")[0] == 403
+            assert call("/api/conversations/search?session_api_key=leak")[0] == 403
+            assert call("/api/bash/execute_bash_command", "POST", Origin="https://owner.example:9443")[0] == 403
+            assert call("/api/conversations", "POST", Origin="https://owner.example:9443")[0] == 403
+            assert call(f"/api/conversations?ids={cid}&ids=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")[0] == 403
+            assert call("/api/conversations?ids=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")[0] == 403
+            assert call("/api/settings/secrets/private")[0] == 403
+            assert call("/api/agent-profiles/private/secrets")[0] == 403
+            assert call(f"/api/conversations/{cid}/run", "POST")[0] == 403
+            assert seen == []
+            assert call("/") == (200, b"upstream")
+            assert seen[-1] == ("/", None)
+            assert call("/api/conversations/search", **{"X-Session-API-Key": "attacker"}) == (200, b"upstream")
+            assert seen[-1] == ("/api/conversations/search", "synthetic-private-key")
+            assert call(f"/api/conversations?ids={cid}")[0] == 200
+            assert call("/api/settings") == (200, b"upstream")
+            assert seen[-1] == ("/api/settings", "synthetic-private-key")
+            with pytest.raises((http.client.IncompleteRead, http.client.RemoteDisconnected)):
+                call(f"/api/conversations/{cid}")
+            assert call("/")[0] == 200
+            preference = {"misc_settings_diff": {"app_preferences": {"user_consents_to_analytics": False}}}
+            assert call("/api/settings", "PATCH", body=json.dumps(preference), Origin="https://owner.example:9443")[0] == 200
+            preference["misc_settings_diff"]["app_preferences"]["user_consents_to_analytics"] = True
+            assert call("/api/settings", "PATCH", body=json.dumps(preference), Origin="https://owner.example:9443")[0] == 403
+            key.chmod(0o644)
+            assert call("/api/conversations/search")[0] == 503
     finally:
-        process.terminate()
-        stdout, stderr = process.communicate(timeout=5)
-        backend.shutdown()
-        backend.server_close()
-        thread.join(timeout=5)
-    assert b"synthetic-private-key" not in stdout + stderr
+        returncode, stdout, stderr, secret_present, process_cleanup_error = _finish_gateway_process(
+            process, b"synthetic-private-key"
+        )
+        cleanup_errors = [process_cleanup_error] if process_cleanup_error else []
+        for cleanup_name, cleanup_action in (
+            ("backend shutdown", backend.shutdown),
+            ("backend close", backend.server_close),
+            ("backend thread join", lambda: thread.join(timeout=5)),
+        ):
+            try:
+                cleanup_action()
+            except Exception as error:  # pragma: no cover - only cleanup failures
+                cleanup_errors.append(f"{cleanup_name} failed ({type(error).__name__})")
+        cleanup_error = "; ".join(cleanup_errors) or None
+    if not ready:
+        assert secret_present is False
+        pytest.fail(
+            f"{readiness_reason}; returncode={returncode}; stderr={stderr!r}"
+            + (f"; {cleanup_error}" if cleanup_error else "")
+        )
+    if cleanup_error:
+        pytest.fail(cleanup_error)
+    assert secret_present is False
+
+
+def test_gateway_readiness_wait_admits_delayed_exact_response():
+    now = [0.0]
+    timeouts = []
+
+    class Process:
+        def poll(self):
+            return None
+
+    def probe(timeout):
+        timeouts.append(timeout)
+        if now[0] <= 2.1:
+            raise OSError("not ready")
+        return 200, b"upstream"
+
+    def sleep(duration):
+        now[0] += duration
+
+    ready, reason = _wait_for_gateway_readiness(
+        Process(), probe, deadline=15.0, clock=lambda: now[0], sleep=sleep
+    )
+    assert ready is True
+    assert reason == ""
+    assert len(timeouts) > 1
+    assert now[0] > 2.1
+
+
+def test_gateway_diagnostics_redact_and_bound_complete_output():
+    secret = b"synthetic-private-key"
+    raw = b"x" * 100 + secret + b"y" * 5000 + secret + b"z"
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def communicate(self, timeout):
+            return raw, raw
+
+    returncode, stdout, stderr, secret_present, cleanup_error = _finish_gateway_process(
+        Process(), secret
+    )
+    assert returncode == 0
+    assert secret_present is True
+    assert secret not in stdout.encode() + stderr.encode()
+    assert len(stdout.encode()) <= _GATEWAY_DIAGNOSTIC_BYTES
+    assert len(stderr.encode()) <= _GATEWAY_DIAGNOSTIC_BYTES
+    assert cleanup_error is None
+
+
+def test_gateway_early_exit_diagnostics_detect_secret_beyond_bound():
+    secret = b"synthetic-private-key"
+    raw = b"x" * (_GATEWAY_DIAGNOSTIC_BYTES + 100) + secret
+
+    class Process:
+        returncode = 17
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout):
+            return raw, raw
+
+    returncode, stdout, stderr, secret_present, cleanup_error = _finish_gateway_process(
+        Process(), secret
+    )
+    assert returncode == 17
+    assert secret_present is True
+    assert secret not in stdout.encode() + stderr.encode()
+    assert len(stdout.encode()) <= _GATEWAY_DIAGNOSTIC_BYTES
+    assert len(stderr.encode()) <= _GATEWAY_DIAGNOSTIC_BYTES
+    assert cleanup_error is None
+
+
+def test_gateway_readiness_wait_rejects_response_after_deadline():
+    class Process:
+        def poll(self):
+            return None
+
+    now = [0.0]
+
+    def probe(timeout):
+        now[0] = 1.1
+        return 200, b"upstream"
+
+    ready, reason = _wait_for_gateway_readiness(
+        Process(), probe, deadline=1.0, clock=lambda: now[0], sleep=lambda _: None
+    )
+    assert ready is False
+    assert reason == "gateway readiness deadline expired"
+
+
+def test_gateway_readiness_wait_reports_early_child_exit():
+    probes = []
+
+    class Process:
+        def poll(self):
+            return 17
+
+    ready, reason = _wait_for_gateway_readiness(
+        Process(), lambda timeout: probes.append(timeout), deadline=15.0, clock=lambda: 0.0
+    )
+    assert ready is False
+    assert reason == "gateway child exited before readiness (returncode=17)"
+    assert probes == []
+
+
+def test_gateway_readiness_wait_stops_at_deadline():
+    now = [0.0]
+    timeouts = []
+
+    class Process:
+        def poll(self):
+            return None
+
+    def probe(timeout):
+        timeouts.append(timeout)
+        raise OSError("not ready")
+
+    def sleep(duration):
+        now[0] += duration
+
+    ready, reason = _wait_for_gateway_readiness(
+        Process(), probe, deadline=0.05, clock=lambda: now[0], sleep=sleep
+    )
+    assert ready is False
+    assert reason == "gateway readiness deadline expired"
+    assert timeouts
+    assert max(timeouts) <= 0.05
 
 
 def test_missing_identity_configuration_refuses():

@@ -1414,6 +1414,14 @@ Production keeps the base environment setting until an operator authorizes a
 configuration change through the deployment gate; its distinct production
 entrypoint retains its existing client default and does not consume this selector.
 
+The outer Compose `/healthz` probe is a separate liveness budget from those inner
+runtime, capture, and ASK client budgets. The base and PROD effective healthcheck
+remain at a 2-second urllib request deadline and 3-second Docker timeout; DEV and
+TEST overlays use a finite 5-second urllib deadline and 7-second Docker timeout to
+admit normal deep-readiness latency without weakening the active `/healthz` →
+`/api/health` readiness producer or changing production authority. These committed
+defaults describe configuration only; they do not claim a live installation.
+
 Channel qualification must inspect the effective gateway environment and prove
 the intended running image/SHA, a real note body, and a capture's matching runtime
 acknowledgement and persisted material. `/healthz` alone establishes liveness.

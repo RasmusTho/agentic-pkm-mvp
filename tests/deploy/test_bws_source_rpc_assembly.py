@@ -22,6 +22,207 @@ from tests.deploy.bws_fixture_support import bws_secure_tmp_path  # noqa: F401
 
 
 _ROOT_RPC_BATCHES = {'empty': 5, 'anchored': 4, 'alias': 1, 'proposed': 1, 'uncertain': 1}
+_RPC_EXCEPTION_CLASSES = frozenset({
+    'AssertionError', 'CalledProcessError', 'FileNotFoundError', 'KeyError',
+    'OSError', 'PermissionError', 'RuntimeError', 'TimeoutError', 'TimeoutExpired',
+    'TypeError', 'UnicodeDecodeError', 'ValueError',
+})
+_RPC_FUNCTION_ROLES = frozenset({
+    '_execute_source_installation', '_git_mode', '_git_source_files', '_refuse',
+    '_verify_candidate', '_verify_candidate_checkout', '_verify_candidate_git',
+    'run', 'run_source_installation', 'verify_caller_checkout',
+})
+_RPC_GIT_CATEGORIES = frozenset({'clean', 'head', 'object', 'root', 'tree'})
+_RPC_GIT_CHECK_LIMIT = 8
+
+
+def _source_paths_for_copy(repository: Path) -> tuple[Path, ...]:
+    """Copy cached and non-ignored worktree source files only."""
+    raw_paths = subprocess.check_output(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "app", "scripts"],
+        cwd=repository,
+    )
+    paths = {path for path in raw_paths.split(b"\0") if path.endswith(b".py")}
+    return tuple(repository / os.fsdecode(path) for path in sorted(paths))
+
+
+def _rpc_exception_class(error: BaseException) -> str:
+    name = type(error).__name__
+    return name if name in _RPC_EXCEPTION_CLASSES else 'other'
+
+
+def _rpc_numeric(error: BaseException, attribute: str, upper: int | float) -> int | float | None:
+    value = getattr(error, attribute, None)
+    if (type(value) in (int, float)
+            and 0 <= value <= upper):
+        return value
+    return None
+
+
+def _rpc_frames(error: BaseException) -> list[tuple[str, str, int]]:
+    frames = []
+    for frame, line in traceback.walk_tb(error.__traceback__):
+        parts = set(Path(frame.f_code.co_filename).parts)
+        if not {'app', 'scripts'} & parts:
+            continue
+        role = frame.f_code.co_name if frame.f_code.co_name in _RPC_FUNCTION_ROLES else 'other'
+        frames.append(('app_source' if 'app' in parts else 'launcher_source', role, line))
+    return frames[-6:]
+
+
+def _rpc_exception_summary(error: BaseException) -> dict[str, object]:
+    return {
+        'class': _rpc_exception_class(error),
+        'errno': _rpc_numeric(error, 'errno', 4096),
+        'timeout': _rpc_numeric(error, 'timeout', 600),
+        'frames': _rpc_frames(error),
+    }
+
+
+def _rpc_failure_diagnostic(error: BaseException, git_checks: list[dict[str, object]]) -> dict[str, object]:
+    context = []
+    seen: set[int] = set()
+    current = error.__context__
+    while current is not None and id(current) not in seen and len(context) < 4:
+        seen.add(id(current))
+        context.append(_rpc_exception_summary(current))
+        current = current.__context__
+    outer = _rpc_exception_summary(error)
+    outer['context'] = context
+    outer['git_checks'] = tuple(git_checks)
+    return outer
+
+
+def _record_rpc_failure(state: dict[str, object], error: BaseException) -> None:
+    try:
+        diagnostic = _rpc_failure_diagnostic(
+            error, state.get('rpc_git_checks', []),
+        )
+    except Exception:
+        # Diagnostics must never replace the original RPC failure.
+        state.pop('rpc_failure', None)
+        return
+    state['rpc_failure'] = diagnostic
+
+
+def _rpc_failure_assertion_context(state: dict[str, object]) -> dict[str, object]:
+    checks = state.get('rpc_git_checks', [])
+    if isinstance(checks, list):
+        checks = tuple(checks[-_RPC_GIT_CHECK_LIMIT:])
+    else:
+        checks = ()
+    dropped = state.get('rpc_git_checks_dropped')
+    return {
+        'rpc_failure': state.get('rpc_failure') if isinstance(state.get('rpc_failure'), dict) else None,
+        'rpc_git_checks': checks,
+        'rpc_git_checks_dropped': dropped if type(dropped) is int and dropped >= 0 else None,
+    }
+
+
+def _emit_rpc_failure_diagnostic(state: dict[str, object], error: BaseException) -> None:
+    try:
+        _record_rpc_failure(state, error)
+        context = _rpc_failure_assertion_context(state)
+        if context['rpc_failure'] is None:
+            return
+        sys.stderr.write(json.dumps({
+            'schema': 'rpc-failure-diagnostic.v1',
+            **context,
+        }, sort_keys=True) + '\n')
+    except Exception:
+        # Diagnostic construction and emission must never replace the original RPC failure.
+        pass
+
+
+def _rpc_git_category(argv: object) -> str | None:
+    try:
+        words = tuple(str(part) for part in argv)  # noqa: C401 - values are never recorded
+    except Exception:
+        return None
+    if 'git' not in words:
+        return None
+    if '--show-toplevel' in words:
+        return 'root'
+    if 'status' in words and '--porcelain=v1' in words:
+        return 'clean'
+    if 'rev-parse' in words and 'HEAD' in words:
+        return 'head'
+    if 'ls-tree' in words:
+        return 'tree'
+    if 'cat-file' in words:
+        return 'object'
+    return None
+
+
+def _rpc_git_record(category: str, result: object = None, error: BaseException | None = None,
+                    *, expected_root: Path | None = None, expected_revision: str | None = None) -> dict[str, object]:
+    if category not in _RPC_GIT_CATEGORIES:
+        return {'category': 'other'}
+    record: dict[str, object] = {'category': category}
+    if error is not None:
+        record.update({
+            'class': _rpc_exception_class(error),
+            'errno': _rpc_numeric(error, 'errno', 4096),
+            'timeout': _rpc_numeric(error, 'timeout', 600),
+        })
+        return record
+    return_code = getattr(result, 'returncode', None)
+    record['return_code'] = (return_code if type(return_code) is int
+                             and -255 <= return_code <= 255 else None)
+    stderr = getattr(result, 'stderr', None)
+    stdout = getattr(result, 'stdout', None)
+    record['stderr_present'] = bool(stderr)
+    if category == 'root':
+        try:
+            record['root'] = (record['return_code'] == 0 and not stderr
+                              and Path(os.fsdecode(stdout.rstrip(b'\n'))) == expected_root)
+        except Exception:
+            record['root'] = False
+    elif category == 'head':
+        try:
+            record['head'] = (record['return_code'] == 0 and not stderr
+                              and stdout.rstrip(b'\n').decode('ascii') == expected_revision)
+        except Exception:
+            record['head'] = False
+    elif category == 'clean':
+        record['clean'] = record['return_code'] == 0 and not stderr and not stdout
+    return record
+
+
+def _record_rpc_git_check(state: dict[str, object], category: str | None, result: object = None,
+                          error: BaseException | None = None, *, expected_root: Path | None = None,
+                          expected_revision: str | None = None) -> None:
+    try:
+        if category is None:
+            return
+        checks = state.setdefault('rpc_git_checks', [])
+        dropped = state.setdefault('rpc_git_checks_dropped', 0)
+        if not isinstance(checks, list) or type(dropped) is not int:
+            return
+        record = _rpc_git_record(
+            category, result, error, expected_root=expected_root, expected_revision=expected_revision,
+        )
+        if len(checks) >= _RPC_GIT_CHECK_LIMIT:
+            checks.pop(0)
+            state['rpc_git_checks_dropped'] = dropped + 1
+        checks.append(record)
+    except Exception:
+        # Diagnostic recording must never replace the observed result/failure.
+        pass
+
+
+def _rpc_observed_git_run(state: dict[str, object], original_run, expected_root: Path,
+                          expected_revision: str, argv, *args, **kwargs):
+    category = _rpc_git_category(argv)
+    try:
+        result = original_run(argv, *args, **kwargs)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _record_rpc_git_check(state, category, error=exc)
+        raise
+    _record_rpc_git_check(
+        state, category, result, expected_root=expected_root, expected_revision=expected_revision,
+    )
+    return result
 
 
 def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_root: Path,
@@ -58,14 +259,13 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     (base / ".git").mkdir(mode=0o700)
     checkout = base / "candidate"
     checkout.mkdir(mode=0o755)
-    for package in ("app", "scripts"):
-        for source in (repository / package).rglob("*.py"):
-            if "__pycache__" in source.parts:
-                continue
-            target = checkout / source.relative_to(repository)
-            target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-            target.chmod(0o755 if target.name == "postgres_deploy_service.py" else 0o644)
+    # Exclude ignored ambient Python files from concurrent worktree activity;
+    # keep current tracked, staged, and non-ignored working-tree bytes.
+    for source in _source_paths_for_copy(repository):
+        target = checkout / source.relative_to(repository)
+        target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        target.chmod(0o755 if target.name == "postgres_deploy_service.py" else 0o644)
     resource_scenarios = {
         'deep-application', 'deep-effect', 'manifest-effect-bound',
         'manifest-effect-directory-bound', 'manifest-effect-ancestor-bound', 'manifest-slot-bound',
@@ -717,23 +917,23 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
                 patch.setattr(transaction._NativePorts, 'verify_candidate', unavailable_candidate)
         state.update(backups=backups, receipts=receipts, bound=True, control_root=control_root)
         original_rpc = linux.rpc
+        original_transaction_subprocess = transaction.subprocess
+        def observed_git_run(argv, *args, **kwargs):
+            return _rpc_observed_git_run(
+                state, original_transaction_subprocess.run, checkout, revision,
+                argv, *args, **kwargs,
+            )
+        patch.setattr(transaction, 'subprocess', SimpleNamespace(
+            run=observed_git_run,
+            DEVNULL=original_transaction_subprocess.DEVNULL,
+            TimeoutExpired=original_transaction_subprocess.TimeoutExpired,
+        ))
+
         def observed_rpc(selected_channel, selected):
             try:
                 return original_rpc(selected_channel, selected)
             except Exception as exc:
-                try:
-                    frames = [
-                        (
-                            'app_source' if 'app' in Path(frame.f_code.co_filename).parts else 'launcher_source',
-                            frame.f_code.co_name,
-                            line,
-                        )
-                        for frame, line in traceback.walk_tb(exc.__traceback__)
-                        if {'app', 'scripts'} & set(Path(frame.f_code.co_filename).parts)
-                    ]
-                    state['rpc_failure'] = (type(exc).__name__, frames[-6:])
-                except Exception:
-                    pass
+                _emit_rpc_failure_diagnostic(state, exc)
                 raise
         patch.setattr(linux, 'rpc', observed_rpc)
         return finder
@@ -944,7 +1144,9 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             assert (state['installed'] / 'app/ops/bws_control_installation.py').read_bytes() == state['old_source']
         raise SystemExit(status)
     if fault in {'path-preserved-close', 'path-preserved-transient-close'}:
-        assert status == 78 and output.getvalue() == '' and state['close_failed']
+        assert (
+            status == 78 and output.getvalue() == '' and state.get('close_failed') is True
+        ), _rpc_failure_assertion_context(state)
         raise SystemExit(status)
     if fault in {'path-close', 'path-transient-initial', 'path-transient-prebackup',
                  'path-proc-close', 'path-launcher-close'} or fault.startswith(('unit-close:', 'unit-runtime-close:')):
@@ -953,7 +1155,9 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
             assert state['uncertain_owned_close_calls'] >= 1
             assert state['close_attempts'].count(state['failed_close_fd']) == 1
             assert not {'prepare', 'stop', 'start'} & set(state['events'])
-        assert status == 78 and output.getvalue() == '' and state['close_failed']
+        assert (
+            status == 78 and output.getvalue() == '' and state.get('close_failed') is True
+        ), _rpc_failure_assertion_context(state)
         raise SystemExit(status)
     assert status == 0, (status, output.getvalue(), state.get("bootstrap_failure"), state.get('rpc_failure'))
     result = json.loads(output.getvalue())["source_installation"]
