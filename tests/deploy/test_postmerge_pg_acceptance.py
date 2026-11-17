@@ -1007,65 +1007,91 @@ def test_legacy_terminal_profile_history_refuses_failed_bootstrap_before_publica
     assert supervisor.operation is None
     assert reached_worker == []
     assert not (journal.directory / f'{fresh_id}.request.json').exists()
-    assert journal.read().operation_id == old_id
-
-
-def test_legacy_terminal_profile_history_qualifies_source_preflight(tmp_path):
-    journal, operation_id, _legacy_plan, _raw_plan, receipt = _legacy_terminal_fixture(tmp_path)
-    effects = SimpleNamespace(config=SimpleNamespace(journal=journal), operation_id=operation_id)
-    from app.ops import native_source_admission
-
-    native_source_admission.require_terminal_deployment(effects)
-    assert journal.read(historical=True) == receipt
+    # The old failed C2 record is historical-only, and its deliberately
+    # malformed bootstrap binding must not be admitted even by the historical
+    # reader.
     with pytest.raises(PostgresDeployError):
         journal.read()
 
-    runtime = SimpleNamespace(
-        installed_fingerprint='1' * 64, execution_fingerprint='2' * 64,
-        running_writers=('api', 'worker', 'watcher'), existing_writers=('api', 'worker', 'watcher'),
-        census_fingerprint='3' * 64, retained_state_fingerprint='4' * 64,
-        container_root='/srv/app', vault_overlay='docker-compose.full-host-vault.yml',
-    )
-    effects = SimpleNamespace(
-        config=SimpleNamespace(channel='dev', journal=journal),
-        source_identity_runtime_snapshot=lambda *_args, **_kwargs: runtime,
-        quiescent=lambda: True,
-    )
-    snapshot = installation_transaction._current_writer_snapshot(effects, {
-        'channel': 'dev', 'candidate_sha': 'b' * 40, 'image_digest': DIGEST,
-    })
-    assert snapshot.terminal_revision == 'a' * 40
-    assert snapshot.terminal_image_digest == DIGEST
+
+def test_legacy_terminal_profile_history_qualifies_source_preflight(tmp_path):
+    from app.ops import native_source_admission
+
+    # Source admission and the writer census must both qualify the two
+    # supported terminal states.  The failed DEV envelope has no PG payload;
+    # the committed TEST envelope must still satisfy the pinned historical
+    # profile.  Neither reader may turn the old request into current state.
+    for channel, terminal_result in (('dev', 'failed'), ('test', 'committed')):
+        journal, operation_id, _legacy_plan, _raw_plan, receipt = _legacy_terminal_fixture(
+            tmp_path / channel, channel=channel, terminal_result=terminal_result,
+        )
+        effects = SimpleNamespace(config=SimpleNamespace(journal=journal), operation_id=operation_id)
+
+        native_source_admission.require_terminal_deployment(effects)
+        assert journal.read(historical=True) == receipt
+        with pytest.raises(PostgresDeployError):
+            journal.read()
+
+        runtime = SimpleNamespace(
+            installed_fingerprint='1' * 64, execution_fingerprint='2' * 64,
+            running_writers=('api', 'worker', 'watcher'), existing_writers=('api', 'worker', 'watcher'),
+            census_fingerprint='3' * 64, retained_state_fingerprint='4' * 64,
+            container_root='/srv/app', vault_overlay='docker-compose.full-host-vault.yml',
+        )
+        effects = SimpleNamespace(
+            config=SimpleNamespace(channel=channel, journal=journal),
+            source_identity_runtime_snapshot=lambda *_args, **_kwargs: runtime,
+            quiescent=lambda: True,
+        )
+        snapshot = installation_transaction._current_writer_snapshot(effects, {
+            'channel': channel, 'candidate_sha': 'b' * 40, 'image_digest': DIGEST,
+        })
+        assert snapshot.terminal_revision == 'a' * 40
+        assert snapshot.terminal_image_digest == DIGEST
 
 
 def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_path):
+    def expect_refusal(journal, operation):
+        before = {path.name: path.read_bytes() for path in journal.directory.iterdir()}
+        with pytest.raises(PostgresDeployError):
+            operation()
+        assert {path.name: path.read_bytes() for path in journal.directory.iterdir()} == before
+
     journal, operation_id, _legacy_plan, raw_plan, _receipt = _legacy_terminal_fixture(tmp_path)
-    with pytest.raises(PostgresDeployError):
-        journal.bind_request(operation_id, DeployPlan('dev', 'b' * 40, ('db', 'api'),
-                                                       ('postgres-db', 'postgres-api'),
-                                                       image_digest=DIGEST, automatic=True), False)
+    expect_refusal(journal, lambda: journal.bind_request(
+        operation_id, DeployPlan('dev', 'b' * 40, ('db', 'api'),
+                                 ('postgres-db', 'postgres-api'),
+                                 image_digest=DIGEST, automatic=True), False,
+    ))
+    # Reusing the old ID with a current-profile plan is not a prepare/join or
+    # reconcile path; even a first current write must leave every old byte
+    # untouched.
+    expect_refusal(journal, lambda: journal.write(operation_id, 'prepared'))
+
+    foreign, foreign_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'foreign')
+    foreign_receipt = json.loads((foreign.directory / f'{foreign_id}.receipt.json').read_text())
+    foreign_receipt['pg_acceptance']['channel'] = 'test'
+    foreign._write_json(f'{foreign_id}.receipt.json', foreign_receipt)
+    foreign._write_json('dev.json', foreign_receipt)
+    expect_refusal(foreign, lambda: foreign.operation_request(foreign_id))
 
     tampered = json.loads((journal.directory / f'{operation_id}.receipt.json').read_text())
     tampered['pg_acceptance']['source_sha'] = 'c' * 40
     (journal.directory / f'{operation_id}.receipt.json').write_text(json.dumps(tampered))
-    with pytest.raises(PostgresDeployError):
-        journal.operation_receipt(operation_id)
+    expect_refusal(journal, lambda: journal.operation_receipt(operation_id))
 
-    with pytest.raises(PostgresDeployError):
-        journal.current_request()
+    expect_refusal(journal, lambda: journal.current_request())
 
     missing, missing_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'missing')
     (missing.directory / f'{missing_id}.receipt.json').unlink()
     (missing.directory / 'dev.json').unlink()
-    with pytest.raises(PostgresDeployError):
-        missing.operation_request(missing_id)
+    expect_refusal(missing, lambda: missing.operation_request(missing_id))
 
     incomplete, incomplete_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'incomplete')
     incomplete._write_json(f'{incomplete_id}.receipt.json', DeployReceipt(
         incomplete_id, 'dev', 'deploy', 'prepared', None,
     ).payload())
-    with pytest.raises(PostgresDeployError):
-        incomplete.operation_request(incomplete_id)
+    expect_refusal(incomplete, lambda: incomplete.operation_request(incomplete_id))
 
     failed, failed_id, _plan, _raw, _receipt = _legacy_terminal_fixture(
         tmp_path / 'failed', channel='dev', terminal_result='failed',
@@ -1073,8 +1099,7 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
     assert failed.operation_receipt(failed_id) is not None
     (failed.directory / f'{failed_id}.request.json').unlink()
     (failed.directory / 'dev.request.json').unlink()
-    with pytest.raises(PostgresDeployError):
-        failed.operation_receipt(failed_id)
+    expect_refusal(failed, lambda: failed.operation_receipt(failed_id))
 
     failed_bootstrap, failed_bootstrap_id, _plan, _raw, _receipt = _legacy_terminal_fixture(
         tmp_path / 'failed-bootstrap', channel='dev', terminal_result='failed',
@@ -1083,16 +1108,14 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
         request = json.loads((failed_bootstrap.directory / name).read_text())
         request['bootstrap'] = True
         (failed_bootstrap.directory / name).write_text(json.dumps(request))
-    with pytest.raises(PostgresDeployError):
-        failed_bootstrap.operation_receipt(str(uuid4()))
+    expect_refusal(failed_bootstrap, lambda: failed_bootstrap.operation_receipt(str(uuid4())))
 
     conflict, conflict_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'conflict')
     conflicting = json.loads((conflict.directory / 'dev.json').read_text())
     conflicting['stage'] = 'aborted'
     conflicting['terminal_result'] = 'aborted'
     (conflict.directory / 'dev.json').write_text(json.dumps(conflicting))
-    with pytest.raises(PostgresDeployError):
-        conflict.operation_request(conflict_id)
+    expect_refusal(conflict, lambda: conflict.operation_request(conflict_id))
 
     request_conflict, request_conflict_id, _plan, _raw, _receipt = _legacy_terminal_fixture(
         tmp_path / 'request-conflict',
@@ -1100,8 +1123,7 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
     conflicting_request = json.loads((request_conflict.directory / 'dev.request.json').read_text())
     conflicting_request['plan']['revision'] = 'c' * 40
     (request_conflict.directory / 'dev.request.json').write_text(json.dumps(conflicting_request))
-    with pytest.raises(PostgresDeployError):
-        request_conflict.operation_request(request_conflict_id)
+    expect_refusal(request_conflict, lambda: request_conflict.operation_request(request_conflict_id))
 
     manual, manual_id, _plan, raw_plan, _receipt = _legacy_terminal_fixture(tmp_path / 'manual')
     manual_plan = {key: raw_plan[key] for key in (
@@ -1111,23 +1133,57 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
         request = json.loads((manual.directory / name).read_text())
         request['plan'] = manual_plan
         (manual.directory / name).write_text(json.dumps(request))
-    with pytest.raises(PostgresDeployError):
-        manual.operation_receipt(manual_id)
-    with pytest.raises(PostgresDeployError):
-        manual.current_request(historical=True)
-    with pytest.raises(PostgresDeployError):
-        manual.bound_plan(manual_id, historical=True)
+    expect_refusal(manual, lambda: manual.operation_receipt(manual_id))
+    expect_refusal(manual, lambda: manual.current_request(historical=True))
+    expect_refusal(manual, lambda: manual.bound_plan(manual_id, historical=True))
 
     malformed, malformed_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'malformed')
     malformed_receipt = json.loads((malformed.directory / f'{malformed_id}.receipt.json').read_text())
     malformed_receipt['pg_acceptance']['source_sha'] = 'not-a-sha'
     (malformed.directory / f'{malformed_id}.receipt.json').write_text(json.dumps(malformed_receipt))
-    with pytest.raises(PostgresDeployError):
-        malformed.operation_receipt(malformed_id)
+    expect_refusal(malformed, lambda: malformed.operation_receipt(malformed_id))
+
+    mixed, mixed_id, old_plan, old_raw_plan, old_receipt = _legacy_terminal_fixture(tmp_path / 'mixed-request')
+    current_plan = DeployPlan(
+        old_plan.channel, old_plan.revision, old_plan.services, old_plan.consumers,
+        image_digest=DIGEST, automatic=True,
+    )
+    current_receipt = DeployReceipt(
+        mixed_id, 'dev', 'deploy', 'committed', 'committed',
+        pg_acceptance=_result(old_plan.revision, 'dev', mixed_id),
+    )
+    mixed._write_json(f'{mixed_id}.request.json', {
+        'operation_id': mixed_id, 'plan': current_plan.payload(), 'bootstrap': False,
+    })
+    mixed._write_json(f'{mixed_id}.receipt.json', current_receipt.payload())
+    mixed._write_json('dev.request.json', {
+        'operation_id': mixed_id, 'plan': old_raw_plan, 'bootstrap': False,
+    })
+    mixed._write_json('dev.json', old_receipt.payload())
+    expect_refusal(mixed, lambda: mixed.operation_request(mixed_id))
+
+    mixed_receipt, mixed_receipt_id, old_plan, old_raw_plan, old_receipt = _legacy_terminal_fixture(
+        tmp_path / 'mixed-receipt',
+    )
+    current_plan = DeployPlan(
+        old_plan.channel, old_plan.revision, old_plan.services, old_plan.consumers,
+        image_digest=DIGEST, automatic=True,
+    )
+    mixed_receipt._write_json(f'{mixed_receipt_id}.request.json', {
+        'operation_id': mixed_receipt_id, 'plan': current_plan.payload(), 'bootstrap': False,
+    })
+    mixed_receipt._write_json('dev.request.json', {
+        'operation_id': mixed_receipt_id, 'plan': current_plan.payload(), 'bootstrap': False,
+    })
+    mixed_receipt._write_json(f'{mixed_receipt_id}.receipt.json', DeployReceipt(
+        mixed_receipt_id, 'dev', 'deploy', 'committed', 'committed',
+        pg_acceptance=_result(old_plan.revision, 'dev', mixed_receipt_id),
+    ).payload())
+    mixed_receipt._write_json('dev.json', old_receipt.payload())
+    expect_refusal(mixed_receipt, lambda: mixed_receipt.operation_receipt(mixed_receipt_id))
 
     bootstrap, bootstrap_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'bootstrap')
     retained_request = json.loads((bootstrap.directory / f'{bootstrap_id}.request.json').read_text())
     retained_request['bootstrap'] = True
     (bootstrap.directory / f'{bootstrap_id}.request.json').write_text(json.dumps(retained_request))
-    with pytest.raises(PostgresDeployError):
-        bootstrap.operation_request(bootstrap_id)
+    expect_refusal(bootstrap, lambda: bootstrap.operation_request(bootstrap_id))

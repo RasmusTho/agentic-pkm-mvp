@@ -517,17 +517,38 @@ class DeployJournal:
                 receipt.validate(historical=historical)
                 if receipt.channel != self.channel:
                     raise PostgresDeployError()
-                if historical:
+                if not historical:
+                    # A retained finite-profile receipt is evidence only on
+                    # the explicit historical path.  This also covers failed
+                    # and aborted C2 receipts, whose envelopes have no PG
+                    # payload from which strict validation could infer the
+                    # old profile.  Unbound manual/Karakeep receipts remain
+                    # ordinary current journal state.
                     request = self.operation_request(receipt.operation_id)
-                    if request is None or not isinstance(request[1], DeployPlan):
-                        raise PostgresDeployError()
-                    if (isinstance(receipt.pg_acceptance, dict)
-                        and receipt.pg_acceptance.get('selection_hash') == LEGACY_SELECTION_HASH
-                        and request[1].verification_profile != {
+                    if (request is not None and isinstance(request[1], DeployPlan)
+                        and request[1].verification_profile == {
                             'version': LEGACY_PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
                         }):
                         raise PostgresDeployError()
-                    if request[1].verification_profile == {
+                if historical:
+                    request = self.operation_request(receipt.operation_id)
+                    if request is None:
+                        # Karakeep and manual workers use this journal
+                        # primitive without a request binding. Native
+                        # operation_receipt() applies the stricter terminal
+                        # pair check before admitting successors.
+                        if (isinstance(receipt.pg_acceptance, dict)
+                            and receipt.pg_acceptance.get('selection_hash') == LEGACY_SELECTION_HASH):
+                            raise PostgresDeployError()
+                        return receipt
+                    if (isinstance(receipt.pg_acceptance, dict)
+                        and receipt.pg_acceptance.get('selection_hash') == LEGACY_SELECTION_HASH
+                        and (not isinstance(request[1], DeployPlan)
+                             or request[1].verification_profile != {
+                            'version': LEGACY_PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
+                             })):
+                        raise PostgresDeployError()
+                    if isinstance(request[1], DeployPlan) and request[1].verification_profile == {
                         'version': LEGACY_PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
                     }:
                         receipt.require_profile(request[1], historical=True)
@@ -638,69 +659,103 @@ class DeployJournal:
                 'version': LEGACY_PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
             }):
             raise PostgresDeployError()
-        retained_request_raw = self._read_json(self._operation_name(operation_id, 'request'), limit=8192)
-        if retained_request_raw is not None:
+        request_copies: list[dict[str, Any]] = []
+        for raw in (
+            self._read_json(self._operation_name(operation_id, 'request'), limit=8192),
+            self._read_json(self.channel + '.request.json', limit=8192),
+        ):
+            if raw is None or raw.get('operation_id') != operation_id:
+                continue
             retained_request, _retained_plan = self._validated_request(
-                retained_request_raw, operation_id=operation_id, historical=True,
+                raw, operation_id=operation_id, historical=True,
             )
-            if retained_request != request:
-                raise PostgresDeployError()
-        retained_raw = self._read_json(self._operation_name(operation_id, 'receipt'), limit=4096)
-        current_raw = self._read_json(self.channel + '.json', limit=4096)
-        raw = retained_raw
-        if raw is None:
-            raw = current_raw
-        if raw is None:
+            request_copies.append(retained_request)
+        if any(copy_request != request for copy_request in request_copies):
+            raise PostgresDeployError()
+
+        receipt_copies: list[DeployReceipt] = []
+        for raw in (
+            self._read_json(self._operation_name(operation_id, 'receipt'), limit=4096),
+            self._read_json(self.channel + '.json', limit=4096),
+        ):
+            if raw is None or raw.get('operation_id') != operation_id:
+                continue
+            try:
+                receipt = DeployReceipt(**raw)
+                receipt.validate(historical=True)
+            except Exception:
+                raise PostgresDeployError() from None
+            receipt_copies.append(receipt)
+        if not receipt_copies:
+            raise PostgresDeployError()
+        if any(receipt.payload() != receipt_copies[0].payload() for receipt in receipt_copies[1:]):
+            raise PostgresDeployError()
+        if any(
+            receipt.operation_id != operation_id or receipt.channel != self.channel
+            or receipt.terminal_result not in {'committed', 'aborted', 'failed'}
+            for receipt in receipt_copies
+        ):
             raise PostgresDeployError()
         try:
-            receipt = DeployReceipt(**raw)
-            receipt.validate(historical=True)
-            receipt.require_profile(plan, historical=True)
+            for receipt in receipt_copies:
+                receipt.require_profile(plan, historical=True)
         except Exception:
             raise PostgresDeployError() from None
-        if (receipt.operation_id != operation_id or receipt.channel != self.channel
-            or receipt.terminal_result not in {'committed', 'aborted', 'failed'}):
-            raise PostgresDeployError()
-        if (current_raw is not None and current_raw.get('operation_id') == operation_id
-            and retained_raw is not None and current_raw != retained_raw):
-            raise PostgresDeployError()
-        current_request = self._read_json(self.channel + '.request.json', limit=8192)
-        if current_request is not None:
-            current_validated, _current_plan = self._validated_request(
-                current_request, historical=True,
-            )
-            if (current_validated['operation_id'] == operation_id
-                and current_validated != request):
-                raise PostgresDeployError()
-        return receipt
+        return receipt_copies[0]
 
     def _qualify_historical_pair(
         self, operation_id: str, request: dict[str, Any], plan: DeployPlan,
     ) -> None:
         """Apply one terminal-pair rule to every historical reader."""
-        legacy_plan = plan.verification_profile == {
-            'version': LEGACY_PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
-        }
-        receipt_raw = self._read_json(self._operation_name(operation_id, 'receipt'), limit=4096)
-        if receipt_raw is None:
-            receipt_raw = self._read_json(self.channel + '.json', limit=4096)
-        same_id_legacy_receipt = False
-        if receipt_raw is not None and receipt_raw.get('operation_id') == operation_id:
+        request_copies: list[tuple[dict[str, Any], DeployPlan]] = [(request, plan)]
+        retained_request_raw = self._read_json(self._operation_name(operation_id, 'request'), limit=8192)
+        current_request_raw = self._read_json(self.channel + '.request.json', limit=8192)
+        for raw in (retained_request_raw, current_request_raw):
+            if raw is None or raw.get('operation_id') != operation_id:
+                continue
+            canonical, selected = self._validated_request(
+                raw, operation_id=operation_id, historical=True,
+            )
+            if not isinstance(selected, DeployPlan):
+                raise PostgresDeployError()
+            request_copies.append((canonical, selected))
+        if any(copy_request != request_copies[0][0] for copy_request, _ in request_copies[1:]):
+            raise PostgresDeployError()
+        if any(copy_plan != request_copies[0][1] for _, copy_plan in request_copies[1:]):
+            raise PostgresDeployError()
+
+        receipt_copies: list[DeployReceipt] = []
+        retained_receipt_raw = self._read_json(self._operation_name(operation_id, 'receipt'), limit=4096)
+        current_receipt_raw = self._read_json(self.channel + '.json', limit=4096)
+        for raw in (retained_receipt_raw, current_receipt_raw):
+            if raw is None or raw.get('operation_id') != operation_id:
+                continue
             try:
-                receipt = DeployReceipt(**receipt_raw)
+                receipt = DeployReceipt(**raw)
                 receipt.validate(historical=True)
             except Exception:
                 raise PostgresDeployError() from None
-            same_id_legacy_receipt = (
-                isinstance(receipt.pg_acceptance, dict)
-                and receipt.pg_acceptance.get('selection_hash') == LEGACY_SELECTION_HASH
-            )
-        if legacy_plan:
-            self._require_historical_pair(operation_id, request, plan)
-        elif same_id_legacy_receipt:
-            # A legacy PG envelope cannot be paired with a manual or current
-            # plan, even when the receipt validator has no profile work.
+            receipt_copies.append(receipt)
+        if (retained_receipt_raw is not None and current_receipt_raw is not None
+            and retained_receipt_raw.get('operation_id') == operation_id
+            and current_receipt_raw.get('operation_id') == operation_id
+            and retained_receipt_raw != current_receipt_raw):
             raise PostgresDeployError()
+
+        legacy_plan = any(selected.verification_profile == {
+            'version': LEGACY_PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
+        } for _, selected in request_copies)
+        legacy_receipt = any(
+            isinstance(receipt.pg_acceptance, dict)
+            and receipt.pg_acceptance.get('selection_hash') == LEGACY_SELECTION_HASH
+            for receipt in receipt_copies
+        )
+        if legacy_plan or legacy_receipt:
+            if any(selected.verification_profile != {
+                'version': LEGACY_PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
+            } or not selected.automatic for _, selected in request_copies):
+                raise PostgresDeployError()
+            self._require_historical_pair(operation_id, request_copies[0][0], request_copies[0][1])
 
     def operation_request(
         self, operation_id: str,
@@ -756,6 +811,9 @@ class DeployJournal:
             # operation ID matches, while strict current admission remains
             # enforced by ``read()`` and ``current_request()``.
             current = self.read(historical=True)
+            if current is not None and current.operation_id != operation_id:
+                if self.operation_request(current.operation_id) is None:
+                    raise PostgresDeployError()
             if current is not None and current.operation_id == operation_id and current.terminal_result is not None:
                 receipt = current
         if receipt is not None:
