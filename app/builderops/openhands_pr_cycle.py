@@ -2796,6 +2796,64 @@ def _disposition_error(review: Mapping[str, Any], expected: Mapping[str, Any] | 
     return None
 
 
+def _workflow_review_gate(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
+                          saved: Mapping[str, Any], expected: Mapping[str, Any], *,
+                          require_verification: bool = True) -> dict[str, Any]:
+    """Make the bounded technical disposition at the owning controller, never at the model.
+
+    A provisional disposition permits only CI/Verify. Premerge requires their actual current
+    results and re-derives the disposition from live authority; the audit copy grants nothing.
+    Explicit dispositions and archived analysis retain the existing exact-item workflow.
+    """
+    review = saved.get("review")
+    reconciliation = _bound_reconciliation(layout, saved)
+    disposition = entry.get("review_disposition")
+    if (disposition is not None or reconciliation is not None or not isinstance(review, dict)
+            or review.get("report_contract") != REPORT_CONTRACT or review.get("findings") != []
+            or _review_gate(review, expected)["outcome"] != "pass"):
+        return review_gate(review, expected, disposition=disposition, reconciliation=reconciliation)
+    items = _report_items(review)
+    scope = resolve_native_issue_authority(pr["body"])
+    routine = {"evidence_not_rerun", "ci_not_observed", "simulated_boundary"}
+    if scope is not None and not scope.closing_issues:
+        routine.add("out_of_scope_followup")
+    if (scope is None or any(not isinstance(item, dict) or item.get("kind") not in routine
+                             or (item.get("kind") == "out_of_scope_followup" and where != "scope")
+                             for (where, _), item in items.items())):
+        return review_gate(review, expected)
+    authority = native_authority(layout, pr, entry)
+    publisher = Path(entry["owner_worktree"])
+    targets = _bounded_pytest_targets(entry["verify_targets"], publisher)
+    issues = pr["review_material"]["issues"]
+    if set(issues) != {str(number) for number in authority["closing_issues"]}:
+        raise CycleError("routine disposition closing scope changed")
+    if issues:
+        # Runtime/non-pytest acceptance remains in its specialized owning workflow.
+        _contract_verify_targets(issues, publisher, admitted=targets)
+    elif authority["closing_issues"] != [] or scope.closing_issues:
+        raise CycleError("routine disposition lacks authenticated non-closing scope")
+    disposition = {**_disposition_request(review, None),
+        "assessment": "Controller-enforced exact native scope, independent current-head CI and sandbox Verify; "
+                      "no finding or runtime acceptance is waived. Governing body hash "
+                      + authority["governing_issue_hashes"]["body_sha256"],
+        "items": [{**item, "decision": "nonblocking", "rationale": {
+            "evidence_not_rerun": "The controller requires a fresh successful sandbox run of every admitted Verify target.",
+            "ci_not_observed": "Reviewer CI visibility is unnecessary; the controller requires fresh CI before Verify and merge.",
+            "simulated_boundary": "Simulated external test ports establish only source regressions; all closing targets remain required.",
+            "out_of_scope_followup": "Authenticated non-closing scope leaves the hash-bound governor open with its runtime obligations intact.",
+        }[items[(item["where"], item["index"])]["kind"]]} for item in _disposition_request(review, None)["items"]]}
+    gate = review_gate(review, expected, disposition=disposition)
+    if require_verification:
+        tests, ci = saved.get("verification"), saved.get("ci")
+        if (not isinstance(ci, Mapping) or ci.get("exit_code") != 0 or not isinstance(tests, Mapping)
+                or tests.get("head_sha") != pr["head_sha"] or tests.get("targets") != entry["verify_targets"]
+                or tests.get("passed") is not True or tests.get("exit_code") != 0
+                or not isinstance(tests.get("output_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", tests["output_sha256"])):
+            raise CycleError("routine disposition requires fresh actual CI and sandbox Verify evidence")
+    return {**gate, "routine_disposition": disposition}
+
+
 def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, Any],
               saved: Mapping[str, Any]) -> dict[str, Any]:
     """Refresh exact review, source, issue and CI evidence immediately before native merge."""
@@ -2814,8 +2872,7 @@ def _premerge(layout: workspace.Layout, pr: dict[str, Any], entry: Mapping[str, 
             or tests.get("head_sha") != pr["head_sha"] or tests.get("targets") != entry["verify_targets"]):
         raise CycleError("review execution or sandbox verification is incomplete")
     # Re-derive the same owner-bound gate immediately before the live authority and CI reads.
-    gate = review_gate(review, report_expectations(layout, entry, pr, saved["identity"]),
-                       disposition=entry.get("review_disposition"), reconciliation=_bound_reconciliation(layout, saved))
+    gate = _workflow_review_gate(layout, pr, entry, saved, report_expectations(layout, entry, pr, saved["identity"]))
     if gate["outcome"] != "pass":
         raise CycleError(f"review report gate is {gate['outcome']}: " + "; ".join(gate["blocking"] or gate["grammar"]))
     if tests.get("disposition_sha256") != gate.get("disposition_sha256"):
@@ -3340,16 +3397,83 @@ def _reconciliation_prompt(pr: Mapping[str, Any], identity: str, targets: list[s
             + f"\nEarlier report (evidence, verbatim): {json.dumps(original, sort_keys=True)}")
 
 
+def _resume_review_worker(layout: workspace.Layout, worker: str, pr: Mapping[str, Any],
+                          entry: Mapping[str, Any], *, http: Callable[..., tuple[int, Any]],
+                          codex_home: Path | None) -> None:
+    """Resume only an authenticated, fully stopped assignment using its retained placement."""
+    mapping = _mapping(layout, worker)
+    _assert_stopped(layout, worker, mapping)
+    prior = mapping.get("conversation")
+    if prior is not None and (not isinstance(prior, Mapping) or prior.get("status") != workspace.CONVERSATION_ENDED):
+        raise CycleError("previous conversation is not proven ended")
+    if isinstance(prior, Mapping) and any(prior.get(key) != entry.get(key) for key in ("engine", "model", "effort")):
+        raise CycleError("stopped review engine, model or effort changed")
+    _assert_repair_publications_settled(mapping)
+    authority = native_authority(layout, pr, entry, purpose="admission")
+    owner_binding = _automatic_review_worker(layout, pr, entry)
+    work = mapping.get("work_at_stop")
+    if (authority.get("claim_issue") != workspace._issue_for_worker(workspace._load_state(layout), worker)
+            or not isinstance(work, Mapping) or work.get("head") != pr["head_sha"]
+            or work.get("branch") != authority.get("branch") or mapping.get("branch") != authority.get("branch")):
+        raise CycleError("stopped review source does not bind current owner, branch and head")
+    checkout = workspace.inspect_checkout(layout, worker, runner=_worker_runner)
+    if checkout.get("readable") is not True or checkout.get("head") != pr["head_sha"] or checkout.get("uncommitted_count") != 0:
+        raise CycleError("stopped review checkout is not clean at the admitted head")
+    budget, image, network, paths = (mapping.get(k) for k in ("budget", "image", "network", "auth_paths"))
+    if (mapping.get("runtime") != "openhands" or not isinstance(budget, Mapping)
+            or not isinstance(image, str) or not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image)
+            or not isinstance(network, str) or not isinstance(paths, dict)
+            or set(paths) != {"codex_home", "claude_env_file"}):
+        raise CycleError("retained review launch configuration or auth paths unavailable")
+    for value in paths.values():
+        if value is not None and (not isinstance(value, str) or not Path(value).is_absolute()
+                                  or str(Path(value).resolve()) != value):
+            raise CycleError("retained review auth path is not canonical")
+    home = Path(paths["codex_home"]) if paths["codex_home"] else None
+    env = Path(paths["claude_env_file"]) if paths["claude_env_file"] else None
+    credentials = {"codex": "chatgpt-login-dir" if home else None, "claude": "oauth-token-env" if env else None}
+    if (mapping.get("credentials") != credentials
+            or (entry["engine"] == "codex" and home is None)
+            or (entry["engine"] == "claude-code" and env is None)
+            or (codex_home is not None and codex_home.resolve() != home)):
+        raise CycleError("retained review authentication is missing or differs from selection")
+    selected_budget = workspace.Budget(budget["cpus"], budget["memory"], budget["pids"]).validated()
+    # Validate every retained input before consuming the existing continuation. No defaults.
+    workspace._validate_env_file(env, layout)
+    mounts = workspace._validate_codex_home(home, layout, _worker_runner)
+    workspace.build_launch_argv(layout, worker, image=image, command=[], budget=selected_budget,
+                                network=network, credential_mounts=mounts)
+    stop = {"stop_id": mapping.get("stop_id"), "previous_stop_id": None}
+    workspace._takeover_locked(layout, worker, reason="resume admitted PR reviewer", runner=_worker_runner,
+                               stop_intent=stop, expected_container_id=mapping.get("container_id"))
+    if (_automatic_review_worker(layout, pr, entry) != owner_binding
+            or not _repair_authority_continues(authority, native_authority(layout, pr, entry, purpose="admission"))):
+        raise CycleError("review authority changed before worker launch")
+    _assert_repair_publications_settled(_mapping(layout, worker))
+    workspace._start_openhands_worker_locked(layout, worker, budget=selected_budget,
+        codex_home=home, claude_env_file=env, image=image, network=network, runner=_worker_runner, http=http)
+    if (_automatic_review_worker(layout, pr, entry) != owner_binding
+            or not _repair_authority_continues(authority, native_authority(layout, pr, entry, purpose="admission"))):
+        raise CycleError("review authority changed before conversation")
+
+
 @workspace._serialized_worker
 def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_id: str,
                               pr: Mapping[str, Any], identity: str, admission: Mapping[str, Any],
                               *, http: Callable[..., tuple[int, Any]] = workspace._http,
+                              codex_home: Path | None = None,
                               reconciliation: Mapping[str, Any] | None = None,
                               expected_owner_binding: Mapping[str, Any] | None = None) -> dict[str, Any]:
     mapping = _mapping(layout, worker)
     if expected_owner_binding is not None and (set(expected_owner_binding) != {"lifecycle_owner", "owner", "builder_session"}
             or any(mapping.get(key) != value for key, value in expected_owner_binding.items())):
         raise CycleError("review worker owner or Builder session changed")
+    if mapping.get("state") == "stopped_verified":
+        if reconciliation is not None and not isinstance(mapping.get("auth_paths"), dict):
+            raise CycleError(f"report reconciliation {operation_id} is reserved; retained auth paths unavailable; "
+                             f"start reviewer {worker} through the existing OpenHands takeover and start lifecycle")
+        _resume_review_worker(layout, worker, pr, admission, http=http, codex_home=codex_home)
+        mapping = _mapping(layout, worker)
     if mapping.get("state") != "running" or mapping.get("runtime") != "openhands":
         if reconciliation is not None:
             raise CycleError(f"report reconciliation {operation_id} is reserved; start reviewer {worker} "
@@ -3371,6 +3495,13 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
             return prior
     if isinstance(prior, dict) and prior.get("status") != workspace.CONVERSATION_ENDED:
         raise CycleError("previous conversation may still write")
+    if ((expected_owner_binding is not None or "claimant" in admission)
+            and mapping.get("auth_paths") is not None and mapping.get("stop_id") is not None):
+        # Also fence a retry after launch succeeded but the pre-conversation refresh failed.
+        # Retained launch metadata alone does not select native authority: explicit
+        # legacy quota continuations retain their existing admission/lifecycle route.
+        native_authority(layout, pr, admission, purpose="admission")
+        expected_owner_binding = _automatic_review_worker(layout, pr, admission)
     checkout = workspace.inspect_checkout(layout, worker, runner=_worker_runner)
     if (checkout.get("readable") is not True or checkout.get("head") != pr["head_sha"]
             or checkout.get("uncommitted_count") != 0):
@@ -6304,12 +6435,14 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
         cid = conversation.get("id") if isinstance(conversation, dict) else None
         review = saved.get("review") if saved.get("public_report_conversation") == cid and cid else None
         pending = _reconciliation(saved)
-        # A reserved reconciliation has no conversation until its reviewer runs again.
+        # Reservation precedes startup, so a pre-launch refusal can leave no bound
+        # conversation. Let intake retry the same operation through the fenced lifecycle.
         awaiting_successor = (isinstance(handoff, Mapping) and handoff.get("status") == "awaiting_pr_cycle"
                               and handoff.get("operation_id") == operation_id and isinstance(conversation, Mapping)
                               and conversation.get("status") == workspace.CONVERSATION_ENDED)
-        if review is None and not awaiting_successor and (pending is None or pending.get("operation") != operation_id
-                                                          or worker_record.get("state") == "running"):
+        if (review is None and isinstance(conversation, Mapping) and conversation.get("operation_id") == operation_id
+                and not awaiting_successor and (pending is None or pending.get("operation") != operation_id
+                                                or worker_record.get("state") == "running")):
             review = review_result(layout, entry["worker"], operation_id, pr, identity, entry, http=http)
         if review is not None:
             saved["review"] = review
@@ -6333,9 +6466,7 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
             # The saved report stays verbatim; the policy gate is re-derived from it on every tick.
             expectations = report_expectations(layout, entry, pr, identity)
             bound_reconciliation = _bound_reconciliation(layout, saved)
-            gate = review_gate(review, expectations,
-                               disposition=entry.get("review_disposition"),
-                               reconciliation=bound_reconciliation)
+            gate = _workflow_review_gate(layout, pr, entry, saved, expectations, require_verification=False)
             repair_candidate = _bounded_repair_candidate(review, _review_gate(review, expectations))
             if gate["outcome"] == "changes_requested" and _review_gate(review, expectations)["outcome"] == "pass":
                 owner_wait = gate["blocking"][0]
@@ -6365,7 +6496,7 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                     pr["review_outcome"] = "changes_requested"
                     exhausted = gate
             if pr["review_outcome"] == "pass" and not same_head_merge_unknown:
-                authority = entry.get("review_disposition")
+                authority = entry.get("review_disposition") or gate.get("routine_disposition")
                 if authority is not None:
                     saved["review_disposition"] = authority  # audit copy, never an authority input
                 else:
@@ -6385,9 +6516,8 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                     with workspace._worker_lifecycle_lock(layout, entry["worker"]):
                         current = _mapping(layout, entry["worker"])
                         _review_stop_checkpoint(current, saved, require_receipt=True)
-                        after_verify = review_gate(review, expectations,
-                                                   disposition=entry.get("review_disposition"),
-                                                   reconciliation=_bound_reconciliation(layout, saved))
+                        after_verify = _workflow_review_gate(layout, pr, entry,
+                                                            {**saved, "verification": verification}, expectations)
                         if (after_verify["outcome"] != "pass"
                                 or after_verify.get("disposition_sha256") != gate.get("disposition_sha256")):
                             raise CycleError("review disposition changed during sandbox verification")
@@ -6461,6 +6591,7 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
                 pending = None
             _save(layout, saved)
             started = start_or_reconcile_review(layout, entry["worker"], op, pr, identity, entry, http=http,
+                                                codex_home=codex_home,
                                                 reconciliation=pending,
                                                 expected_owner_binding=entry.get("_automatic_owner_binding"))
             decision["reason"] = f"conversation {started.get('id')} {started.get('status')}"

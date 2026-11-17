@@ -3425,6 +3425,8 @@ def _start_openhands_worker_locked(
         budget={"cpus": budget.cpus, "memory": budget.memory, "pids": budget.pids}, network=network,
         **({"verification_venv": str(verification_venv)} if verification_venv is not None else {}),
         credentials={"claude": "oauth-token-env" if credential_env else None, "codex": "chatgpt-login-dir" if codex_mounts else None},
+        auth_paths={"claude_env_file": str(credential_env.resolve()) if credential_env else None,
+                    "codex_home": str(codex_home.resolve()) if codex_mounts and codex_home else None},
         started_at=_now(),
     )
     _record_assigned_worker(layout, issue, worker, container_id=_launch(layout, issue, worker, argv, runner))
