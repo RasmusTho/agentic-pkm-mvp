@@ -660,10 +660,13 @@ class DeployJournal:
             }):
             raise PostgresDeployError()
         request_copies: list[dict[str, Any]] = []
-        for raw in (
-            self._read_json(self._operation_name(operation_id, 'request'), limit=8192),
-            self._read_json(self.channel + '.request.json', limit=8192),
-        ):
+        retained_request_raw = self._read_json(
+            self._operation_name(operation_id, 'request'), limit=8192,
+        )
+        if retained_request_raw is not None and retained_request_raw.get('operation_id') != operation_id:
+            raise PostgresDeployError()
+        current_request_raw = self._read_json(self.channel + '.request.json', limit=8192)
+        for raw in (retained_request_raw, current_request_raw):
             if raw is None or raw.get('operation_id') != operation_id:
                 continue
             retained_request, _retained_plan = self._validated_request(
@@ -674,10 +677,15 @@ class DeployJournal:
             raise PostgresDeployError()
 
         receipt_copies: list[DeployReceipt] = []
-        for raw in (
-            self._read_json(self._operation_name(operation_id, 'receipt'), limit=4096),
-            self._read_json(self.channel + '.json', limit=4096),
-        ):
+        retained_receipt_raw = self._read_json(
+            self._operation_name(operation_id, 'receipt'), limit=4096,
+        )
+        if retained_receipt_raw is not None and retained_receipt_raw.get('operation_id') != operation_id:
+            raise PostgresDeployError()
+        current_receipt_raw = self._read_json(self.channel + '.json', limit=4096)
+        for raw in (retained_receipt_raw, current_receipt_raw):
+            if raw is None or raw.get('operation_id') != operation_id:
+                continue
             if raw is None or raw.get('operation_id') != operation_id:
                 continue
             try:
@@ -707,9 +715,11 @@ class DeployJournal:
         self, operation_id: str, request: dict[str, Any], plan: DeployPlan,
     ) -> None:
         """Apply one terminal-pair rule to every historical reader."""
-        request_copies: list[tuple[dict[str, Any], DeployPlan]] = [(request, plan)]
         retained_request_raw = self._read_json(self._operation_name(operation_id, 'request'), limit=8192)
+        if retained_request_raw is not None and retained_request_raw.get('operation_id') != operation_id:
+            raise PostgresDeployError()
         current_request_raw = self._read_json(self.channel + '.request.json', limit=8192)
+        request_copies: list[tuple[dict[str, Any], DeployPlan]] = [(request, plan)]
         for raw in (retained_request_raw, current_request_raw):
             if raw is None or raw.get('operation_id') != operation_id:
                 continue
@@ -726,6 +736,8 @@ class DeployJournal:
 
         receipt_copies: list[DeployReceipt] = []
         retained_receipt_raw = self._read_json(self._operation_name(operation_id, 'receipt'), limit=4096)
+        if retained_receipt_raw is not None and retained_receipt_raw.get('operation_id') != operation_id:
+            raise PostgresDeployError()
         current_receipt_raw = self._read_json(self.channel + '.json', limit=4096)
         for raw in (retained_receipt_raw, current_receipt_raw):
             if raw is None or raw.get('operation_id') != operation_id:

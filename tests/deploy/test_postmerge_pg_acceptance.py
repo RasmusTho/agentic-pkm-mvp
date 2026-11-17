@@ -1075,6 +1075,14 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
     foreign._write_json('dev.json', foreign_receipt)
     expect_refusal(foreign, lambda: foreign.operation_request(foreign_id))
 
+    named_slot, named_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'named-slot')
+    retained_foreign = json.loads((named_slot.directory / f'{named_id}.receipt.json').read_text())
+    retained_foreign['operation_id'] = str(uuid4())
+    named_slot._write_json(f'{named_id}.receipt.json', retained_foreign)
+    # A UUID-named retained slot is not an optional archive: its embedded ID
+    # must bind the filename before a valid current slot can be considered.
+    expect_refusal(named_slot, lambda: named_slot.operation_request(named_id))
+
     tampered = json.loads((journal.directory / f'{operation_id}.receipt.json').read_text())
     tampered['pg_acceptance']['source_sha'] = 'c' * 40
     (journal.directory / f'{operation_id}.receipt.json').write_text(json.dumps(tampered))
