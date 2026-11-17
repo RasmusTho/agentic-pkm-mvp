@@ -43,7 +43,7 @@ def _repository(tmp_path):
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('exact resource')
-            if name == 'scripts/scalar_rollback_native.sh':
+            if name.endswith('.sh') and name.startswith('scripts/'):
                 path.chmod(0o755)
     for selector in profile.SELECTORS:
         path = root / selector.split('::')[0]
@@ -344,6 +344,45 @@ def test_scalar_rollback_resources_are_committed_and_readonly(tmp_path, monkeypa
     assert not boundary.containers
 
 
+def test_principal_fence_resources_are_committed_and_readonly(tmp_path, monkeypatch):
+    runner, boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
+    resources = (
+        'scripts/deploy_channel.sh',
+        'scripts/export_runtime_env.sh',
+        'scripts/start_full_system.sh',
+    )
+    committed = {name: (runner.repository / name).read_bytes() for name in resources}
+    manifest = runner.resources(IMAGE_ID)
+    source = runner.directory / 'source'
+    for name, content in committed.items():
+        path = source / name
+        assert path.read_bytes() == content
+        assert manifest['files'][name] == hashlib.sha256(content).hexdigest()
+        assert path.stat().st_mode & 0o777 == 0o755
+    runner.cleanup()
+
+    runner.verify()
+    calls = [arguments for arguments, _timeout in boundary.commands]
+    tests = next(args for args in calls if args[0] == 'create' and args[args.index('--name') + 1].endswith('-tests'))
+    mounts = {
+        fields['dst']: fields
+        for index, value in enumerate(tests)
+        if value == '--mount'
+        for fields in [dict(part.split('=', 1) for part in tests[index + 1].split(',') if '=' in part)]
+    }
+    destinations = {f'/app/{name}' for name in resources}
+    assert destinations <= mounts.keys()
+    for destination in destinations:
+        mount = next(
+            tests[index + 1]
+            for index, value in enumerate(tests)
+            if value == '--mount'
+            and dict(part.split('=', 1) for part in tests[index + 1].split(',') if '=' in part).get('dst') == destination
+        )
+        assert mount.endswith(',readonly')
+    assert not boundary.containers
+
+
 def test_scalar_rollback_resource_closure_refuses_missing_or_tampered_assets(tmp_path, monkeypatch):
     runner, _boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
     manifest = runner.resources(IMAGE_ID)
@@ -355,6 +394,8 @@ def test_scalar_rollback_resource_closure_refuses_missing_or_tampered_assets(tmp
     assets = (
         'docker-compose.yaml', 'docker-compose.scalar-rollback.yml',
         'ops/scalar-rollback/nginx.conf', 'scripts/scalar_rollback_native.sh',
+        'scripts/deploy_channel.sh', 'scripts/export_runtime_env.sh',
+        'scripts/start_full_system.sh',
     )
     for asset in assets:
         path = candidate / asset

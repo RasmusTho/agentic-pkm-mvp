@@ -969,10 +969,12 @@ container image ID and resource tree must agree before a pass is accepted.
 
 The native PG, web, and journaling resource producers export the same immutable public resource
 closure, including `docker-compose.yaml`, `docker-compose.scalar-rollback.yml`,
-`ops/scalar-rollback/nginx.conf`, and the executable `scripts/scalar_rollback_native.sh`. Each
-asset is copied from the candidate Git tree, mounted at its canonical `/app` path read-only, and
-included in the source-bound manifest; missing or changed bytes refuse the profile. The MVR-06D
-older-runtime floor proof uses the byte-exact fixture at
+`ops/scalar-rollback/nginx.conf`, the executable `scripts/scalar_rollback_native.sh`, and the
+three executable native principal-fence producers `scripts/deploy_channel.sh`,
+`scripts/export_runtime_env.sh`, and `scripts/start_full_system.sh`. Each asset is copied from the
+candidate Git tree, mounted at its canonical `/app` path read-only, and included in the
+source-bound manifest; missing or changed bytes refuse the profile. The MVR-06D older-runtime floor
+proof uses the byte-exact fixture at
 `tests/fixtures/mvr06c_vault_registry.py`, pinned to commit
 `6da6e2342ef362319e7810abd1c9370cb2ebe89d`, 179307 bytes, and SHA256
 `05f1c222efca81a39a36e30c4099c3c0120524344aa978585612a5c970ea238a`; it does not invoke Git,

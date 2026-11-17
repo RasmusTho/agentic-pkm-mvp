@@ -32,6 +32,8 @@ RESOURCE_PATHS = (
     'docker-compose.devui-sources.yml', 'docker-compose.devui.yml', '.github', '.codex', 'AGENTS.md',
     'docker-compose.yaml', 'docker-compose.scalar-rollback.yml',
     'ops/scalar-rollback/nginx.conf', 'scripts/scalar_rollback_native.sh',
+    'scripts/deploy_channel.sh', 'scripts/export_runtime_env.sh',
+    'scripts/start_full_system.sh',
 )
 BAKED_PACKAGES = ('app', 'mimer_runtime', 'llm_contract', 'companion-ui/companion-app')
 
