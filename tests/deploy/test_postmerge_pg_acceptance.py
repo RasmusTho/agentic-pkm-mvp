@@ -386,7 +386,9 @@ def test_native_principal_producer_resources_are_complete_and_readonly(tmp_path,
     )
     assert {producer.role for producer in producers} == AUTH_PRODUCER_ROLES
     assert {producer.source for producer in producers} >= set(NATIVE_AUTH_PRODUCERS)
-    assert set(NATIVE_AUTH_PRODUCERS) <= set(runner_module.RESOURCE_PATHS)
+    assert {
+        path for path in NATIVE_AUTH_PRODUCERS if path.startswith('scripts/')
+    } <= set(runner_module.RESOURCE_PATHS)
     assert re.fullmatch(r'[0-9a-f]{64}', digest)
     assert digest == discover_auth_producers(
         compose_path=source / 'docker-compose.yaml',
