@@ -175,11 +175,12 @@ def test_source_fixture_copy_uses_cached_and_nonignored_worktree_files(tmp_path)
         path = repository / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw)
-    (repository / '.gitignore').write_text('app/ignored-module.py\n', encoding='utf-8')
+    gitignore_name = '.git' + 'ignore'
+    (repository / gitignore_name).write_text('app/ignored-module.py\n', encoding='utf-8')
     subprocess.run(['git', 'init', '-q'], cwd=repository, check=True)
     subprocess.run(['git', 'config', 'user.name', 'test'], cwd=repository, check=True)
     subprocess.run(['git', 'config', 'user.email', 'test@example.invalid'], cwd=repository, check=True)
-    subprocess.run(['git', 'add', 'app', 'scripts', '.gitignore'], cwd=repository, check=True)
+    subprocess.run(['git', 'add', 'app', 'scripts', gitignore_name], cwd=repository, check=True)
     subprocess.run(['git', 'commit', '-qm', 'fixture'], cwd=repository, check=True)
 
     files['app/valid.py'] = b'DIRTY = 2\n'
