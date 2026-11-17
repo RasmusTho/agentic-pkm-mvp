@@ -19,7 +19,7 @@ from app.instance.binding_ids import (
     OUTBOX_QUARANTINE_BINDING_ID,
 )
 from app.instance.vault_registry import DEFAULT_PROVENANCE_EXPLICIT
-from app.services.outbox import derive_binding_scoped_idempotency_key
+from app.services.outbox import derive_binding_scoped_idempotency_key, derive_idempotency_key
 from app.services.outbox_producers import require_registered_producer
 
 pytestmark = pytest.mark.pg
@@ -249,12 +249,17 @@ def test_mvr06_requires_complete_mvr05_classification_receipt(mvr06d_db) -> None
     ) = default_rows[0]
     assert default_legacy_key
     assert default_binding == OUTBOX_GLOBAL_BINDING_ID
+    assert default_revision and int(default_revision) > 0
+    assert default_legacy_key == derive_idempotency_key(
+        INSTANCE_DEFAULT_VAULT_CHANGED,
+        str(default_revision),
+        "instance-default-vault-changed-v1",
+    )
     assert default_row == derive_binding_scoped_idempotency_key(
         INSTANCE_DEFAULT_VAULT_CHANGED, OUTBOX_GLOBAL_BINDING_ID, default_legacy_key
     )
-    assert default_revision and int(default_revision) > 0
     assert default_payload_binding == binding
-    assert default_previous_binding == binding
+    assert default_previous_binding is None
     assert default_provenance == DEFAULT_PROVENANCE_EXPLICIT
     assert default_producer == "shared.instance.default_vault"
     assert require_registered_producer(default_producer).routing == "global"
@@ -262,6 +267,9 @@ def test_mvr06_requires_complete_mvr05_classification_receipt(mvr06d_db) -> None
         (default_row, OUTBOX_GLOBAL_BINDING_ID)
     ]
     assert _outbox_ids(dsn) == {legacy_pending, unprovable, default_row}
+    default_payload_before = _outbox_payload_snapshot(dsn, default_row)
+    default_lineage_before = _outbox_lineage(dsn, default_legacy_key)
+    default_before = _outbox(dsn, default_row)
     scoped = emit_stage(runtime, binding, "classified-scoped")
     global_row = emit_background_intent_event(runtime.registry.load(), reason="governed_add")
     assert global_row
@@ -285,6 +293,9 @@ def test_mvr06_requires_complete_mvr05_classification_receipt(mvr06d_db) -> None
     assert not many_binding_dispatch_enabled(runtime.registry.load())
     floor = runtime.registry.load().extensions["runtimeFloors"]["minimumRuntimeSchema"]
     assert floor == MVR06_MINIMUM_RUNTIME_SCHEMA
+    assert _outbox(dsn, default_row) == default_before
+    assert _outbox_payload_snapshot(dsn, default_row) == default_payload_before
+    assert _outbox_lineage(dsn, default_legacy_key) == default_lineage_before
 
     # Drained through the singleton path (one canonical lineage, acknowledged once) ...
     assert ack_outbox(legacy_pending)
@@ -303,16 +314,19 @@ def test_mvr06_requires_complete_mvr05_classification_receipt(mvr06d_db) -> None
         key: classification.get(key) if isinstance(classification, dict) else None
         for key in expected_classification
     }
+    assert _outbox(dsn, default_row) == default_before
+    assert _outbox_payload_snapshot(dsn, default_row) == default_payload_before
+    assert _outbox_lineage(dsn, default_legacy_key) == default_lineage_before
     again = activate_many_binding(runtime)
     assert again["_exit_code"] == 0 and again["activated"] is False
+    assert _outbox(dsn, default_row) == default_before
+    assert _outbox_payload_snapshot(dsn, default_row) == default_payload_before
+    assert _outbox_lineage(dsn, default_legacy_key) == default_lineage_before
 
     # ... then the many-binding worker: global keeps one lineage with at-least-once
     # dispatch, the scoped row keeps one lineage under its own binding, and the
     # unprovable row stays quarantined: never claimed, dispatched, or acknowledged.
     enroll_exactly(runtime, (binding,))
-    default_payload_before = _outbox_payload_snapshot(dsn, default_row)
-    default_lineage_before = _outbox_lineage(dsn, default_legacy_key)
-    default_before = _outbox(dsn, default_row)
     global_before = _outbox(dsn, global_row)
     scoped_before = _outbox(dsn, scoped)
     worker = ManyBindingDispatcher(supervisor_for(runtime, "worker"), owner="classifier")
