@@ -969,6 +969,29 @@ def test_legacy_terminal_profile_history_allows_real_supervisor_fresh_worker(
         }
 
 
+def test_legacy_terminal_profile_history_refuses_failed_bootstrap_before_publication(tmp_path):
+    """A failed legacy pair with bootstrap authority cannot publish a fresh ID."""
+    journal, old_id, _old_plan, _raw_plan, _old_receipt = _legacy_terminal_fixture(
+        tmp_path, channel='dev', terminal_result='failed',
+    )
+    for name in (f'{old_id}.request.json', 'dev.request.json'):
+        request = json.loads((journal.directory / name).read_text())
+        request['bootstrap'] = True
+        (journal.directory / name).write_text(json.dumps(request))
+    current = DeployPlan('dev', 'b' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                         image_digest=DIGEST, automatic=True)
+    fresh_id = str(uuid4())
+    supervisor = linux.DeploymentSupervisor(SimpleNamespace(channel='dev', journal=journal))
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({
+            'action': 'prepare', 'operation_id': fresh_id,
+            'plan': json.loads(json.dumps(current.payload())), 'bootstrap': False,
+        })
+    assert supervisor.operation is None
+    assert not (journal.directory / f'{fresh_id}.request.json').exists()
+    assert journal.read().operation_id == old_id
+
+
 def test_legacy_terminal_profile_history_qualifies_source_preflight(tmp_path):
     journal, operation_id, _legacy_plan, _raw_plan, receipt = _legacy_terminal_fixture(tmp_path)
     effects = SimpleNamespace(config=SimpleNamespace(journal=journal), operation_id=operation_id)
@@ -1034,6 +1057,16 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
     (failed.directory / 'dev.request.json').unlink()
     with pytest.raises(PostgresDeployError):
         failed.operation_receipt(failed_id)
+
+    failed_bootstrap, failed_bootstrap_id, _plan, _raw, _receipt = _legacy_terminal_fixture(
+        tmp_path / 'failed-bootstrap', channel='dev', terminal_result='failed',
+    )
+    for name in (f'{failed_bootstrap_id}.request.json', 'dev.request.json'):
+        request = json.loads((failed_bootstrap.directory / name).read_text())
+        request['bootstrap'] = True
+        (failed_bootstrap.directory / name).write_text(json.dumps(request))
+    with pytest.raises(PostgresDeployError):
+        failed_bootstrap.operation_receipt(str(uuid4()))
 
     conflict, conflict_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'conflict')
     conflicting = json.loads((conflict.directory / 'dev.json').read_text())

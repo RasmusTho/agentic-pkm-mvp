@@ -517,12 +517,14 @@ class DeployJournal:
                 receipt.validate(historical=historical)
                 if receipt.channel != self.channel:
                     raise PostgresDeployError()
-                if (historical and isinstance(receipt.pg_acceptance, dict)
-                    and receipt.pg_acceptance.get('selection_hash') == LEGACY_SELECTION_HASH):
+                if historical:
                     request = self.operation_request(receipt.operation_id)
                     if request is None or not isinstance(request[1], DeployPlan):
                         raise PostgresDeployError()
-                    receipt.require_profile(request[1], historical=True)
+                    if request[1].verification_profile == {
+                        'version': PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
+                    }:
+                        receipt.require_profile(request[1], historical=True)
                 return receipt
 
     def _read_json(self, name: str, *, limit: int) -> dict[str, Any] | None:
@@ -673,13 +675,13 @@ class DeployJournal:
         if current is None:
             return None
         validated = self._validated_request(current, historical=True)
-        if validated[0]['operation_id'] != operation_id:
-            return None
         if (isinstance(validated[1], DeployPlan)
             and validated[1].verification_profile == {
                 'version': PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
             }):
-            self._require_historical_pair(operation_id, validated[0], validated[1])
+            self._require_historical_pair(validated[0]['operation_id'], validated[0], validated[1])
+        if validated[0]['operation_id'] != operation_id:
+            return None
         return validated
 
     def current_request(
