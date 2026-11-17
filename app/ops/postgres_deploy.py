@@ -675,7 +675,13 @@ class DeployJournal:
                 or receipt.terminal_result not in {'committed', 'aborted', 'failed'}):
                 raise PostgresDeployError()
         else:
-            current = self.read()
+            # The current channel slot may still contain a retained terminal
+            # receipt from the prior finite profile while a fresh operation
+            # ID is being prepared.  Read that slot through the explicit
+            # historical path; callers still receive a receipt only when its
+            # operation ID matches, while strict current admission remains
+            # enforced by ``read()`` and ``current_request()``.
+            current = self.read(historical=True)
             if current is not None and current.operation_id == operation_id and current.terminal_result is not None:
                 receipt = current
         if receipt is not None:

@@ -890,6 +890,10 @@ def test_legacy_terminal_profile_history_allows_fresh_current_prepare(tmp_path):
     current = DeployPlan('dev', 'b' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
                          image_digest=DIGEST, automatic=True)
     fresh_id = str(uuid4())
+    # A fresh prepare first asks whether its ID has a retained receipt while
+    # the channel slot still contains the exact old terminal pair.  This must
+    # return no receipt without strict-reading the old profile as new state.
+    assert journal.operation_receipt(fresh_id) is None
     retained_bytes = (journal.directory / f'{operation_id}.request.json').read_bytes()
     journal.bind_request(fresh_id, current, False, create=True)
     journal.write(fresh_id, 'prepared')
