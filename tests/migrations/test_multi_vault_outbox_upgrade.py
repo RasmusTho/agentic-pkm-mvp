@@ -12,10 +12,15 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
+from app.events.types import INSTANCE_DEFAULT_VAULT_CHANGED
 from app.instance.binding_ids import (
     COMPATIBILITY_BINDING_ID,
+    OUTBOX_GLOBAL_BINDING_ID,
     OUTBOX_QUARANTINE_BINDING_ID,
 )
+from app.instance.vault_registry import DEFAULT_PROVENANCE_EXPLICIT
+from app.services.outbox import derive_binding_scoped_idempotency_key
+from app.services.outbox_producers import require_registered_producer
 
 pytestmark = pytest.mark.pg
 
@@ -171,6 +176,44 @@ def _outbox(dsn: str, row_id: str) -> tuple:
         ).fetchone()
 
 
+def _outbox_ids(dsn: str) -> set[str]:
+    with psycopg.connect(dsn) as conn:
+        return {row[0] for row in conn.execute("SELECT id::text FROM outbox").fetchall()}
+
+
+def _outbox_payload_snapshot(dsn: str, row_id: str) -> tuple:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            "SELECT topic, id::text, legacy_key::text, vault_binding_id, payload "
+            "FROM outbox WHERE id = %s",
+            (row_id,),
+        ).fetchone()
+
+
+def _outbox_lineage(dsn: str, legacy_key: str) -> list[tuple]:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            "SELECT id::text, vault_binding_id FROM outbox WHERE legacy_key = %s",
+            (legacy_key,),
+        ).fetchall()
+
+
+def _default_mutation_rows(dsn: str) -> list[tuple]:
+    """Return the real bootstrap default-vault producer's bounded lineage."""
+
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            "SELECT id::text, legacy_key::text, vault_binding_id, "
+            "payload #>> '{payload,registry_revision}', "
+            "payload #>> '{payload,vault_binding_id}', "
+            "payload #>> '{payload,previous_vault_binding_id}', "
+            "payload #>> '{payload,provenance}', "
+            "payload #>> '{meta,outbox_producer}' "
+            "FROM outbox WHERE topic = %s ORDER BY created_at, id",
+            (INSTANCE_DEFAULT_VAULT_CHANGED,),
+        ).fetchall()
+
+
 def test_mvr06_requires_complete_mvr05_classification_receipt(mvr06d_db) -> None:
     from dataclasses import replace
 
@@ -192,9 +235,37 @@ def test_mvr06_requires_complete_mvr05_classification_receipt(mvr06d_db) -> None
 
     runtime, first, dsn, legacy_pending, unprovable = mvr06d_db
     binding = first.vault_binding_id
+    default_rows = _default_mutation_rows(dsn)
+    assert len(default_rows) == 1
+    (
+        default_row,
+        default_legacy_key,
+        default_binding,
+        default_revision,
+        default_payload_binding,
+        default_previous_binding,
+        default_provenance,
+        default_producer,
+    ) = default_rows[0]
+    assert default_legacy_key
+    assert default_binding == OUTBOX_GLOBAL_BINDING_ID
+    assert default_row == derive_binding_scoped_idempotency_key(
+        INSTANCE_DEFAULT_VAULT_CHANGED, OUTBOX_GLOBAL_BINDING_ID, default_legacy_key
+    )
+    assert default_revision and int(default_revision) > 0
+    assert default_payload_binding == binding
+    assert default_previous_binding == binding
+    assert default_provenance == DEFAULT_PROVENANCE_EXPLICIT
+    assert default_producer == "shared.instance.default_vault"
+    assert require_registered_producer(default_producer).routing == "global"
+    assert _outbox_lineage(dsn, default_legacy_key) == [
+        (default_row, OUTBOX_GLOBAL_BINDING_ID)
+    ]
+    assert _outbox_ids(dsn) == {legacy_pending, unprovable, default_row}
     scoped = emit_stage(runtime, binding, "classified-scoped")
     global_row = emit_background_intent_event(runtime.registry.load(), reason="governed_add")
     assert global_row
+    assert _outbox_ids(dsn) == {legacy_pending, unprovable, default_row, scoped, global_row}
     assert _outbox(dsn, legacy_pending)[2] == COMPATIBILITY_BINDING_ID
     assert _outbox(dsn, unprovable)[2] == OUTBOX_QUARANTINE_BINDING_ID
     before = runtime.layout.registry_path.read_bytes()
@@ -219,13 +290,18 @@ def test_mvr06_requires_complete_mvr05_classification_receipt(mvr06d_db) -> None
     assert ack_outbox(legacy_pending)
     receipt = activate_many_binding(runtime)
     assert receipt["_exit_code"] == 0, receipt
-    assert receipt["classification"] == {
+    expected_classification = {
         "mvr05_receipt": "valid",
         "outbox": "postgres",
         "unprovable_quarantined": 1,
-        "global_pending": 1,
+        "global_pending": 2,
         "scoped_pending": 1,
         "scoped_unregistered_bindings": 0,
+    }
+    classification = receipt.get("classification")
+    assert classification == expected_classification, {
+        key: classification.get(key) if isinstance(classification, dict) else None
+        for key in expected_classification
     }
     again = activate_many_binding(runtime)
     assert again["_exit_code"] == 0 and again["activated"] is False
@@ -234,13 +310,20 @@ def test_mvr06_requires_complete_mvr05_classification_receipt(mvr06d_db) -> None
     # dispatch, the scoped row keeps one lineage under its own binding, and the
     # unprovable row stays quarantined: never claimed, dispatched, or acknowledged.
     enroll_exactly(runtime, (binding,))
+    default_payload_before = _outbox_payload_snapshot(dsn, default_row)
+    default_lineage_before = _outbox_lineage(dsn, default_legacy_key)
+    default_before = _outbox(dsn, default_row)
     global_before = _outbox(dsn, global_row)
     scoped_before = _outbox(dsn, scoped)
     worker = ManyBindingDispatcher(supervisor_for(runtime, "worker"), owner="classifier")
     for _ in range(6):
         worker.tick()
     global_after = _outbox(dsn, global_row)
+    default_after = _outbox(dsn, default_row)
     scoped_after = _outbox(dsn, scoped)
+    assert default_after[:3] == default_before[:3] and default_after[3] is True
+    assert _outbox_payload_snapshot(dsn, default_row) == default_payload_before
+    assert _outbox_lineage(dsn, default_legacy_key) == default_lineage_before
     assert global_after[:3] == global_before[:3] and global_after[3] is True
     assert scoped_after[:3] == scoped_before[:3] and scoped_after[3] is True
     assert scoped_after[2] == binding
