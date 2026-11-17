@@ -1050,14 +1050,14 @@ def test_legacy_terminal_profile_history_qualifies_source_preflight(tmp_path):
         assert snapshot.terminal_image_digest == DIGEST
 
 
-def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_path):
+def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_path, monkeypatch):
     def expect_refusal(journal, operation):
         before = {path.name: path.read_bytes() for path in journal.directory.iterdir()}
         with pytest.raises(PostgresDeployError):
             operation()
         assert {path.name: path.read_bytes() for path in journal.directory.iterdir()} == before
 
-    journal, operation_id, _legacy_plan, raw_plan, _receipt = _legacy_terminal_fixture(tmp_path)
+    journal, operation_id, legacy_plan, raw_plan, _receipt = _legacy_terminal_fixture(tmp_path)
     expect_refusal(journal, lambda: journal.bind_request(
         operation_id, DeployPlan('dev', 'b' * 40, ('db', 'api'),
                                  ('postgres-db', 'postgres-api'),
@@ -1067,6 +1067,20 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
     # reconcile path; even a first current write must leave every old byte
     # untouched.
     expect_refusal(journal, lambda: journal.write(operation_id, 'prepared'))
+    same_source_current = DeployPlan(
+        legacy_plan.channel, legacy_plan.revision, legacy_plan.services, legacy_plan.consumers,
+        image_digest=DIGEST, automatic=True,
+    )
+    config = SimpleNamespace(channel='dev', journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    for action in ('prepare', 'join', 'reconcile-failed'):
+        expect_refusal(journal, lambda action=action: linux.DeploymentSupervisor(config).request({
+            'action': action, 'operation_id': operation_id,
+            'plan': same_source_current.payload(), 'bootstrap': False,
+        }))
+    expect_refusal(journal, lambda: journal.write(
+        operation_id, 'committed', _result(legacy_plan.revision, 'dev', operation_id),
+    ))
 
     foreign, foreign_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'foreign')
     foreign_receipt = json.loads((foreign.directory / f'{foreign_id}.receipt.json').read_text())
@@ -1082,6 +1096,32 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
     # A UUID-named retained slot is not an optional archive: its embedded ID
     # must bind the filename before a valid current slot can be considered.
     expect_refusal(named_slot, lambda: named_slot.operation_request(named_id))
+
+    mixed_non_pg, mixed_non_pg_id, _plan, old_raw_plan, _receipt = _legacy_terminal_fixture(
+        tmp_path / 'mixed-karakeep',
+    )
+    karakeep_request = {
+        'operation_id': mixed_non_pg_id,
+        'plan': {'channel': 'dev', 'revision': 'a' * 40},
+        'bootstrap': False,
+    }
+    manual_receipt = DeployReceipt(
+        mixed_non_pg_id, 'dev', 'deploy', 'committed', 'committed',
+    ).payload()
+    for name in (f'{mixed_non_pg_id}.request.json', 'dev.request.json'):
+        mixed_non_pg._write_json(name, karakeep_request)
+    for name in (f'{mixed_non_pg_id}.receipt.json', 'dev.json'):
+        mixed_non_pg._write_json(name, manual_receipt)
+    # The retained non-EE view must not hide an EE request/receipt that has
+    # appeared in the same-ID current slots.
+    mixed_non_pg._write_json('dev.request.json', {
+        'operation_id': mixed_non_pg_id, 'plan': old_raw_plan, 'bootstrap': False,
+    })
+    mixed_non_pg._write_json('dev.json', DeployReceipt(
+        mixed_non_pg_id, 'dev', 'deploy', 'failed', 'failed',
+    ).payload())
+    expect_refusal(mixed_non_pg, lambda: mixed_non_pg.operation_request(mixed_non_pg_id))
+    expect_refusal(mixed_non_pg, lambda: mixed_non_pg.operation_receipt(mixed_non_pg_id))
 
     tampered = json.loads((journal.directory / f'{operation_id}.receipt.json').read_text())
     tampered['pg_acceptance']['source_sha'] = 'c' * 40
@@ -1150,6 +1190,15 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
     malformed_receipt['pg_acceptance']['source_sha'] = 'not-a-sha'
     (malformed.directory / f'{malformed_id}.receipt.json').write_text(json.dumps(malformed_receipt))
     expect_refusal(malformed, lambda: malformed.operation_receipt(malformed_id))
+
+    unknown, unknown_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'unknown-profile')
+    for name in (f'{unknown_id}.request.json', 'dev.request.json'):
+        request = json.loads((unknown.directory / name).read_text())
+        request['plan']['verification_profile'] = {
+            'version': 'unknown-profile', 'selection_hash': 'f' * 64,
+        }
+        unknown._write_json(name, request)
+    expect_refusal(unknown, lambda: unknown.operation_request(unknown_id))
 
     mixed, mixed_id, old_plan, old_raw_plan, old_receipt = _legacy_terminal_fixture(tmp_path / 'mixed-request')
     current_plan = DeployPlan(
