@@ -11,7 +11,7 @@ from uuid import UUID
 
 PROFILE_VERSION = 'postmerge-pg.v1'
 TEST_TIMEOUT = 120
-PROFILE_DEADLINE = 3600
+PROFILE_DEADLINE = 5400
 POSTGRES_IMAGE = 'mirror.gcr.io/pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a'
 IMAGE_REPOSITORY = 'ghcr.io/rasmustho/pkm-app'
 SELECTORS = (

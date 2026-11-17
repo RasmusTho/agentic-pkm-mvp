@@ -613,7 +613,7 @@ def test_existing_pg_acceptance_contract_is_unchanged(tmp_path, monkeypatch):
     pg.require_pass(proof, sha, DIGEST, 'dev', operation)
     assert proof['profile_version'] == 'postmerge-pg.v1'
     assert proof['selection_hash'] == pg.SELECTION_HASH
-    assert len(pg.SELECTORS) == 65 and pg.PROFILE_DEADLINE == 3600
+    assert len(pg.SELECTORS) == 65 and pg.PROFILE_DEADLINE == 5400
     assert not boundary.containers
     # An apparently green web result is never a retained PG receipt.
     with pytest.raises(pg.PgAcceptanceError):

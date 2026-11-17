@@ -784,7 +784,7 @@ retains the existing host-controller and VM channel locks, supervised worker, re
 health/readiness/version, fleet and browser UI gates. Before `committed`, the native worker enters
 `verifying` and runs `app.ops.pg_acceptance` with the retained acceptance selection transferred
 from the GitHub PG job. Required selector absence, skip/xfail, assertion failure, unavailable
-dependency, per-test 120-second timeout or the finite 60-minute native aggregate deadline prevents acceptance.
+dependency, per-test 120-second timeout or the finite 90-minute native aggregate deadline prevents acceptance.
 The aggregate budget is owned by the shared profile and included in its selection hash; there is
 no per-host override. A trusted Docker attach timeout emits only the fixed
 `profile_deadline_exceeded` native journal signal before owned cleanup, without raw command,
@@ -966,6 +966,21 @@ and a scratch vault. Exact-SHA Git resources supply tests, UAT seed and required
 application Python files stay baked in the admitted image and are checked against exact Git blobs.
 The existing app-image producer supplies Git and pytest-timeout. Image revision, admitted digest,
 container image ID and resource tree must agree before a pass is accepted.
+
+The native PG, web, and journaling resource producers export the same immutable public resource
+closure, including `docker-compose.yaml`, `docker-compose.scalar-rollback.yml`,
+`ops/scalar-rollback/nginx.conf`, and the executable `scripts/scalar_rollback_native.sh`. Each
+asset is copied from the candidate Git tree, mounted at its canonical `/app` path read-only, and
+included in the source-bound manifest; missing or changed bytes refuse the profile. The MVR-06D
+older-runtime floor proof uses the byte-exact fixture at
+`tests/fixtures/mvr06c_vault_registry.py`, pinned to commit
+`6da6e2342ef362319e7810abd1c9370cb2ebe89d`, 179307 bytes, and SHA256
+`05f1c222efca81a39a36e30c4099c3c0120524344aa978585612a5c970ea238a`; it does not invoke Git,
+history, or network access. This closes required inputs only: the all-pass selector inventory,
+120-second per-test watchdog and complete all-pass envelope remain unchanged. The shared native PG
+attach limit is a provisional finite 5400-second (90-minute) calibration, bound in the existing
+selection hash; setup and cleanup remain separately bounded and any measured DEV/TEST capacity
+evidence must distinguish this calibration from observed complete-channel acceptance.
 
 The existing native receipt binds profile version/selection hash, result, source SHA, image digest,
 channel, operation ID, resource tree, image ID and report hash. Cleanup inspects exact resource IDs

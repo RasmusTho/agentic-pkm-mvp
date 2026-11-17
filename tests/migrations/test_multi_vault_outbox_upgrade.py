@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+import subprocess
+import sys
+import types
 import uuid
 
 import psycopg
@@ -104,6 +109,23 @@ def test_partially_upgraded_unprovable_row_is_quarantined(
 
 #: The last MVR-06C image on main (PR #6596): it understands v1..v3 registries only.
 MVR06C_IMAGE_SHA = "6da6e2342ef362319e7810abd1c9370cb2ebe89d"
+MVR06C_REGISTRY_SNAPSHOT = Path(__file__).parents[1] / "fixtures/mvr06c_vault_registry.py"
+MVR06C_REGISTRY_SNAPSHOT_PROVENANCE = {
+    "commit": MVR06C_IMAGE_SHA,
+    "path": "app/instance/vault_registry.py",
+    "bytes": 179307,
+    "sha256": "05f1c222efca81a39a36e30c4099c3c0120524344aa978585612a5c970ea238a",
+}
+
+
+def _load_mvr06c_registry_snapshot(path: Path = MVR06C_REGISTRY_SNAPSHOT) -> str:
+    source = path.read_bytes()
+    if (
+        len(source) != MVR06C_REGISTRY_SNAPSHOT_PROVENANCE["bytes"]
+        or hashlib.sha256(source).hexdigest() != MVR06C_REGISTRY_SNAPSHOT_PROVENANCE["sha256"]
+    ):
+        raise RuntimeError("pinned MVR-06C registry snapshot digest mismatch")
+    return source.decode("utf-8")
 
 
 @pytest.fixture
@@ -230,13 +252,30 @@ def test_mvr06_requires_complete_mvr05_classification_receipt(mvr06d_db) -> None
     assert duplicates == (1,)
 
 
+def test_mvr06c_registry_snapshot_is_pinned_and_git_independent(tmp_path, monkeypatch) -> None:
+    def forbidden_git(*_args, **_kwargs):
+        raise AssertionError("historical registry proof must not invoke Git")
+
+    monkeypatch.setattr(subprocess, "run", forbidden_git)
+    monkeypatch.setattr(subprocess, "check_output", forbidden_git)
+    source = _load_mvr06c_registry_snapshot()
+    previous = types.ModuleType("tests._mvr06c_previous_registry_image")
+    sys.modules[previous.__name__] = previous
+    try:
+        exec(compile(source, "mvr06c-registry-image.py", "exec"), previous.__dict__)
+        assert previous.VaultRegistryStore
+    finally:
+        sys.modules.pop(previous.__name__, None)
+
+    corrupted = tmp_path / "mvr06c_vault_registry.py"
+    corrupted.write_bytes(MVR06C_REGISTRY_SNAPSHOT.read_bytes()[:-1] + b"x")
+    with pytest.raises(RuntimeError, match="digest mismatch"):
+        _load_mvr06c_registry_snapshot(corrupted)
+
+
 def test_mvr06d_floor_precedes_first_queue_state_write_and_blocks_older_runtime(
     mvr06d_db, monkeypatch
 ) -> None:
-    import subprocess
-    import sys
-    import types
-
     from app.instance.runtime import _preflight_runtime
     from app.instance.vault_registry import (
         MANY_BINDING_REGISTRY_SCHEMA,
@@ -252,24 +291,11 @@ def test_mvr06d_floor_precedes_first_queue_state_write_and_blocks_older_runtime(
         emit_stage,
         supervisor_for,
     )
-    from tests._mvr_default_vault_harness import REPO_ROOT
     from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
     runtime, first, dsn, legacy_pending, _unprovable = mvr06d_db
     binding = first.vault_binding_id
-    if subprocess.run(
-        ["git", "cat-file", "-e", f"{MVR06C_IMAGE_SHA}^{{commit}}"], cwd=REPO_ROOT
-    ).returncode != 0:
-        # A shallow CI checkout lacks the previous image; fetch exactly that commit.
-        subprocess.check_call(
-            ["git", "fetch", "--no-tags", "--depth=1", "origin", MVR06C_IMAGE_SHA],
-            cwd=REPO_ROOT,
-        )
-    source = subprocess.check_output(
-        ["git", "show", f"{MVR06C_IMAGE_SHA}:app/instance/vault_registry.py"],
-        cwd=REPO_ROOT,
-        text=True,
-    )
+    source = _load_mvr06c_registry_snapshot()
     previous = types.ModuleType("tests._mvr06c_previous_registry_image")
     sys.modules[previous.__name__] = previous
     try:

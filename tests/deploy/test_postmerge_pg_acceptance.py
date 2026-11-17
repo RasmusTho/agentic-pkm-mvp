@@ -41,7 +41,10 @@ def _repository(tmp_path):
             path.mkdir()
             (path / 'fixture.txt').write_text('exact resource')
         else:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('exact resource')
+            if name == 'scripts/scalar_rollback_native.sh':
+                path.chmod(0o755)
     for selector in profile.SELECTORS:
         path = root / selector.split('::')[0]
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -295,6 +298,75 @@ def test_production_runner_isolates_database_vault_and_credentials(tmp_path, mon
                         observed.append(options) or SimpleNamespace(returncode=0, stdout=b''))
     runner_module._command(['docker', 'version'])
     assert 'persistent-private-secret-canary' not in json.dumps(observed[0]['env'])
+
+
+def test_scalar_rollback_resources_are_committed_and_readonly(tmp_path, monkeypatch):
+    runner, boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
+    committed = {
+        name: (runner.repository / name).read_bytes()
+        for name in (
+            'docker-compose.yaml', 'docker-compose.scalar-rollback.yml',
+            'ops/scalar-rollback/nginx.conf', 'scripts/scalar_rollback_native.sh',
+        )
+    }
+    (runner.repository / 'docker-compose.yaml').write_bytes(b'dirty checkout bytes')
+    manifest = runner.resources(IMAGE_ID)
+    source = runner.directory / 'source'
+    for name, content in committed.items():
+        path = source / name
+        assert path.read_bytes() == content
+        assert manifest['files'][name] == hashlib.sha256(content).hexdigest()
+    assert (source / 'scripts/scalar_rollback_native.sh').stat().st_mode & 0o777 == 0o755
+    runner.cleanup()
+
+    runner.verify()
+    calls = [arguments for arguments, _timeout in boundary.commands]
+    tests = next(args for args in calls if args[0] == 'create' and args[args.index('--name') + 1].endswith('-tests'))
+    mounts = {
+        fields['dst']: fields
+        for index, value in enumerate(tests)
+        if value == '--mount'
+        for fields in [dict(part.split('=', 1) for part in tests[index + 1].split(',') if '=' in part)]
+    }
+    assert {
+        '/app/docker-compose.yaml', '/app/docker-compose.scalar-rollback.yml',
+        '/app/ops/scalar-rollback/nginx.conf', '/app/scripts/scalar_rollback_native.sh',
+    } <= mounts.keys()
+    for index, value in enumerate(tests):
+        if value != '--mount':
+            continue
+        fields = dict(part.split('=', 1) for part in tests[index + 1].split(',') if '=' in part)
+        if fields.get('dst') in {
+            '/app/docker-compose.yaml', '/app/docker-compose.scalar-rollback.yml',
+            '/app/ops/scalar-rollback/nginx.conf', '/app/scripts/scalar_rollback_native.sh',
+        }:
+            assert tests[index + 1].endswith(',readonly')
+    assert not boundary.containers
+
+
+def test_scalar_rollback_resource_closure_refuses_missing_or_tampered_assets(tmp_path, monkeypatch):
+    runner, _boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
+    manifest = runner.resources(IMAGE_ID)
+    source = runner.directory / 'source'
+    candidate = tmp_path / 'image-root'
+    shutil.copytree(source, candidate)
+    import app
+    monkeypatch.setattr(app, '__file__', str(candidate / 'app/__init__.py'))
+    assets = (
+        'docker-compose.yaml', 'docker-compose.scalar-rollback.yml',
+        'ops/scalar-rollback/nginx.conf', 'scripts/scalar_rollback_native.sh',
+    )
+    for asset in assets:
+        path = candidate / asset
+        original = path.read_bytes()
+        path.unlink()
+        with pytest.raises(profile.PgAcceptanceError):
+            profile.verify_resources(manifest, root=candidate)
+        path.write_bytes(original + b'\n')
+        with pytest.raises(profile.PgAcceptanceError):
+            profile.verify_resources(manifest, root=candidate)
+        path.write_bytes(original)
+    runner.cleanup()
 
 
 @pytest.mark.parametrize('fault', ['sha', 'digest', 'resource', 'image'])
@@ -604,7 +676,7 @@ def test_native_profile_budget_is_bound_and_finite(tmp_path, monkeypatch):
     runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
     result = runner.verify()
     attach = [(args, timeout) for args, timeout in boundary.commands if args[:2] == ('start', '--attach')]
-    assert len(attach) == 1 and attach[0][1] == profile.PROFILE_DEADLINE == 3600
+    assert len(attach) == 1 and attach[0][1] == profile.PROFILE_DEADLINE == 5400
     profile.require_pass(result, sha, DIGEST, 'dev', operation_id)
     assert profile.TEST_TIMEOUT == 120 and '--timeout=120' in profile.pytest_arguments()
     assert not boundary.containers and not runner.directory.exists()
@@ -642,7 +714,7 @@ def test_deadline_signal_survives_cleanup_refusal(tmp_path, monkeypatch):
 
 
 def test_profile_budget_identity_rejects_old_receipts(tmp_path, monkeypatch):
-    old_hash = '64a82a73f52410361fd0605b6e9a2053d27e05ecc2ead25556d0e7109aa5f503'
+    old_hash = 'ee37e3f865bfcdcb3de2345030bc5df7ab396a72de55d94f280e961887e4c381'
     runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
     observed_manifests = []
     original = boundary.command
