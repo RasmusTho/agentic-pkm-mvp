@@ -46,7 +46,6 @@ from app.ops.host_secret_contract import (
 )
 from app.ops.host_secret_controller import PreserveJournalBodyError
 from app.ops.native_web_acceptance import NativeWebRefusal, WEB_PROFILE
-from app.ops.pg_acceptance import LEGACY_SELECTION_HASH, PROFILE_VERSION
 from app.ops.postgres_deploy import (
     AuthorityCutover, DeployJournal, DeployPlan, DeployReceipt, DeployWorker, PostgresDeployError,
     TestRecoveryRequest,
@@ -1045,22 +1044,6 @@ def _full_deploy_consumers(channel: str) -> frozenset[str]:
     return _base_deploy_consumers(channel) | set(youtube_runtime_consumers(channel))
 
 
-def _profile_transition_matches(historical: DeployPlan, requested: DeployPlan) -> bool:
-    if not (
-        historical.automatic and requested.automatic
-        and historical.verification_profile == {
-            'version': PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
-        }
-        and requested.verification_profile is None
-    ):
-        return False
-    old_payload = historical.payload()
-    current_payload = requested.payload()
-    old_payload.pop('verification_profile', None)
-    current_payload.pop('verification_profile', None)
-    return old_payload == current_payload
-
-
 def _compatible_retained_plan(
     retained: tuple[dict[str, Any], object] | None,
     requested: DeployPlan,
@@ -1070,13 +1053,15 @@ def _compatible_retained_plan(
     if retained is None or not isinstance(retained[1], DeployPlan):
         return None
     historical = retained[1]
-    profile_transition = _profile_transition_matches(historical, requested)
     if historical == requested:
         return None
     if retained[0].get('bootstrap') is not bootstrap:
         return None
-    if profile_transition:
-        return historical
+    # A retained legacy profile is read-only evidence. It can never be
+    # adopted as the current requested plan for reconciliation or cleanup;
+    # doing so would turn an old terminal ID into a new acceptance path.
+    if historical.verification_profile is not None:
+        return None
     if (not is_legacy_youtube_consumer_upgrade(
             requested.channel, historical.consumers, requested.consumers
         )
@@ -4382,7 +4367,10 @@ class SupervisedOperation:
         self.thread = threading.Thread(target=self._run, daemon=False)
 
     def _run_locked(self) -> None:
-        previous = self.effects.config.journal.read()
+        # A fresh operation may supersede one exact retained terminal from the
+        # prior finite profile. Qualification is read-only here; the worker's
+        # newly prepared/current receipt remains strictly validated below.
+        previous = self.effects.config.journal.read(historical=True)
         if previous and previous.terminal_result is None and (
             previous.operation_id == self.operation_id
             or not self.effects.config.journal.can_admit_request_after_current(

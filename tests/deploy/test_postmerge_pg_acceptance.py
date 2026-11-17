@@ -848,58 +848,125 @@ LEGACY_PROFILE_DEADLINE = 3600
 LEGACY_SELECTION_HASH = 'ee37e3f865bfcdcb3de2345030bc5df7ab396a72de55d94f280e961887e4c381'
 
 
-def _legacy_terminal_fixture(tmp_path, *, terminal_result='committed', operation_id=None):
+def _legacy_terminal_fixture(
+    tmp_path, *, channel='dev', terminal_result='committed', operation_id=None,
+):
     """Install one exact retained C2 request/receipt pair without using bind_request."""
     operation_id = operation_id or str(uuid4())
     revision = 'a' * 40
-    plan = DeployPlan('dev', revision, ('db', 'api'), ('postgres-db', 'postgres-api'),
+    plan = DeployPlan(channel, revision, ('db', 'api'), ('postgres-db', 'postgres-api'),
                       image_digest=DIGEST, automatic=True)
     raw_plan = plan.payload()
     raw_plan['verification_profile'] = {
-        'version': profile.PROFILE_VERSION,
+        'version': profile.LEGACY_PROFILE_VERSION,
         'selection_hash': LEGACY_SELECTION_HASH,
     }
-    acceptance = _result(revision, 'dev', operation_id)
-    acceptance['selection_hash'] = LEGACY_SELECTION_HASH
-    receipt = DeployReceipt(operation_id, 'dev', 'deploy', terminal_result, terminal_result,
+    acceptance = None
+    if terminal_result == 'committed':
+        acceptance = _result(revision, channel, operation_id)
+        acceptance['selection_hash'] = LEGACY_SELECTION_HASH
+    receipt = DeployReceipt(operation_id, channel, 'deploy', terminal_result, terminal_result,
                             pg_acceptance=acceptance)
-    journal = DeployJournal(tmp_path / 'native-history', 'dev')
+    journal = DeployJournal(tmp_path / 'native-history', channel)
     journal.directory.parent.mkdir(parents=True, exist_ok=True)
     journal.directory.mkdir(mode=0o700)
     journal._write_json(journal._operation_name(operation_id, 'request'), {
         'operation_id': operation_id, 'plan': raw_plan, 'bootstrap': False,
     })
     journal._write_json(journal._operation_name(operation_id, 'receipt'), receipt.payload())
-    journal._write_json('dev.json', receipt.payload())
-    journal._write_json('dev.request.json', {
+    journal._write_json(f'{channel}.json', receipt.payload())
+    journal._write_json(f'{channel}.request.json', {
         'operation_id': operation_id, 'plan': raw_plan, 'bootstrap': False,
     })
     return journal, operation_id, plan, raw_plan, receipt
 
 
 def test_legacy_terminal_profile_history_allows_fresh_current_prepare(tmp_path):
-    journal, operation_id, _legacy_plan, raw_plan, receipt = _legacy_terminal_fixture(tmp_path)
-    with pytest.raises(PostgresDeployError):
-        DeployPlan.from_payload(raw_plan)
+    for channel in ('dev', 'test'):
+        journal, operation_id, _legacy_plan, raw_plan, receipt = _legacy_terminal_fixture(
+            tmp_path / channel, channel=channel,
+        )
+        with pytest.raises(PostgresDeployError):
+            DeployPlan.from_payload(raw_plan)
 
-    retained = journal.operation_request(operation_id)
-    assert retained is not None and retained[0]['plan'] == json.loads(json.dumps(raw_plan))
-    assert retained[1].payload()['verification_profile'] == raw_plan['verification_profile']
-    assert journal.operation_receipt(operation_id) == receipt
+        retained = journal.operation_request(operation_id)
+        assert retained is not None and retained[0]['plan'] == json.loads(json.dumps(raw_plan))
+        assert retained[1].payload()['verification_profile'] == raw_plan['verification_profile']
+        assert journal.operation_receipt(operation_id) == receipt
 
-    current = DeployPlan('dev', 'b' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
-                         image_digest=DIGEST, automatic=True)
-    fresh_id = str(uuid4())
-    # A fresh prepare first asks whether its ID has a retained receipt while
-    # the channel slot still contains the exact old terminal pair.  This must
-    # return no receipt without strict-reading the old profile as new state.
-    assert journal.operation_receipt(fresh_id) is None
-    retained_bytes = (journal.directory / f'{operation_id}.request.json').read_bytes()
-    journal.bind_request(fresh_id, current, False, create=True)
-    journal.write(fresh_id, 'prepared')
-    assert journal.current_request()[1] == current
-    assert (journal.directory / f'{operation_id}.request.json').read_bytes() == retained_bytes
-    assert journal.operation_request(operation_id)[0]['plan'] == json.loads(json.dumps(raw_plan))
+        current = DeployPlan(channel, 'b' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                             image_digest=DIGEST, automatic=True)
+        fresh_id = str(uuid4())
+        # A fresh prepare first asks whether its ID has a retained receipt while
+        # the channel slot still contains the exact old terminal pair.  This must
+        # return no receipt without strict-reading the old profile as new state.
+        assert journal.operation_receipt(fresh_id) is None
+        retained_bytes = (journal.directory / f'{operation_id}.request.json').read_bytes()
+        journal.bind_request(fresh_id, current, False, create=True)
+        journal.write(fresh_id, 'prepared')
+        assert journal.current_request()[1] == current
+        assert (journal.directory / f'{operation_id}.request.json').read_bytes() == retained_bytes
+        assert journal.operation_request(operation_id)[0]['plan'] == json.loads(json.dumps(raw_plan))
+
+
+def test_legacy_terminal_profile_history_allows_real_supervisor_fresh_worker(
+    tmp_path, monkeypatch, admitted_bws_caller,
+):
+    """Fresh workers supersede only exact failed-DEV/committed-TEST terminal pairs."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from tests.deploy.test_deploy_channel_script import _BwsVmEffects
+
+    for channel, terminal_result in (('dev', 'failed'), ('test', 'committed')):
+        journal, old_id, old_plan, _raw_plan, _old_receipt = _legacy_terminal_fixture(
+            tmp_path / channel, channel=channel, terminal_result=terminal_result,
+        )
+        old_request_bytes = (journal.directory / f'{old_id}.request.json').read_bytes()
+        old_receipt_bytes = (journal.directory / f'{old_id}.receipt.json').read_bytes()
+        current = DeployPlan(channel, 'b' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                             image_digest=DIGEST, automatic=True)
+        fresh_id = str(uuid4())
+        effects = _BwsVmEffects()
+        effects.config = SimpleNamespace(channel=channel, journal=journal)
+        if channel == 'dev':
+            effects.require_promotion_admission = lambda _plan: None
+        effects.validate_plan = lambda selected: selected.validate()
+        effects.select_active_plan = lambda selected: selected
+        effects.verify = lambda operation_id, plan: {
+            **profile.identity(plan.revision, plan.image_digest or '', plan.channel, operation_id),
+            'result': 'passed', 'selected': len(profile.SELECTORS), 'passed': len(profile.SELECTORS),
+            'resource_tree': 'd' * 40, 'app_image_id': IMAGE_ID, 'report_hash': 'e' * 64,
+        }
+        effects.cleanup_verification = lambda *_args: None
+
+        @contextmanager
+        def channel_lock():
+            yield
+            receipt = journal.read()
+            assert receipt is not None and receipt.operation_id == fresh_id
+
+        effects.channel_lock = channel_lock
+        monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: effects.config)
+        monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: effects)
+        supervisor = linux.DeploymentSupervisor(effects.config)
+        request = {
+            'action': 'prepare', 'operation_id': fresh_id,
+            'plan': json.loads(json.dumps(current.payload())), 'bootstrap': False,
+        }
+        assert supervisor.request(request)['ready']
+        operation = supervisor.operation
+        assert operation is not None
+        operation.activation.set()
+        result = supervisor.request({**request, 'action': 'join'})
+        assert result['receipt']['terminal_result'] == 'committed'
+        assert journal.read().operation_id == fresh_id
+        assert (journal.directory / f'{old_id}.request.json').read_bytes() == old_request_bytes
+        assert (journal.directory / f'{old_id}.receipt.json').read_bytes() == old_receipt_bytes
+        retained_old = journal.operation_request(old_id)
+        assert retained_old is not None and retained_old[1].revision == old_plan.revision
+        assert retained_old[1].verification_profile == {
+            'version': profile.LEGACY_PROFILE_VERSION, 'selection_hash': LEGACY_SELECTION_HASH,
+        }
 
 
 def test_legacy_terminal_profile_history_qualifies_source_preflight(tmp_path):
@@ -958,3 +1025,27 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
     ).payload())
     with pytest.raises(PostgresDeployError):
         incomplete.operation_request(incomplete_id)
+
+    failed, failed_id, _plan, _raw, _receipt = _legacy_terminal_fixture(
+        tmp_path / 'failed', channel='dev', terminal_result='failed',
+    )
+    assert failed.operation_receipt(failed_id) is not None
+    (failed.directory / f'{failed_id}.request.json').unlink()
+    (failed.directory / 'dev.request.json').unlink()
+    with pytest.raises(PostgresDeployError):
+        failed.operation_receipt(failed_id)
+
+    conflict, conflict_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'conflict')
+    conflicting = json.loads((conflict.directory / 'dev.json').read_text())
+    conflicting['stage'] = 'aborted'
+    conflicting['terminal_result'] = 'aborted'
+    (conflict.directory / 'dev.json').write_text(json.dumps(conflicting))
+    with pytest.raises(PostgresDeployError):
+        conflict.operation_request(conflict_id)
+
+    bootstrap, bootstrap_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'bootstrap')
+    retained_request = json.loads((bootstrap.directory / f'{bootstrap_id}.request.json').read_text())
+    retained_request['bootstrap'] = True
+    (bootstrap.directory / f'{bootstrap_id}.request.json').write_text(json.dumps(retained_request))
+    with pytest.raises(PostgresDeployError):
+        bootstrap.operation_request(bootstrap_id)
