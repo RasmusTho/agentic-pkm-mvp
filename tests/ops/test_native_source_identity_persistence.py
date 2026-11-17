@@ -2357,7 +2357,7 @@ def test_legacy_mount_compatibility_cannot_cross_absence_or_producer_boundary(
     operation_id = str(uuid4())
     journal = SimpleNamespace(
         directory=tmp_path,
-        read=lambda: SimpleNamespace(
+        read=lambda *args, **kwargs: SimpleNamespace(
             operation_id=str(uuid4()), terminal_result="failed",
         ),
     )
