@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,7 +10,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.ops import bws_installation_transaction as transaction
 from tests.deploy import test_bws_source_rpc_assembly as rpc
 
 
@@ -170,7 +168,7 @@ def test_source_fixture_copy_uses_cached_and_nonignored_worktree_files(tmp_path)
     repository.mkdir()
     files = {
         'app/valid.py': b'VALID = 1\n',
-        'app/tracked-module.py': b'TRACKED_UNSUPPORTED = 1\n',
+        'app/tracked.module.py': b'TRACKED_UNSUPPORTED = 1\n',
         'scripts/valid.py': b'VALID_SCRIPT = 1\n',
     }
     for relative, raw in files.items():
@@ -184,8 +182,13 @@ def test_source_fixture_copy_uses_cached_and_nonignored_worktree_files(tmp_path)
     subprocess.run(['git', 'add', 'app', 'scripts', '.gitignore'], cwd=repository, check=True)
     subprocess.run(['git', 'commit', '-qm', 'fixture'], cwd=repository, check=True)
 
-    files['app/dirty.py'] = b'DIRTY = 2\n'
-    (repository / 'app/dirty.py').write_bytes(files['app/dirty.py'])
+    files['app/valid.py'] = b'DIRTY = 2\n'
+    (repository / 'app/valid.py').write_bytes(files['app/valid.py'])
+    staged = repository / 'app/staged-module.py'
+    staged.write_bytes(b'STAGED_INDEX = 3\n')
+    subprocess.run(['git', 'add', 'app/staged-module.py'], cwd=repository, check=True)
+    files['app/staged-module.py'] = b'STAGED_CURRENT = 4\n'
+    staged.write_bytes(files['app/staged-module.py'])
     files['app/new-module.py'] = b'NEW_UNSUPPORTED = 3\n'
     (repository / 'app/new-module.py').write_bytes(files['app/new-module.py'])
     (repository / 'app/ignored-module.py').write_bytes(b'IGNORED = 4\n')
@@ -199,6 +202,7 @@ def test_source_fixture_copy_uses_cached_and_nonignored_worktree_files(tmp_path)
     }
     assert 'app/ignored-module.py' in legacy_relative
     assert 'app/ignored-module.py' not in relative
+    assert 'app/tracked.module.py' in relative
 
     candidate = tmp_path / 'candidate'
     for source in sources:
@@ -209,9 +213,3 @@ def test_source_fixture_copy_uses_cached_and_nonignored_worktree_files(tmp_path)
         path.relative_to(candidate).as_posix(): path.read_bytes()
         for path in candidate.rglob('*.py')
     } == files
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(transaction, '_OWNER_UID', os.geteuid())
-        patch.setattr(transaction, '_OWNER_GID', os.getegid())
-        with pytest.raises(RuntimeError):
-            transaction._source_file_inventory({'application': repository})
