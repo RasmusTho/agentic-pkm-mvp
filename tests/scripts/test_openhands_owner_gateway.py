@@ -29,11 +29,11 @@ def _wait_for_gateway_readiness(process, probe, *, deadline, clock=time.monotoni
             response = probe(min(_GATEWAY_PROBE_TIMEOUT_SECONDS, remaining))
         except OSError:
             response = None
-        if response == (200, b"upstream"):
-            return True, ""
         remaining = deadline - clock()
         if remaining <= 0:
             return False, "gateway readiness deadline expired"
+        if response == (200, b"upstream"):
+            return True, ""
         sleep(min(0.02, remaining))
 
 
@@ -45,7 +45,9 @@ def _bounded_redacted_output(raw, secret: bytes) -> str:
     )
 
 
-def _finish_gateway_process(process, secret: bytes) -> tuple[int | None, str, str, str | None]:
+def _finish_gateway_process(
+    process, secret: bytes
+) -> tuple[int | None, str, str, bool, str | None]:
     cleanup_error = None
     try:
         if process.poll() is None:
@@ -58,10 +60,12 @@ def _finish_gateway_process(process, secret: bytes) -> tuple[int | None, str, st
     except Exception as error:  # pragma: no cover - only cleanup failures
         cleanup_error = f"gateway cleanup failed ({type(error).__name__})"
         stdout = stderr = b""
+    secret_present = secret in stdout or secret in stderr
     return (
         process.poll(),
         _bounded_redacted_output(stdout, secret),
         _bounded_redacted_output(stderr, secret),
+        secret_present,
         cleanup_error,
     )
 
@@ -165,7 +169,7 @@ def test_gateway_admission_and_secret_boundary(tmp_path):
             key.chmod(0o644)
             assert call("/api/conversations/search")[0] == 503
     finally:
-        returncode, stdout, stderr, process_cleanup_error = _finish_gateway_process(
+        returncode, stdout, stderr, secret_present, process_cleanup_error = _finish_gateway_process(
             process, b"synthetic-private-key"
         )
         cleanup_errors = [process_cleanup_error] if process_cleanup_error else []
@@ -180,14 +184,14 @@ def test_gateway_admission_and_secret_boundary(tmp_path):
                 cleanup_errors.append(f"{cleanup_name} failed ({type(error).__name__})")
         cleanup_error = "; ".join(cleanup_errors) or None
     if not ready:
-        assert "synthetic-private-key" not in stdout + stderr
+        assert secret_present is False
         pytest.fail(
             f"{readiness_reason}; returncode={returncode}; stderr={stderr!r}"
             + (f"; {cleanup_error}" if cleanup_error else "")
         )
     if cleanup_error:
         pytest.fail(cleanup_error)
-    assert b"synthetic-private-key" not in stdout.encode() + stderr.encode()
+    assert secret_present is False
 
 
 def test_gateway_readiness_wait_admits_delayed_exact_response():
@@ -200,15 +204,65 @@ def test_gateway_readiness_wait_admits_delayed_exact_response():
 
     def probe(timeout):
         timeouts.append(timeout)
-        now[0] = 2.1
+        if now[0] <= 2.1:
+            raise OSError("not ready")
         return 200, b"upstream"
 
+    def sleep(duration):
+        now[0] += duration
+
     ready, reason = _wait_for_gateway_readiness(
-        Process(), probe, deadline=15.0, clock=lambda: now[0], sleep=lambda _: None
+        Process(), probe, deadline=15.0, clock=lambda: now[0], sleep=sleep
     )
     assert ready is True
     assert reason == ""
-    assert timeouts == [3.0]
+    assert len(timeouts) > 1
+    assert now[0] > 2.1
+
+
+def test_gateway_diagnostics_redact_and_bound_complete_output():
+    secret = b"synthetic-private-key"
+    raw = b"x" * 100 + secret + b"y" * 5000 + secret + b"z"
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def communicate(self, timeout):
+            return raw, raw
+
+    returncode, stdout, stderr, secret_present, cleanup_error = _finish_gateway_process(
+        Process(), secret
+    )
+    assert returncode == 0
+    assert secret_present is True
+    assert secret not in stdout.encode() + stderr.encode()
+    assert len(stdout.encode()) <= _GATEWAY_DIAGNOSTIC_BYTES
+    assert len(stderr.encode()) <= _GATEWAY_DIAGNOSTIC_BYTES
+    assert cleanup_error is None
+
+
+def test_gateway_readiness_wait_rejects_response_after_deadline():
+    class Process:
+        def poll(self):
+            return None
+
+    now = [0.0]
+
+    def probe(timeout):
+        now[0] = 1.1
+        return 200, b"upstream"
+
+    ready, reason = _wait_for_gateway_readiness(
+        Process(), probe, deadline=1.0, clock=lambda: now[0], sleep=lambda _: None
+    )
+    assert ready is False
+    assert reason == "gateway readiness deadline expired"
 
 
 def test_gateway_readiness_wait_reports_early_child_exit():
