@@ -4383,7 +4383,9 @@ def test_source_identity_absence_proof_refuses_partial_ambiguous_or_mismatched_s
     directory.mkdir()
     terminal = SimpleNamespace(operation_id=str(uuid4()), terminal_result="failed")
     config = SimpleNamespace(
-        channel="dev", journal=SimpleNamespace(directory=directory, read=lambda: terminal),
+        channel="dev", journal=SimpleNamespace(
+            directory=directory, read=lambda *args, **kwargs: terminal,
+        ),
     )
     effects = object.__new__(linux.LinuxEffects)
     effects.config = config
