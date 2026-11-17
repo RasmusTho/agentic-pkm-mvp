@@ -993,6 +993,15 @@ candidate does not veto a later candidate. Actual both-channel equivalent covera
 cleanup are verified on #5675; that evidence establishes the GitHub PG coverage handoff. Permanent
 controller activation is recorded separately and does not alter production promotion authority.
 
+Retained automatic terminal history from the preceding 3600-second profile is a closed,
+read-only compatibility case. Native journal, fresh-prepare fallback, archive/supersession, and
+source-preflight readers may qualify only the exact original request/receipt pair, preserving its
+canonical payload, profile hash, fingerprint, and bytes; a complete committed envelope is
+historical evidence only, while failed or aborted history supplies no acceptance. Incoming plans,
+new workers and receipts, current success/reuse, and transport joins remain strict to the current
+5400-second profile. Missing, nonterminal, unknown, foreign, replayed, or tampered history is
+refused, with no old pending replay or general legacy-policy registry.
+
 Automatic requests bind `image_digest`, `automatic=true` and the fixed verification profile into
 the existing native journal.
 Compose uses `repository:SHA@sha256:...` through `APP_IMAGE_DIGEST_SUFFIX` in the channel pin.

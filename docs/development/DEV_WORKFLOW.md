@@ -1624,6 +1624,12 @@ success cannot replace the native PG receipt. The independently bounded PG and i
 remain on `integration-nightly.yaml` (nightly schedule plus `workflow_dispatch`). See
 [`TESTING.md`](../TESTING.md) and the [deployment owner](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
 
+Automatic terminal history from the prior 3600-second profile is a read-only compatibility case:
+only an exact original request/receipt pair may be qualified, preserving its original payload,
+fingerprint, and bytes. Fresh admission, workers, receipts, and current success/reuse remain
+strictly bound to the current 5400-second profile; failed, aborted, incomplete, foreign, or
+tampered history is not acceptance evidence.
+
 The nightly `k6-search` job provisions pgvector in its disposable `k6_search` database, applies
 `alembic upgrade head`, and runs assert-only outbox bootstrap before seeding canonical object and
 vector rows through `scripts.k6_search_fixture`. The finite fixture uses generated binding/object

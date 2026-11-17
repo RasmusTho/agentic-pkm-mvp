@@ -662,7 +662,10 @@ promote public internet readiness.
   observed capacity: setup/cleanup measurements and complete DEV then TEST acceptance remain
   required before treating it as qualified. Attach expiry produces only a fixed native failure
   signal before owned cleanup. Equivalent both-stage coverage is verified by the dated receipt
-  above; permanent unit activation is separate.
+  above; permanent unit activation is separate. Retained automatic terminal records from the
+  preceding 3600-second profile remain readable only as exact, lossless request/receipt pairs;
+  new admission, workers, and receipts require the current 5400-second profile, and failed or
+  aborted history never supplies acceptance evidence.
 - Classification evaluation is offline by default. The opt-in live golden-set runner binds an
   exact registered model/transport and reports dataset coverage, mutation-side gate, captured
   usage and dated cost provenance. Unsupported billing or incomplete evidence cannot produce

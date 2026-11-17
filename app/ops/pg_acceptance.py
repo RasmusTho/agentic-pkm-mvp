@@ -142,10 +142,23 @@ NIGHTLY_SELECTORS = (
     'tests/integration/test_single_vault_compatibility.py',
 )
 MINIMUM_SELECTED = len(SELECTORS)
-SELECTION_HASH = hashlib.sha256(json.dumps(
-    [PROFILE_VERSION, SELECTORS, 'pg', TEST_TIMEOUT, 'thread', MINIMUM_SELECTED, POSTGRES_IMAGE, PROFILE_DEADLINE],
-    separators=(',', ':'),
-).encode()).hexdigest()
+
+
+def _selection_hash(deadline: int) -> str:
+    return hashlib.sha256(json.dumps(
+        [PROFILE_VERSION, SELECTORS, 'pg', TEST_TIMEOUT, 'thread', MINIMUM_SELECTED, POSTGRES_IMAGE, deadline],
+        separators=(',', ':'),
+    ).encode()).hexdigest()
+
+
+SELECTION_HASH = _selection_hash(PROFILE_DEADLINE)
+# The previous finite profile is retained only for authenticated terminal reads.
+# New admission and every newly written receipt remain bound to SELECTION_HASH.
+LEGACY_PROFILE_DEADLINE = 3600
+# This is the immutable C2 envelope hash. It is deliberately pinned rather
+# than recomputed from today's selector inventory: a future selector change
+# must not silently reinterpret retained terminal history.
+LEGACY_SELECTION_HASH = 'ee37e3f865bfcdcb3de2345030bc5df7ab396a72de55d94f280e961887e4c381'
 
 
 class PgAcceptanceError(RuntimeError):
@@ -166,8 +179,16 @@ def identity(sha: str, digest: str, channel: str, operation_id: str) -> dict[str
             'source_sha': sha, 'image_digest': digest, 'channel': channel, 'operation_id': operation_id}
 
 
-def require_pass(result: Any, sha: str, digest: str, channel: str, operation_id: str) -> None:
+def _profile_identity(
+    sha: str, digest: str, channel: str, operation_id: str, selection_hash: str,
+) -> dict[str, str]:
     expected = identity(sha, digest, channel, operation_id)
+    if selection_hash not in {SELECTION_HASH, LEGACY_SELECTION_HASH}:
+        raise PgAcceptanceError()
+    return {**expected, 'selection_hash': selection_hash}
+
+
+def _require_pass_for_identity(result: Any, expected: dict[str, str]) -> None:
     if (not isinstance(result, dict) or set(result) != set(expected) | {
         'result', 'selected', 'passed', 'resource_tree', 'app_image_id', 'report_hash'
     } or any(result.get(key) != value for key, value in expected.items())
@@ -178,6 +199,31 @@ def require_pass(result: Any, sha: str, digest: str, channel: str, operation_id:
         or re.fullmatch(r'sha256:[0-9a-f]{64}', str(result['app_image_id'])) is None
         or re.fullmatch(r'[0-9a-f]{64}', str(result['report_hash'])) is None):
         raise PgAcceptanceError()
+
+
+def require_pass(result: Any, sha: str, digest: str, channel: str, operation_id: str) -> None:
+    """Validate a newly produced/current acceptance envelope."""
+    _require_pass_for_identity(result, identity(sha, digest, channel, operation_id))
+
+
+def require_historical_pass(
+    result: Any, sha: str, digest: str, channel: str, operation_id: str,
+    verification_profile: Any,
+) -> None:
+    """Validate one known profile for an authenticated retained terminal receipt."""
+    if (not isinstance(verification_profile, dict)
+        or set(verification_profile) != {'version', 'selection_hash'}
+        or verification_profile.get('version') != PROFILE_VERSION
+        or verification_profile.get('selection_hash') not in {SELECTION_HASH, LEGACY_SELECTION_HASH}):
+        raise PgAcceptanceError()
+    expected = _profile_identity(
+        sha, digest, channel, operation_id, verification_profile['selection_hash'],
+    )
+    if verification_profile != {
+        'version': expected['profile_version'], 'selection_hash': expected['selection_hash'],
+    }:
+        raise PgAcceptanceError()
+    _require_pass_for_identity(result, expected)
 
 
 def pytest_arguments(*, nightly: bool = False) -> list[str]:
