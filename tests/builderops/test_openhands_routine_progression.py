@@ -1,6 +1,8 @@
 """Routine progression: real cycle, native authority, Git, lifecycle and persistence.
 
 GitHub/dispatcher, container/engine and upstream HTTP are simulated external ports.
+The synthetic nested-Verify port runs real pytest with the current trusted interpreter;
+the copied verifier fixture is inspected by the real preflight, never executed from tmp.
 These regressions do not establish live runtime, model or activation acceptance.
 """
 import copy
@@ -30,6 +32,23 @@ REAL_VENV_MINOR = cycle._venv_python_minor
 REAL_THREADS = cycle._assert_review_threads_clear
 
 
+@pytest.fixture
+def synthetic_noexec_tmp(tmp_path, monkeypatch):
+    """Model exec denial under the owned test root; no mount/security policy change."""
+    original_popen = subprocess.Popen
+    denied = []
+
+    def popen(args, *positional, **kwargs):
+        executable = kwargs.get('executable') or args[0]
+        if Path(executable).resolve().is_relative_to(tmp_path.resolve()):
+            denied.append(str(executable))
+            raise PermissionError(f'synthetic noexec test root: {executable}')
+        return original_popen(args, *positional, **kwargs)
+
+    monkeypatch.setattr(subprocess, 'Popen', popen)
+    return denied
+
+
 def _create_verifier_venv(verifier):
     # This security-owned fixture must satisfy the real preflight even under CI's
     # group-writable outer umask; restore that umask for the rest of the test.
@@ -52,7 +71,8 @@ def _create_verifier_venv(verifier):
                 path.chmod(stat.S_IMODE(mode) & ~0o022, follow_symlinks=False)
 
 
-def test_verifier_fixture_corrects_copied_modes_under_group_writable_umask(tmp_path, monkeypatch):
+def test_verifier_fixture_corrects_copied_modes_under_group_writable_umask(
+        tmp_path, monkeypatch, synthetic_noexec_tmp):
     layout = ew.Layout(tmp_path / 'workspaces', 6618)
     verifier = tmp_path / 'controller-test-venv'
     templates = tmp_path / 'templates'
@@ -100,8 +120,13 @@ def test_verifier_fixture_corrects_copied_modes_under_group_writable_umask(tmp_p
         assert stat.S_IMODE((verifier / 'bin/executable').stat().st_mode) == 0o755
         assert stat.S_IMODE((verifier / 'nested').stat().st_mode) == 0o755
         assert stat.S_IMODE((verifier / 'nested/data').stat().st_mode) == 0o644
-        assert (verifier / 'bin/python').stat().st_mode & stat.S_IXUSR
-        subprocess.run([str(verifier / 'bin/python'), '-c', 'pass'], check=True)
+        assert stat.S_IMODE((verifier / 'bin/python').stat().st_mode) == 0o755
+        assert (verifier / 'bin/python').read_bytes() == interpreter.read_bytes()
+        # Executable mode is preserved even where the mount forbids exec. This
+        # explicit simulated refusal is not an interpreter/runtime acceptance test.
+        with pytest.raises(PermissionError, match='synthetic noexec test root'):
+            subprocess.run([str(verifier / 'bin/python'), '-c', 'pass'], check=True)
+        assert synthetic_noexec_tmp == [str(verifier / 'bin/python')]
         assert stat.S_IMODE(interpreter.stat().st_mode) == 0o775
         assert stat.S_IMODE((templates / 'common/plain').stat().st_mode) == 0o664
         (verifier / 'bin/plain').chmod(0o664)
@@ -142,10 +167,12 @@ def test_verifier_fixture_does_not_follow_symlinks(tmp_path, monkeypatch):
     assert REAL_TEST_VENV(layout, str(verifier)) == verifier
 
 
-def assembled(tmp_path, monkeypatch, *, nonclosing=False):
+def assembled(tmp_path, monkeypatch, *, nonclosing=False, verify_passes=True):
     f = _automatic_cycle_fixture(tmp_path, monkeypatch)
     layout, worker = f['layout'], 'reviewer'
     # Put the Verify target in the actual fixture commit, as on an admitted PR head.
+    if not verify_passes:
+        (f['worktree'] / 'tests/example.py').write_text('def test_example():\n    assert False\n')
     subprocess.run(['git', '-C', str(f['worktree']), 'add', 'tests/example.py'],
                    check=True, capture_output=True)
     subprocess.run(['git', '-C', str(f['worktree']), '-c', 'user.name=Fixture',
@@ -183,6 +210,7 @@ def assembled(tmp_path, monkeypatch, *, nonclosing=False):
     layout.home(worker).mkdir(parents=True, exist_ok=True)
     engine = SyntheticEngine()
     verification_runs = []
+    verification_results = []
     # Existing engine fixture's absent-object diagnostic is normalized at its external port.
     def runner(argv, **kw):
         if list(argv)[:3] == ['docker', 'image', 'inspect']:
@@ -202,11 +230,15 @@ def assembled(tmp_path, monkeypatch, *, nonclosing=False):
             command = engine.pending[argv[-1]]
             targets = command[command.index('-c') + 2:]
             verification_runs.append(list(targets))
-            # Real pytest at a labelled simulated container port, no model or GH access.
-            return subprocess.run([str(verifier / 'bin/python'), '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *targets],
+            # This external container port is explicitly synthetic, inside the
+            # outer verifier. Run actual pytest with its trusted interpreter so
+            # tmp need not be executable; never retry/fall back after exec failure.
+            result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *targets],
                 cwd=checkout, capture_output=True, text=True, timeout=30,
                 env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTEST_ADDOPTS': '',
                      'PYTHONDONTWRITEBYTECODE': '1'})
+            verification_results.append(result)
+            return result
         if list(argv)[:2] == ['docker', 'inspect'] and '--format' not in argv:
             cid = argv[-1]
             if cid in engine.ids.values() and 'reviewer' in engine.containers:
@@ -258,7 +290,8 @@ def assembled(tmp_path, monkeypatch, *, nonclosing=False):
         f['config'].write_text(json.dumps({'admissions': [entry]}))
     f['nonclosing'] = nonclosing
     monkeypatch.setattr(cycle, 'github_fetch', f['fetch'])
-    f.update(engine=engine, runner=runner, home=home, verification_runs=verification_runs)
+    f.update(engine=engine, runner=runner, home=home, verification_runs=verification_runs,
+             verification_results=verification_results)
     return f
 
 
@@ -367,8 +400,10 @@ def reviewed(f):
 
 
 @pytest.mark.parametrize('nonclosing', [False, True])
-def test_informational_limits_progress_with_current_evidence(tmp_path, monkeypatch, nonclosing):
-    f = assembled(tmp_path, monkeypatch, nonclosing=nonclosing)
+@pytest.mark.parametrize('verify_passes', [True, False])
+def test_informational_limits_progress_with_current_evidence(
+        tmp_path, monkeypatch, nonclosing, verify_passes, synthetic_noexec_tmp):
+    f = assembled(tmp_path, monkeypatch, nonclosing=nonclosing, verify_passes=verify_passes)
     saved, report, proof = reviewed(f)
     real_stop = ew.stop_worker
     monkeypatch.setattr(ew, 'stop_worker', lambda *args, **kw: real_stop(*args, **kw, runner=f['runner']))
@@ -386,11 +421,24 @@ def test_informational_limits_progress_with_current_evidence(tmp_path, monkeypat
     assert fresh['review'] == report
     assert 'review_gate' in fresh, result
     assert fresh['review_gate']['outcome'] == 'pass', result
-    assert len(f['ci_calls']) >= 2
     assert f['verification_runs'] == [[f['target']]]
-    assert fresh['verification']['passed'] is True
-    assert calls.count('merge') == 1, result
+    assert not synthetic_noexec_tmp
+    nested = f['verification_results'][0]
+    assert nested.returncode == (0 if verify_passes else 1)
+    assert ('1 passed' if verify_passes else '1 failed') in nested.stdout
     assert f['issue']['state'] == 'open'
+    if not verify_passes:
+        # Real failing pytest must survive the simulated port and block merge.
+        assert 'AssertionError' in nested.stdout
+        assert len(f['ci_calls']) == 1
+        assert not calls and 'merge_intent' not in fresh and 'verification' not in fresh
+        assert result['action'] == 'wait', result
+        assert result['reason'] == 'routine disposition requires fresh actual CI and sandbox Verify evidence'
+        return
+    assert fresh['verification']['passed'] is True
+    assert fresh['verification']['exit_code'] == nested.returncode
+    assert len(f['ci_calls']) >= 2
+    assert calls.count('merge') == 1, result
     assert fresh['review_disposition']['report_sha256'] == cycle._digest(report)
     assert len(fresh['review_disposition']['items']) == (4 if nonclosing else 3)
     entry = json.loads(f['config'].read_text())['admissions'][0]
