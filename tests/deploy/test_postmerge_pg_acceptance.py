@@ -969,8 +969,13 @@ def test_legacy_terminal_profile_history_allows_real_supervisor_fresh_worker(
         }
 
 
-def test_legacy_terminal_profile_history_refuses_failed_bootstrap_before_publication(tmp_path):
+def test_legacy_terminal_profile_history_refuses_failed_bootstrap_before_publication(
+    tmp_path, monkeypatch, admitted_bws_caller,
+):
     """A failed legacy pair with bootstrap authority cannot publish a fresh ID."""
+    from contextlib import contextmanager
+    from tests.deploy.test_deploy_channel_script import _BwsVmEffects
+
     journal, old_id, _old_plan, _raw_plan, _old_receipt = _legacy_terminal_fixture(
         tmp_path, channel='dev', terminal_result='failed',
     )
@@ -981,13 +986,26 @@ def test_legacy_terminal_profile_history_refuses_failed_bootstrap_before_publica
     current = DeployPlan('dev', 'b' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
                          image_digest=DIGEST, automatic=True)
     fresh_id = str(uuid4())
-    supervisor = linux.DeploymentSupervisor(SimpleNamespace(channel='dev', journal=journal))
+    effects = _BwsVmEffects()
+    effects.config = SimpleNamespace(channel='dev', journal=journal)
+    reached_worker = []
+
+    @contextmanager
+    def channel_lock():
+        reached_worker.append(True)
+        yield
+
+    effects.channel_lock = channel_lock
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: effects.config)
+    monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: effects)
+    supervisor = linux.DeploymentSupervisor(effects.config)
     with pytest.raises(PostgresDeployError):
         supervisor.request({
             'action': 'prepare', 'operation_id': fresh_id,
             'plan': json.loads(json.dumps(current.payload())), 'bootstrap': False,
         })
     assert supervisor.operation is None
+    assert reached_worker == []
     assert not (journal.directory / f'{fresh_id}.request.json').exists()
     assert journal.read().operation_id == old_id
 
@@ -1075,6 +1093,37 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
     (conflict.directory / 'dev.json').write_text(json.dumps(conflicting))
     with pytest.raises(PostgresDeployError):
         conflict.operation_request(conflict_id)
+
+    request_conflict, request_conflict_id, _plan, _raw, _receipt = _legacy_terminal_fixture(
+        tmp_path / 'request-conflict',
+    )
+    conflicting_request = json.loads((request_conflict.directory / 'dev.request.json').read_text())
+    conflicting_request['plan']['revision'] = 'c' * 40
+    (request_conflict.directory / 'dev.request.json').write_text(json.dumps(conflicting_request))
+    with pytest.raises(PostgresDeployError):
+        request_conflict.operation_request(request_conflict_id)
+
+    manual, manual_id, _plan, raw_plan, _receipt = _legacy_terminal_fixture(tmp_path / 'manual')
+    manual_plan = {key: raw_plan[key] for key in (
+        'channel', 'revision', 'services', 'consumers', 'ack_forward_only',
+    )}
+    for name in (f'{manual_id}.request.json', 'dev.request.json'):
+        request = json.loads((manual.directory / name).read_text())
+        request['plan'] = manual_plan
+        (manual.directory / name).write_text(json.dumps(request))
+    with pytest.raises(PostgresDeployError):
+        manual.operation_receipt(manual_id)
+    with pytest.raises(PostgresDeployError):
+        manual.current_request(historical=True)
+    with pytest.raises(PostgresDeployError):
+        manual.bound_plan(manual_id, historical=True)
+
+    malformed, malformed_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'malformed')
+    malformed_receipt = json.loads((malformed.directory / f'{malformed_id}.receipt.json').read_text())
+    malformed_receipt['pg_acceptance']['source_sha'] = 'not-a-sha'
+    (malformed.directory / f'{malformed_id}.receipt.json').write_text(json.dumps(malformed_receipt))
+    with pytest.raises(PostgresDeployError):
+        malformed.operation_receipt(malformed_id)
 
     bootstrap, bootstrap_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'bootstrap')
     retained_request = json.loads((bootstrap.directory / f'{bootstrap_id}.request.json').read_text())

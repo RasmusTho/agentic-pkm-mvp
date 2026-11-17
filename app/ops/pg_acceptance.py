@@ -212,12 +212,17 @@ def _profile_identity(
     if selection_hash == LEGACY_SELECTION_HASH:
         if not _legacy_policy_is_unchanged():
             raise PgAcceptanceError()
+        # Keep the shared identity grammar (SHA, digest, channel and UUID)
+        # even though the policy fields below are pinned to C2.
+        current = identity(sha, digest, channel, operation_id)
         expected = {
             'profile_version': LEGACY_PROFILE_VERSION,
             'selection_hash': LEGACY_SELECTION_HASH,
             'source_sha': sha, 'image_digest': digest,
             'channel': channel, 'operation_id': operation_id,
         }
+        if any(current[key] != expected[key] for key in ('source_sha', 'image_digest', 'channel', 'operation_id')):
+            raise PgAcceptanceError()
     else:
         expected = identity(sha, digest, channel, operation_id)
     return {**expected, 'selection_hash': selection_hash}
