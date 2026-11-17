@@ -207,6 +207,10 @@ inventory with its per-case temporary roots and disposable resource-limited subp
 existing serial suites still follow successful parallel work and node-evidence validation.
 Unknown production paths and shared-fixture cochanges retain normal routing.
 
+Its fixture source census uses Git's cached plus non-ignored worktree set, so ignored ambient
+Python files cannot pollute a synthetic candidate; staged/non-ignored files and invalid tracked
+inputs remain subject to the unchanged candidate validator.
+
 The exact synthetic diagnostic helper retains all four whole admission/lifecycle/transaction/RPC
 consumer modules. Selector-repair cochanges retain their complete governance and CI coverage.
 These paths are allowed cochanges, not additional qualifying sources or a general helper policy;

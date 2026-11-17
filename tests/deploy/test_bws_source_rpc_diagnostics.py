@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
 
 import pytest
 
+from app.ops import bws_installation_transaction as transaction
 from tests.deploy import test_bws_source_rpc_assembly as rpc
 
 
@@ -160,3 +163,55 @@ def test_rpc_git_recording_preserves_observed_exception_on_probe_failure(monkeyp
     with pytest.raises(type(error)) as raised:
         observed(['git', 'rev-parse', 'HEAD'])
     assert raised.value is error
+
+
+def test_source_fixture_copy_uses_cached_and_nonignored_worktree_files(tmp_path) -> None:
+    repository = tmp_path / 'repository'
+    repository.mkdir()
+    files = {
+        'app/valid.py': b'VALID = 1\n',
+        'app/tracked-module.py': b'TRACKED_UNSUPPORTED = 1\n',
+        'scripts/valid.py': b'VALID_SCRIPT = 1\n',
+    }
+    for relative, raw in files.items():
+        path = repository / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    (repository / '.gitignore').write_text('app/ignored-module.py\n', encoding='utf-8')
+    subprocess.run(['git', 'init', '-q'], cwd=repository, check=True)
+    subprocess.run(['git', 'config', 'user.name', 'test'], cwd=repository, check=True)
+    subprocess.run(['git', 'config', 'user.email', 'test@example.invalid'], cwd=repository, check=True)
+    subprocess.run(['git', 'add', 'app', 'scripts', '.gitignore'], cwd=repository, check=True)
+    subprocess.run(['git', 'commit', '-qm', 'fixture'], cwd=repository, check=True)
+
+    files['app/dirty.py'] = b'DIRTY = 2\n'
+    (repository / 'app/dirty.py').write_bytes(files['app/dirty.py'])
+    files['app/new-module.py'] = b'NEW_UNSUPPORTED = 3\n'
+    (repository / 'app/new-module.py').write_bytes(files['app/new-module.py'])
+    (repository / 'app/ignored-module.py').write_bytes(b'IGNORED = 4\n')
+
+    sources = rpc._source_paths_for_copy(repository)
+    relative = {path.relative_to(repository).as_posix() for path in sources}
+    assert relative == set(files)
+    legacy_relative = {
+        path.relative_to(repository).as_posix()
+        for path in repository.rglob('*.py')
+    }
+    assert 'app/ignored-module.py' in legacy_relative
+    assert 'app/ignored-module.py' not in relative
+
+    candidate = tmp_path / 'candidate'
+    for source in sources:
+        target = candidate / source.relative_to(repository)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    assert {
+        path.relative_to(candidate).as_posix(): path.read_bytes()
+        for path in candidate.rglob('*.py')
+    } == files
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(transaction, '_OWNER_UID', os.geteuid())
+        patch.setattr(transaction, '_OWNER_GID', os.getegid())
+        with pytest.raises(RuntimeError):
+            transaction._source_file_inventory({'application': repository})

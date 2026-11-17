@@ -36,6 +36,16 @@ _RPC_GIT_CATEGORIES = frozenset({'clean', 'head', 'object', 'root', 'tree'})
 _RPC_GIT_CHECK_LIMIT = 8
 
 
+def _source_paths_for_copy(repository: Path) -> tuple[Path, ...]:
+    """Copy cached and non-ignored worktree source files only."""
+    raw_paths = subprocess.check_output(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "app", "scripts"],
+        cwd=repository,
+    )
+    paths = {path for path in raw_paths.split(b"\0") if path.endswith(b".py")}
+    return tuple(repository / os.fsdecode(path) for path in sorted(paths))
+
+
 def _rpc_exception_class(error: BaseException) -> str:
     name = type(error).__name__
     return name if name in _RPC_EXCEPTION_CLASSES else 'other'
@@ -249,14 +259,13 @@ def _exercise(base: Path, repository: Path, channel: str, fault: str, journal_ro
     (base / ".git").mkdir(mode=0o700)
     checkout = base / "candidate"
     checkout.mkdir(mode=0o755)
-    for package in ("app", "scripts"):
-        for source in (repository / package).rglob("*.py"):
-            if "__pycache__" in source.parts:
-                continue
-            target = checkout / source.relative_to(repository)
-            target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-            target.chmod(0o755 if target.name == "postgres_deploy_service.py" else 0o644)
+    # Exclude ignored ambient Python files from concurrent worktree activity;
+    # keep current tracked, staged, and non-ignored working-tree bytes.
+    for source in _source_paths_for_copy(repository):
+        target = checkout / source.relative_to(repository)
+        target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        target.chmod(0o755 if target.name == "postgres_deploy_service.py" else 0o644)
     resource_scenarios = {
         'deep-application', 'deep-effect', 'manifest-effect-bound',
         'manifest-effect-directory-bound', 'manifest-effect-ancestor-bound', 'manifest-slot-bound',
