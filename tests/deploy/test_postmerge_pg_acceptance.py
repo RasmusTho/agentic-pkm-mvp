@@ -42,7 +42,22 @@ def _repository(tmp_path):
             (path / 'fixture.txt').write_text('exact resource')
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text('exact resource')
+            if name == 'docker-compose.yaml':
+                path.write_text(
+                    'services:\n'
+                    '  api: {}\n'
+                    '  companion-ui: {}\n'
+                    '  db: {}\n'
+                    '  heimdal-capture-watch: {}\n'
+                    '  instance-state-init: {}\n'
+                    '  migrate: {}\n'
+                    '  ollama: {}\n'
+                    '  source-identity-db-witness: {}\n'
+                    '  watcher: {}\n'
+                    '  worker: {}\n'
+                )
+            else:
+                path.write_text('exact resource')
             if name.endswith('.sh') and name.startswith('scripts/'):
                 path.chmod(0o755)
     for selector in profile.SELECTORS:
@@ -344,7 +359,13 @@ def test_scalar_rollback_resources_are_committed_and_readonly(tmp_path, monkeypa
     assert not boundary.containers
 
 
-def test_principal_fence_resources_are_committed_and_readonly(tmp_path, monkeypatch):
+def test_native_principal_producer_resources_are_complete_and_readonly(tmp_path, monkeypatch):
+    from app.instance.principal_fence import (
+        AUTH_PRODUCER_ROLES,
+        NATIVE_AUTH_PRODUCERS,
+        discover_auth_producers,
+    )
+
     runner, boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
     resources = (
         'scripts/deploy_channel.sh',
@@ -359,6 +380,18 @@ def test_principal_fence_resources_are_committed_and_readonly(tmp_path, monkeypa
         assert path.read_bytes() == content
         assert manifest['files'][name] == hashlib.sha256(content).hexdigest()
         assert path.stat().st_mode & 0o777 == 0o755
+    producers, digest = discover_auth_producers(
+        compose_path=source / 'docker-compose.yaml',
+        repo_root=source,
+    )
+    assert {producer.role for producer in producers} == AUTH_PRODUCER_ROLES
+    assert {producer.source for producer in producers} >= set(NATIVE_AUTH_PRODUCERS)
+    assert set(NATIVE_AUTH_PRODUCERS) <= set(runner_module.RESOURCE_PATHS)
+    assert re.fullmatch(r'[0-9a-f]{64}', digest)
+    assert digest == discover_auth_producers(
+        compose_path=source / 'docker-compose.yaml',
+        repo_root=source,
+    )[1]
     runner.cleanup()
 
     runner.verify()
@@ -401,6 +434,38 @@ def test_scalar_rollback_resource_closure_refuses_missing_or_tampered_assets(tmp
         path = candidate / asset
         original = path.read_bytes()
         path.unlink()
+        with pytest.raises(profile.PgAcceptanceError):
+            profile.verify_resources(manifest, root=candidate)
+        path.write_bytes(original + b'\n')
+        with pytest.raises(profile.PgAcceptanceError):
+            profile.verify_resources(manifest, root=candidate)
+        path.write_bytes(original)
+    runner.cleanup()
+
+
+def test_native_principal_producer_resources_refuse_missing_or_tampered_files(tmp_path, monkeypatch):
+    from app.instance.principal_fence import PrincipalFenceError, discover_auth_producers
+
+    runner, _boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
+    manifest = runner.resources(IMAGE_ID)
+    source = runner.directory / 'source'
+    candidate = tmp_path / 'image-root'
+    shutil.copytree(source, candidate)
+    import app
+    monkeypatch.setattr(app, '__file__', str(candidate / 'app/__init__.py'))
+    assets = (
+        'scripts/deploy_channel.sh', 'scripts/export_runtime_env.sh',
+        'scripts/start_full_system.sh',
+    )
+    for asset in assets:
+        path = candidate / asset
+        original = path.read_bytes()
+        path.unlink()
+        with pytest.raises(PrincipalFenceError, match=Path(asset).name):
+            discover_auth_producers(
+                compose_path=candidate / 'docker-compose.yaml',
+                repo_root=candidate,
+            )
         with pytest.raises(profile.PgAcceptanceError):
             profile.verify_resources(manifest, root=candidate)
         path.write_bytes(original + b'\n')
