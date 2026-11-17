@@ -1075,6 +1075,8 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
             same_legacy.channel, same_legacy.revision, same_legacy.services, same_legacy.consumers,
             image_digest=DIGEST, automatic=True,
         )
+        wire_plan = json.loads(json.dumps(same_source_current.payload()))
+        assert DeployPlan.from_payload(wire_plan) == same_source_current
         config = SimpleNamespace(channel=channel, journal=same_id_journal)
         monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel, config=config: config)
         worker_calls = []
@@ -1093,7 +1095,7 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
         for action in ('prepare', 'join', 'reconcile-failed'):
             expect_refusal(same_id_journal, lambda action=action: linux.DeploymentSupervisor(config).request({
                 'action': action, 'operation_id': same_id,
-                'plan': same_source_current.payload(), 'bootstrap': False,
+                'plan': wire_plan, 'bootstrap': False,
             }))
         assert worker_calls == [] and cleanup_calls == []
     expect_refusal(journal, lambda: journal.write(
