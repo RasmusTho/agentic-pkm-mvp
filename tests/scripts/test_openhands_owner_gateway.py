@@ -247,6 +247,30 @@ def test_gateway_diagnostics_redact_and_bound_complete_output():
     assert cleanup_error is None
 
 
+def test_gateway_early_exit_diagnostics_detect_secret_beyond_bound():
+    secret = b"synthetic-private-key"
+    raw = b"x" * (_GATEWAY_DIAGNOSTIC_BYTES + 100) + secret
+
+    class Process:
+        returncode = 17
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout):
+            return raw, raw
+
+    returncode, stdout, stderr, secret_present, cleanup_error = _finish_gateway_process(
+        Process(), secret
+    )
+    assert returncode == 17
+    assert secret_present is True
+    assert secret not in stdout.encode() + stderr.encode()
+    assert len(stdout.encode()) <= _GATEWAY_DIAGNOSTIC_BYTES
+    assert len(stderr.encode()) <= _GATEWAY_DIAGNOSTIC_BYTES
+    assert cleanup_error is None
+
+
 def test_gateway_readiness_wait_rejects_response_after_deadline():
     class Process:
         def poll(self):
