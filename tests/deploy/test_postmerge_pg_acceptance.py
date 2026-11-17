@@ -1067,20 +1067,64 @@ def test_legacy_terminal_profile_history_refuses_invalid_or_replayed_pairs(tmp_p
     # reconcile path; even a first current write must leave every old byte
     # untouched.
     expect_refusal(journal, lambda: journal.write(operation_id, 'prepared'))
-    same_source_current = DeployPlan(
-        legacy_plan.channel, legacy_plan.revision, legacy_plan.services, legacy_plan.consumers,
-        image_digest=DIGEST, automatic=True,
-    )
-    config = SimpleNamespace(channel='dev', journal=journal)
-    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
-    for action in ('prepare', 'join', 'reconcile-failed'):
-        expect_refusal(journal, lambda action=action: linux.DeploymentSupervisor(config).request({
-            'action': action, 'operation_id': operation_id,
-            'plan': same_source_current.payload(), 'bootstrap': False,
-        }))
+    for channel, terminal_result in (('dev', 'failed'), ('test', 'committed')):
+        same_id_journal, same_id, same_legacy, _raw, _receipt = _legacy_terminal_fixture(
+            tmp_path / f'same-source-{channel}', channel=channel, terminal_result=terminal_result,
+        )
+        same_source_current = DeployPlan(
+            same_legacy.channel, same_legacy.revision, same_legacy.services, same_legacy.consumers,
+            image_digest=DIGEST, automatic=True,
+        )
+        config = SimpleNamespace(channel=channel, journal=same_id_journal)
+        monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel, config=config: config)
+        worker_calls = []
+        cleanup_calls = []
+
+        def no_worker(*_args, **_kwargs):
+            worker_calls.append(True)
+            raise AssertionError('same-ID current-profile history reached a worker')
+
+        def no_cleanup(*_args, **_kwargs):
+            cleanup_calls.append(True)
+            raise AssertionError('same-ID current-profile history reached cleanup')
+
+        monkeypatch.setattr(linux, 'SupervisedOperation', no_worker)
+        monkeypatch.setattr(linux, 'LinuxEffects', no_cleanup)
+        for action in ('prepare', 'join', 'reconcile-failed'):
+            expect_refusal(same_id_journal, lambda action=action: linux.DeploymentSupervisor(config).request({
+                'action': action, 'operation_id': same_id,
+                'plan': same_source_current.payload(), 'bootstrap': False,
+            }))
+        assert worker_calls == [] and cleanup_calls == []
     expect_refusal(journal, lambda: journal.write(
         operation_id, 'committed', _result(legacy_plan.revision, 'dev', operation_id),
     ))
+
+    fresh_journal, fresh_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'fresh-write')
+    # Replace the old fixture with a genuinely current request and advance it
+    # through legal nonterminal stages before testing a new receipt.
+    for name in (f'{fresh_id}.request.json', 'dev.request.json'):
+        (fresh_journal.directory / name).unlink()
+    (fresh_journal.directory / f'{fresh_id}.receipt.json').unlink()
+    (fresh_journal.directory / 'dev.json').unlink()
+    current_plan = DeployPlan(
+        'dev', 'a' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
+        image_digest=DIGEST, automatic=True,
+    )
+    fresh_journal.bind_request(fresh_id, current_plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating', 'verifying'):
+        fresh_journal.write(fresh_id, stage)
+    before_bad_receipt = {path.name: path.read_bytes() for path in fresh_journal.directory.iterdir()}
+    bad_current_result = _result(current_plan.revision, 'dev', fresh_id)
+    bad_current_result['selection_hash'] = LEGACY_SELECTION_HASH
+    expect_refusal(fresh_journal, lambda: fresh_journal.write(
+        fresh_id, 'committed', bad_current_result,
+    ))
+    assert {path.name: path.read_bytes() for path in fresh_journal.directory.iterdir()} == before_bad_receipt
+    committed = fresh_journal.write(
+        fresh_id, 'committed', _result(current_plan.revision, 'dev', fresh_id),
+    )
+    assert committed.terminal_result == 'committed'
 
     foreign, foreign_id, _plan, _raw, _receipt = _legacy_terminal_fixture(tmp_path / 'foreign')
     foreign_receipt = json.loads((foreign.directory / f'{foreign_id}.receipt.json').read_text())
