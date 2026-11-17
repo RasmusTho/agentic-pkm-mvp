@@ -252,7 +252,7 @@ def test_mvr06_requires_complete_mvr05_classification_receipt(mvr06d_db) -> None
     assert default_revision and int(default_revision) > 0
     assert default_legacy_key == derive_idempotency_key(
         INSTANCE_DEFAULT_VAULT_CHANGED,
-        str(default_revision),
+        str(int(default_revision)),
         "instance-default-vault-changed-v1",
     )
     assert default_row == derive_binding_scoped_idempotency_key(
