@@ -763,7 +763,8 @@ class DeployJournal:
             retained.validate(historical=True)
         except Exception:
             return False
-        if (plan.channel != self.channel or retained.payload() != receipt.payload()):
+        if (plan.channel != self.channel or request.get('bootstrap') is not False
+            or retained.payload() != receipt.payload()):
             return False
         if isinstance(plan, DeployPlan):
             try:
