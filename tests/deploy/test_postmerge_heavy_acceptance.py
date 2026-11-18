@@ -32,6 +32,19 @@ def _expected():
     return heavy.identity(SHA, DIGEST, 'test', OPERATION)
 
 
+def test_heavy_profile_loads_real_selector():
+    """The production loader must register its real dataclass module first."""
+    import importlib
+
+    importlib.import_module('scripts.select_pr_tests')
+    module = heavy._load_selector(ROOT)
+
+    assert module.Selection.__module__ == module.__name__
+    assert sys.modules[module.__name__] is module
+    selection = module.Selection(False, (), ('tests/deploy',), 'regression')
+    assert selection.targets == ('tests/deploy',)
+
+
 def test_heavy_profile_refuses_failure_timeout_and_docker_skip(tmp_path):
     assert heavy.classify(_summary(), _expected())['result'] == 'passed'
     # A test failure, a pytest-timeout watchdog kill (reported as a failure),
