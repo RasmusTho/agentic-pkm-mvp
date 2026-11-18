@@ -186,6 +186,8 @@ def test_heavy_profile_rejects_incomplete_duplicate_and_foreign_worker_results(t
     )
     parsed, _ = heavy._read_worker_result(result, expected)
     assert parsed["selected"] == 1
+    with pytest.raises(heavy.HeavyAcceptanceError):
+        heavy._read_worker_result(result, expected, ("tests/deploy/test_other.py::test_other",))
     result.write_text(
         json.dumps(
             {

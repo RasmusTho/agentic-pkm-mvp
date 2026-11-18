@@ -453,7 +453,7 @@ def _worker_summary(
 
 
 def _read_worker_result(
-    path: Path, expected: dict[str, str]
+    path: Path, expected: dict[str, str], expected_nodes: tuple[str, ...] | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -481,6 +481,7 @@ def _read_worker_result(
         summary["targets"] != [HEAVY_TARGET]
         or len(nodes) != summary["selected"]
         or len(set(nodes)) != len(nodes)
+        or (expected_nodes is not None and tuple(sorted(nodes)) != tuple(sorted(expected_nodes)))
         or len(passed_nodes) != summary["passed"]
         or len(failed_nodes) != summary["failed"]
         or len(skipped_nodes) != summary["skipped"]
@@ -520,7 +521,7 @@ def _run_partitions(
     partitions = _partition_targets(root, marker, targets, expected_nodes, deadline)
     _remaining(deadline)
     work_dir = Path(tempfile.mkdtemp(prefix="heavy-acceptance-", dir="/tmp"))
-    processes: list[tuple[subprocess.Popen[str], Path, Path]] = []
+    processes: list[tuple[subprocess.Popen[str], Path, tuple[str, ...]]] = []
     try:
         manifest_path = work_dir / "manifest.json"
         manifest_path.write_text(
@@ -528,6 +529,12 @@ def _run_partitions(
         )
         for index, partition in enumerate(partitions):
             _remaining(deadline)
+            expected_partition_nodes = tuple(
+                node
+                for item in partition
+                for node in expected_nodes
+                if node == item or node.split("::", 1)[0] == item
+            )
             target_path = work_dir / f"partition-{index}.targets"
             result_path = work_dir / f"partition-{index}.json"
             log_path = work_dir / f"partition-{index}.log"
@@ -558,7 +565,7 @@ def _run_partitions(
                 start_new_session=True,
             )
             log.close()
-            processes.append((process, result_path, log_path))
+            processes.append((process, result_path, expected_partition_nodes))
 
         timed_out = False
         while any(process.poll() is None for process, _, _ in processes):
@@ -585,9 +592,9 @@ def _run_partitions(
         skipped = docker_skipped = 0
         exit_status = 0
         skipped_nodes: list[str] = []
-        for process, result_path, _ in processes:
+        for process, result_path, partition in processes:
             _remaining(deadline)
-            summary, payload = _read_worker_result(result_path, expected)
+            summary, payload = _read_worker_result(result_path, expected, partition)
             observed_nodes.extend(payload["nodes"])
             passed_nodes.extend(payload["passed_nodes"])
             failed_nodes.extend(payload["failed_nodes"])
