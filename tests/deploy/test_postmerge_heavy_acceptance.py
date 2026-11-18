@@ -71,7 +71,10 @@ def _partition_tree(tmp_path, file_count=6):
 
 
 def _leaky_test_source(marker: Path, *, linger_seconds: float = 1.0) -> str:
-    child = f"import time; time.sleep({linger_seconds}); Path({str(marker)!r}).write_text('leaked')"
+    child = (
+        f"from pathlib import Path; import time; time.sleep({linger_seconds}); "
+        f"Path({str(marker)!r}).write_text('leaked')"
+    )
     return (
         "import subprocess\n"
         "import sys\n"
