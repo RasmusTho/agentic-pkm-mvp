@@ -189,6 +189,19 @@ def test_heavy_profile_rejects_incomplete_duplicate_and_foreign_worker_results(t
     result.write_text(
         json.dumps(
             {
+                "summary": {**summary, "selected": 2},
+                "nodes": ["tests/deploy/test_a.py::test_a"],
+                "passed_nodes": ["tests/deploy/test_a.py::test_a"],
+                "failed_nodes": [],
+                "skipped_nodes": [],
+            }
+        )
+    )
+    with pytest.raises(heavy.HeavyAcceptanceError):
+        heavy._read_worker_result(result, expected)
+    result.write_text(
+        json.dumps(
+            {
                 **json.loads(result.read_text()),
                 "summary": {**summary, "report_hash": "1" * 64},
             }
