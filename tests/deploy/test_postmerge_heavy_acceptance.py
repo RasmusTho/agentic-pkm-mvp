@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -69,6 +70,18 @@ def _partition_tree(tmp_path, file_count=6):
     return work
 
 
+def _leaky_test_source(marker: Path, *, linger_seconds: float = 1.0) -> str:
+    child = f"import time; time.sleep({linger_seconds}); Path({str(marker)!r}).write_text('leaked')"
+    return (
+        "import subprocess\n"
+        "import sys\n"
+        "import time\n"
+        f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
+        "def test_leaky_worker():\n"
+        "    time.sleep(0.05)\n"
+    )
+
+
 def test_heavy_profile_uses_exact_candidate_selector_without_baked_ci_imports():
     """The production loader must register its real dataclass module first."""
     import importlib
@@ -80,6 +93,21 @@ def test_heavy_profile_uses_exact_candidate_selector_without_baked_ci_imports():
     assert sys.modules[module.__name__] is module
     selection = module.Selection(False, (), ("tests/deploy",), "regression")
     assert selection.targets == ("tests/deploy",)
+
+
+def test_heavy_profile_binds_candidate_partition_helpers(tmp_path, monkeypatch):
+    import types
+
+    work = _partition_tree(tmp_path, file_count=1)
+    foreign_package = types.ModuleType("scripts")
+    foreign_package.__path__ = [str(tmp_path / "foreign-scripts")]
+    foreign_planner = types.ModuleType("scripts.plan_full_suite_node_shards")
+    monkeypatch.setitem(sys.modules, "scripts", foreign_package)
+    monkeypatch.setitem(sys.modules, "scripts.plan_full_suite_node_shards", foreign_planner)
+    tools = heavy._load_partition_tools(work)
+    assert (
+        Path(tools.__file__).resolve() == (work / "scripts/run_scoped_test_partitions.py").resolve()
+    )
 
 
 def test_heavy_profile_partitions_deploy_nodes_exactly_once_with_shared_groups(tmp_path):
@@ -103,6 +131,28 @@ def test_heavy_profile_partitions_deploy_nodes_exactly_once_with_shared_groups(t
     )
 
 
+def test_heavy_profile_aggregates_two_node_outcomes_and_report_hash(tmp_path, monkeypatch):
+    work = _partition_tree(tmp_path, file_count=1)
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    deadline = time.monotonic() + 60
+    nodes = heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+    aggregate = heavy._run_partitions(
+        {**_expected()},
+        work,
+        SELECTOR_MARKER,
+        ("tests/deploy",),
+        nodes,
+        deadline,
+    )
+    expected_hash = hashlib.sha256(
+        json.dumps([sorted(nodes), []], separators=(",", ":")).encode()
+    ).hexdigest()
+    assert aggregate["selected"] == len(nodes) == 2
+    assert aggregate["passed"] == 2
+    assert aggregate["failed"] == aggregate["skipped"] == 0
+    assert aggregate["report_hash"] == expected_hash
+
+
 def test_heavy_profile_rejects_incomplete_duplicate_and_foreign_worker_results(tmp_path):
     expected = _expected()
     with pytest.raises(heavy.HeavyAcceptanceError) as missing:
@@ -113,7 +163,9 @@ def test_heavy_profile_rejects_incomplete_duplicate_and_foreign_worker_results(t
         "targets": ["tests/deploy"],
         "exit_status": 0,
         "failures": [],
-        "report_hash": "0" * 64,
+        "report_hash": hashlib.sha256(
+            json.dumps([["tests/deploy/test_a.py::test_a"], []], separators=(",", ":")).encode()
+        ).hexdigest(),
         "selected": 1,
         "passed": 1,
         "failed": 0,
@@ -128,11 +180,58 @@ def test_heavy_profile_rejects_incomplete_duplicate_and_foreign_worker_results(t
                 "nodes": ["tests/deploy/test_a.py::test_a"],
                 "passed_nodes": ["tests/deploy/test_a.py::test_a"],
                 "failed_nodes": [],
+                "skipped_nodes": [],
             }
         )
     )
     parsed, _ = heavy._read_worker_result(result, expected)
     assert parsed["selected"] == 1
+    result.write_text(
+        json.dumps(
+            {
+                **json.loads(result.read_text()),
+                "summary": {**summary, "report_hash": "1" * 64},
+            }
+        )
+    )
+    with pytest.raises(heavy.HeavyAcceptanceError):
+        heavy._read_worker_result(result, expected)
+    result.write_text(
+        json.dumps(
+            {
+                "summary": summary,
+                "nodes": ["tests/deploy/test_a.py::test_a"],
+                "passed_nodes": ["tests/deploy/test_a.py::test_a"],
+                "failed_nodes": [],
+                "skipped_nodes": [],
+            }
+        )
+    )
+    two_summary = {**summary, "selected": 2, "passed": 1, "skipped": 1}
+    two_payload = {
+        "summary": two_summary,
+        "nodes": ["tests/deploy/test_a.py::test_a", "tests/deploy/test_b.py::test_b"],
+        "passed_nodes": ["tests/deploy/test_a.py::test_a"],
+        "failed_nodes": [],
+        "skipped_nodes": ["tests/deploy/test_b.py::test_b"],
+    }
+    result.write_text(json.dumps(two_payload))
+    parsed, _ = heavy._read_worker_result(result, expected)
+    assert parsed["selected"] == 2
+    result.write_text(json.dumps({**two_payload, "summary": {**two_summary, "skipped": 0}}))
+    with pytest.raises(heavy.HeavyAcceptanceError):
+        heavy._read_worker_result(result, expected)
+    result.write_text(
+        json.dumps(
+            {
+                "summary": summary,
+                "nodes": ["tests/deploy/test_a.py::test_a"],
+                "passed_nodes": ["tests/deploy/test_a.py::test_a"],
+                "failed_nodes": [],
+                "skipped_nodes": [],
+            }
+        )
+    )
     for payload in (
         {**json.loads(result.read_text()), "nodes": ["tests/deploy/test_a.py::test_a"] * 2},
         {**json.loads(result.read_text()), "summary": {**summary, "source_sha": "c" * 40}},
@@ -179,11 +278,110 @@ def test_heavy_profile_enforces_deadline_watchdog_and_owned_child_cleanup(tmp_pa
     assert not marker.exists()
 
 
-def test_heavy_profile_refuses_collection_errors_and_missing_watchdog(tmp_path):
+def test_heavy_profile_cleans_exited_leader_and_descendant_when_peer_times_out(
+    tmp_path, monkeypatch
+):
+    work = _partition_tree(tmp_path, file_count=1)
+    exited_marker = tmp_path / "exited-descendant-leaked"
+    slow_marker = tmp_path / "slow-descendant-leaked"
+    exited_file = work / "tests" / "deploy" / "test_exited.py"
+    slow_file = work / "tests" / "deploy" / "test_slow_peer.py"
+    exited_file.write_text(_leaky_test_source(exited_marker))
+    slow_file.write_text("import time\ndef test_slow_peer(): time.sleep(5)\n")
+    monkeypatch.setattr(
+        heavy,
+        "_partition_targets",
+        lambda *args, **kwargs: (
+            ("tests/deploy/test_exited.py",),
+            ("tests/deploy/test_slow_peer.py",),
+        ),
+    )
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    survivor = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(2)"], start_new_session=True
+    )
+    try:
+        with pytest.raises(heavy.HeavyAcceptanceError) as error:
+            heavy._run_partitions(
+                {**_expected()},
+                work,
+                SELECTOR_MARKER,
+                ("tests/deploy",),
+                (),
+                time.monotonic() + 0.5,
+            )
+        assert error.value.reason == "heavy_deadline_exceeded"
+        assert survivor.poll() is None
+        time.sleep(1.2)
+        assert not exited_marker.exists()
+        assert not slow_marker.exists()
+    finally:
+        survivor.terminate()
+        survivor.wait(timeout=2)
+
+
+def test_heavy_profile_cleans_descendant_after_nominal_success(tmp_path, monkeypatch):
+    work = _partition_tree(tmp_path, file_count=1)
+    marker = tmp_path / "nominal-descendant-leaked"
+    test_file = work / "tests" / "deploy" / "test_nominal.py"
+    test_file.write_text(_leaky_test_source(marker))
+    monkeypatch.setattr(
+        heavy, "_partition_targets", lambda *args, **kwargs: (("tests/deploy/test_nominal.py",),)
+    )
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    deadline = time.monotonic() + 10
+    nodes = tuple(
+        node
+        for node in heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+        if node.startswith("tests/deploy/test_nominal.py::")
+    )
+    aggregate = heavy._run_partitions(
+        {**_expected()},
+        work,
+        SELECTOR_MARKER,
+        ("tests/deploy",),
+        nodes,
+        deadline,
+    )
+    assert heavy.classify(aggregate, _expected())["result"] == "passed"
+    time.sleep(1.2)
+    assert not marker.exists()
+
+
+def test_heavy_profile_refuses_exhausted_planning_before_spawning_workers(tmp_path, monkeypatch):
+    started: list[object] = []
+
+    def planning(*args, **kwargs):
+        time.sleep(0.05)
+        return (("tests/deploy/test_extra_0.py",),)
+
+    monkeypatch.setattr(heavy, "_partition_targets", planning)
+    real_popen = heavy.subprocess.Popen
+
+    def unexpected_start(*args, **kwargs):
+        started.append(args)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(heavy.subprocess, "Popen", unexpected_start)
+    with pytest.raises(heavy.HeavyAcceptanceError) as error:
+        heavy._run_partitions(
+            {**_expected()},
+            tmp_path,
+            SELECTOR_MARKER,
+            ("tests/deploy",),
+            (),
+            time.monotonic() + 0.01,
+        )
+    assert error.value.reason == "heavy_deadline_exceeded"
+    assert not started
+
+
+def test_heavy_profile_refuses_collection_errors_and_missing_watchdog(tmp_path, monkeypatch):
     work = _partition_tree(tmp_path, file_count=2)
     broken = work / "tests" / "deploy" / "test_broken.py"
     broken.write_text("def test_broken(:\n    pass\n")
     result = tmp_path / "collection-error.json"
+    monkeypatch.chdir(work)
     heavy._worker_summary(
         {**_expected(), "marker": SELECTOR_MARKER},
         ["tests/deploy/test_broken.py"],
@@ -195,6 +393,31 @@ def test_heavy_profile_refuses_collection_errors_and_missing_watchdog(tmp_path):
     with pytest.raises(heavy.HeavyAcceptanceError) as watchdog:
         heavy.HeavyResults().summary(0)
     assert watchdog.value.reason == "heavy_watchdog_missing"
+
+
+def test_heavy_profile_refuses_xfail_and_xpass_terminal_outcomes(tmp_path, monkeypatch):
+    work = _partition_tree(tmp_path, file_count=1)
+    xfail_file = work / "tests" / "deploy" / "test_xfail.py"
+    xfail_file.write_text(
+        "import pytest\n"
+        "@pytest.mark.xfail(reason='expected')\n"
+        "def test_expected_failure():\n"
+        "    assert False\n"
+        "@pytest.mark.xfail(reason='unexpected')\n"
+        "def test_unexpected_pass():\n"
+        "    assert True\n"
+    )
+    result = tmp_path / "xfail.json"
+    monkeypatch.chdir(work)
+    heavy._worker_summary(
+        {**_expected(), "marker": SELECTOR_MARKER},
+        ["tests/deploy/test_xfail.py"],
+        result,
+    )
+    summary = json.loads(result.read_text())["summary"]
+    assert summary["exit_status"] == 0
+    assert summary["failed"] == 2
+    assert heavy.classify(summary, _expected())["result"] == "failed"
 
 
 def test_heavy_profile_refuses_failure_timeout_and_docker_skip(tmp_path):
