@@ -105,6 +105,9 @@ def test_heavy_profile_partitions_deploy_nodes_exactly_once_with_shared_groups(t
 
 def test_heavy_profile_rejects_incomplete_duplicate_and_foreign_worker_results(tmp_path):
     expected = _expected()
+    with pytest.raises(heavy.HeavyAcceptanceError) as missing:
+        heavy._read_worker_result(tmp_path / "missing.json", expected)
+    assert missing.value.reason == "heavy_worker_result_missing"
     summary = {
         **expected,
         "targets": ["tests/deploy"],
@@ -146,8 +149,13 @@ def test_heavy_profile_rejects_incomplete_duplicate_and_foreign_worker_results(t
 
 def test_heavy_profile_enforces_deadline_watchdog_and_owned_child_cleanup(tmp_path, monkeypatch):
     work = _partition_tree(tmp_path, file_count=2)
+    marker = tmp_path / "child-finished-after-timeout"
     (work / "tests" / "deploy" / "test_extra_0.py").write_text(
-        "import time\n" "def test_slow(): time.sleep(5)\n"
+        "import time\n"
+        f"from pathlib import Path\nMARKER = Path({str(marker)!r})\n"
+        "def test_slow():\n"
+        "    time.sleep(1)\n"
+        "    MARKER.write_text('leaked')\n"
     )
     monkeypatch.setattr(
         heavy, "_partition_targets", lambda *args, **kwargs: (("tests/deploy/test_extra_0.py",),)
@@ -163,6 +171,26 @@ def test_heavy_profile_enforces_deadline_watchdog_and_owned_child_cleanup(tmp_pa
             time.monotonic() + 0.5,
         )
     assert error.value.reason == "heavy_deadline_exceeded"
+    time.sleep(1.2)
+    assert not marker.exists()
+
+
+def test_heavy_profile_refuses_collection_errors_and_missing_watchdog(tmp_path):
+    work = _partition_tree(tmp_path, file_count=2)
+    broken = work / "tests" / "deploy" / "test_broken.py"
+    broken.write_text("def test_broken(:\n    pass\n")
+    result = tmp_path / "collection-error.json"
+    heavy._worker_summary(
+        {**_expected(), "marker": SELECTOR_MARKER},
+        ["tests/deploy/test_broken.py"],
+        result,
+    )
+    payload = json.loads(result.read_text())
+    assert payload["summary"]["exit_status"] != 0
+    assert heavy.classify(payload["summary"], _expected())["result"] == "failed"
+    with pytest.raises(heavy.HeavyAcceptanceError) as watchdog:
+        heavy.HeavyResults().summary(0)
+    assert watchdog.value.reason == "heavy_watchdog_missing"
 
 
 def test_heavy_profile_refuses_failure_timeout_and_docker_skip(tmp_path):
