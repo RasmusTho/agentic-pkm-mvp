@@ -1160,7 +1160,7 @@ def test_runner_refuses_unqualified_init_before_start(tmp_path, monkeypatch, ini
     runner, fake = _runner(tmp_path, monkeypatch, output, init_value=init_value)
     with pytest.raises(heavy.HeavyAcceptanceError, match="heavy_container_unqualified"):
         runner.verify()
-    assert not any(call[:2] == ["start", "--attach"] for call in fake.calls)
+    assert not any(call[1:3] == ["start", "--attach"] for call in fake.calls)
     assert fake.container is None and not runner.directory.exists()
 
 
