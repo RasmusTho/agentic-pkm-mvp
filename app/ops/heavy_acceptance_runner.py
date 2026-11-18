@@ -176,6 +176,7 @@ class HeavyAcceptanceRunner:
             'create', '--name', self.name + '-tests', *labels,
             '--log-driver', 'json-file', '--log-opt', 'max-size=50m', '--log-opt', 'max-file=3',
             *(self.memory_limit.docker_args() if self.memory_limit is not None else []),
+            '--init',
             '--network', 'none', '--read-only', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges', '--pids-limit', '4096', '--no-healthcheck', '--user', '0:0', '--workdir', '/work',
             '--tmpfs', '/tmp:rw,nosuid,nodev,size=2g',
@@ -191,6 +192,7 @@ class HeavyAcceptanceRunner:
         config = (row or {}).get('HostConfig', {})
         if (row is None or row['Id'] != container or row.get('Image') != image['Id']
             or config.get('NetworkMode') != 'none' or config.get('Privileged')
+            or config.get('Init') is not True
             or config.get('ReadonlyRootfs') is not True or config.get('CapDrop') != ['ALL']
             or config.get('Binds') or config.get('PortBindings')
             or (self.memory_limit is not None and not self.memory_limit.applied(config))
