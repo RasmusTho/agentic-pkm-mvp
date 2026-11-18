@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import time
 from uuid import uuid4
 
 import pytest
@@ -14,81 +16,236 @@ from app.ops import heavy_acceptance_runner as runner_module
 from app.ops import postgres_deploy_linux as linux
 from app.ops.heavy_acceptance_runner import HeavyAcceptanceRunner
 
-SHA = 'a' * 40
-DIGEST = 'sha256:' + 'b' * 64
+SHA = "a" * 40
+DIGEST = "sha256:" + "b" * 64
 OPERATION = str(uuid4())
 ROOT = Path(__file__).resolve().parents[2]
-SELECTOR_NAME = 'select_pr_tests' + '.py'
+SELECTOR_NAME = "select_pr_tests" + ".py"
+SELECTOR_MARKER = (
+    "not pg and not alpha_llm and not alpha_llm_live and not panel_llm_e2e "
+    "and not eval and not browser_runtime and not human_uat and not uat_integrated_runtime"
+)
 
 
 def _summary(**overrides):
-    summary = {**heavy.identity(SHA, DIGEST, 'test', OPERATION), 'targets': ['tests/deploy'], 'exit_status': 0,
-               'failures': [], 'report_hash': '0' * 64, 'selected': 500, 'passed': 490, 'failed': 0,
-               'skipped': 10, 'docker_skipped': 0}
+    summary = {
+        **heavy.identity(SHA, DIGEST, "test", OPERATION),
+        "targets": ["tests/deploy"],
+        "exit_status": 0,
+        "failures": [],
+        "report_hash": "0" * 64,
+        "selected": 500,
+        "passed": 490,
+        "failed": 0,
+        "skipped": 10,
+        "docker_skipped": 0,
+    }
     return {**summary, **overrides}
 
 
 def _expected():
-    return heavy.identity(SHA, DIGEST, 'test', OPERATION)
+    return heavy.identity(SHA, DIGEST, "test", OPERATION)
 
 
-def test_heavy_profile_loads_real_selector():
+def _partition_tree(tmp_path, file_count=6):
+    work = tmp_path / "partition-work"
+    (work / "scripts").mkdir(parents=True)
+    (work / "tests" / "deploy").mkdir(parents=True)
+    (work / "scripts" / SELECTOR_NAME).write_text(
+        "HEAVY_PR_DEFERRED_TARGETS = {'tests/deploy': ()}\n"
+        f"PR_MARKER_EXPRESSION = {SELECTOR_MARKER!r}\n"
+    )
+    for helper in ("plan_full_suite_node_shards.py", "run_scoped_test_partitions.py"):
+        shutil.copy2(ROOT / "scripts" / helper, work / "scripts" / helper)
+    (work / "tox.ini").write_text("[pytest]\nmarkers =\n    pg: pg\n")
+    (work / "tests" / "deploy" / "test_deploy_channel_script.py").write_text(
+        "def test_rollback_dry_run_without_sha_parses_flag_and_skips_writes(): pass\n"
+        "def test_rollback_with_explicit_sha_still_allows_flags(): pass\n"
+    )
+    for index in range(file_count - 1):
+        (work / "tests" / "deploy" / f"test_extra_{index}.py").write_text(
+            f"def test_extra_{index}(): pass\n"
+        )
+    return work
+
+
+def test_heavy_profile_uses_exact_candidate_selector_without_baked_ci_imports():
     """The production loader must register its real dataclass module first."""
     import importlib
 
-    importlib.import_module('scripts.select_pr_tests')
+    importlib.import_module("scripts.select_pr_tests")
     module = heavy._load_selector(ROOT)
 
     assert module.Selection.__module__ == module.__name__
     assert sys.modules[module.__name__] is module
-    selection = module.Selection(False, (), ('tests/deploy',), 'regression')
-    assert selection.targets == ('tests/deploy',)
+    selection = module.Selection(False, (), ("tests/deploy",), "regression")
+    assert selection.targets == ("tests/deploy",)
+
+
+def test_heavy_profile_partitions_deploy_nodes_exactly_once_with_shared_groups(tmp_path):
+    work = _partition_tree(tmp_path)
+    deadline = time.monotonic() + 60
+    nodes = heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+    partitions = heavy._partition_targets(work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline)
+    expected_files = {node.split("::", 1)[0] for node in nodes}
+    actual_files = {target.split("::", 1)[0] for partition in partitions for target in partition}
+    assert len(partitions) <= heavy.MAX_WORKERS
+    assert actual_files == expected_files
+    assert (
+        sum(
+            any(
+                target.split("::", 1)[0] == "tests/deploy/test_deploy_channel_script.py"
+                for target in partition
+            )
+            for partition in partitions
+        )
+        == 1
+    )
+
+
+def test_heavy_profile_rejects_incomplete_duplicate_and_foreign_worker_results(tmp_path):
+    expected = _expected()
+    summary = {
+        **expected,
+        "targets": ["tests/deploy"],
+        "exit_status": 0,
+        "failures": [],
+        "report_hash": "0" * 64,
+        "selected": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "docker_skipped": 0,
+    }
+    result = tmp_path / "worker.json"
+    result.write_text(
+        json.dumps(
+            {
+                "summary": summary,
+                "nodes": ["tests/deploy/test_a.py::test_a"],
+                "passed_nodes": ["tests/deploy/test_a.py::test_a"],
+                "failed_nodes": [],
+            }
+        )
+    )
+    parsed, _ = heavy._read_worker_result(result, expected)
+    assert parsed["selected"] == 1
+    for payload in (
+        {**json.loads(result.read_text()), "nodes": ["tests/deploy/test_a.py::test_a"] * 2},
+        {**json.loads(result.read_text()), "summary": {**summary, "source_sha": "c" * 40}},
+    ):
+        result.write_text(json.dumps(payload))
+        with pytest.raises(heavy.HeavyAcceptanceError):
+            heavy._read_worker_result(result, expected)
+
+
+def test_heavy_profile_enforces_deadline_watchdog_and_owned_child_cleanup(tmp_path, monkeypatch):
+    work = _partition_tree(tmp_path, file_count=2)
+    (work / "tests" / "deploy" / "test_extra_0.py").write_text(
+        "import time\n" "def test_slow(): time.sleep(5)\n"
+    )
+    monkeypatch.setattr(
+        heavy, "_partition_targets", lambda *args, **kwargs: (("tests/deploy/test_extra_0.py",),)
+    )
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    with pytest.raises(heavy.HeavyAcceptanceError) as error:
+        heavy._run_partitions(
+            {**_expected()},
+            work,
+            SELECTOR_MARKER,
+            ("tests/deploy",),
+            (),
+            time.monotonic() + 0.5,
+        )
+    assert error.value.reason == "heavy_deadline_exceeded"
 
 
 def test_heavy_profile_refuses_failure_timeout_and_docker_skip(tmp_path):
-    assert heavy.classify(_summary(), _expected())['result'] == 'passed'
+    assert heavy.classify(_summary(), _expected())["result"] == "passed"
     # A test failure, a pytest-timeout watchdog kill (reported as a failure),
     # a docker-gated skip, a nonzero session or an empty run are never a pass.
-    for overrides in ({'failed': 1, 'failures': ['tests/deploy/test_a.py::test_slow']},
-                      {'exit_status': 1}, {'docker_skipped': 3}, {'selected': 0, 'passed': 0}):
-        assert heavy.classify(_summary(**overrides), _expected())['result'] == 'failed', overrides
+    for overrides in (
+        {"failed": 1, "failures": ["tests/deploy/test_a.py::test_slow"]},
+        {"exit_status": 1},
+        {"docker_skipped": 3},
+        {"selected": 0, "passed": 0},
+    ):
+        assert heavy.classify(_summary(**overrides), _expected())["result"] == "failed", overrides
     # Foreign identity, missing fields or unbounded evidence are refused.
-    for broken in (_summary(source_sha='c' * 40), {k: v for k, v in _summary().items() if k != 'targets'},
-                   _summary(targets=[]), _summary(failures=['x\ny']), _summary(failures=['t'] * 21),
-                   _summary(passed=-1)):
+    for broken in (
+        _summary(source_sha="c" * 40),
+        {k: v for k, v in _summary().items() if k != "targets"},
+        _summary(targets=[]),
+        _summary(failures=["x\ny"]),
+        _summary(failures=["t"] * 21),
+        _summary(passed=-1),
+    ):
         with pytest.raises(heavy.HeavyAcceptanceError):
             heavy.classify(broken, _expected())
 
     # In-container entrypoint: the exact tree's own selector, PR marker and
     # the 120 s thread watchdog; a docker-gated skip is counted.
-    work = tmp_path / 'work'
+    work = tmp_path / "work"
     # Path pieces, not repo-relative literals: the heavy-trigger census reads
     # string literals in tests/deploy as repo files this suite depends on.
-    (work / 'scripts').mkdir(parents=True)
-    (work / 'tests' / 'heavy').mkdir(parents=True)
-    (work / 'scripts' / SELECTOR_NAME).write_text(
-        "HEAVY_PR_DEFERRED_TARGETS = {'tests/heavy': ()}\nPR_MARKER_EXPRESSION = 'not pg'\n")
-    (work / 'tox.ini').write_text('[pytest]\nmarkers =\n    pg: pg\n')
-    (work / 'tests' / 'heavy' / 'test_sample.py').write_text(
-        'import pytest\n'
-        'def test_ok():\n    pass\n'
-        '@pytest.mark.pg\ndef test_pg_is_deselected():\n    raise AssertionError()\n'
+    (work / "scripts").mkdir(parents=True)
+    (work / "tests" / "deploy").mkdir(parents=True)
+    (work / "scripts" / SELECTOR_NAME).write_text(
+        "HEAVY_PR_DEFERRED_TARGETS = {'tests/deploy': ()}\n"
+        "PR_MARKER_EXPRESSION = 'not pg and not alpha_llm and not alpha_llm_live and not panel_llm_e2e and not eval and not browser_runtime and not human_uat and not uat_integrated_runtime'\n"
+    )
+    for helper in ("plan_full_suite_node_shards.py", "run_scoped_test_partitions.py"):
+        shutil.copy2(ROOT / "scripts" / helper, work / "scripts" / helper)
+    (work / "tox.ini").write_text("[pytest]\nmarkers =\n    pg: pg\n")
+    (work / "tests" / "deploy" / "test_sample.py").write_text(
+        "import pytest\n"
+        "def test_ok():\n    pass\n"
+        "@pytest.mark.pg\ndef test_pg_is_deselected():\n    raise AssertionError()\n"
         '@pytest.mark.skipif(True, reason="docker executable not found on PATH")\n'
-        'def test_compose():\n    pass\n')
-    manifest = tmp_path / 'manifest.json'
+        "def test_compose():\n    pass\n"
+    )
+    manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps(_expected()))
     result = subprocess.run(
-        [sys.executable, '-c', 'import sys; from app.ops.heavy_acceptance import main; '
-         f'sys.path.insert(0, {str(work)!r}); raise SystemExit(main(["--manifest", {str(manifest)!r}]))'],
-        cwd=work, capture_output=True, text=True, timeout=120,
-        env={**os.environ, 'PYTHONPATH': str(ROOT), 'PYTEST_ADDOPTS': ''},
+        [
+            sys.executable,
+            "-c",
+            "import sys; from app.ops.heavy_acceptance import main; "
+            f'sys.path.insert(0, {str(work)!r}); raise SystemExit(main(["--manifest", {str(manifest)!r}]))',
+        ],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, "PYTHONPATH": str(ROOT), "PYTEST_ADDOPTS": ""},
     )
-    line = next(row for row in result.stdout.splitlines() if row.startswith(heavy.RESULT_PREFIX))
-    summary = json.loads(line[len(heavy.RESULT_PREFIX):])
     assert result.returncode == 0, result.stdout + result.stderr
-    assert summary['targets'] == ['tests/heavy']
-    assert (summary['selected'], summary['passed'], summary['skipped'], summary['docker_skipped']) == (2, 1, 1, 1)
-    assert heavy.classify(summary, _expected())['result'] == 'failed'
+    line = next(row for row in result.stdout.splitlines() if row.startswith(heavy.RESULT_PREFIX))
+    summary = json.loads(line[len(heavy.RESULT_PREFIX) :])
+    assert summary["targets"] == ["tests/deploy"]
+    assert (
+        summary["selected"],
+        summary["passed"],
+        summary["skipped"],
+        summary["docker_skipped"],
+    ) == (2, 1, 1, 1)
+    assert heavy.classify(summary, _expected())["result"] == "failed"
+
+
+def test_heavy_profile_preserves_v1_identity_and_report_hash():
+    summary = _summary()
+    verdict = heavy.classify(summary, _expected())
+    assert verdict["profile_version"] == heavy.PROFILE_VERSION
+    assert verdict["source_sha"] == SHA
+    assert verdict["image_digest"] == DIGEST
+    assert verdict["channel"] == "test"
+    assert verdict["operation_id"] == OPERATION
+    assert verdict["report_hash"] == summary["report_hash"]
+    assert verdict["selected"] == summary["selected"]
+    assert verdict["passed"] == summary["passed"]
+    assert verdict["failed"] == summary["failed"]
+    assert verdict["skipped"] == summary["skipped"]
+    assert verdict["docker_skipped"] == summary["docker_skipped"]
 
 
 class _FakeDocker:
@@ -106,94 +263,151 @@ class _FakeDocker:
 
     def __call__(self, argv, *, timeout=60):
         self.calls.append(argv)
-        if argv[0] == 'git':
+        if argv[0] == "git":
             command, where = argv[5:], Path(argv[4])
-            if command[:1] == ['rev-parse']:
-                return (SHA if command[1] in {SHA + '^{commit}', 'HEAD'} else 'e' * 40).encode() + b'\n'
-            if command[:1] == ['fetch']:
-                assert command[-2:] == ['file://' + str(self.repository), SHA] and '--depth' in command
-                return b''
-            if command[:1] == ['checkout']:
-                (where / 'scripts').mkdir()
-                (where / 'scripts' / SELECTOR_NAME).write_text('x = 1\n')
-                return b''
-            if command[:1] in (['init'], ['status']):
-                return b''
+            if command[:1] == ["rev-parse"]:
+                return (
+                    SHA if command[1] in {SHA + "^{commit}", "HEAD"} else "e" * 40
+                ).encode() + b"\n"
+            if command[:1] == ["fetch"]:
+                assert (
+                    command[-2:] == ["file://" + str(self.repository), SHA] and "--depth" in command
+                )
+                return b""
+            if command[:1] == ["checkout"]:
+                (where / "scripts").mkdir()
+                (where / "scripts" / SELECTOR_NAME).write_text("x = 1\n")
+                return b""
+            if command[:1] in (["init"], ["status"]):
+                return b""
         command = argv[1:]
-        if command[:2] == ['image', 'inspect']:
-            return json.dumps([{'Id': 'sha256:' + 'f' * 64, 'RepoDigests': [heavy_image_digest()],
-                                'Config': {'Labels': {'org.opencontainers.image.revision': SHA}}}]).encode()
-        if command[:2] == ['container', 'ls']:
-            return (self.container or '').encode()
-        if command[:1] == ['create']:
+        if command[:2] == ["image", "inspect"]:
+            return json.dumps(
+                [
+                    {
+                        "Id": "sha256:" + "f" * 64,
+                        "RepoDigests": [heavy_image_digest()],
+                        "Config": {"Labels": {"org.opencontainers.image.revision": SHA}},
+                    }
+                ]
+            ).encode()
+        if command[:2] == ["container", "ls"]:
+            return (self.container or "").encode()
+        if command[:1] == ["create"]:
             self.created = command
-            self.container = 'c' * 64
-            return self.container.encode() + b'\n'
-        if command[:1] == ['inspect']:
+            self.container = "c" * 64
+            return self.container.encode() + b"\n"
+        if command[:1] == ["inspect"]:
             labels = {}
             for index, value in enumerate(self.created):
-                if value == '--label':
-                    key, _, item = self.created[index + 1].partition('=')
+                if value == "--label":
+                    key, _, item = self.created[index + 1].partition("=")
                     labels[key] = item
-            mounts = [{'Type': 'bind', 'Source': self.created[i + 1].split(',')[1].removeprefix('src=')}
-                      for i, value in enumerate(self.created) if value == '--mount']
-            memory = int(self.created[self.created.index('--memory') + 1]) if '--memory' in self.created else 0
-            swap = int(self.created[self.created.index('--memory-swap') + 1]) if '--memory-swap' in self.created else 0
-            return json.dumps([{'Id': self.container, 'Name': '/' + self.created[2], 'Image': 'sha256:' + 'f' * 64,
-                                'Config': {'Labels': labels}, 'Mounts': mounts,
-                                'State': {'OOMKilled': self.oom, 'ExitCode': 0, 'Running': not self.finished},
-                                'HostConfig': {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'CapDrop': ['ALL'],
-                                               'Memory': memory + int(self.limit_mismatch), 'MemorySwap': swap}}]
-                              ).encode()
-        if command[:2] == ['start', '--attach']:
+            mounts = [
+                {"Type": "bind", "Source": self.created[i + 1].split(",")[1].removeprefix("src=")}
+                for i, value in enumerate(self.created)
+                if value == "--mount"
+            ]
+            memory = (
+                int(self.created[self.created.index("--memory") + 1])
+                if "--memory" in self.created
+                else 0
+            )
+            swap = (
+                int(self.created[self.created.index("--memory-swap") + 1])
+                if "--memory-swap" in self.created
+                else 0
+            )
+            return json.dumps(
+                [
+                    {
+                        "Id": self.container,
+                        "Name": "/" + self.created[2],
+                        "Image": "sha256:" + "f" * 64,
+                        "Config": {"Labels": labels},
+                        "Mounts": mounts,
+                        "State": {
+                            "OOMKilled": self.oom,
+                            "ExitCode": 0,
+                            "Running": not self.finished,
+                        },
+                        "HostConfig": {
+                            "NetworkMode": "none",
+                            "ReadonlyRootfs": True,
+                            "CapDrop": ["ALL"],
+                            "Memory": memory + int(self.limit_mismatch),
+                            "MemorySwap": swap,
+                        },
+                    }
+                ]
+            ).encode()
+        if command[:2] == ["start", "--attach"]:
             self.finished = True
             return self.output.encode()
-        if command[:1] == ['rm']:
+        if command[:1] == ["rm"]:
             self.container = None
-            return b''
+            return b""
         raise AssertionError(argv)
 
 
 def heavy_image_digest():
     from app.ops.pg_acceptance import IMAGE_REPOSITORY
-    return IMAGE_REPOSITORY + '@' + DIGEST
+
+    return IMAGE_REPOSITORY + "@" + DIGEST
 
 
-def _runner(tmp_path, monkeypatch, output, *, channel='test', memory_limit=None):
-    journal = tmp_path / 'journal'
+def _runner(tmp_path, monkeypatch, output, *, channel="test", memory_limit=None):
+    journal = tmp_path / "journal"
     journal.mkdir(mode=0o700)
-    fake = _FakeDocker(tmp_path / 'repo', output)
-    monkeypatch.setattr(runner_module, '_command', fake)
-    docker = tmp_path / 'docker'
-    compose = tmp_path / 'docker-compose'
+    fake = _FakeDocker(tmp_path / "repo", output)
+    monkeypatch.setattr(runner_module, "_command", fake)
+    docker = tmp_path / "docker"
+    compose = tmp_path / "docker-compose"
     for path in (docker, compose):
-        path.write_text('')
-    monkeypatch.setattr(runner_module, 'host_docker_cli', lambda: (docker, compose))
-    return HeavyAcceptanceRunner(tmp_path / 'repo', journal, sha=SHA, digest=DIGEST, channel=channel,
-                                 operation_id=OPERATION, memory_limit=memory_limit), fake
+        path.write_text("")
+    monkeypatch.setattr(runner_module, "host_docker_cli", lambda: (docker, compose))
+    return HeavyAcceptanceRunner(
+        tmp_path / "repo",
+        journal,
+        sha=SHA,
+        digest=DIGEST,
+        channel=channel,
+        operation_id=OPERATION,
+        memory_limit=memory_limit,
+    ), fake
 
 
 def test_runner_isolates_candidate_and_cleans_owned_resources(tmp_path, monkeypatch):
-    output = 'pytest noise\n' + heavy.RESULT_PREFIX + json.dumps(_summary()) + '\n'
+    output = "pytest noise\n" + heavy.RESULT_PREFIX + json.dumps(_summary()) + "\n"
     runner, fake = _runner(tmp_path, monkeypatch, output)
     result = runner.verify()
-    assert result['result'] == 'passed' and result['selected'] == 500
+    assert result["result"] == "passed" and result["selected"] == 500
     create = fake.created
-    for flag in (['--network', 'none'], ['--cap-drop', 'ALL'], ['--security-opt', 'no-new-privileges']):
+    for flag in (
+        ["--network", "none"],
+        ["--cap-drop", "ALL"],
+        ["--security-opt", "no-new-privileges"],
+    ):
         index = create.index(flag[0])
-        assert create[index:index + 2] == flag
-    assert '--read-only' in create
-    mounts = [create[i + 1] for i, value in enumerate(create) if value == '--mount']
-    assert any(m.endswith(f'dst={runner_module.CONTAINER_DOCKER},readonly') for m in mounts)
-    assert any(m.endswith(f'dst={runner_module.CONTAINER_COMPOSE},readonly') for m in mounts)
-    assert not any('docker.sock' in m for m in mounts)
-    assert create[-3:] == ['app.ops.heavy_acceptance', '--manifest', '/heavy-manifest.json']
+        assert create[index : index + 2] == flag
+    assert "--read-only" in create
+    mounts = [create[i + 1] for i, value in enumerate(create) if value == "--mount"]
+    assert any(m.endswith(f"dst={runner_module.CONTAINER_DOCKER},readonly") for m in mounts)
+    assert any(m.endswith(f"dst={runner_module.CONTAINER_COMPOSE},readonly") for m in mounts)
+    assert not any("docker.sock" in m for m in mounts)
+    assert create[-3:] == ["app.ops.heavy_acceptance", "--manifest", "/heavy-manifest.json"]
     # Exact owned container and work tree are gone after the run.
     assert fake.container is None and not runner.directory.exists()
 
 
-@pytest.mark.parametrize('output', ['', heavy.RESULT_PREFIX + 'refused\n',
-                                    heavy.RESULT_PREFIX + json.dumps(_summary(operation_id=str(uuid4()))) + '\n'])
+@pytest.mark.parametrize(
+    "output",
+    [
+        "",
+        heavy.RESULT_PREFIX + "refused\n",
+        heavy.RESULT_PREFIX + json.dumps(_summary(operation_id=str(uuid4()))) + "\n",
+    ],
+)
 def test_runner_refuses_missing_or_foreign_evidence(tmp_path, monkeypatch, output):
     runner, fake = _runner(tmp_path, monkeypatch, output)
     with pytest.raises(heavy.HeavyAcceptanceError):
@@ -204,21 +418,34 @@ def test_runner_refuses_missing_or_foreign_evidence(tmp_path, monkeypatch, outpu
 def test_qualify_heavy_is_fixed_dev_test_and_refuses_uncommitted(
     monkeypatch, capsys, admitted_bws_caller
 ):
-    assert linux.main(['qualify-heavy', 'prod', OPERATION]) == 78
+    assert linux.main(["qualify-heavy", "prod", OPERATION]) == 78
     assert json.loads(capsys.readouterr().out) == {
-        'profile_version': heavy.PROFILE_VERSION, 'result': 'refused', 'reason': 'fixed_dev_test_invocation_required'}
+        "profile_version": heavy.PROFILE_VERSION,
+        "result": "refused",
+        "reason": "fixed_dev_test_invocation_required",
+    }
 
     class Journal:
-        directory = Path('/nonexistent')
+        directory = Path("/nonexistent")
 
         @staticmethod
         def read():
             return None
 
-    monkeypatch.setattr(linux.LinuxConfig, 'load', classmethod(
-        lambda cls, channel, **_kw: type('Config', (), {'channel': channel, 'journal': Journal})()))
-    assert linux.main(['qualify-heavy', 'test', OPERATION]) == 78
-    assert json.loads(capsys.readouterr().out)['reason'] == 'expected_committed_native_operation_required'
+    monkeypatch.setattr(
+        linux.LinuxConfig,
+        "load",
+        classmethod(
+            lambda cls, channel, **_kw: type(
+                "Config", (), {"channel": channel, "journal": Journal}
+            )()
+        ),
+    )
+    assert linux.main(["qualify-heavy", "test", OPERATION]) == 78
+    assert (
+        json.loads(capsys.readouterr().out)["reason"]
+        == "expected_committed_native_operation_required"
+    )
 
 
 def test_launcher_admits_qualify_heavy(monkeypatch):
@@ -227,7 +454,9 @@ def test_launcher_admits_qualify_heavy(monkeypatch):
     # the root-owned channel configuration read.
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location('launcher', ROOT / 'scripts' / 'postgres_deploy_service.py')
+    spec = importlib.util.spec_from_file_location(
+        "launcher", ROOT / "scripts" / "postgres_deploy_service.py"
+    )
     launcher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launcher)
     opened = []
@@ -236,11 +465,15 @@ def test_launcher_admits_qualify_heavy(monkeypatch):
         opened.append(str(path))
         raise PermissionError()
 
-    monkeypatch.setattr(launcher.os, 'open', refuse)
-    for argv, admitted in ((['qualify-heavy', 'dev', OPERATION], True), (['qualify-heavy', 'test', OPERATION], True),
-                           (['qualify-heavy', 'dev'], False), (['qualify-heavy', 'stage', OPERATION], False),
-                           (['qualify-anything', 'dev', OPERATION], False)):
+    monkeypatch.setattr(launcher.os, "open", refuse)
+    for argv, admitted in (
+        (["qualify-heavy", "dev", OPERATION], True),
+        (["qualify-heavy", "test", OPERATION], True),
+        (["qualify-heavy", "dev"], False),
+        (["qualify-heavy", "stage", OPERATION], False),
+        (["qualify-anything", "dev", OPERATION], False),
+    ):
         opened.clear()
-        monkeypatch.setattr(launcher.sys, 'argv', ['yggdrasil-bws-deploy', *argv])
+        monkeypatch.setattr(launcher.sys, "argv", ["yggdrasil-bws-deploy", *argv])
         assert launcher.run() == 78  # the config read is refused in this sandbox either way
         assert bool(opened) is admitted, argv
