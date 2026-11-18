@@ -802,8 +802,16 @@ def _run_partitions(
     return aggregate
 
 
+def _require_reaping_parent() -> None:
+    """Refuse a direct PID1 parent that cannot provide orphan reaping."""
+
+    if os.getpid() == 1:
+        raise HeavyAcceptanceError("heavy_pid1_unqualified")
+
+
 def run(manifest: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
     root = Path.cwd() if root is None else root  # The container's workdir is the exact tree.
+    _require_reaping_parent()
     selector = _load_selector(root)
     targets = tuple(selector.HEAVY_PR_DEFERRED_TARGETS)
     if targets != (HEAVY_TARGET,):

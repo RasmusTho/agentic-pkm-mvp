@@ -978,7 +978,7 @@ def test_heavy_profile_preserves_v1_identity_and_report_hash():
 class _FakeDocker:
     """Records the trusted worker's Docker/Git calls for one disposable run."""
 
-    def __init__(self, repository: Path, output: str):
+    def __init__(self, repository: Path, output: str, *, init_value: object = True):
         self.calls: list[list[str]] = []
         self.output = output
         self.container = None
@@ -987,6 +987,7 @@ class _FakeDocker:
         self.oom = False
         self.limit_mismatch = False
         self.finished = False
+        self.init_value = init_value
 
     def __call__(self, argv, *, timeout=60):
         self.calls.append(argv)
@@ -1045,6 +1046,15 @@ class _FakeDocker:
                 if "--memory-swap" in self.created
                 else 0
             )
+            host_config = {
+                "NetworkMode": "none",
+                "ReadonlyRootfs": True,
+                "CapDrop": ["ALL"],
+                "Memory": memory + int(self.limit_mismatch),
+                "MemorySwap": swap,
+            }
+            if self.init_value is not _MISSING_INIT:
+                host_config["Init"] = self.init_value
             return json.dumps(
                 [
                     {
@@ -1058,13 +1068,7 @@ class _FakeDocker:
                             "ExitCode": 0,
                             "Running": not self.finished,
                         },
-                        "HostConfig": {
-                            "NetworkMode": "none",
-                            "ReadonlyRootfs": True,
-                            "CapDrop": ["ALL"],
-                            "Memory": memory + int(self.limit_mismatch),
-                            "MemorySwap": swap,
-                        },
+                        "HostConfig": host_config,
                     }
                 ]
             ).encode()
@@ -1083,10 +1087,13 @@ def heavy_image_digest():
     return IMAGE_REPOSITORY + "@" + DIGEST
 
 
-def _runner(tmp_path, monkeypatch, output, *, channel="test", memory_limit=None):
+_MISSING_INIT = object()
+
+
+def _runner(tmp_path, monkeypatch, output, *, channel="test", memory_limit=None, init_value=True):
     journal = tmp_path / "journal"
     journal.mkdir(mode=0o700)
-    fake = _FakeDocker(tmp_path / "repo", output)
+    fake = _FakeDocker(tmp_path / "repo", output, init_value=init_value)
     monkeypatch.setattr(runner_module, "_command", fake)
     docker = tmp_path / "docker"
     compose = tmp_path / "docker-compose"
@@ -1118,6 +1125,7 @@ def test_runner_isolates_candidate_and_cleans_owned_resources(tmp_path, monkeypa
         index = create.index(flag[0])
         assert create[index : index + 2] == flag
     assert "--read-only" in create
+    assert "--init" in create
     mounts = [create[i + 1] for i, value in enumerate(create) if value == "--mount"]
     assert any(m.endswith(f"dst={runner_module.CONTAINER_DOCKER},readonly") for m in mounts)
     assert any(m.endswith(f"dst={runner_module.CONTAINER_COMPOSE},readonly") for m in mounts)
@@ -1140,6 +1148,34 @@ def test_runner_refuses_missing_or_foreign_evidence(tmp_path, monkeypatch, outpu
     with pytest.raises(heavy.HeavyAcceptanceError):
         runner.verify()
     assert fake.container is None and not runner.directory.exists()
+
+
+@pytest.mark.parametrize(
+    "init_value",
+    [False, None, _MISSING_INIT],
+    ids=["false", "null", "missing"],
+)
+def test_runner_refuses_unqualified_init_before_start(tmp_path, monkeypatch, init_value):
+    output = heavy.RESULT_PREFIX + json.dumps(_summary()) + "\n"
+    runner, fake = _runner(tmp_path, monkeypatch, output, init_value=init_value)
+    with pytest.raises(heavy.HeavyAcceptanceError, match="heavy_container_unqualified"):
+        runner.verify()
+    assert not any(call[:2] == ["start", "--attach"] for call in fake.calls)
+    assert fake.container is None and not runner.directory.exists()
+
+
+def test_heavy_profile_refuses_pid1_before_collection_or_spawning(tmp_path, monkeypatch):
+    monkeypatch.setattr(heavy.os, "getpid", lambda: 1)
+    popen_calls = []
+
+    def forbidden_popen(*args, **kwargs):
+        popen_calls.append((args, kwargs))
+        raise AssertionError("PID1 preflight must run before collection")
+
+    monkeypatch.setattr(heavy.subprocess, "Popen", forbidden_popen)
+    with pytest.raises(heavy.HeavyAcceptanceError, match="heavy_pid1_unqualified"):
+        heavy.run(_expected(), root=tmp_path)
+    assert popen_calls == []
 
 
 def test_qualify_heavy_is_fixed_dev_test_and_refuses_uncommitted(
