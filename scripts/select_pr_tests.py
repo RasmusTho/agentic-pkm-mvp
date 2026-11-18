@@ -404,6 +404,9 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         # it imports by path -- census-enforced by
         # tests/scripts/test_select_pr_tests.py, plus the deploy-channel
         # directories it exercises.
+        "scripts/__init__.py",
+        "scripts/plan_full_suite_node_shards.py",
+        "scripts/run_scoped_test_partitions.py",
         "scripts/lib/",
         "ops/",
         "config/deploy/",
