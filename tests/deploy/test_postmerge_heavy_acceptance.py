@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -71,30 +72,26 @@ def _partition_tree(tmp_path, file_count=6):
     return work
 
 
-def _leaky_test_source(
-    marker: Path,
-    *,
-    linger_seconds: float = 1.0,
-    started_marker: Path | None = None,
-    leader_marker: Path | None = None,
-) -> str:
-    started = started_marker or marker.with_name(marker.name + ".started")
-    leader = leader_marker or marker.with_name(marker.name + ".leader")
+def _leaky_test_source(pid_file: Path, *, during_collection: bool = False) -> str:
+    """The descendant reports its own PID; the parent must observe liveness."""
+
     child = (
-        f"from pathlib import Path; import time; Path({str(started)!r}).write_text('started'); "
-        f"time.sleep({linger_seconds}); "
-        f"Path({str(marker)!r}).write_text('leaked')"
+        "from pathlib import Path; import os, time; "
+        f"Path({str(pid_file)!r}).write_text(str(os.getpid())); time.sleep(30)"
     )
-    return (
-        "import subprocess\n"
-        "import sys\n"
-        "import time\n"
-        f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
-        "def test_leaky_worker():\n"
-        "    deadline = time.monotonic() + 2\n"
-        f"    while not __import__('pathlib').Path({str(started)!r}).exists() and time.monotonic() < deadline:\n"
-        "        time.sleep(0.01)\n"
-        f"    __import__('pathlib').Path({str(leader)!r}).write_text('leader-exited')\n"
+    imports = "import subprocess\nimport sys\nimport time\nfrom pathlib import Path\n"
+    launch = (
+        f"subprocess.Popen([sys.executable, '-c', {child!r}], "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "deadline = time.monotonic() + 5\n"
+        f"while not Path({str(pid_file)!r}).exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.01)\n"
+        f"assert Path({str(pid_file)!r}).exists()\n"
+    )
+    if during_collection:
+        return imports + launch + "def test_leaky_worker(): pass\n"
+    return imports + "def test_leaky_worker():\n" + "".join(
+        "    " + line + "\n" for line in launch.splitlines()
     )
 
 
@@ -173,314 +170,592 @@ def test_heavy_profile_aggregates_two_node_outcomes_and_report_hash(tmp_path, mo
     assert aggregate["report_hash"] == expected_hash
 
 
-def test_heavy_profile_rejects_incomplete_duplicate_and_foreign_worker_results(tmp_path):
-    expected = _expected()
-    with pytest.raises(heavy.HeavyAcceptanceError) as missing:
-        heavy._read_worker_result(tmp_path / "missing.json", expected)
-    assert missing.value.reason == "heavy_worker_result_missing"
-    summary = {
-        **expected,
-        "targets": ["tests/deploy"],
-        "exit_status": 0,
-        "failures": [],
-        "report_hash": hashlib.sha256(
-            json.dumps([["tests/deploy/test_a.py::test_a"], []], separators=(",", ":")).encode()
-        ).hexdigest(),
-        "selected": 1,
-        "passed": 1,
-        "failed": 0,
-        "skipped": 0,
-        "docker_skipped": 0,
-    }
+def test_heavy_profile_rejects_incomplete_duplicate_and_foreign_worker_results(
+    tmp_path, monkeypatch
+):
+    work = _partition_tree(tmp_path, file_count=1)
+    test_file = work / "tests" / "deploy" / "test_strict_worker_results.py"
+    test_file.write_text(
+        "import pytest\n"
+        "def test_pass(): pass\n"
+        "@pytest.mark.xfail(reason='ordinary call failure')\n"
+        "def test_expected_failure(): assert False\n"
+    )
     result = tmp_path / "worker.json"
-    result.write_text(
-        json.dumps(
-            {
-                "summary": summary,
-                "nodes": ["tests/deploy/test_a.py::test_a"],
-                "passed_nodes": ["tests/deploy/test_a.py::test_a"],
-                "failed_nodes": [],
-                "skipped_nodes": [],
-            }
-        )
+    tools = heavy._load_partition_tools(work)
+    with pytest.raises(heavy.HeavyAcceptanceError) as missing:
+        heavy._read_worker_result(result, _expected(), (), partition_tools=tools)
+    assert missing.value.reason == "heavy_worker_result_missing"
+    monkeypatch.chdir(work)
+    heavy._worker_summary(
+        {**_expected(), "marker": SELECTOR_MARKER},
+        ["tests/deploy/test_strict_worker_results.py"],
+        result,
     )
-    parsed, _ = heavy._read_worker_result(result, expected)
-    assert parsed["selected"] == 1
+    payload = json.loads(result.read_text())
+    nodes = tuple(payload["nodes"])
+    parsed, _ = heavy._read_worker_result(
+        result, _expected(), nodes, partition_tools=tools
+    )
+    assert parsed["selected"] == 2 and parsed["passed"] == 1
     with pytest.raises(heavy.HeavyAcceptanceError):
-        heavy._read_worker_result(result, expected, ("tests/deploy/test_other.py::test_other",))
-    result.write_text(
-        json.dumps(
-            {
-                "summary": {**summary, "selected": 2},
-                "nodes": ["tests/deploy/test_a.py::test_a"],
-                "passed_nodes": ["tests/deploy/test_a.py::test_a"],
-                "failed_nodes": [],
-                "skipped_nodes": [],
-            }
+        heavy._read_worker_result(
+            result, _expected(), ("tests/deploy/foreign.py::test_foreign",),
+            partition_tools=tools,
         )
+    phases = payload["phase_results"]
+    terminal = payload["terminal_results"]
+    corruptions = (
+        {**payload, "nodes": [nodes[0], nodes[0]]},
+        {**payload, "phase_results": phases[:-1]},
+        {**payload, "phase_results": [*phases, phases[0]]},
+        {**payload, "phase_results": [
+            {**phases[0], "nodeid": "tests/deploy/foreign.py::test_foreign"}, *phases[1:]
+        ]},
+        {**payload, "phase_results": [{**phases[0], "docker_skipped": True}, *phases[1:]]},
+        {**payload, "terminal_results": terminal[:-1]},
+        {**payload, "terminal_results": [terminal[0], terminal[0]]},
+        {**payload, "terminal_results": [
+            f"{nodes[0]} UNKNOWN", *terminal[1:]
+        ]},
+        {**payload, "terminal_results": [
+            "tests/deploy/foreign.py::test_foreign PASSED", *terminal[1:]
+        ]},
+        {**payload, "summary": {**payload["summary"], "report_hash": "1" * 64}},
+        {**payload, "summary": {**payload["summary"], "source_sha": "c" * 40}},
+        {**payload, "summary": {**payload["summary"], "targets": ["tests/ops"]}},
+        {**payload, "passed_nodes": [nodes[0], nodes[0]]},
+        {key: value for key, value in payload.items() if key != "phase_results"},
     )
-    with pytest.raises(heavy.HeavyAcceptanceError):
-        heavy._read_worker_result(result, expected)
-    result.write_text(
-        json.dumps(
-            {
-                **json.loads(result.read_text()),
-                "summary": {**summary, "report_hash": "1" * 64},
-            }
-        )
-    )
-    with pytest.raises(heavy.HeavyAcceptanceError):
-        heavy._read_worker_result(result, expected)
-    result.write_text(
-        json.dumps(
-            {
-                "summary": summary,
-                "nodes": ["tests/deploy/test_a.py::test_a"],
-                "passed_nodes": ["tests/deploy/test_a.py::test_a"],
-                "failed_nodes": [],
-                "skipped_nodes": [],
-            }
-        )
-    )
-    two_summary = {**summary, "selected": 2, "passed": 1, "skipped": 1}
-    two_payload = {
-        "summary": two_summary,
-        "nodes": ["tests/deploy/test_a.py::test_a", "tests/deploy/test_b.py::test_b"],
-        "passed_nodes": ["tests/deploy/test_a.py::test_a"],
-        "failed_nodes": [],
-        "skipped_nodes": ["tests/deploy/test_b.py::test_b"],
-    }
-    result.write_text(json.dumps(two_payload))
-    parsed, _ = heavy._read_worker_result(result, expected)
-    assert parsed["selected"] == 2
-    result.write_text(json.dumps({**two_payload, "summary": {**two_summary, "skipped": 0}}))
-    with pytest.raises(heavy.HeavyAcceptanceError):
-        heavy._read_worker_result(result, expected)
-    result.write_text(
-        json.dumps(
-            {
-                "summary": summary,
-                "nodes": ["tests/deploy/test_a.py::test_a"],
-                "passed_nodes": ["tests/deploy/test_a.py::test_a"],
-                "failed_nodes": [],
-                "skipped_nodes": [],
-            }
-        )
-    )
-    for payload in (
-        {**json.loads(result.read_text()), "nodes": ["tests/deploy/test_a.py::test_a"] * 2},
-        {**json.loads(result.read_text()), "summary": {**summary, "source_sha": "c" * 40}},
-        {
-            **json.loads(result.read_text()),
-            "failed_nodes": ["tests/deploy/test_a.py::test_a"],
-            "summary": {**summary, "failed": 1, "passed": 1},
-        },
-        {
-            **json.loads(result.read_text()),
-            "summary": {**summary, "targets": ["tests/ops"]},
-        },
-    ):
-        result.write_text(json.dumps(payload))
+    for corrupt in corruptions:
+        result.write_text(json.dumps(corrupt))
         with pytest.raises(heavy.HeavyAcceptanceError):
-            heavy._read_worker_result(result, expected)
+            heavy._read_worker_result(
+                result, _expected(), nodes, partition_tools=tools
+            )
 
-
-def test_heavy_profile_preserves_bounded_failure_projection_for_planned_long_ids(tmp_path):
-    expected = _expected()
-    long_node = "tests/deploy/" + ("x" * 220) + "::test_long_failure"
-    summary = {
-        **expected,
-        "targets": ["tests/deploy"],
-        "exit_status": 1,
-        "failures": [long_node[: heavy.MAX_NODEID]],
-        "report_hash": hashlib.sha256(
-            json.dumps([[], [long_node]], separators=(",", ":")).encode()
-        ).hexdigest(),
-        "selected": 1,
-        "passed": 0,
-        "failed": 1,
-        "skipped": 0,
-        "docker_skipped": 0,
+    # Actual ordinary call-XFAIL reports cannot authenticate a forged passed1.
+    xfailed = next(node for node in nodes if node.endswith("::test_expected_failure"))
+    xfail_phases = [phase for phase in phases if phase["nodeid"] == xfailed]
+    assert [(phase["when"], phase["outcome"], phase["xfail"])
+            for phase in xfail_phases] == [
+        ("setup", "passed", False), ("call", "skipped", True),
+        ("teardown", "passed", False),
+    ]
+    forged = {
+        **payload,
+        "nodes": [xfailed],
+        "passed_nodes": [xfailed],
+        "failed_nodes": [],
+        "skipped_nodes": [],
+        "phase_results": xfail_phases,
+        "terminal_results": [f"{xfailed} XFAIL"],
+        "summary": {
+            **payload["summary"], "selected": 1, "passed": 1,
+            "report_hash": hashlib.sha256(
+                json.dumps([[xfailed], []], separators=(",", ":")).encode()
+            ).hexdigest(),
+        },
     }
-    assert heavy.classify(summary, expected)["result"] == "failed"
-    result = tmp_path / "long-failure.json"
-    result.write_text(
-        json.dumps(
-            {
-                "summary": summary,
-                "nodes": [long_node],
-                "passed_nodes": [],
-                "failed_nodes": [long_node],
-                "skipped_nodes": [],
-            }
+    assert heavy.classify(forged["summary"], _expected())["result"] == "passed"
+    result.write_text(json.dumps(forged))
+    with pytest.raises(heavy.HeavyAcceptanceError):
+        heavy._read_worker_result(
+            result, _expected(), (xfailed,), partition_tools=tools
         )
-    )
-    parsed, _ = heavy._read_worker_result(result, expected, (long_node,))
-    assert parsed["failures"] == [long_node[: heavy.MAX_NODEID]]
 
 
-def test_heavy_profile_enforces_deadline_watchdog_and_owned_child_cleanup(tmp_path, monkeypatch):
-    work = _partition_tree(tmp_path, file_count=2)
-    marker = tmp_path / "child-finished-after-timeout"
-    (work / "tests" / "deploy" / "test_extra_0.py").write_text(
-        "import time\n"
-        f"from pathlib import Path\nMARKER = Path({str(marker)!r})\n"
-        "def test_slow():\n"
-        "    time.sleep(1)\n"
-        "    MARKER.write_text('leaked')\n"
+def test_heavy_profile_preserves_bounded_failure_projection_for_planned_long_ids(
+    tmp_path, monkeypatch
+):
+    work = _partition_tree(tmp_path, file_count=1)
+    test_file = work / "tests" / "deploy" / "test_long_worker_result.py"
+    long_id = "space " + ("x" * 220) + " suffix"
+    test_file.write_text(
+        "import pytest\n"
+        f"@pytest.mark.parametrize('value', [False], ids=[{long_id!r}])\n"
+        "def test_long_failure(value): assert value\n"
     )
-    monkeypatch.setattr(
-        heavy, "_partition_targets", lambda *args, **kwargs: (("tests/deploy/test_extra_0.py",),)
+    result = tmp_path / "long-failure.json"
+    monkeypatch.chdir(work)
+    heavy._worker_summary(
+        {**_expected(), "marker": SELECTOR_MARKER},
+        ["tests/deploy/test_long_worker_result.py"],
+        result,
+    )
+    payload = json.loads(result.read_text())
+    node, = payload["nodes"]
+    assert len(node) > heavy.MAX_NODEID and " " in node
+    parsed, _ = heavy._read_worker_result(
+        result, _expected(), (node,), partition_tools=heavy._load_partition_tools(work)
+    )
+    assert parsed["failures"] == [node[: heavy.MAX_NODEID]]
+    assert parsed["report_hash"] == hashlib.sha256(
+        json.dumps([[], [node]], separators=(",", ":")).encode()
+    ).hexdigest()
+    assert heavy.classify(parsed, _expected())["result"] == "failed"
+
+
+def test_heavy_profile_aggregates_spaced_and_long_node_ids(tmp_path, monkeypatch):
+    work = _partition_tree(tmp_path, file_count=1)
+    test_file = work / "tests" / "deploy" / "test_spaced_worker_ids.py"
+    ids = ["with spaces", "long " + ("x" * 220)]
+    test_file.write_text(
+        "import pytest\n"
+        f"@pytest.mark.parametrize('value', [True, True], ids={ids!r})\n"
+        "def test_parameter(value): assert value\n"
     )
     monkeypatch.setenv("PYTHONPATH", str(ROOT))
-    with pytest.raises(heavy.HeavyAcceptanceError) as error:
-        heavy._run_partitions(
-            {**_expected()},
-            work,
-            SELECTOR_MARKER,
-            ("tests/deploy",),
-            (),
-            time.monotonic() + 0.5,
+    deadline = time.monotonic() + 60
+    nodes = heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+    assert any(" " in node for node in nodes)
+    assert any(len(node) > heavy.MAX_NODEID for node in nodes)
+    aggregate = heavy._run_partitions(
+        _expected(), work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
+    )
+    assert aggregate["selected"] == aggregate["passed"] == len(nodes) == 4
+    assert aggregate["report_hash"] == hashlib.sha256(
+        json.dumps([sorted(nodes), []], separators=(",", ":")).encode()
+    ).hexdigest()
+    assert heavy.classify(aggregate, _expected())["result"] == "passed"
+
+
+@pytest.mark.parametrize("reported_status", [0, -1], ids=["ordinary", "nonzero-metadata"])
+def test_heavy_profile_aggregates_pass_and_xfail_only_partitions(
+    tmp_path, monkeypatch, reported_status
+):
+    work = _partition_tree(tmp_path, file_count=1)
+    (work / "tests" / "deploy" / "test_deploy_channel_script.py").unlink()
+    (work / "tests" / "deploy" / "test_pass_partition.py").write_text(
+        "def test_pass(): pass\n"
+    )
+    (work / "tests" / "deploy" / "test_xfail_partition.py").write_text(
+        "import pytest\n@pytest.mark.xfail(reason='expected')\n"
+        "def test_expected_failure(): assert False\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    deadline = time.monotonic() + 60
+    nodes = heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+    assert len(heavy._partition_targets(
+        work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
+    )) == 2
+    real_reader = heavy._read_worker_result
+    read_count = 0
+
+    def reader(path, *args, **kwargs):
+        nonlocal read_count
+        if reported_status != 0 and read_count == 0:
+            payload = json.loads(path.read_text())
+            payload["summary"]["exit_status"] = reported_status
+            path.write_text(json.dumps(payload))
+        read_count += 1
+        return real_reader(path, *args, **kwargs)
+
+    monkeypatch.setattr(heavy, "_read_worker_result", reader)
+    aggregate = heavy._run_partitions(
+        _expected(), work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
+    )
+    passed = [node for node in nodes if node.endswith("::test_pass")]
+    assert (aggregate["selected"], aggregate["passed"], aggregate["failed"],
+            aggregate["skipped"]) == (2, 1, 0, 0)
+    assert aggregate["report_hash"] == hashlib.sha256(
+        json.dumps([passed, []], separators=(",", ":")).encode()
+    ).hexdigest()
+    assert read_count == 2
+    assert heavy.classify(aggregate, _expected())["result"] == (
+        "passed" if reported_status == 0 else "failed"
+    )
+
+
+@pytest.mark.parametrize("entrypoint", ["collection", "worker"])
+def test_heavy_profile_enforces_deadline_watchdog_and_owned_child_cleanup(
+    tmp_path, monkeypatch, entrypoint
+):
+    work = _partition_tree(tmp_path, file_count=1)
+    (work / "tests" / "deploy" / "test_deploy_channel_script.py").unlink()
+    slow = (
+        "import time\ntime.sleep(30)\ndef test_slow(): pass\n"
+        if entrypoint == "collection"
+        else "import time\ndef test_slow(): time.sleep(30)\n"
+    )
+    (work / "tests" / "deploy" / "test_slow.py").write_text(slow)
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    nodes = ()
+    if entrypoint == "worker":
+        nodes = heavy._collect_nodes(
+            work, SELECTOR_MARKER, "tests/deploy", time.monotonic() + 30
         )
-    assert error.value.reason == "heavy_deadline_exceeded"
-    time.sleep(1.2)
-    assert not marker.exists()
+    real_popen = subprocess.Popen
+    real_cleanup = heavy._cleanup_owned_process
+    owned = []
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        owned.append(process)
+        return process
+
+    monkeypatch.setattr(heavy.subprocess, "Popen", launch)
+    try:
+        deadline = time.monotonic() + 0.5
+        with pytest.raises(heavy.HeavyAcceptanceError) as error:
+            if entrypoint == "collection":
+                heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+            else:
+                heavy._run_partitions(
+                    _expected(), work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
+                )
+        assert error.value.reason == "heavy_deadline_exceeded"
+        assert len(owned) == 1
+        for process in owned:
+            assert process.poll() is not None
+            with pytest.raises(ProcessLookupError):
+                os.killpg(process.pid, 0)
+    finally:
+        for process in owned:
+            real_cleanup(process)
 
 
 def test_heavy_profile_cleans_exited_leader_and_descendant_when_peer_times_out(
     tmp_path, monkeypatch
 ):
     work = _partition_tree(tmp_path, file_count=1)
-    exited_marker = tmp_path / "exited-descendant-leaked"
-    slow_marker = tmp_path / "slow-descendant-leaked"
-    exited_started = tmp_path / "exited-descendant-started"
-    exited_leader = tmp_path / "exited-leader-done"
-    slow_started = tmp_path / "slow-peer-started"
-    exited_file = work / "tests" / "deploy" / "test_exited.py"
-    slow_file = work / "tests" / "deploy" / "test_slow_peer.py"
-    exited_file.write_text(
-        _leaky_test_source(
-            exited_marker,
-            linger_seconds=5,
-            started_marker=exited_started,
-            leader_marker=exited_leader,
-        )
+    (work / "tests" / "deploy" / "test_deploy_channel_script.py").unlink()
+    descendant_pid = tmp_path / "descendant.pid"
+    peer_started = tmp_path / "peer.pid"
+    (work / "tests" / "deploy" / "test_exited.py").write_text(
+        _leaky_test_source(descendant_pid)
     )
-    slow_file.write_text(
-        "import time\n"
-        f"from pathlib import Path\nPath({str(slow_started)!r}).write_text('started')\n"
-        "def test_slow_peer(): time.sleep(5)\n"
-    )
-    monkeypatch.setattr(
-        heavy,
-        "_partition_targets",
-        lambda *args, **kwargs: (
-            ("tests/deploy/test_exited.py",),
-            ("tests/deploy/test_slow_peer.py",),
-        ),
+    (work / "tests" / "deploy" / "test_slow_peer.py").write_text(
+        "import os, time\nfrom pathlib import Path\n"
+        "def test_slow_peer():\n"
+        f"    Path({str(peer_started)!r}).write_text(str(os.getpid()))\n"
+        "    time.sleep(30)\n"
     )
     monkeypatch.setenv("PYTHONPATH", str(ROOT))
-    survivor = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(10)"], start_new_session=True
+    real_monotonic = time.monotonic
+    deadline = real_monotonic() + 10
+    nodes = heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+    assert heavy._partition_targets(
+        work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
+    ) == (("tests/deploy/test_exited.py",), ("tests/deploy/test_slow_peer.py",))
+    real_popen = subprocess.Popen
+    real_cleanup = heavy._cleanup_owned_process
+    owned = []
+    survivor = real_popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True
     )
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        owned.append(process)
+        return process
+
+    posture_verified = False
+    posture_limit = real_monotonic() + 5
+
+    def clock():
+        nonlocal posture_verified
+        if posture_verified:
+            return deadline + 1
+        if (
+            len(owned) == 2 and owned[0].poll() is not None
+            and descendant_pid.exists() and peer_started.exists()
+        ):
+            child = int(descendant_pid.read_text())
+            os.kill(child, 0)
+            assert os.getpgid(child) == owned[0].pid
+            assert int(peer_started.read_text()) == owned[1].pid
+            assert owned[1].poll() is None
+            posture_verified = True
+            return deadline + 1
+        assert real_monotonic() < posture_limit, "real exited-leader posture not reached"
+        return real_monotonic()
+
+    monkeypatch.setattr(heavy.subprocess, "Popen", launch)
+    monkeypatch.setattr(heavy, "time", SimpleNamespace(monotonic=clock, sleep=time.sleep))
     try:
         with pytest.raises(heavy.HeavyAcceptanceError) as error:
             heavy._run_partitions(
-                {**_expected()},
-                work,
-                SELECTOR_MARKER,
-                ("tests/deploy",),
-                (),
-                time.monotonic() + 2,
+                _expected(), work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
             )
         assert error.value.reason == "heavy_deadline_exceeded"
+        assert posture_verified and len(owned) == 2
+        for process in owned:
+            assert process.poll() is not None
+            with pytest.raises(ProcessLookupError):
+                os.killpg(process.pid, 0)
         assert survivor.poll() is None
-        assert exited_started.exists()
-        assert exited_leader.exists()
-        assert slow_started.exists()
-        time.sleep(1.2)
-        assert not exited_marker.exists()
-        assert not slow_marker.exists()
     finally:
+        for process in owned:
+            real_cleanup(process)
         survivor.terminate()
         survivor.wait(timeout=2)
 
 
-def test_heavy_profile_cleans_descendant_after_nominal_success(tmp_path, monkeypatch):
+@pytest.mark.parametrize("during_collection", [False, True], ids=["worker", "collection"])
+def test_heavy_profile_cleans_descendant_after_nominal_success(
+    tmp_path, monkeypatch, during_collection
+):
     work = _partition_tree(tmp_path, file_count=1)
-    marker = tmp_path / "nominal-descendant-leaked"
-    started = tmp_path / "nominal-descendant-started"
-    leader = tmp_path / "nominal-leader-done"
+    (work / "tests" / "deploy" / "test_deploy_channel_script.py").unlink()
+    descendant_pid = tmp_path / "nominal-descendant.pid"
     test_file = work / "tests" / "deploy" / "test_nominal.py"
     test_file.write_text(
-        _leaky_test_source(
-            marker, linger_seconds=2, started_marker=started, leader_marker=leader
-        )
-    )
-    monkeypatch.setattr(
-        heavy, "_partition_targets", lambda *args, **kwargs: (("tests/deploy/test_nominal.py",),)
+        _leaky_test_source(descendant_pid, during_collection=during_collection)
     )
     monkeypatch.setenv("PYTHONPATH", str(ROOT))
     deadline = time.monotonic() + 10
-    nodes = tuple(
-        node
-        for node in heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
-        if node.startswith("tests/deploy/test_nominal.py::")
+    nodes = ()
+    if not during_collection:
+        nodes = heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+    real_popen = subprocess.Popen
+    real_cleanup = heavy._cleanup_owned_process
+    owned = []
+    observed = []
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        owned.append(process)
+        return process
+
+    def cleanup(process):
+        try:
+            # This is observed before the real cleanup, not a marker claiming exit.
+            assert process.poll() is not None
+            child = int(descendant_pid.read_text())
+            os.kill(child, 0)
+            assert os.getpgid(child) == process.pid
+            observed.append((process.pid, child))
+        finally:
+            leaked = real_cleanup(process)
+        return leaked
+
+    monkeypatch.setattr(heavy.subprocess, "Popen", launch)
+    monkeypatch.setattr(heavy, "_cleanup_owned_process", cleanup)
+    try:
+        with pytest.raises(heavy.HeavyAcceptanceError) as error:
+            if during_collection:
+                heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+            else:
+                heavy._run_partitions(
+                    _expected(), work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
+                )
+        assert error.value.reason == "heavy_cleanup_leaked"
+        assert len(observed) == len(owned) == 1
+        for process in owned:
+            assert process.poll() is not None
+            with pytest.raises(ProcessLookupError):
+                os.killpg(process.pid, 0)
+    finally:
+        for process in owned:
+            real_cleanup(process)
+
+
+def test_heavy_profile_cleans_all_owned_groups_after_cleanup_unknown(tmp_path, monkeypatch):
+    work = _partition_tree(tmp_path, file_count=1)
+    (work / "tests" / "deploy" / "test_deploy_channel_script.py").unlink()
+    descendant_pid = tmp_path / "unknown-descendant.pid"
+    (work / "tests" / "deploy" / "test_first_owned.py").write_text(
+        _leaky_test_source(descendant_pid)
     )
-    with pytest.raises(heavy.HeavyAcceptanceError) as error:
-        heavy._run_partitions(
-            {**_expected()},
-            work,
-            SELECTOR_MARKER,
-            ("tests/deploy",),
-            nodes,
-            deadline,
-        )
-    assert error.value.reason == "heavy_cleanup_leaked"
-    assert started.exists()
-    assert leader.exists()
-    time.sleep(1.2)
-    assert not marker.exists()
+    (work / "tests" / "deploy" / "test_second_owned.py").write_text(
+        "def test_peer_pass(): pass\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    deadline = time.monotonic() + 30
+    nodes = heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+    real_popen = subprocess.Popen
+    real_cleanup = heavy._cleanup_owned_process
+    real_group_exists = heavy._group_exists
+    owned = []
+    injected = False
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        owned.append(process)
+        return process
+
+    def uncertain_group(group):
+        nonlocal injected
+        if owned and group == owned[0].pid and not injected:
+            child = int(descendant_pid.read_text())
+            os.kill(child, 0)
+            assert os.getpgid(child) == group
+            injected = True
+            raise heavy.HeavyAcceptanceError("heavy_cleanup_refused")
+        return real_group_exists(group)
+
+    monkeypatch.setattr(heavy.subprocess, "Popen", launch)
+    monkeypatch.setattr(heavy, "_group_exists", uncertain_group)
+    try:
+        with pytest.raises(heavy.HeavyAcceptanceError) as error:
+            heavy._run_partitions(
+                _expected(), work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
+            )
+        assert error.value.reason == "heavy_cleanup_refused"
+        assert injected and len(owned) == 2
+        for process in owned:
+            assert process.poll() is not None
+            with pytest.raises(ProcessLookupError):
+                os.killpg(process.pid, 0)
+    finally:
+        for process in owned:
+            real_cleanup(process)
 
 
-def test_heavy_profile_checks_deadline_after_cleanup(tmp_path, monkeypatch):
+def test_heavy_profile_registers_worker_before_fallible_log_close(tmp_path, monkeypatch):
     work = _partition_tree(tmp_path, file_count=1)
     monkeypatch.setenv("PYTHONPATH", str(ROOT))
-    test_file = work / "tests" / "deploy" / "test_after_cleanup.py"
-    test_file.write_text("def test_after_cleanup(): pass\n")
-    monkeypatch.setattr(
-        heavy,
-        "_partition_targets",
-        lambda *args, **kwargs: (("tests/deploy/test_after_cleanup.py",),),
-    )
-    expired = False
-    real_remaining = heavy._remaining
-
-    def remaining(deadline):
-        if expired:
-            raise heavy.HeavyAcceptanceError("heavy_deadline_exceeded")
-        return real_remaining(deadline)
-
+    deadline = time.monotonic() + 30
+    nodes = heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+    real_popen = subprocess.Popen
     real_cleanup = heavy._cleanup_owned_process
+    real_open = Path.open
+    owned = []
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        owned.append(process)
+        return process
+
+    class CloseFailure:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def fileno(self):
+            return self.stream.fileno()
+
+        def close(self):
+            self.stream.close()
+            raise OSError("injected owned-worker log-close failure")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    def open_log(path, *args, **kwargs):
+        stream = real_open(path, *args, **kwargs)
+        if path.name.startswith("partition-") and path.suffix == ".log":
+            return CloseFailure(stream)
+        return stream
+
+    monkeypatch.setattr(heavy.subprocess, "Popen", launch)
+    monkeypatch.setattr(Path, "open", open_log)
+    try:
+        with pytest.raises(OSError, match="injected owned-worker log-close failure"):
+            heavy._run_partitions(
+                _expected(), work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
+            )
+        assert len(owned) == 1
+        for process in owned:
+            assert process.poll() is not None
+            with pytest.raises(ProcessLookupError):
+                os.killpg(process.pid, 0)
+    finally:
+        for process in owned:
+            real_cleanup(process)
+
+
+@pytest.mark.parametrize("expires_during", ["aggregation", "cleanup"])
+def test_heavy_profile_checks_deadline_after_cleanup(tmp_path, monkeypatch, expires_during):
+    work = _partition_tree(tmp_path, file_count=1)
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    expired = False
+    real_monotonic = time.monotonic
+    deadline = real_monotonic() + 60
+    nodes = heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+    real_reader = heavy._read_worker_result
+    real_cleanup = heavy._cleanup_owned_process
+
+    def clock():
+        return deadline + 1 if expired else real_monotonic()
+
+    def reader(*args, **kwargs):
+        nonlocal expired
+        result = real_reader(*args, **kwargs)
+        if expires_during == "aggregation":
+            expired = True
+        return result
 
     def cleanup(process):
         nonlocal expired
         leaked = real_cleanup(process)
-        expired = True
+        if expires_during == "cleanup":
+            expired = True
         return leaked
 
-    monkeypatch.setattr(heavy, "_remaining", remaining)
+    monkeypatch.setattr(heavy, "time", SimpleNamespace(monotonic=clock, sleep=time.sleep))
+    monkeypatch.setattr(heavy, "_read_worker_result", reader)
     monkeypatch.setattr(heavy, "_cleanup_owned_process", cleanup)
     with pytest.raises(heavy.HeavyAcceptanceError) as error:
         heavy._run_partitions(
-            {**_expected()},
-            work,
-            SELECTOR_MARKER,
-            ("tests/deploy",),
-            ("tests/deploy/test_after_cleanup.py::test_after_cleanup",),
-            time.monotonic() + 60,
+            _expected(), work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
+        )
+    assert expired and error.value.reason == "heavy_deadline_exceeded"
+
+
+def test_heavy_profile_refuses_expired_collection_before_spawning(tmp_path, monkeypatch):
+    started = []
+
+    def launch(*args, **kwargs):
+        started.append(args)
+        raise AssertionError("expired collection admitted")
+
+    monkeypatch.setattr(heavy.subprocess, "Popen", launch)
+    with pytest.raises(heavy.HeavyAcceptanceError) as error:
+        heavy._collect_nodes(
+            tmp_path, SELECTOR_MARKER, "tests/deploy", time.monotonic() - 1
         )
     assert error.value.reason == "heavy_deadline_exceeded"
+    assert not started
+
+
+@pytest.mark.parametrize("preparation", ["targets", "log"])
+def test_heavy_profile_refuses_expired_worker_preparation_before_spawning(
+    tmp_path, monkeypatch, preparation
+):
+    work = _partition_tree(tmp_path, file_count=1)
+    expired = False
+    started = []
+    real_monotonic = time.monotonic
+    deadline = real_monotonic() + 60
+    nodes = heavy._collect_nodes(work, SELECTOR_MARKER, "tests/deploy", deadline)
+    real_write = Path.write_text
+    real_open = Path.open
+
+    def clock():
+        return deadline + 1 if expired else real_monotonic()
+
+    def write(path, *args, **kwargs):
+        nonlocal expired
+        result = real_write(path, *args, **kwargs)
+        if preparation == "targets" and path.suffix == ".targets":
+            expired = True
+        return result
+
+    def open_log(path, *args, **kwargs):
+        nonlocal expired
+        stream = real_open(path, *args, **kwargs)
+        if preparation == "log" and path.suffix == ".log":
+            expired = True
+        return stream
+
+    def launch(*args, **kwargs):
+        started.append(args)
+        raise AssertionError("expired worker admitted")
+
+    monkeypatch.setattr(heavy, "time", SimpleNamespace(monotonic=clock, sleep=time.sleep))
+    monkeypatch.setattr(Path, "write_text", write)
+    monkeypatch.setattr(Path, "open", open_log)
+    monkeypatch.setattr(heavy.subprocess, "Popen", launch)
+    with pytest.raises(heavy.HeavyAcceptanceError) as error:
+        heavy._run_partitions(
+            _expected(), work, SELECTOR_MARKER, ("tests/deploy",), nodes, deadline
+        )
+    assert expired and error.value.reason == "heavy_deadline_exceeded"
+    assert not started
 
 
 def test_heavy_profile_refuses_exhausted_planning_before_spawning_workers(tmp_path, monkeypatch):
@@ -530,17 +805,23 @@ def test_heavy_profile_refuses_collection_errors_and_missing_watchdog(tmp_path, 
     assert watchdog.value.reason == "heavy_watchdog_missing"
 
 
-def test_heavy_profile_refuses_xfail_and_xpass_terminal_outcomes(tmp_path, monkeypatch):
+def test_heavy_profile_preserves_xfail_xpass_and_setup_phase_projection(tmp_path, monkeypatch):
     work = _partition_tree(tmp_path, file_count=1)
     xfail_file = work / "tests" / "deploy" / "test_xfail.py"
     xfail_file.write_text(
         "import pytest\n"
         "@pytest.mark.xfail(reason='expected')\n"
-        "def test_expected_failure():\n"
-        "    assert False\n"
+        "def test_expected_failure(): assert False\n"
         "@pytest.mark.xfail(reason='unexpected')\n"
-        "def test_unexpected_pass():\n"
-        "    assert True\n"
+        "def test_unexpected_pass(): assert True\n"
+        "@pytest.fixture\n"
+        "def setup_xfail(): pytest.xfail('setup')\n"
+        "def test_setup_xfail(setup_xfail): pass\n"
+        "@pytest.fixture\n"
+        "def teardown_xfail():\n"
+        "    yield\n"
+        "    pytest.xfail('teardown')\n"
+        "def test_pass_then_teardown_xfail(teardown_xfail): pass\n"
     )
     result = tmp_path / "xfail.json"
     monkeypatch.chdir(work)
@@ -549,57 +830,60 @@ def test_heavy_profile_refuses_xfail_and_xpass_terminal_outcomes(tmp_path, monke
         ["tests/deploy/test_xfail.py"],
         result,
     )
-    summary = json.loads(result.read_text())["summary"]
-    assert summary["exit_status"] == 0
-    # v1 bookkeeping is unchanged: XPASS remains passed and XFAIL is not
-    # relabeled as a failure.  The strict terminal evidence records both when
-    # the parent authenticates this worker result.
-    assert summary["failed"] == 0
-    assert summary["passed"] == 1
-    terminal = json.loads(result.read_text())["terminal_results"]
-    assert sorted(line.rsplit(" ", 1)[1] for line in terminal) == ["XFAIL", "XPASS"]
-    assert heavy.classify(summary, _expected())["result"] == "passed"
     payload = json.loads(result.read_text())
+    summary = payload["summary"]
+    # C3 counts call-pass + teardown-XFAIL as passed, and setup/call XFAIL
+    # contributes to neither legacy counter. These are not exclusive buckets.
+    assert (summary["selected"], summary["passed"], summary["failed"],
+            summary["skipped"], summary["exit_status"]) == (4, 2, 0, 0, 0)
+    assert sorted(line.rsplit(" ", 1)[1] for line in payload["terminal_results"]) == [
+        "XFAIL", "XFAIL", "XFAIL", "XPASS",
+    ]
     parsed, _ = heavy._read_worker_result(
-        result,
-        _expected(),
-        tuple(payload["nodes"]),
+        result, _expected(), tuple(payload["nodes"]),
         partition_tools=heavy._load_partition_tools(work),
     )
     assert heavy.classify(parsed, _expected())["result"] == "passed"
+    setup_node = next(node for node in payload["nodes"] if node.endswith("::test_setup_xfail"))
+    assert [phase["when"] for phase in payload["phase_results"]
+            if phase["nodeid"] == setup_node] == ["setup", "teardown"]
 
 
-def test_heavy_profile_preserves_v1_overlap_for_teardown_failure(tmp_path, monkeypatch):
+@pytest.mark.parametrize("teardown", ["failure", "skip"])
+def test_heavy_profile_preserves_v1_overlap_for_teardown_failure(
+    tmp_path, monkeypatch, teardown
+):
     work = _partition_tree(tmp_path, file_count=1)
-    test_file = work / "tests" / "deploy" / "test_teardown_failure.py"
+    filename = "test_teardown_" + teardown + ".py"
+    test_file = work / "tests" / "deploy" / filename
+    action = "assert False" if teardown == "failure" else "pytest.skip('teardown')"
     test_file.write_text(
         "import pytest\n"
         "@pytest.fixture\n"
-        "def failing_teardown():\n"
+        "def finishing():\n"
         "    yield\n"
-        "    assert False\n"
-        "def test_call_passes_but_teardown_fails(failing_teardown):\n"
-        "    pass\n"
+        f"    {action}\n"
+        "def test_call_passes(finishing): pass\n"
     )
-    result = tmp_path / "teardown-failure.json"
+    result = tmp_path / "teardown-result.json"
     monkeypatch.chdir(work)
     heavy._worker_summary(
         {**_expected(), "marker": SELECTOR_MARKER},
-        ["tests/deploy/test_teardown_failure.py"],
+        ["tests/deploy/" + filename],
         result,
     )
     payload = json.loads(result.read_text())
     summary = payload["summary"]
     assert summary["passed"] == 1
-    assert summary["failed"] == 1
-    assert payload["terminal_results"][0].endswith(" ERROR")
+    assert summary["failed"] == int(teardown == "failure")
+    assert summary["skipped"] == int(teardown == "skip")
     parsed, _ = heavy._read_worker_result(
-        result,
-        _expected(),
-        tuple(payload["nodes"]),
+        result, _expected(), tuple(payload["nodes"]),
         partition_tools=heavy._load_partition_tools(work),
     )
-    assert heavy.classify(parsed, _expected())["result"] == "failed"
+    assert heavy.classify(parsed, _expected())["result"] == (
+        "failed" if teardown == "failure" else "passed"
+    )
 
 
 def test_heavy_profile_refuses_failure_timeout_and_docker_skip(tmp_path):
