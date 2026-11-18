@@ -416,6 +416,7 @@ def _read_worker_result(
         or len(failed_nodes) != summary["failed"]
         or not set(passed_nodes).issubset(nodes)
         or not set(failed_nodes).issubset(nodes)
+        or set(passed_nodes) & set(failed_nodes)
     ):
         raise HeavyAcceptanceError("heavy_worker_result_refused")
     if summary["passed"] + summary["failed"] + summary["skipped"] > summary["selected"]:
