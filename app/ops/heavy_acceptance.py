@@ -172,6 +172,8 @@ class HeavyResults:
         self.skipped = 0
         self.docker_skipped = 0
         self.skipped_nodes: set[str] = set()
+        self.terminal_results: list[str] = []
+        self._reports: dict[str, list[Any]] = {}
         self.watchdog = False
 
     def pytest_collection_finish(self, session: Any) -> None:
@@ -182,9 +184,13 @@ class HeavyResults:
         )
 
     def pytest_runtest_logreport(self, report: Any) -> None:
+        self._reports.setdefault(report.nodeid, []).append(report)
         if getattr(report, "wasxfail", False):
-            if report.when == "call":
-                self.failed.append(report.nodeid)
+            # Keep the original v1 projection: XPASS contributes to passed and
+            # XFAIL contributes to neither legacy counter.  Terminal evidence
+            # below is the stricter admission signal.
+            if report.when == "call" and report.passed:
+                self.passed.add(report.nodeid)
         elif report.failed:
             if report.nodeid not in self.failed:
                 self.failed.append(report.nodeid)
@@ -195,6 +201,28 @@ class HeavyResults:
                 self.docker_skipped += 1
         elif report.when == "call" and report.passed:
             self.passed.add(report.nodeid)
+
+    def pytest_runtest_logfinish(self, nodeid: str, location: Any) -> None:
+        reports = self._reports.get(nodeid, ())
+        if any(report.failed for report in reports):
+            status = "ERROR"
+        else:
+            call = next((report for report in reports if report.when == "call"), None)
+            if call is not None and getattr(call, "wasxfail", False):
+                status = "XPASS" if call.passed else "XFAIL"
+            elif call is not None and call.failed:
+                status = "FAILED"
+            elif call is not None and call.skipped:
+                status = "SKIPPED"
+            elif call is not None and call.passed:
+                status = "PASSED"
+            elif any(report.skipped for report in reports):
+                # A setup-level skip has no call report but is still a
+                # recognized terminal outcome for the exact-node oracle.
+                status = "SKIPPED"
+            else:
+                status = "ERROR"
+        self.terminal_results.append(f"{nodeid} {status}")
 
     def pytest_collectreport(self, report: Any) -> None:
         if report.failed:
@@ -216,6 +244,16 @@ class HeavyResults:
             "failures": [node[:MAX_NODEID] for node in self.failed[:MAX_FAILURES]],
             "report_hash": report_hash,
         }
+
+
+def _group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError as exc:
+        raise HeavyAcceptanceError("heavy_cleanup_refused") from exc
+    return True
 
 
 def _terminate_process_group(process_group: int) -> None:
@@ -248,9 +286,10 @@ def _assert_process_group_absent(process_group: int) -> None:
     raise HeavyAcceptanceError("heavy_cleanup_leaked")
 
 
-def _cleanup_owned_process(process: subprocess.Popen[str]) -> None:
+def _cleanup_owned_process(process: subprocess.Popen[str]) -> bool:
     """Reap an owned leader and refuse if its process group remains alive."""
 
+    leaked_descendant = process.poll() is not None and _group_exists(process.pid)
     _terminate_process_group(process.pid)
     try:
         process.wait(timeout=2)
@@ -262,6 +301,7 @@ def _cleanup_owned_process(process: subprocess.Popen[str]) -> None:
             raise HeavyAcceptanceError("heavy_cleanup_refused") from reap_error
         raise HeavyAcceptanceError("heavy_cleanup_refused") from exc
     _assert_process_group_absent(process.pid)
+    return leaked_descendant
 
 
 def _remaining(deadline: float) -> float:
@@ -435,6 +475,13 @@ def _worker_summary(
             plugins=[plugin],
         )
     )
+    try:
+        partition_tools = _load_partition_tools(Path.cwd())
+        partition_tools.verify_node_results(
+            tuple(sorted(plugin.nodes)), HEAVY_TARGET, tuple(plugin.terminal_results)
+        )
+    except (HeavyAcceptanceError, ValueError) as exc:
+        raise HeavyAcceptanceError("heavy_terminal_evidence_refused") from exc
     summary = {**expected, "targets": [HEAVY_TARGET], **plugin.summary(exit_status)}
     result_path.write_text(
         json.dumps(
@@ -444,6 +491,7 @@ def _worker_summary(
                 "passed_nodes": sorted(plugin.passed),
                 "failed_nodes": list(plugin.failed),
                 "skipped_nodes": sorted(plugin.skipped_nodes),
+                "terminal_results": list(plugin.terminal_results),
             },
             sort_keys=True,
         ),
@@ -453,7 +501,11 @@ def _worker_summary(
 
 
 def _read_worker_result(
-    path: Path, expected: dict[str, str], expected_nodes: tuple[str, ...] | None = None
+    path: Path,
+    expected: dict[str, str],
+    expected_nodes: tuple[str, ...] | None = None,
+    *,
+    partition_tools: Any | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -476,7 +528,11 @@ def _read_worker_result(
         or any(not isinstance(node, str) for node in skipped_nodes)
     ):
         raise HeavyAcceptanceError("heavy_worker_result_refused")
+    all_nodes = (*nodes, *passed_nodes, *failed_nodes, *skipped_nodes)
+    if any(not node or re.search(r"[\x00-\x1f]", node) for node in all_nodes):
+        raise HeavyAcceptanceError("heavy_worker_result_refused")
     classify(summary, expected)
+    strict_terminal = partition_tools is not None
     if (
         summary["targets"] != [HEAVY_TARGET]
         or len(nodes) != summary["selected"]
@@ -488,12 +544,17 @@ def _read_worker_result(
         or not set(passed_nodes).issubset(nodes)
         or not set(failed_nodes).issubset(nodes)
         or not set(skipped_nodes).issubset(nodes)
-        or set(passed_nodes) & set(failed_nodes)
-        or set(passed_nodes) & set(skipped_nodes)
-        or set(failed_nodes) & set(skipped_nodes)
         or summary["docker_skipped"] > summary["skipped"]
-        or summary["passed"] + summary["failed"] + summary["skipped"] != summary["selected"]
-        or any(node not in failed_nodes for node in summary["failures"])
+        or (
+            not strict_terminal
+            and (
+                set(passed_nodes) & set(failed_nodes)
+                or set(passed_nodes) & set(skipped_nodes)
+                or set(failed_nodes) & set(skipped_nodes)
+                or summary["passed"] + summary["failed"] + summary["skipped"]
+                != summary["selected"]
+            )
+        )
     ):
         raise HeavyAcceptanceError("heavy_worker_result_refused")
     expected_report_hash = hashlib.sha256(
@@ -501,11 +562,42 @@ def _read_worker_result(
     ).hexdigest()
     expected_failures = [node[:MAX_NODEID] for node in failed_nodes[:MAX_FAILURES]]
     if (
-        summary["passed"] + summary["failed"] + summary["skipped"] > summary["selected"]
+        (
+            not strict_terminal
+            and summary["passed"] + summary["failed"] + summary["skipped"]
+            > summary["selected"]
+        )
         or summary["report_hash"] != expected_report_hash
         or summary["failures"] != expected_failures
     ):
         raise HeavyAcceptanceError("heavy_worker_result_refused")
+    if partition_tools is not None:
+        terminal_results = payload.get("terminal_results")
+        expected_terminal_nodes = expected_nodes if expected_nodes is not None else tuple(nodes)
+        if not isinstance(terminal_results, list) or not all(
+            isinstance(line, str) for line in terminal_results
+        ):
+            raise HeavyAcceptanceError("heavy_worker_result_refused")
+        try:
+            partition_tools.verify_node_results(
+                expected_terminal_nodes, HEAVY_TARGET, tuple(terminal_results)
+            )
+        except (TypeError, ValueError) as exc:
+            raise HeavyAcceptanceError("heavy_worker_result_refused") from exc
+        terminal_by_node: dict[str, str] = {}
+        statuses = {"PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS"}
+        for line in terminal_results:
+            node, separator, status = line.partition(" ")
+            if not separator or status not in statuses or node in terminal_by_node:
+                raise HeavyAcceptanceError("heavy_worker_result_refused")
+            terminal_by_node[node] = status
+        for node, status in terminal_by_node.items():
+            if status in {"PASSED", "XPASS"} and node not in passed_nodes:
+                raise HeavyAcceptanceError("heavy_worker_result_refused")
+            if status in {"FAILED", "ERROR"} and node not in failed_nodes:
+                raise HeavyAcceptanceError("heavy_worker_result_refused")
+            if status == "SKIPPED" and node not in skipped_nodes:
+                raise HeavyAcceptanceError("heavy_worker_result_refused")
     return summary, payload
 
 
@@ -522,8 +614,10 @@ def _run_partitions(
     _remaining(deadline)
     partitions = _partition_targets(root, marker, targets, expected_nodes, deadline)
     _remaining(deadline)
+    partition_tools = _load_partition_tools(root)
     work_dir = Path(tempfile.mkdtemp(prefix="heavy-acceptance-", dir="/tmp"))
     processes: list[tuple[subprocess.Popen[str], Path, tuple[str, ...]]] = []
+    aggregate: dict[str, Any] | None = None
     try:
         manifest_path = work_dir / "manifest.json"
         manifest_path.write_text(
@@ -566,8 +660,9 @@ def _run_partitions(
                 env=environment,
                 start_new_session=True,
             )
-            log.close()
+            # Register the owned process before any fallible post-launch work.
             processes.append((process, result_path, expected_partition_nodes))
+            log.close()
 
         timed_out = False
         while any(process.poll() is None for process, _, _ in processes):
@@ -593,13 +688,17 @@ def _run_partitions(
         skipped = docker_skipped = 0
         exit_status = 0
         skipped_nodes: list[str] = []
+        terminal_results: list[str] = []
         for process, result_path, partition in processes:
             _remaining(deadline)
-            summary, payload = _read_worker_result(result_path, expected, partition)
+            summary, payload = _read_worker_result(
+                result_path, expected, partition, partition_tools=partition_tools
+            )
             observed_nodes.extend(payload["nodes"])
             passed_nodes.extend(payload["passed_nodes"])
             failed_nodes.extend(payload["failed_nodes"])
             skipped_nodes.extend(payload["skipped_nodes"])
+            terminal_results.extend(payload["terminal_results"])
             skipped += summary["skipped"]
             docker_skipped += summary["docker_skipped"]
             exit_status = max(exit_status, summary["exit_status"])
@@ -611,10 +710,21 @@ def _run_partitions(
             or len(set(passed_nodes)) != len(passed_nodes)
             or len(set(failed_nodes)) != len(failed_nodes)
             or len(set(skipped_nodes)) != len(skipped_nodes)
-            or set(passed_nodes) & set(failed_nodes)
-            or set(passed_nodes) & set(skipped_nodes)
-            or set(failed_nodes) & set(skipped_nodes)
-            or len(passed_nodes) + len(failed_nodes) + len(skipped_nodes) != len(observed_nodes)
+            or len(terminal_results) != len(expected_nodes)
+            or len(set(line.split(" ", 1)[0] for line in terminal_results))
+            != len(terminal_results)
+        ):
+            raise HeavyAcceptanceError("heavy_node_coverage_refused")
+        terminal_by_node = {
+            line.split(" ", 1)[0]: line.split(" ", 1)[1] for line in terminal_results
+        }
+        if set(terminal_by_node) != set(expected_nodes):
+            raise HeavyAcceptanceError("heavy_terminal_outcome_refused")
+        if any(
+            (status in {"PASSED", "XPASS"} and node not in passed_nodes)
+            or (status in {"FAILED", "ERROR"} and node not in failed_nodes)
+            or (status == "SKIPPED" and node not in skipped_nodes)
+            for node, status in terminal_by_node.items()
         ):
             raise HeavyAcceptanceError("heavy_node_coverage_refused")
         report_hash = hashlib.sha256(
@@ -632,19 +742,27 @@ def _run_partitions(
             "skipped": skipped,
             "docker_skipped": docker_skipped,
         }
-        _remaining(deadline)
-        classify(aggregate, expected)
-        return aggregate
     finally:
         cleanup_error: HeavyAcceptanceError | None = None
+        leaked_group = False
+        active_error = sys.exc_info()[1]
         for process, _, _ in processes:
             try:
-                _cleanup_owned_process(process)
+                leaked_group = _cleanup_owned_process(process) or leaked_group
             except HeavyAcceptanceError as exc:
                 cleanup_error = cleanup_error or exc
         shutil.rmtree(work_dir, ignore_errors=False)
         if cleanup_error is not None:
             raise cleanup_error
+        if leaked_group and active_error is None:
+            raise HeavyAcceptanceError("heavy_cleanup_leaked")
+    if aggregate is None:
+        raise HeavyAcceptanceError("heavy_worker_result_refused")
+    # Cleanup is part of the single acceptance envelope.  A result that was
+    # green before slow cleanup is not green after the shared deadline.
+    _remaining(deadline)
+    classify(aggregate, expected)
+    return aggregate
 
 
 def run(manifest: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
