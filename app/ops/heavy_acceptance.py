@@ -486,6 +486,7 @@ def _run_partitions(
         for process, _, _ in processes:
             if process.poll() is None:
                 process.wait()
+            _terminate_process_group(process.pid)
 
         expected = identity(
             manifest["source_sha"],
