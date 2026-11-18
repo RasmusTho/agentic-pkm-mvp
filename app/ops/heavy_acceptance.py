@@ -499,9 +499,11 @@ def _read_worker_result(
     expected_report_hash = hashlib.sha256(
         json.dumps([sorted(passed_nodes), failed_nodes], separators=(",", ":")).encode()
     ).hexdigest()
+    expected_failures = [node[:MAX_NODEID] for node in failed_nodes[:MAX_FAILURES]]
     if (
         summary["passed"] + summary["failed"] + summary["skipped"] > summary["selected"]
         or summary["report_hash"] != expected_report_hash
+        or summary["failures"] != expected_failures
     ):
         raise HeavyAcceptanceError("heavy_worker_result_refused")
     return summary, payload
@@ -588,7 +590,6 @@ def _run_partitions(
         observed_nodes: list[str] = []
         passed_nodes: list[str] = []
         failed_nodes: list[str] = []
-        failures: list[str] = []
         skipped = docker_skipped = 0
         exit_status = 0
         skipped_nodes: list[str] = []
@@ -599,7 +600,6 @@ def _run_partitions(
             passed_nodes.extend(payload["passed_nodes"])
             failed_nodes.extend(payload["failed_nodes"])
             skipped_nodes.extend(payload["skipped_nodes"])
-            failures.extend(summary["failures"])
             skipped += summary["skipped"]
             docker_skipped += summary["docker_skipped"]
             exit_status = max(exit_status, summary["exit_status"])
@@ -624,7 +624,7 @@ def _run_partitions(
             **expected,
             "targets": list(targets),
             "exit_status": 0 if exit_status == 0 else 1,
-            "failures": failures[:MAX_FAILURES],
+            "failures": [node[:MAX_NODEID] for node in failed_nodes[:MAX_FAILURES]],
             "report_hash": report_hash,
             "selected": len(observed_nodes),
             "passed": len(set(passed_nodes)),
