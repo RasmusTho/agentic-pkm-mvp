@@ -410,7 +410,8 @@ def _read_worker_result(
         raise HeavyAcceptanceError("heavy_worker_result_refused")
     classify(summary, expected)
     if (
-        len(nodes) != summary["selected"]
+        summary["targets"] != [HEAVY_TARGET]
+        or len(nodes) != summary["selected"]
         or len(set(nodes)) != len(nodes)
         or len(passed_nodes) != summary["passed"]
         or len(failed_nodes) != summary["failed"]
