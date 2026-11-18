@@ -52,6 +52,7 @@ def _partition_tree(tmp_path, file_count=6):
     work = tmp_path / "partition-work"
     (work / "scripts").mkdir(parents=True)
     (work / "tests" / "deploy").mkdir(parents=True)
+    shutil.copy2(ROOT / "scripts" / "__init__.py", work / "scripts" / "__init__.py")
     (work / "scripts" / SELECTOR_NAME).write_text(
         "HEAVY_PR_DEFERRED_TARGETS = {'tests/deploy': ()}\n"
         f"PR_MARKER_EXPRESSION = {SELECTOR_MARKER!r}\n"
@@ -110,6 +111,10 @@ def test_heavy_profile_binds_candidate_partition_helpers(tmp_path, monkeypatch):
     tools = heavy._load_partition_tools(work)
     assert (
         Path(tools.__file__).resolve() == (work / "scripts/run_scoped_test_partitions.py").resolve()
+    )
+    assert (
+        Path(tools.plan_node_units.__code__.co_filename).resolve()
+        == (work / "scripts/plan_full_suite_node_shards.py").resolve()
     )
 
 
