@@ -5,7 +5,7 @@ Owner subsystem: GOV - Governance, Policy, Authority & Receipts
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-25
+Last reviewed: 2026-11-21
 
 # GovernedWriteProtocol
 
@@ -236,6 +236,80 @@ may be collapsed into a generic success or silently retried:
 
 These are logical contract states, not a prescribed module, database table, package layout, or claim
 that the transitional runtime already enforces the whole chain.
+
+### Vault-bound atomic append/reconcile
+
+State: shipped primitive, opt-in, no consumer migrated (#4659). Code owner:
+`app/knowledge/atomic_append_reconcile.py :: atomic_append_reconcile_relative`. Audience: one person, one
+machine at a time, notes in a local vault. This is a deliberately small contract; it does not make the
+existing `append_note_relative` seam safe and does not claim #4515, #4641, #4325 or any consumer migration
+delivered.
+
+**Invariant.** One entry is added to the END of an existing note (or a note the caller asked to create)
+through one `O_APPEND` write on a descriptor the primitive holds, followed by one sync (`fsync`,
+`F_FULLFSYNC` on macOS). Creating a note first syncs the file, then its parent directory. Nothing is
+renamed, exchanged, replaced, linked, cloned, truncated, deleted, re-permissioned or chown'd, no stage or
+temporary file is created, and no state exists outside the note. No code path deletes, shortens or
+overwrites an existing byte. Success is returned only if the entry reads back from the file that was
+written to and that file still has a name.
+
+**Entry format.** Plain-text marker lines, no control bytes:
+
+```text
+<!--ya:begin ID h=HHHHHHHH-->
+entry text (always ends with a newline)
+<!--ya:end ID b=BBBBBBBB-->
+```
+
+`ID` is the caller's operation id (32 lowercase hex); `h` and `b` are 8 hex of SHA-256 of the caller's text
+and of the body as written. A marker line counts only when the whole line has this shape (trailing spaces and
+a CR allowed); anything else is plain text. The first closed entry for an `ID` is the entry for that
+operation; later closed entries with the same `ID` are plain text. A new `begin` while an entry is open turns
+the earlier one into plain text. An entry still open at end of file is a cut-off tail, as is an unterminated
+last line that starts `<!--ya`. A closed entry whose body has NUL or invalid UTF-8 is damaged and plain text.
+Entry text must be valid UTF-8 without NUL and without a line shaped like a marker.
+
+**Outcomes.**
+
+| Outcome | Meaning |
+| --- | --- |
+| `appended` | The entry was written, synced and read back. |
+| `reconciled_replay` | The same operation id and text already has a closed entry; nothing was written. Flagged `edited` when its body no longer matches `b`. Also holds after the note was renamed or moved. |
+| collision (`AtomicAppendCollision`) | The same id with different text; nothing was written. |
+| refused (`KnowledgeCapabilityError`) | Symlinked, hard-linked, non-regular or escaping target; setuid, setgid or (Linux) file-capability bit; note over 16 MiB; network, FUSE or tmpfs storage; missing note without `create`. Nothing was written. |
+| conflict (`KnowledgeWriteConflict`) | A name or root changed before the write, the guard, effect locator or deadline failed, a sync failed, the write was cut short, or the entry did not read back. The entry is never reported as written; retrying the same operation is safe. |
+
+A cut-off entry is never counted as written. A retry of the same operation writes the missing rest of its own
+cut-off entry. Any other append leaves the fragment as plain text and writes one visible line, `> [!note] An
+unfinished entry above was cut off by an interrupted write. It is kept as plain text.`, before its own entry.
+Under `flock` on the note, `WriteGuard`, the effect locator and the deadline are checked again immediately
+before the one write.
+
+**Owner decisions kept.**
+
+- *Reader visibility (2026-11-15).* The note is never unbound, replaced or rewritten. A reader sees every
+  earlier byte unchanged, followed by at most one incomplete entry of the append in flight.
+- *Hand edits (2026-11-15).* Entries are editable. Editing, reflowing or deleting an entry, converting line
+  endings or deleting or editing a marker never blocks a later append. A changed body is accepted and flagged
+  as edited; a deleted marker is plain text; a replay of an operation whose entry was deleted appends it again.
+- *Duplicates (2026-11-15).* A pasted second copy of an entry is plain text; only the first counts.
+- *Permission bits during a write (2026-11-15).* If another writer sets a setuid, setgid or file-capability
+  bit between the last check and the write, the operating system clears it and the append still succeeds. A note
+  that has such a bit when checked is refused.
+- *Rename during a write (2026-11-15).* If another writer renames or moves the note during an append, the entry
+  lands in that same note and the call succeeds. A name change found before the first byte is refused, and an
+  entry written to a file that no longer has any name is not reported as success.
+- *Storage assumption (2026-11-16).* A write never changes bytes outside its own range, even if power fails
+  (powersafe overwrite). SQLite documents and assumes this by default; that is prior art only and nothing here
+  depends on SQLite. Because of the assumption the primitive keeps no copy of earlier bytes.
+
+**Not promised.** Protection from another writer overwriting the note during the write (the read-back detects
+it and the caller retries; last-write-wins as in ADR-0055 otherwise); that other readers see exact old-or-new
+during a write or after a crash until the next append; a power-cut experiment (the write/sync ordering is
+tested by process death only); recovery records, capacity pools, ledgers, repair tooling or sealed entries;
+network or distributed filesystems; vault-global locking. How Obsidian draws the marker lines in live preview
+has not been checked, and any later slice that enrols a note must check it first. The pathname-exchange defect
+in `_atomic_append_note_relative` is not changed here.
 
 ## Allowed Producers
 
