@@ -528,3 +528,68 @@ def test_schema_violation_on_grandfathered_row_is_log_only_never_dead_lettered(
     assert dead_letters == []
     assert len(handled) == 1
     assert acked == ["row-grandfathered"]
+
+
+def test_panel_scan_from_watcher_honours_watcher_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A watcher scan dispatched by the worker is an automatic run (#6675)."""
+    from uuid import uuid4
+
+    from app import objects as object_store_module
+    from app.agents.panel_agent.agent import reset_panel_intent_dedup_store
+    from app.stores import reset_store_backends
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    reset_store_backends()
+    object_store_module._MEMORY_STORE.clear()
+    reset_panel_intent_dedup_store()
+    vault_root = tmp_path / "vault"
+    note_uuid = str(uuid4())
+    note_path = vault_root / "Notes" / "gated.md"
+    note_path.parent.mkdir(parents=True)
+    original = (
+        f"---\nuuid: {note_uuid}\n---\n"
+        "%% AI:Start %%\n## AI-instruktion\nPlease process this panel.\n"
+        "## AI-åtgärder\n- [x] Archive this note\n%% AI:End %%\n"
+    )
+    note_path.write_text(original, encoding="utf-8")
+    catalog = tmp_path / "panel-actions.md"
+    catalog.write_text(
+        '---\nmappings:\n  - id: "note.archive"\n    label: "Archive this note"\n'
+        '    intent_type: "archival"\n    downstream_event: "note.archive"\n'
+        "    manual_only: true\n    watcher_allowed: false\n---\n",
+        encoding="utf-8",
+    )
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(catalog))
+    # Deterministic checkbox decisions; the gate under test is independent of the decider.
+    monkeypatch.setenv("PANEL_AGENT_DECIDER", "rule")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.setattr(outbox_worker, "_outbox_audit_path", lambda: outbox_path)
+    monkeypatch.setattr(outbox_worker, "_use_db_outbox", lambda: False)
+
+    import app.agents.panel_agent.runtime as panel_runtime
+
+    results: list[Any] = []
+    real_execute = panel_runtime.execute_panel_intent
+
+    def _recording_execute(*args: Any, **kwargs: Any) -> Any:
+        result = real_execute(*args, **kwargs)
+        results.append(result)
+        return result
+
+    monkeypatch.setattr("app.agents.panel_agent.execution.execute_panel_intent", _recording_execute)
+
+    outbox_worker.handle_panel_scan_requested(
+        {"vault_path": str(note_path), "relative_path": "Notes/gated.md", "hash": "h", "mtime": 1.0},
+        vault_root=vault_root,
+    )
+
+    assert results, "the worker did not reach the panel runtime"
+    assert results[0].intent.source.trigger == "watcher"
+    assert [action.details.get("reason") for action in results[0].actions] == ["watcher_not_allowed"]
+    events = [json.loads(line)["event"] for line in outbox_path.read_text(encoding="utf-8").splitlines()]
+    assert "note.archive" not in events
+    assert note_path.exists()

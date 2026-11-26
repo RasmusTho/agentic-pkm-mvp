@@ -2067,6 +2067,9 @@ def handle_panel_scan_requested(
         vault_root=resolved_root,
         vault_uuid=note_uuid,
         persist_created_to_db=_use_db_outbox(),
+        # Only watchers emit panel.scan.requested: this is an automatic run and
+        # must honour the catalog's manual_only/watcher_allowed gate (#6675).
+        trigger="watcher",
         # The sentinel is the carrier-free/legacy row attribution: those runs stamp
         # the live compatibility binding. Any other binding is the producing vault.
         producing_binding_id=(
