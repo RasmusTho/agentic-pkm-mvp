@@ -60,6 +60,13 @@ shipped only in the separate `mimer-mcp-sidecar` distribution, not in `app/` or 
 dependency surface. Streamable HTTP over tailnet/LAN plus per-device authentication are deferred,
 separately gated follow-ons and must not be enabled implicitly.
 
+The v1 `tools/list` response declares advisory MCP annotations: `mimer.retrieve`, `mimer.read_note`,
+and `mimer.health` are `readOnlyHint: true`; `mimer.ask` (the runtime may append recall and synthesis
+receipts) and `mimer.capture` are `readOnlyHint: false`, `destructiveHint: false`, and
+`idempotentHint: false`; all five are `openWorldHint: false`. Annotations are client hints that may
+change a client's confirmation prompts. They grant no authority, admit no client or transport, and
+replace no runtime gate.
+
 ### Accepted MCP v2 authority profile
 
 [ADR-0069](../adr/ADR-0069-mcp-v2-authority-profile.md) records the owner-approved v2 design and

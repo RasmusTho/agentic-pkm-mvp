@@ -66,6 +66,43 @@ def test_stdio_transport_lifecycle_negotiates_and_shuts_down_cleanly(tmp_path: P
             process.wait(timeout=10)
 
 
+def test_stdio_tool_listing_declares_truthful_annotations(tmp_path: Path) -> None:
+    """The installed entrypoint tells clients which v1 tools cannot change state."""
+    entrypoint = _installed_entrypoint(tmp_path)
+    process = subprocess.Popen(
+        [str(entrypoint), "--transport", "stdio"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    initialize = {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
+    }
+    try:
+        assert _request(process, initialize)["id"] == 1
+        _notify(process, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+        listed = _request(process, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        read_only = {"readOnlyHint": True, "openWorldHint": False}
+        # ``ask`` may append recall and synthesis receipts, so it is not read-only.
+        effectful = {
+            "readOnlyHint": False, "destructiveHint": False,
+            "idempotentHint": False, "openWorldHint": False,
+        }
+        assert {tool["name"]: tool.get("annotations") for tool in listed["result"]["tools"]} == {
+            "mimer.ask": effectful,
+            "mimer.capture": effectful,
+            "mimer.retrieve": read_only,
+            "mimer.read_note": read_only,
+            "mimer.health": read_only,
+        }
+        assert process.stdin is not None
+        process.stdin.close()
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+
+
 def _request(process: subprocess.Popen[str], payload: dict[str, object]) -> dict[str, object]:
     assert process.stdin is not None and process.stdout is not None
     process.stdin.write(json.dumps(payload) + "\n")
