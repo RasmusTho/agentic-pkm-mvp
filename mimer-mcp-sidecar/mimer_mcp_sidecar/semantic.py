@@ -26,6 +26,7 @@ class McpToolDefinition:
     input_schema: dict[str, Any]
     output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
+    annotations: dict[str, bool] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         result = {"name": self.name, "description": self.description, "inputSchema": self.input_schema}
@@ -33,6 +34,8 @@ class McpToolDefinition:
             result["outputSchema"] = self.output_schema
         if self.metadata is not None:
             result["_meta"] = self.metadata
+        if self.annotations is not None:
+            result["annotations"] = dict(self.annotations)
         return result
 
 
@@ -186,6 +189,15 @@ class _GovernedMimerHttpOperations:
 
 _STRING_SCHEMA = {"type": "string", "minLength": 1}
 _NO_ARGUMENTS_SCHEMA = {"type": "object", "properties": {}, "additionalProperties": False}
+# Advisory MCP client hints only; every gate stays in the runtime.  ``ask`` is
+# not read-only because the runtime may append recall and synthesis receipts.
+_READ_ONLY_HINTS = {"readOnlyHint": True, "openWorldHint": False}
+_EFFECTFUL_HINTS = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
 _CAPTURE_ACTION = "companion.capture.append"
 _CAPTURE_WRITE_CLASS = "vault_capture_append"
 _CAPTURE_ACTOR = "companion.capture"
@@ -203,6 +215,7 @@ _TOOLS = (
             "required": ["question"],
             "additionalProperties": False,
         },
+        annotations=_EFFECTFUL_HINTS,
     ),
     McpToolDefinition(
         "mimer.capture",
@@ -213,6 +226,7 @@ _TOOLS = (
             "required": ["text"],
             "additionalProperties": False,
         },
+        annotations=_EFFECTFUL_HINTS,
     ),
     McpToolDefinition(
         "mimer.retrieve",
@@ -223,6 +237,7 @@ _TOOLS = (
             "required": ["query"],
             "additionalProperties": False,
         },
+        annotations=_READ_ONLY_HINTS,
     ),
     McpToolDefinition(
         "mimer.read_note",
@@ -237,8 +252,14 @@ _TOOLS = (
             "required": ["note_path"],
             "additionalProperties": False,
         },
+        annotations=_READ_ONLY_HINTS,
     ),
-    McpToolDefinition("mimer.health", "Read Mimer liveness.", _NO_ARGUMENTS_SCHEMA),
+    McpToolDefinition(
+        "mimer.health",
+        "Read Mimer liveness.",
+        _NO_ARGUMENTS_SCHEMA,
+        annotations=_READ_ONLY_HINTS,
+    ),
 )
 
 
