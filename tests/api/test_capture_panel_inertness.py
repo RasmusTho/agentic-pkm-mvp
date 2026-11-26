@@ -133,3 +133,13 @@ def test_compose_entry_neutralizes_across_line_separators(separator: str) -> Non
     assert find_panels(composed) == []
     assert not parse_panel_state(composed).actions
     assert not watcher_panel_candidate({}, composed)
+
+
+def test_compose_entry_is_linear_on_adversarial_runs() -> None:
+    import time
+
+    started = time.perf_counter()
+    for text in ("#" * 50_000 + " x", "- " + " " * 50_000 + "x", "%" * 50_000):
+        _compose_entry(text, "T")
+    assert time.perf_counter() - started < 1.0
+    assert _compose_entry("#### ai-logg", "T") == "- [T] #\\#\\#\\# ai-logg\n"

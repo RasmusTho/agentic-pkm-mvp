@@ -186,10 +186,12 @@ def _capture_target_overlaps_sources(
 # checked action that panel automation would read as a human confirmation.
 # Markdown backslash escapes keep the visible text and break only the syntax.
 _COMMENT_DELIMITER_RE = re.compile(r"%(?=%)")
+# Possessive quantifiers and the run-start anchor keep matching linear (no
+# backtracking over long ``#``/whitespace runs in caller-supplied text).
 _PANEL_HEADING_RE = re.compile(
-    r"#(#+)(?=\s*ai-(?:instruktion|åtgärder|logg))", re.IGNORECASE
+    r"(?<!#)#(#++)(?=\s*+ai-(?:instruktion|åtgärder|logg))", re.IGNORECASE
 )
-_CHECKBOX_RE = re.compile(r"(-\s*)\[(?=[ xX]\])")
+_CHECKBOX_RE = re.compile(r"(-\s*+)\[(?=[ xX]\])")
 
 
 def _inert_capture_line(line: str) -> str:
