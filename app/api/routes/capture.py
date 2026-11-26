@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from contextlib import nullcontext
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -181,8 +182,28 @@ def _capture_target_overlaps_sources(
         vault_root=vault_root,
     )
 
+# Captured text is plain intake (#6674): it must never form an AI panel or a
+# checked action that panel automation would read as a human confirmation.
+# Markdown backslash escapes keep the visible text and break only the syntax.
+_COMMENT_DELIMITER_RE = re.compile(r"%(?=%)")
+# Possessive quantifiers and the run-start anchor keep matching linear (no
+# backtracking over long ``#``/whitespace runs in caller-supplied text).
+_PANEL_HEADING_RE = re.compile(
+    r"(?<!#)#(#++)(?=\s*+ai-(?:instruktion|åtgärder|logg))", re.IGNORECASE
+)
+_CHECKBOX_RE = re.compile(r"(-\s*+)\[(?=[ xX]\])")
+
+
+def _inert_capture_line(line: str) -> str:
+    line = _COMMENT_DELIMITER_RE.sub(lambda _match: "%\\", line)
+    line = _PANEL_HEADING_RE.sub(
+        lambda match: "#" + "\\#" * len(match.group(1)), line
+    )
+    return _CHECKBOX_RE.sub(r"\1\\[", line)
+
+
 def _compose_entry(text: str, captured_at: str) -> str:
-    lines = text.splitlines() or [text]
+    lines = [_inert_capture_line(line) for line in (text.splitlines() or [text])]
     first = f"- [{captured_at}] {lines[0]}"
     continuation = [f"  {line}" for line in lines[1:]]
     return "\n".join([first, *continuation]) + "\n"
