@@ -254,6 +254,13 @@ def test_mimer_mcp_adapter_selects_semantic_and_existing_http_contract_tests() -
     assert "tests/api" not in selection.targets
 
 
+def test_remote_runtime_ingress_selects_its_remote_mcp_proofs() -> None:
+    selection = select_tests(["app/api/remote_ingress.py"])
+
+    assert "mimer_mcp" in selection.subsystems
+    assert "tests/remote_mcp" in selection.targets
+
+
 @pytest.mark.parametrize(
     "planner_path",
     ("app/planner/provider.py", "app/planner/prompts.py"),

@@ -16,8 +16,11 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
+import stat
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,6 +29,8 @@ from typing import Sequence
 GRANT_SCHEMA = "mimer_remote_grant.v1"
 GRANTABLE_TOOLS = frozenset({"mimer.health", "mimer.capture"})
 GRANT_PATH_ENV = "MIMER_REMOTE_GRANT_PATH"
+MAX_GRANT_DAYS = 90
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class GrantRefused(Exception):
@@ -62,11 +67,24 @@ def _digest(credential: str) -> str:
     return hashlib.sha256(credential.encode("utf-8")).hexdigest()
 
 
+def _read_owner_only(path: Path) -> str:
+    """Read the grant without following a symlink; refuse a file others can read or write."""
+
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("not a regular file")
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError("grant file must be owned by this user with mode 0600")
+        return handle.read()
+
+
 def load_grant(path: Path) -> RemoteGrant:
     """Parse the grant file or raise ``GrantRefused(503)``."""
 
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(_read_owner_only(path))
         if not isinstance(raw, dict) or raw.get("schema") != GRANT_SCHEMA:
             raise ValueError("schema")
         tools = raw["tools"]
@@ -77,9 +95,13 @@ def load_grant(path: Path) -> RemoteGrant:
         expires_at = datetime.fromisoformat(raw["expires_at"])
         if expires_at.tzinfo is None:
             raise ValueError("naive expiry")
+        if expires_at > datetime.now(timezone.utc) + timedelta(days=MAX_GRANT_DAYS, minutes=5):
+            raise ValueError("expiry beyond the maximum grant lifetime")
         fields = (raw["grant_id"], raw["vault_binding_id"], raw["credential_sha256"])
         if not all(isinstance(value, str) and value for value in fields):
             raise ValueError("fields")
+        if not _HEX64.match(raw["credential_sha256"]):
+            raise ValueError("credential digest")
         if not isinstance(raw["active"], bool):
             raise ValueError("active")
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -110,12 +132,24 @@ def admit(path: Path, presented: str | None, *, now: datetime | None = None) -> 
 
 
 def _write(path: Path, grant: RemoteGrant) -> None:
+    """Atomically replace the grant: unpredictable O_EXCL temp file (0600), fsync, rename, fsync dir."""
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(grant.as_payload(), handle, indent=2)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".remote-grant-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(grant.as_payload(), handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    dir_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def issue_grant(
@@ -125,8 +159,8 @@ def issue_grant(
 
     if not set(tools) <= GRANTABLE_TOOLS or not tools:
         raise ValueError(f"tools must be a non-empty subset of {sorted(GRANTABLE_TOOLS)}")
-    if not 1 <= days <= 90:
-        raise ValueError("days must be between 1 and 90")
+    if not 1 <= days <= MAX_GRANT_DAYS:
+        raise ValueError(f"days must be between 1 and {MAX_GRANT_DAYS}")
     credential = secrets.token_urlsafe(32)
     grant = RemoteGrant(
         grant_id=f"rg_{secrets.token_hex(8)}",
