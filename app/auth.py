@@ -179,15 +179,28 @@ def _effective_client_host(request: Request) -> str | None:
 SUBJECT_TRUSTED_LOOPBACK = "trusted_loopback"
 SUBJECT_TRUSTED_COMPANION_PROXY = "trusted_companion_proxy"
 SUBJECT_API_KEY_CREDENTIAL = "api_key_credential"
+#: ADR-0070: set only by the separate remote ingress (`app/api/remote_ingress.py`)
+#: after it verified the host-side grant. Request scope state is not client-writable.
+SUBJECT_REMOTE_MCP_GRANT = "remote_mcp_grant"
+
+
+def remote_grant(request: Request) -> object | None:
+    """The verified remote grant for a request that arrived through the remote ingress."""
+
+    return request.scope.get("state", {}).get("mimer_remote_grant")
 
 
 def resolve_auth_subject(request: Request, api_key: str | None) -> str:
     """Return the server-derived subject that admits this request, or raise 401.
 
-    Ordering matches the historical admission order exactly:
+    A request from the remote ingress is the remote subject before any other
+    classification, so loopback trust can never admit it. Otherwise the
+    ordering matches the historical admission order exactly:
     loopback -> trusted Companion UI proxy -> configured API key.
     """
 
+    if remote_grant(request) is not None:
+        return SUBJECT_REMOTE_MCP_GRANT
     if _is_loopback_host(_effective_client_host(request)):
         return SUBJECT_TRUSTED_LOOPBACK
     # The Companion UI container is the sole caller of these routes in the
@@ -214,6 +227,8 @@ def require_loopback_or_api_key(
     api_key: str | None = Depends(api_key_header),
 ) -> str:
     subject = resolve_auth_subject(request, api_key)
+    if subject == SUBJECT_REMOTE_MCP_GRANT:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="remote_subject_not_admitted")
     if subject == SUBJECT_API_KEY_CREDENTIAL:
         # Preserved for backward compatibility: this dependency's historical return value
         # is the configured key for a key-admitted request and "" otherwise.

@@ -695,6 +695,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # CI's fail-closed unowned-runtime path (#3368).
             "app/mimer_mcp/",
             "mimer-mcp-sidecar/",
+            # ADR-0070 remote HTTP v1 profile: host grant and its ingress proofs.
+            "app/remote_mcp/",
+            "tests/remote_mcp/",
             "tests/mcp/test_mimer_server.py",
             "tests/mcp/test_mimer_sidecar_semantic_parity.py",
             "tests/mcp/test_mimer_server_transport.py",
@@ -713,6 +716,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/architecture/test_mimer_mcp_server_boundaries.py",
             "tests/architecture/test_mimer_mcp_sidecar_isolation.py",
             "tests/architecture/test_requirements_consistency.py",
+            "tests/remote_mcp",
             "tests/api/test_ask_contract.py",
             "tests/api/test_capture_inbox_api.py",
             "tests/api/test_search_canonical_substrate.py",
@@ -729,6 +733,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # into app/api/app.py, and its x-trace-id propagation regression
             # lives in tests/api (test_ask_contract).
             "app/middleware/",
+            # Request authentication subjects (loopback, proxy, API key, ADR-0070
+            # remote grant) are API admission surface exercised from tests/api.
+            "app/auth.py",
             # Static assets are mounted and served by app/api/app.py; page
             # handlers (/signboard, /cockpit) are API surface, asserted from
             # tests/api (test_signboard_api reads signboard.html/.js), so a
