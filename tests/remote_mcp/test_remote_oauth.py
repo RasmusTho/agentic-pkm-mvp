@@ -552,9 +552,10 @@ def test_owner_cli_provisions_rotates_and_revokes(tmp_path, capsys, rig):
         str(rig.grant_path),
     ]
     assert oauth_main(args) == 0
-    issued = json.loads(capsys.readouterr().out)
-    secret = secret_file.read_text().strip()
-    assert secret and secret not in json.dumps(issued)
+    printed = capsys.readouterr().out
+    issued = json.loads(secret_file.read_text())
+    secret = issued["client_secret"]
+    assert json.loads(printed) == {"handover_file": str(secret_file)}
     assert secret_file.stat().st_mode & 0o077 == 0
     assert secret not in path.read_text()
     assert load_config(path).client_id == issued["client_id"]
@@ -567,7 +568,7 @@ def test_owner_cli_provisions_rotates_and_revokes(tmp_path, capsys, rig):
         oauth_main(["rotate-secret", "--config", str(path), "--secret-out", str(rotated_file)]) == 0
     )
     capsys.readouterr()
-    assert rotated_file.read_text().strip() != secret
+    assert json.loads(rotated_file.read_text())["client_secret"] != secret
 
     tokens = _tokens(rig)
     assert oauth_main(["revoke-tokens", "--config", str(rig.config_path)]) == 0

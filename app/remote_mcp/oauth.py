@@ -646,16 +646,17 @@ def provision(
     return config, secret
 
 
-def _hand_over_secret(path: Path, secret: str) -> None:
-    """Write the client secret once to a new owner-only file (never stdout, logs, or argv).
+def _hand_over_secret(path: Path, client_id: str, secret: str) -> None:
+    """Write the client credentials once to a new owner-only file (never stdout, logs, or argv).
 
-    The owner copies it into Claude's connector settings and deletes the file.
+    The owner copies them into Claude's connector settings and deletes the file.
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(secret + "\n")
+        json.dump({"client_id": client_id, "client_secret": secret}, handle)
+        handle.write("\n")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -689,12 +690,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 store_path=args.store_path,
                 grant_path=args.grant_path,
             )
-            _hand_over_secret(args.secret_out, secret)
-            print(
-                json.dumps(
-                    {"client_id": config.client_id, "client_secret_file": str(args.secret_out)}
-                )
-            )
+            _hand_over_secret(args.secret_out, config.client_id, secret)
+            print(json.dumps({"handover_file": str(args.secret_out)}))
         elif args.command == "rotate-secret":
             current = load_config(args.config)
             secret = secrets.token_urlsafe(32)
@@ -702,12 +699,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.config,
                 OAuthConfig(**{**current.__dict__, "client_secret_sha256": _sha256(secret)}),
             )
-            _hand_over_secret(args.secret_out, secret)
-            print(
-                json.dumps(
-                    {"client_id": current.client_id, "client_secret_file": str(args.secret_out)}
-                )
-            )
+            _hand_over_secret(args.secret_out, current.client_id, secret)
+            print(json.dumps({"handover_file": str(args.secret_out)}))
         else:
             revoked = OAuthStore(load_config(args.config).store_path).revoke_all()
             print(json.dumps({"revoked": revoked}))
