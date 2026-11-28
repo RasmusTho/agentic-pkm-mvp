@@ -77,8 +77,16 @@ connector. It does not change the stdio sidecar above.
   grant is the authoritative kill.
 - **Operations:** a subset of the five v1 tools; default health and capture, retrieval once remote
   reads qualify, `ask` not granted.
-- Enabling it in any environment needs merged and verified implementation, qualified DEV/TEST
-  acceptance, and separate owner go-aheads for Funnel exposure, credentials and production.
+- **Remote reads:** only Markdown notes owned by the bound vault; no nested vault, hidden or system
+  content, and no absolute host path; search results, including titles, are filtered the same way.
+- **Writes:** no adapter retry; writes stay disabled unless qualification shows that
+  disconnect-after-write and restart cause no second append. Remote-mode logs carry operation,
+  outcome and trace identifier only.
+- Enabling it needs, in order: merged and verified implementation; the owner's Claude connector
+  confirmed on the tablet; qualified DEV/TEST acceptance with the real client; and a separate
+  production authorization. Turning Funnel on, issuing credentials and production each need the
+  owner's go-ahead at that time.
+- Normative detail is ADR-0070 §§1–6; where this summary is silent, the ADR governs.
 
 The v1 `tools/list` response declares advisory MCP annotations: `mimer.retrieve`, `mimer.read_note`,
 and `mimer.health` are `readOnlyHint: true`; `mimer.ask` (the runtime may append recall and synthesis
@@ -553,7 +561,7 @@ Answers per `docs/INTEGRATION_FABRIC_CONTRACT.md` §Contract fields.
 Named follow-on work; each routes through `feature-breakdown`/`docs-to-issue`, none blocks v1 clients operating under the postures above:
 
 - **F1 — Capture provenance field + per-agent actor.** The capture schema is `{text}` with `extra="forbid"`; the actor is hardcoded `companion.capture`, so a Claude-app capture and a Bifrost capture are indistinguishable in DecisionToken/AuthorityReceipt/event. Add an optional provenance object to the schema and thread it through the governed chain.
-- **F2 — Auth coverage + per-agent/per-device identity (first hardening slice).** Apply the existing `X-API-Key` machinery to the client-facing routes and introduce per-client identity/keys; serves both families (and Bifrost B1's remote posture). It is not a blocker for ADR-0061's stdio-only MCP v1 because no listener exists, but it is a mandatory precondition for any separately approved Streamable HTTP MCP transport.
+- **F2 — Auth coverage + per-agent/per-device identity (first hardening slice).** Apply the existing `X-API-Key` machinery to the client-facing routes and introduce per-client identity/keys; serves both families (and Bifrost B1's remote posture). It is not a blocker for ADR-0061's stdio-only MCP v1 because no listener exists, but it is a mandatory precondition for any separately approved Streamable HTTP MCP transport. For the ADR-0070 remote entrypoint only, the separate runtime ingress with loopback trust off and its remote-subject credential satisfies this precondition; F2 stays open for every other client.
 - **F3 — uuid-resolving note fetch or enriched search payload.** Close the §4.2 uuid→path gap at the API instead of by client-side filesystem enrichment.
 - **F4 — API versioning + published OpenAPI for the client surface.** The hub API is unversioned and `api/openapi.yaml` documents 2 of 23+ route modules (audit §3; the surface is still growing); a client-publishable contract needs both.
 - **F5 — Client-visible idempotency key on the *text* capture endpoint.** Still open for `POST /api/companion/capture`: no client-supplied key exists there, so a client must verify-by-read after `not_acknowledged`/timeout instead of retrying (§6 W5). **Delivered for the media lane** by #4384 / PR #4400: `POST /api/heimdal/capture/media` takes `(capture_id, content_sha256)` as its client-minted identity and answers a resend with the same `receipt_id` (§4.4), so that lane retries safely and needs no verify-by-read.
