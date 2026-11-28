@@ -646,23 +646,39 @@ def provision(
     return config, secret
 
 
+def _hand_over_secret(path: Path, secret: str) -> None:
+    """Write the client secret once to a new owner-only file (never stdout, logs, or argv).
+
+    The owner copies it into Claude's connector settings and deletes the file.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(secret + "\n")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.remote_mcp.oauth")
     sub = parser.add_subparsers(dest="command", required=True)
-    prov = sub.add_parser("provision", help="create the client; prints the client secret once")
+    prov = sub.add_parser("provision", help="create the client; writes the secret to --secret-out")
     prov.add_argument("--config", type=Path, required=True)
+    prov.add_argument("--secret-out", type=Path, required=True, help="new file, created 0600")
     for flag in ("--issuer", "--resource", "--authorization-origin", "--owner-login"):
         prov.add_argument(flag, required=True)
     prov.add_argument("--store-path", type=Path, required=True)
     prov.add_argument("--grant-path", type=Path, required=True)
     rotate = sub.add_parser(
-        "rotate-secret", help="replace the client secret; prints the new one once"
+        "rotate-secret", help="replace the client secret; writes it to --secret-out"
     )
     rotate.add_argument("--config", type=Path, required=True)
+    rotate.add_argument("--secret-out", type=Path, required=True, help="new file, created 0600")
     revoke = sub.add_parser("revoke-tokens", help="revoke every issued token")
     revoke.add_argument("--config", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
+        if args.command in {"provision", "rotate-secret"} and args.secret_out.exists():
+            raise ValueError("--secret-out must not exist")
         if args.command == "provision":
             config, secret = provision(
                 args.config,
@@ -673,7 +689,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 store_path=args.store_path,
                 grant_path=args.grant_path,
             )
-            print(json.dumps({"client_id": config.client_id, "client_secret": secret}))
+            _hand_over_secret(args.secret_out, secret)
+            print(
+                json.dumps(
+                    {"client_id": config.client_id, "client_secret_file": str(args.secret_out)}
+                )
+            )
         elif args.command == "rotate-secret":
             current = load_config(args.config)
             secret = secrets.token_urlsafe(32)
@@ -681,7 +702,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.config,
                 OAuthConfig(**{**current.__dict__, "client_secret_sha256": _sha256(secret)}),
             )
-            print(json.dumps({"client_id": current.client_id, "client_secret": secret}))
+            _hand_over_secret(args.secret_out, secret)
+            print(
+                json.dumps(
+                    {"client_id": current.client_id, "client_secret_file": str(args.secret_out)}
+                )
+            )
         else:
             revoked = OAuthStore(load_config(args.config).store_path).revoke_all()
             print(json.dumps({"revoked": revoked}))

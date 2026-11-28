@@ -531,10 +531,13 @@ def test_config_requires_a_separate_authorization_origin(tmp_path):
 
 def test_owner_cli_provisions_rotates_and_revokes(tmp_path, capsys, rig):
     path = tmp_path / "cli.json"
+    secret_file = tmp_path / "client-secret"
     args = [
         "provision",
         "--config",
         str(path),
+        "--secret-out",
+        str(secret_file),
         "--issuer",
         ISSUER,
         "--resource",
@@ -550,11 +553,21 @@ def test_owner_cli_provisions_rotates_and_revokes(tmp_path, capsys, rig):
     ]
     assert oauth_main(args) == 0
     issued = json.loads(capsys.readouterr().out)
-    assert issued["client_secret"] not in path.read_text()
+    secret = secret_file.read_text().strip()
+    assert secret and secret not in json.dumps(issued)
+    assert secret_file.stat().st_mode & 0o077 == 0
+    assert secret not in path.read_text()
     assert load_config(path).client_id == issued["client_id"]
-    assert oauth_main(["rotate-secret", "--config", str(path)]) == 0
-    rotated = json.loads(capsys.readouterr().out)
-    assert rotated["client_secret"] != issued["client_secret"]
+    # The secret file is never overwritten.
+    assert (
+        oauth_main(["rotate-secret", "--config", str(path), "--secret-out", str(secret_file)]) == 2
+    )
+    rotated_file = tmp_path / "client-secret-2"
+    assert (
+        oauth_main(["rotate-secret", "--config", str(path), "--secret-out", str(rotated_file)]) == 0
+    )
+    capsys.readouterr()
+    assert rotated_file.read_text().strip() != secret
 
     tokens = _tokens(rig)
     assert oauth_main(["revoke-tokens", "--config", str(rig.config_path)]) == 0
