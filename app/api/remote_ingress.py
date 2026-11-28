@@ -39,6 +39,10 @@ TOOL_ROUTES: dict[str, tuple[str, str]] = {
 }
 _CAPTURE_ROUTE = TOOL_ROUTES["mimer.capture"]
 
+#: ADR-0070 §3: the ingress derives the active context from the grant and *rejects* any
+#: carrier the entrypoint sends, rather than silently ignoring it.
+_CARRIER_HEADERS = frozenset({b"x-active-context-session", b"x-active-context-override"})
+
 _DROPPED_HEADERS = frozenset(
     {
         b"x-forwarded-for",
@@ -65,7 +69,10 @@ async def _send_json(send: Send, status: int, detail: str) -> None:
         {
             "type": "http.response.start",
             "status": status,
-            "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())],
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
         }
     )
     await send({"type": "http.response.body", "body": body})
@@ -87,13 +94,24 @@ class RemoteIngress:
             return
 
         headers = scope.get("headers") or []
-        presented = next((value.decode("latin-1") for name, value in headers if name.lower() == CREDENTIAL_HEADER), None)
+        presented = next(
+            (
+                value.decode("latin-1")
+                for name, value in headers
+                if name.lower() == CREDENTIAL_HEADER
+            ),
+            None,
+        )
         route = (scope["method"], scope["path"])
         try:
             grant = admit(self._grant_path, presented)
         except GrantRefused as refused:
             _LOG.warning("remote_ingress_refused reason=%s", refused.reason)
             await _send_json(send, refused.status_code, refused.reason)
+            return
+        if any(name.lower() in _CARRIER_HEADERS for name, _ in headers):
+            _LOG.warning("remote_ingress_refused reason=remote_context_carrier_rejected")
+            await _send_json(send, 403, "remote_context_carrier_rejected")
             return
         if route not in {TOOL_ROUTES[tool] for tool in grant.tools}:
             _LOG.warning("remote_ingress_refused reason=remote_route_not_granted")
@@ -109,15 +127,18 @@ class RemoteIngress:
             if isinstance(pinned, tuple):
                 await _send_json(send, *pinned)
                 return
-            inner["headers"] = [(n, v) for n, v in inner["headers"] if n.lower() != b"content-length"]
+            inner["headers"] = [
+                (n, v)
+                for n, v in inner["headers"]
+                if n.lower() not in {b"content-length", b"content-type"}
+            ]
+            inner["headers"].append((b"content-type", b"application/json"))
             inner["headers"].append((b"content-length", str(len(pinned)).encode()))
             receive = _replay(pinned)
         await self._app(inner, receive, send)
 
     @staticmethod
-    async def _pinned_capture_body(
-        receive: Receive, grant: RemoteGrant
-    ) -> bytes | tuple[int, str]:
+    async def _pinned_capture_body(receive: Receive, grant: RemoteGrant) -> bytes | tuple[int, str]:
         chunks: list[bytes] = []
         size = 0
         while True:

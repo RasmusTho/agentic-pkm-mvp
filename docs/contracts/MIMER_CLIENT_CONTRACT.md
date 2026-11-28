@@ -87,6 +87,22 @@ connector. It does not change the stdio sidecar above.
   production authorization. Turning Funnel on, issuing credentials and production each need the
   owner's go-ahead at that time.
 - Normative detail is ADR-0070 §§1–6; where this summary is silent, the ADR governs.
+- **Implementation state (#6668, source only):** health and capture are implemented and not
+  enabled. The pieces are:
+  - **Runtime ingress:** `app/api/remote_ingress.py`, with the host grant in `app/remote_mcp/grant.py`.
+  - **OAuth server:** `app/remote_mcp/oauth.py` and `oauth_http.py`. The public surface serves
+    metadata and the token endpoint. The tailnet surface serves authorize and consent, gated on owner
+    identity, Host and Origin.
+  - **Entrypoint:** `app/remote_mcp/entrypoint.py`. It puts a bearer gate in front of a stateless
+    Streamable HTTP endpoint that uses the SDK's DNS-rebinding protection. It reaches the runtime only
+    through the ingress Unix socket and refuses any TCP API address.
+  - **Owner tooling:** owner CLIs issue and revoke the grant and provision the client, writing secrets
+    to owner-only files.
+
+  Retrieval and `read_note` are not implemented for remote use. Nothing is provisioned, deployed or
+  exposed. DEV/TEST qualification (#6669) still has to show that Serve preserves `Host`, that the
+  Unix-socket backends work, that a real browser can submit consent, and that Claude completes the
+  flow. Review findings deferred from this work are in Known Defects #4172.
 
 The v1 `tools/list` response declares advisory MCP annotations: `mimer.retrieve`, `mimer.read_note`,
 and `mimer.health` are `readOnlyHint: true`; `mimer.ask` (the runtime may append recall and synthesis

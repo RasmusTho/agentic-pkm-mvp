@@ -13,7 +13,14 @@ from starlette.requests import Request
 
 from app.api.app import app
 from app.auth import SUBJECT_REMOTE_MCP_GRANT, require_loopback_or_api_key
-from app.remote_mcp.grant import GrantRefused, admit, issue_grant, load_grant, main as grant_main, revoke_grant
+from app.remote_mcp.grant import (
+    GrantRefused,
+    admit,
+    issue_grant,
+    load_grant,
+    main as grant_main,
+    revoke_grant,
+)
 from app.api.remote_ingress import CREDENTIAL_HEADER, RemoteIngress
 from tests.api.test_multi_vault_governed_writes import setup_capture
 
@@ -35,14 +42,14 @@ def test_remote_capture_is_pinned_to_the_grant_binding_and_attributed(tmp_path, 
     runtime, first, other, local, carrier = setup_capture(tmp_path, monkeypatch)
     remote, _path, credential = _remote(tmp_path, other.vault_binding_id)
 
-    # A carrier for `first`, a forged loopback forward, an API key and Tailscale
-    # identity headers are all dropped: the grant alone decides the binding.
+    # A forged loopback forward, an API key and Tailscale identity headers are
+    # dropped, and a non-JSON content type is normalised: the grant alone decides.
     response = remote.post(
         "/api/companion/capture/scoped",
-        json={"text": "Remote boiler note"},
+        content=json.dumps({"text": "Remote boiler note"}),
         headers={
             _CRED: credential,
-            **carrier,
+            "Content-Type": "text/plain",
             "X-Forwarded-For": "127.0.0.1",
             "X-API-Key": "anything",
             "Tailscale-User-Login": "owner@example.invalid",
@@ -58,6 +65,21 @@ def test_remote_capture_is_pinned_to_the_grant_binding_and_attributed(tmp_path, 
     assert context["selection_provenance"] == "remote_grant"
     assert context["principal_context"]["subject"] == SUBJECT_REMOTE_MCP_GRANT
     assert receipt["actor"] == "companion.capture"
+
+
+def test_a_context_carrier_is_rejected_not_ignored(tmp_path, monkeypatch):
+    _runtime, first, other, _local, carrier = setup_capture(tmp_path, monkeypatch)
+    remote, _path, credential = _remote(tmp_path, other.vault_binding_id)
+    response = remote.post(
+        "/api/companion/capture/scoped",
+        json={"text": "Carried"},
+        headers={_CRED: credential, **carrier},
+    )
+    assert (response.status_code, response.json()["detail"]) == (
+        403,
+        "remote_context_carrier_rejected",
+    )
+    assert "Carried" not in _inbox(first) + _inbox(other)
 
 
 def test_remote_capture_cannot_name_another_binding(tmp_path, monkeypatch):
@@ -86,7 +108,9 @@ def test_remote_capture_cannot_name_another_binding(tmp_path, monkeypatch):
         ("corrupt", "ok", 503, "remote_grant_unavailable"),
     ],
 )
-def test_refused_remote_requests_never_reach_a_route(tmp_path, monkeypatch, mutate, presented, status, reason):
+def test_refused_remote_requests_never_reach_a_route(
+    tmp_path, monkeypatch, mutate, presented, status, reason
+):
     _runtime, first, other, _local, _carrier = setup_capture(tmp_path, monkeypatch)
     remote, path, credential = _remote(tmp_path, other.vault_binding_id)
     if mutate == "revoke":
@@ -137,7 +161,9 @@ def test_only_granted_routes_are_reachable(tmp_path, monkeypatch, method, route)
 def test_an_ungranted_tool_route_is_refused(tmp_path, monkeypatch):
     _runtime, first, other, _local, _carrier = setup_capture(tmp_path, monkeypatch)
     remote, _path, credential = _remote(tmp_path, other.vault_binding_id, tools=("mimer.health",))
-    response = remote.post("/api/companion/capture/scoped", json={"text": "Not granted"}, headers={_CRED: credential})
+    response = remote.post(
+        "/api/companion/capture/scoped", json={"text": "Not granted"}, headers={_CRED: credential}
+    )
     assert response.status_code == 404
     assert "Not granted" not in _inbox(first) + _inbox(other)
 
@@ -152,7 +178,14 @@ def test_oversized_capture_is_refused(tmp_path, monkeypatch):
 
 
 def test_loopback_gated_dependency_refuses_the_remote_subject():
-    request = Request({"type": "http", "headers": [], "client": ("127.0.0.1", 1), "state": {"mimer_remote_grant": object()}})
+    request = Request(
+        {
+            "type": "http",
+            "headers": [],
+            "client": ("127.0.0.1", 1),
+            "state": {"mimer_remote_grant": object()},
+        }
+    )
     with pytest.raises(HTTPException) as refused:
         require_loopback_or_api_key(request, api_key=None)
     assert refused.value.status_code == 403
@@ -160,13 +193,33 @@ def test_loopback_gated_dependency_refuses_the_remote_subject():
 
 def test_grant_file_lifecycle(tmp_path, capsys):
     path = tmp_path / "grant.json"
-    assert grant_main(["issue", "--path", str(path), "--vault-binding-id", "b1", "--tool", "mimer.capture", "--days", "7"]) == 0
+    assert (
+        grant_main(
+            [
+                "issue",
+                "--path",
+                str(path),
+                "--vault-binding-id",
+                "b1",
+                "--tool",
+                "mimer.capture",
+                "--days",
+                "7",
+            ]
+        )
+        == 0
+    )
     issued = json.loads(capsys.readouterr().out)
     assert path.stat().st_mode & 0o077 == 0
     assert issued["credential"] not in path.read_text()
     assert admit(path, issued["credential"]).vault_binding_id == "b1"
     assert load_grant(path).tools == frozenset({"mimer.capture"})
-    assert grant_main(["issue", "--path", str(path), "--vault-binding-id", "b1", "--tool", "mimer.ask"]) == 2
+    assert (
+        grant_main(
+            ["issue", "--path", str(path), "--vault-binding-id", "b1", "--tool", "mimer.ask"]
+        )
+        == 2
+    )
     assert grant_main(["revoke", "--path", str(path)]) == 0
     with pytest.raises(GrantRefused):
         admit(path, issued["credential"])

@@ -245,6 +245,7 @@ def test_mimer_mcp_adapter_selects_semantic_and_existing_http_contract_tests() -
         "tests/architecture/test_mimer_mcp_sidecar_isolation.py",
         "tests/architecture/test_requirements_consistency.py",
         "tests/remote_mcp",
+        "tests/mcp/test_remote_mimer_client.py",
         "tests/api/test_ask_contract.py",
         "tests/api/test_capture_inbox_api.py",
         "tests/api/test_search_canonical_substrate.py",

@@ -126,6 +126,12 @@ async def _read_form(request: Request) -> dict[str, list[str]]:
 
 
 def public_app(server: AuthorizationServer) -> Starlette:
+    return Starlette(routes=public_routes(server))
+
+
+def public_routes(server: AuthorizationServer) -> list[Route]:
+    """Discovery metadata and the token endpoint (the MCP path is added by the entrypoint)."""
+
     rate = {"metadata": SlidingWindow(PUBLIC_RATE_PER_MINUTE, 60)}
     unauthenticated = SlidingWindow(PUBLIC_RATE_PER_MINUTE, 60)
     grant_failures = SlidingWindow(FAILED_TOKEN_ATTEMPTS_CAP, FAILED_TOKEN_WINDOW_SECONDS)
@@ -174,19 +180,15 @@ def public_app(server: AuthorizationServer) -> Starlette:
         _log("token", "issued")
         return JSONResponse(issued, headers=_NO_STORE)
 
-    return Starlette(
-        routes=[
-            Route("/.well-known/oauth-protected-resource", limited("metadata", protected_resource)),
-            Route(
-                "/.well-known/oauth-protected-resource/{rest:path}",
-                limited("metadata", protected_resource),
-            ),
-            Route(
-                "/.well-known/oauth-authorization-server", limited("metadata", authorization_server)
-            ),
-            Route("/oauth/token", token, methods=["POST"]),
-        ]
-    )
+    return [
+        Route("/.well-known/oauth-protected-resource", limited("metadata", protected_resource)),
+        Route(
+            "/.well-known/oauth-protected-resource/{rest:path}",
+            limited("metadata", protected_resource),
+        ),
+        Route("/.well-known/oauth-authorization-server", limited("metadata", authorization_server)),
+        Route("/oauth/token", token, methods=["POST"]),
+    ]
 
 
 def owner_identity(request: Request, owner_login: str, authorization_origin: str) -> str | None:
@@ -355,4 +357,4 @@ if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
 
 
-__all__ = ["SlidingWindow", "owner_identity", "public_app", "tailnet_app"]
+__all__ = ["SlidingWindow", "owner_identity", "public_app", "public_routes", "tailnet_app"]
