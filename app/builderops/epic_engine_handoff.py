@@ -126,6 +126,7 @@ def _prompt(layout: ew.Layout, worker: str, handoff: Mapping[str, Any]) -> str:
 def _confirmed_quota(status: Mapping[str, Any], conversation: Mapping[str, Any]) -> bool:
     settings = status.get("agent_settings")
     return (conversation.get("engine") == "claude-code" and conversation.get("status") == "created"
+            and conversation.get("selection_policy") != "catalog"
             and status.get("reachable") is True and status.get("events_reachable") is True
             and status.get("failure_class") == "quota_exhausted" and status.get("failure_current") is True
             and str(status.get("execution_status") or "").lower() in {"idle", "finished", "error", "stuck"}

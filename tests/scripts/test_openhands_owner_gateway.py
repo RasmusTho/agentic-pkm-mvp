@@ -1,6 +1,7 @@
 """Exercise real HTTP admission and proxying without a tailnet or credentials."""
 import http.client
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -10,6 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+
+from app.builderops import openhands_owner_access as owner
 
 _GATEWAY_STARTUP_DEADLINE_SECONDS = 15.0
 _GATEWAY_PROBE_TIMEOUT_SECONDS = 3.0
@@ -340,49 +343,81 @@ def test_missing_identity_configuration_refuses():
 
 
 @pytest.mark.parametrize("state", ["ended_with_container", "creating", "unknown", "created"])
-@pytest.mark.parametrize("model,effort", [("gpt-6.1-terra", None), ("gpt-6.1-sol", "high")])
-def test_endpoint_holder_generation_and_loss(tmp_path, state, model, effort):
+@pytest.mark.parametrize("engine,model,effort,selector,live,catalog,changed_session", [
+    ("codex", "gpt-6.1-terra", None, None, None, False, False),
+    ("codex", "gpt-6.1-sol", "high", None, None, False, False),
+    ("codex", "gpt-6.1-terra", "high", None, None, True, True),
+    ("claude-code", "claude-sonnet-6-2", None, None, None, True, False),
+    ("claude-code", "claude-sonnet-6-2", None, None, None, True, True),
+    ("claude-code", "claude-sonnet-5-5", None, "sonnet", "sonnet", True, False),
+    ("claude-code", "claude-sonnet-5-5", None, "sonnet", "default", True, False),
+])
+def test_endpoint_holder_generation_and_loss(tmp_path, monkeypatch, state, engine, model, effort, selector, live,
+                                             catalog, changed_session):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is required")
-    # The existing controller guard is separately qualified. This fixture exercises the real
-    # gateway's child/pipe/generation/loss boundary with only that guard's engine substituted.
-    package = tmp_path / "app/builderops"
-    package.mkdir(parents=True)
-    (tmp_path / "app/__init__.py").touch()
-    (package / "__init__.py").touch()
-    (package / "epic_workspace.py").write_text('''import contextlib,json,os,subprocess
+    # The gateway launches the real controller checks in a child. Substitute only the
+    # controller's local state and external auth/endpoint effects.
+    (tmp_path / "sitecustomize.py").write_text('''import contextlib,json,os
 from pathlib import Path
-class Layout:
- def __init__(self,root,epic):self.root=root
-def _load_state(l):return json.loads((l.root/'state.json').read_text())
-def resolve_engine(engine,model):
- if engine!='codex' or model not in ('gpt-6.1-terra','gpt-6.1-sol'):raise ValueError('model')
- return engine,model
-def resolve_effort(engine,model,effort):
- if model=='gpt-6.1-sol' and effort!='high':raise ValueError('effort')
-def _conversation_bound(info,*args):return True
-def verify_codex_subscription(*args):pass
-def _http(method,port,key,path,body,timeout):
- c=json.loads((Path(__file__).parents[2]/'state.json').read_text())['issue_mappings']['6630']['conversation']
- return 200,{'agent':{'kind':'ACPAgent','acp_server':'codex','acp_model':c['model'],'acp_effort':c.get('effort')},'current_model_id':c['model'],'current_effort':c.get('effort')}
+from app.builderops import epic_workspace as e
+
+def load(l):
+ return json.loads((l.root/'state.json').read_text())
+def http(method,port,key,path,body,timeout):
+ root=Path(__file__).parent
+ if path.startswith('/agent-profiles/'):
+  (root/'profile-engaged').touch()
+  raise AssertionError('profile reached before proof')
+ state=load(e.Layout(root,6630))
+ c=state['issue_mappings']['6630']['conversation']
+ selector=c.get('acp_selector',c['model'])
+ live=state.get('live') or selector
+ return 200,{'id':c['id'],'workspace':{'working_dir':'/workspace'},
+             'tags':{'epic':'6630','issue':'6630','worker':'owner-sandbox'},
+             'agent':{'kind':'ACPAgent','acp_server':c['engine'],'acp_model':selector,
+                      'acp_command':[e._INSTALLED_ACP[c['engine']]],'acp_effort':c.get('effort')},
+             'current_model_id':live,'current_effort':c.get('effort'),
+             'agent_state':{'acp_session_id':state['session'],'acp_session_cwd':'/workspace',
+                            'acp_current_model_id':live}}
 @contextlib.contextmanager
-def _endpoint_session(l,*args):
+def endpoint(l,*args):
  (l.root/'holder.pid').write_text(str(os.getpid()))
  yield 18840,'synthetic-private-key'
+e._load_state=load
+e._http=http
+e._endpoint_session=endpoint
+e.verify_codex_subscription=e.verify_claude_subscription=lambda *args:None
 ''')
-    (tmp_path / "state.json").write_text(json.dumps({"issue_mappings": {"6630": {
-        "worker": "owner-sandbox", "conversation": {"id": "12345678-1234-1234-1234-123456789abc",
-        "engine": "codex", "model": model, "effort": effort, "status": state}}}}))
+    cid = "12345678-1234-1234-1234-123456789abc"
+    conversation = {"id": cid, "engine": engine, "model": model, "effort": effort, "status": state}
+    if catalog:
+        conversation.update(selection_policy="catalog", selection_proof={"conversation_id": cid, "engine": engine,
+                            "model": model, "effort": effort, "session_id": "fixture-session"})
+    if selector:
+        conversation["acp_selector"] = selector
+        conversation["selection_proof"]["acp_selector"] = selector
+    session = "replacement-session" if changed_session else "fixture-session"
+    (tmp_path / "state.json").write_text(json.dumps({"live": live, "session": session, "issue_mappings": {"6630": {
+        "worker": "owner-sandbox", "conversation": conversation}}}))
     script = Path(__file__).resolve().parents[2] / "scripts/openhands_owner_gateway.mjs"
     config = {"sandbox": True, "runner": str(tmp_path), "root": str(tmp_path), "sandboxEpic": 6630}
     code = "import {endpoint} from " + json.dumps(script.as_uri()) + ";import {readFileSync} from 'node:fs';"
     code += "const config=" + json.dumps(config) + ";"
-    if state != "created":
+    if state != "created" or live != selector or changed_session:
         code += "try{await endpoint(config);process.exit(1)}catch{}"
     else:
         code += ("const binding=await endpoint(config);"
                  "await new Promise(resolve=>{binding.onLost(resolve);"
                  "process.kill(Number(readFileSync(config.root+'/holder.pid','utf8')),'SIGTERM')});"
                  "binding.release();binding.release();")
-    subprocess.run([node, "--input-type=module", "-e", code], check=True, timeout=15, capture_output=True)
+    fixture_path = os.pathsep.join((str(tmp_path), str(script.parents[1])))
+    subprocess.run([node, "--input-type=module", "-e", code], check=True, timeout=15, capture_output=True,
+                   env={**os.environ, "PYTHONPATH": fixture_path})
+    if state == "created" and changed_session:
+        monkeypatch.setenv("PYTHONPATH", fixture_path)
+        with pytest.raises(owner.OwnerAccessError, match="ACP profile is not verified"):
+            owner._sandbox_profile({"runner": str(tmp_path), "root": str(tmp_path), "sandbox_epic": 6630},
+                                   engine, model, effort)
+        assert not (tmp_path / "profile-engaged").exists()

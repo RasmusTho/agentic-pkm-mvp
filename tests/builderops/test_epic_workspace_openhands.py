@@ -114,7 +114,8 @@ def test_one_writer_per_worker_and_unknown_creates_are_never_repeated(tmp_path, 
     assert posts() == []
 
     capsys.readouterr()
-    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt),
+                 "--model", "claude-sonnet-5-5") == 0
     first = json.loads(capsys.readouterr().out)
     assert posts()[0][3]["agent_settings"] == {"agent_kind": "acp", "acp_server": "claude-code", "acp_model": "claude-sonnet-5-5"}
     assert posts()[0][3]["tags"] == {"epic": "6615", "issue": "6617", "worker": "w-a"}
@@ -133,7 +134,8 @@ def test_one_writer_per_worker_and_unknown_creates_are_never_repeated(tmp_path, 
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
     server.lose_next_create = True  # applied by the server, response lost
     capsys.readouterr()
-    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex", "--prompt-file", str(prompt)) == 0
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex",
+                 "--model", "gpt-6.1-terra", "--prompt-file", str(prompt)) == 0
     second = json.loads(capsys.readouterr().out)
     assert second["status"] == "created" and second["model"] == "gpt-6.1-terra" and len(posts()) == 2
     mapping = ew._load_state(layout)["issue_mappings"]["6617"]
@@ -145,7 +147,8 @@ def test_one_writer_per_worker_and_unknown_creates_are_never_repeated(tmp_path, 
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
     server.lose_next_create, server.create_not_applied = True, True
     capsys.readouterr()
-    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt),
+                 "--model", "claude-sonnet-5-5") == 0
     assert json.loads(capsys.readouterr().out)["status"] == "unknown"
     assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 2
     assert _main(root, engine, server, "conversation-reconcile", "--worker", "w-a") == 0
@@ -183,7 +186,8 @@ def test_failure_classes_are_distinct_and_status_reports_them(tmp_path, capsys):
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
     prompt = tmp_path / "p.md"
     prompt.write_text("x")
-    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt),
+                 "--model", "claude-sonnet-5-5") == 0
     server.events = [
         {"kind": "MessageEvent", "source": "user"},
         {"kind": "AgentErrorEvent", "error": "Claude AI usage limit reached"},  # tool-level: never classified
@@ -215,7 +219,8 @@ def test_status_uses_latest_page_and_newest_error_and_message(tmp_path, capsys):
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
     prompt = tmp_path / "p.md"
     prompt.write_text("x")
-    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt),
+                 "--model", "claude-sonnet-5-5") == 0
     quota = "You've hit your weekly limit · resets 2am (UTC)"
     server.events = (
         [{"kind": "MessageEvent", "source": "user", "detail": "old"} for _ in range(55)]
@@ -274,7 +279,8 @@ def test_late_create_response_cannot_replace_a_newer_stop_record(tmp_path, capsy
             ew._record_worker(layout, 6617, state="stopped_verified", conversation={**record, "status": ew.CONVERSATION_ENDED})
         return response
     capsys.readouterr()
-    assert ew.main(["--root", str(root), "--epic", "6615", "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)],
+    assert ew.main(["--root", str(root), "--epic", "6615", "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt),
+                    "--model", "claude-sonnet-5-5"],
                    runner=engine, http=changed_during_post) == 0
     result = json.loads(capsys.readouterr().out)
     saved = ew._load_state(layout)["issue_mappings"]["6617"]

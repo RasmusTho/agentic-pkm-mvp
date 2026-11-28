@@ -48,13 +48,9 @@ class VerifyReadbackPending(CycleError):
 
 
 CONTAINER_TEST_VENV = "/opt/pr-cycle-venv"
-CODEX_CLI = "/acp-node/lib/node_modules/@agentclientprotocol/codex-acp/node_modules/@openai/codex/bin/codex.js"
+CODEX_CLI = workspace.CODEX_CLI
 _worker_runner: workspace.Runner = subprocess.run
-CLAUDE_STATUS = (
-    "import glob,os; p=glob.glob('/acp-node/lib/node_modules/@agentclientprotocol/claude-agent-acp/"
-    "node_modules/@anthropic-ai/claude-agent-sdk-*/claude'); "
-    "assert len(p)==1; os.execv(p[0],[p[0],'auth','status','--json'])"
-)
+CLAUDE_STATUS = workspace.CLAUDE_STATUS
 
 
 class _LifecycleDispatcherExecutor:
@@ -2238,6 +2234,7 @@ def _add_transfer_review_context(layout: workspace.Layout, entry: Mapping[str, A
 # against the same tables, so producer and consumer cannot drift. A report without report_contract is
 # the legacy v1 shape; it is accepted only when it has nothing to classify.
 REPORT_CONTRACT = "pr_cycle_report.v2"
+_CORRECTION_QUOTA_HOLD = "report correction quota handoff would change the archived review selection"
 # Protected classes from verification-and-closure FULL_PATH :: Severity routing. They block at any severity.
 PROTECTED_CLASSES = {
     "data_integrity": "data loss or corruption",
@@ -2811,7 +2808,11 @@ def _workflow_review_gate(layout: workspace.Layout, pr: Mapping[str, Any], entry
     if (disposition is not None or reconciliation is not None or not isinstance(review, dict)
             or review.get("report_contract") != REPORT_CONTRACT or review.get("findings") != []
             or _review_gate(review, expected)["outcome"] != "pass"):
-        return review_gate(review, expected, disposition=disposition, reconciliation=reconciliation)
+        gate = review_gate(review, expected, disposition=disposition, reconciliation=reconciliation)
+        if reconciliation is not None and gate["outcome"] == "pass":
+            _reconciliation_model(entry, _mapping(layout, entry["worker"]), reconciliation,
+                                  saved["identity"], pr["head_sha"])
+        return gate
     items = _report_items(review)
     scope = resolve_native_issue_authority(pr["body"])
     routine = {"evidence_not_rerun", "ci_not_observed", "simulated_boundary"}
@@ -3258,16 +3259,21 @@ def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: 
     record = mapping.get("conversation")
     image = mapping.get("image")
     credentials = mapping.get("credentials")
-    engine, model = workspace.resolve_engine(admission["engine"], admission["model"])
-    effort = workspace.resolve_effort(engine, model, admission.get("effort"))
+    selection = _retained_model(admission, record, operation_id)
+    if selection.get("model") is None:
+        raise CycleError("native execution has no resolved model for this operation")
+    engine, model = workspace.resolve_engine(selection["engine"], selection["model"])
+    effort = workspace.resolve_effort(engine, model, selection.get("effort"))
     if (not isinstance(record, dict) or record.get("operation_id") != operation_id
             or record.get("engine") != engine or record.get("model") != model
+            or (record.get("selection_policy") == "catalog" and record.get("status") != "created")
             or (effort is not None and record.get("effort") != effort)
             or not isinstance(credentials, dict)
             or (engine == "codex" and credentials.get("codex") != "chatgpt-login-dir")
             or (engine == "claude-code" and credentials.get("claude") != "oauth-token-env")
             or not isinstance(image, str) or not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image)):
         raise CycleError("native execution configuration is not admitted")
+    selector = workspace.conversation_acp_selector(record)
     ident = mapping["container_id"]
     container = _command(["docker", "inspect", ident], timeout=15)
     pinned = _command(["docker", "image", "inspect", image], timeout=15)
@@ -3328,13 +3334,14 @@ def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: 
     kinds = status.get("event_kinds")
     if (code != 200 or not isinstance(info, dict) or str(info.get("id")) != cid
             or not isinstance(agent, dict) or agent.get("kind") != "ACPAgent"
-            or agent.get("acp_server") != engine or agent.get("acp_model") != model
-            or info.get("current_model_id") != model
+            or agent.get("acp_server") != engine or agent.get("acp_model") != selector
+            or info.get("current_model_id") != selector
             or (effort is not None and (agent.get("acp_effort") != effort or info.get("current_effort") != effort))
-            or not isinstance(info.get("current_effort"), str)
-            or not isinstance(info.get("available_efforts"), list)
-            or not any(isinstance(e, dict) and e.get("value") == info["current_effort"]
-                       for e in info["available_efforts"])
+            or ((engine == "codex" or record.get("selection_policy") != "catalog") and (
+                not isinstance(info.get("current_effort"), str)
+                or not isinstance(info.get("available_efforts"), list)
+                or not any(isinstance(e, dict) and e.get("value") == info["current_effort"]
+                           for e in info["available_efforts"])))
             or status.get("reachable") is not True or status.get("events_reachable") is not True
             or status.get("execution_status") not in ("finished", "FINISHED")
             or status.get("errors") or not isinstance(kinds, list)
@@ -3357,11 +3364,20 @@ def native_execution_proof(layout: workspace.Layout, worker: str, operation_id: 
                     or evidence.get("effort") not in ("high", "xhigh", "max", "ultra")))
                 or (engine == "claude-code" and evidence.get("effort") is not None)):
             raise CycleError("native execution metadata does not match selected model or effort")
-    except ValueError as exc:
+        if record.get("selection_policy") == "catalog" or "acp_selector" in record:
+            probe = record.get("selection_proof")
+            if (not isinstance(probe, dict) or not workspace.selection_proof_matches(record, info)
+                    or probe.get("effort") != evidence["effort"] or not isinstance(probe.get("timestamp"), str)
+                    or datetime.fromisoformat(evidence["timestamp"].replace("Z", "+00:00"))
+                    <= datetime.fromisoformat(probe["timestamp"].replace("Z", "+00:00"))):
+                raise CycleError("productive native execution is not established after model qualification")
+    except (ValueError, TypeError) as exc:
         raise CycleError("native execution metadata is unreadable") from exc
     return {"conversation_id": cid, "native_session_id": evidence["session_id"],
             "operation_id": operation_id, "container_id": ident, "image": image,
             "engine": engine, "model": evidence["model"], "effort": evidence["effort"],
+            **({"acp_selector": selector} if selector != model else {}),
+            **({"selection_policy": "catalog"} if record.get("selection_policy") == "catalog" else {}),
             "timestamp": evidence["timestamp"],
             "auth": "chatgpt" if engine == "codex" else "claude-subscription",
             "source": "native-session-metadata"}
@@ -3406,7 +3422,8 @@ def _resume_review_worker(layout: workspace.Layout, worker: str, pr: Mapping[str
     prior = mapping.get("conversation")
     if prior is not None and (not isinstance(prior, Mapping) or prior.get("status") != workspace.CONVERSATION_ENDED):
         raise CycleError("previous conversation is not proven ended")
-    if isinstance(prior, Mapping) and any(prior.get(key) != entry.get(key) for key in ("engine", "model", "effort")):
+    if isinstance(prior, Mapping) and (prior.get("engine") != entry.get("engine")
+            or (entry.get("model") is not None and any(prior.get(key) != entry.get(key) for key in ("model", "effort")))):
         raise CycleError("stopped review engine, model or effort changed")
     _assert_repair_publications_settled(mapping)
     authority = native_authority(layout, pr, entry, purpose="admission")
@@ -3468,6 +3485,14 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
     if expected_owner_binding is not None and (set(expected_owner_binding) != {"lifecycle_owner", "owner", "builder_session"}
             or any(mapping.get(key) != value for key, value in expected_owner_binding.items())):
         raise CycleError("review worker owner or Builder session changed")
+    if reconciliation is not None:
+        if reconciliation.get("operation") != operation_id:
+            raise CycleError("report correction operation does not bind the reservation")
+        admission = _reconciliation_model(admission, mapping, reconciliation, identity, pr["head_sha"])
+        handoff = mapping.get("engine_handoff")
+        if (isinstance(handoff, Mapping) and handoff.get("operation_id") == operation_id
+                and handoff.get("status") in ("pending", "awaiting_pr_cycle")):
+            raise CycleError(_CORRECTION_QUOTA_HOLD)
     if mapping.get("state") == "stopped_verified":
         if reconciliation is not None and not isinstance(mapping.get("auth_paths"), dict):
             raise CycleError(f"report reconciliation {operation_id} is reserved; retained auth paths unavailable; "
@@ -3484,7 +3509,8 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
     handoff = mapping.get("engine_handoff")
     if (isinstance(handoff, Mapping) and handoff.get("status") == "awaiting_pr_cycle"
             and handoff.get("operation_id") == operation_id):
-        admission = {**admission, "engine": "codex", "model": "gpt-6.1-terra"}
+        admission = {**admission, "engine": "codex", "model": "gpt-6.1-terra", "effort": None,
+                     "_qualify_selection": False}
     if isinstance(prior, dict) and prior.get("operation_id") == operation_id:
         if expected_owner_binding is not None and prior.get("owner_binding") != dict(expected_owner_binding):
             raise CycleError("review conversation owner binding changed")
@@ -3516,8 +3542,9 @@ def start_or_reconcile_review(layout: workspace.Layout, worker: str, operation_i
         prompt = ("Compact controller records for this same review (unknown means not established):\n"
                   + json.dumps(context, ensure_ascii=True, sort_keys=True, default=str) + "\n\n" + prompt)
     return workspace._start_conversation_locked(
-        layout, worker, engine=admission["engine"], model=admission["model"],
+        layout, worker, engine=admission["engine"], model=admission.get("model"),
         effort=admission.get("effort"), prompt=prompt,
+        qualify_selection=admission.get("_qualify_selection") is True,
         operation_id=operation_id,
         expected_owner_binding=expected_owner_binding,
         http=http, runner=_worker_runner)
@@ -3580,6 +3607,7 @@ def review_result(layout: workspace.Layout, worker: str, operation_id: str,
             status = workspace.conversation_status(layout, worker, http=http, runner=_worker_runner, include_messages=False)
             conversation = status.get("conversation")
             if (not isinstance(conversation, dict) or conversation.get("operation_id") != operation_id
+                    or (conversation.get("selection_policy") == "catalog" and conversation.get("status") != "created")
                     or status.get("reachable") is not True or status.get("execution_status") not in ("finished", "FINISHED")
                     or status.get("errors")):
                 return None
@@ -3592,6 +3620,8 @@ def review_result(layout: workspace.Layout, worker: str, operation_id: str,
                 return None
             code, final = http("GET", port, key, f"/conversations/{cid}/agent_final_response", None, 10.0)
             text = final.get("response") if code == 200 and isinstance(final, dict) else None
+            if conversation.get("selection_policy") == "catalog" and isinstance(text, str) and text.strip() == workspace.MODEL_PROBE_REPLY:
+                return None
             if include_raw:
                 if not isinstance(text, str) or len(text.encode("utf-8")) > 65536:
                     raise CycleError("finished candidate review response unavailable or exceeds the bound")
@@ -3613,6 +3643,49 @@ def review_result(layout: workspace.Layout, worker: str, operation_id: str,
     return result
 
 
+def _retained_model(entry: Mapping[str, Any], record: Any, operation: Any) -> dict[str, Any]:
+    """Bind a default admission to the exact selection saved for this operation."""
+    if (entry.get("model") is not None or not isinstance(record, Mapping) or not isinstance(operation, str)
+            or record.get("operation_id") != operation):
+        return dict(entry)
+    model = record.get("model")
+    if record.get("engine") != entry["engine"] or not isinstance(model, str):
+        raise CycleError("retained operation does not match the admitted engine or exact model")
+    engine, model = workspace.resolve_engine(entry["engine"], model)
+    effort = workspace.resolve_effort(engine, model, record.get("effort"))
+    # Catalog pins must be requalified even when the exact ID has a legacy route.
+    selector = workspace.conversation_acp_selector(record)
+    return {**entry, "model": model, "effort": effort,
+            **({"_qualify_selection": True} if record.get("selection_policy") == "catalog" or selector != model else {})}
+
+
+def _review_model(entry: Mapping[str, Any], mapping: Mapping[str, Any], saved: Mapping[str, Any]) -> dict[str, Any]:
+    operation = saved.get("review_operation")
+    selected = _retained_model(entry, mapping.get("conversation"), operation)
+    if selected.get("model") is None:
+        history = mapping.get("conversation_history", [])
+        matches = [r for r in history if isinstance(r, Mapping) and r.get("operation_id") == operation] if isinstance(history, list) and operation else []
+        if len(matches) > 1:
+            raise CycleError("retained review operation has ambiguous model selection")
+        if matches:
+            return _retained_model(entry, matches[0], operation)
+    return selected
+
+
+def _candidate_model(entry: Mapping[str, Any], saved: Mapping[str, Any]) -> dict[str, Any]:
+    """Use the stopped author's proved selection for this candidate and its continuations."""
+    if entry.get("model") is not None:
+        return dict(entry)
+    operation = saved.get("repair_operation")
+    proof = saved.get("repair_execution_proof")
+    if (not isinstance(operation, str) or not isinstance(proof, Mapping)
+            or proof.get("source") != "native-session-metadata" or proof.get("operation_id") != operation
+            or (proof.get("engine"), proof.get("model")) != (saved.get("repair_engine"), saved.get("repair_model"))
+            or (saved.get("repair_effort") is not None and proof.get("effort") != saved["repair_effort"])):
+        raise CycleError("candidate has no operation-bound native author selection")
+    return _retained_model(entry, {**proof, "effort": saved.get("repair_effort")}, operation)
+
+
 def _validate_admission(value: Any) -> dict[int, dict[str, Any]]:
     if not isinstance(value, list):
         raise CycleError("admissions must be a list")
@@ -3629,8 +3702,7 @@ def _validate_admission(value: Any) -> dict[int, dict[str, Any]]:
                 or not isinstance(row.get("test_venv"), str) or not row["test_venv"]):
             raise CycleError("invalid admission identity or Verify targets")
         workspace.validate_worker_id(worker)
-        engine, model = workspace.resolve_engine(row.get("engine", ""), row.get("model"))
-        workspace.resolve_effort(engine, model, row.get("effort"))
+        engine, model, _ = workspace.model_request(row.get("engine", ""), row.get("model"), row.get("effort"))
         admitted[number] = {**row, "engine": engine, "model": model}
     return admitted
 
@@ -3676,13 +3748,12 @@ def _write_configuration(path: Path, config: Mapping[str, Any], expected: str) -
 
 def _automatic_settings(value: Any) -> dict[str, Any]:
     """One controller-owned operating scope, never a PR/body/model assertion."""
-    required = {"claimant", "session", "lifecycle_repo", "test_venv", "engine", "model"}
+    required = {"claimant", "session", "lifecycle_repo", "test_venv", "engine"}
     if (not isinstance(value, dict) or not required <= value.keys()
-            or value.keys() - required - {"effort"}
+            or value.keys() - required - {"model", "effort"}
             or any(not isinstance(value[k], str) or not value[k].strip() for k in required)):
-        raise CycleError("automatic_native requires claimant/session, lifecycle repository, test venv and engine/model")
-    engine, model = workspace.resolve_engine(value["engine"], value["model"])
-    workspace.resolve_effort(engine, model, value.get("effort"))
+        raise CycleError("automatic_native requires claimant/session, lifecycle repository, test venv and engine")
+    engine, model, _ = workspace.model_request(value["engine"], value.get("model"), value.get("effort"))
     return {**value, "engine": engine, "model": model}
 
 
@@ -3806,7 +3877,8 @@ def _review_quota_candidate(layout: workspace.Layout, pr: Mapping[str, Any], ent
         return None
     if not pending:
         if (mapping.get("state") != "running" or not isinstance(conversation, Mapping)
-                or conversation.get("engine") != "claude-code" or conversation.get("status") != "created"):
+                or conversation.get("engine") != "claude-code" or conversation.get("status") != "created"
+                or conversation.get("selection_policy") == "catalog"):
             return None
         status = workspace.conversation_status(layout, worker, http=http, runner=_worker_runner, include_messages=False)
         if status.get("failure_class") != "quota_exhausted" or status.get("failure_current") is not True:
@@ -3814,8 +3886,12 @@ def _review_quota_candidate(layout: workspace.Layout, pr: Mapping[str, Any], ent
     identity = result.get("identity")
     if not isinstance(identity, str):
         identity = completion.work_identity(pr)
-    if _find(layout, pr["number"], identity).get("review_operation") != operation:
+    saved = _find(layout, pr["number"], identity)
+    if saved.get("review_operation") != operation:
         return None
+    # Once a correction is reserved, the live operation must retain the archived selection.
+    if _reconciliation(saved) is not None:
+        raise CycleError(_CORRECTION_QUOTA_HOLD)
     return issue, worker, workspace.assignment_of(mapping)
 
 
@@ -5090,6 +5166,7 @@ def _materialize_candidate_reviewer(layout: workspace.Layout, saved: dict[str, A
 def _advance_candidate_review(layout: workspace.Layout, pr: Mapping[str, Any], entry: Mapping[str, Any],
                               saved: dict[str, Any], *, http: Callable[..., tuple[int, Any]],
                               codex_home: Path | None) -> dict[str, Any]:
+    entry = _candidate_model(entry, saved)
     author = entry["worker"]
     with workspace._worker_lifecycle_lock(layout, author):
         pending = saved.get("candidate_repair")
@@ -5638,8 +5715,12 @@ def _advance_candidate_repair_locked(layout: workspace.Layout, pr: Mapping[str, 
             raise CycleError("candidate Verify target or environment changed")
     else:
         raise CycleError("candidate repair cause is unavailable")
-    if entry.get("engine") != "codex" or workspace.resolve_engine("codex", entry.get("model"))[1] != entry.get("model"):
+    entry = _retained_model(entry, reviewer_mapping.get("conversation"), dispatch["operation_id"])
+    if (entry.get("engine") != "codex" or not isinstance(entry.get("model"), str)
+            or any(entry.get(key) != binding.get(key) for key in ("engine", "model", "effort"))):
         raise CycleError("candidate repair requires the admitted native Codex model")
+    _, model = workspace.resolve_engine("codex", entry["model"])
+    workspace.resolve_effort("codex", model, entry.get("effort"))
     attempt = result.get("attempt")
     if type(attempt) is not int or attempt < 1:
         raise CycleError("candidate repair attempt identity is unavailable")
@@ -5692,7 +5773,8 @@ def _advance_candidate_repair_locked(layout: workspace.Layout, pr: Mapping[str, 
         mapping = _mapping(layout, worker)
         conversation = mapping.get("conversation")
         if isinstance(conversation, Mapping):
-            if conversation.get("operation_id") != operation:
+            if conversation.get("operation_id") != operation or any(
+                    conversation.get(key) != entry.get(key) for key in ("engine", "model", "effort")):
                 raise CycleError("candidate repair conversation belongs to another operation")
             if conversation.get("status") in ("creating", "unknown"):
                 conversation = workspace._reconcile_worker_conversation_locked(layout, worker, http=http, runner=_worker_runner)
@@ -6341,7 +6423,98 @@ def _reconciliation(saved: Mapping[str, Any]) -> dict[str, Any] | None:
     return matches[0] if matches else None
 
 
-def _bound_reconciliation(layout: workspace.Layout, saved: Mapping[str, Any]) -> dict[str, Any] | None:
+def _reconciliation_model(entry: Mapping[str, Any], mapping: Mapping[str, Any],
+                          reconciliation: Mapping[str, Any], identity: str, head_sha: str) -> dict[str, Any]:
+    """Bind the one report correction to the stopped attempt and its selection policy."""
+    archive = reconciliation.get("archived")
+    if not isinstance(archive, Mapping):
+        raise CycleError("original review selection lineage is unavailable")
+    review, proof, stop = (archive.get(key) for key in ("review", "execution_proof", "stop_intent"))
+    operation = reconciliation.get("original_operation")
+    if (not isinstance(review, Mapping) or not isinstance(proof, Mapping) or not isinstance(stop, Mapping)
+            or reconciliation.get("contract") != REPORT_CONTRACT
+            or reconciliation.get("identity", review.get("identity")) != identity
+            or reconciliation.get("head_sha", review.get("head_sha")) != head_sha
+            or reconciliation.get("original_report_sha256") != _digest(review)
+            or reconciliation.get("original_attempt_sha256") not in (None, _digest(archive))
+            or not _text(operation) or archive.get("review_operation") != operation
+            or proof.get("operation_id") != operation or archive.get("stop_verified") is not True):
+        raise CycleError("original review selection lineage is missing or contradictory")
+    assignment = stop.get("assignment")
+    stopped_conversation = assignment.get("conversation") if isinstance(assignment, Mapping) else None
+    cid, engine, effort = (proof.get(key) for key in ("conversation_id", "engine", "effort"))
+    if (not isinstance(engine, str) or not _text(cid)
+            or not isinstance(stopped_conversation, Mapping) or stopped_conversation.get("id") != cid
+            or stopped_conversation.get("operation_id", operation) != operation
+            or archive.get("public_report_conversation") != cid
+            or not isinstance(assignment, Mapping) or assignment.get("runtime") != "openhands"
+            or not _text(proof.get("container_id")) or stop.get("container_id") != proof["container_id"]
+            or assignment.get("container_id") != proof["container_id"]
+            or proof.get("source") != "native-session-metadata"
+            or not _text(proof.get("native_session_id")) or not _text(proof.get("timestamp"))
+            or (engine, proof.get("auth")) not in (("codex", "chatgpt"), ("claude-code", "claude-subscription"))
+            or (engine == "codex" and effort not in ("high", "xhigh", "max", "ultra"))
+            or (engine == "claude-code" and effort is not None)):
+        raise CycleError("original review selection does not bind the stopped native execution")
+    selector = workspace.conversation_acp_selector(proof)
+    model = proof["model"]
+    policy = proof.get("selection_policy")
+    if policy not in (None, "catalog"):
+        raise CycleError("original review selection policy is unknown")
+    qualified = policy == "catalog" or selector != model
+    history = mapping.get("conversation_history", [])
+    if not isinstance(history, list):
+        raise CycleError("original review conversation history is malformed")
+    records = [row for row in [mapping.get("conversation"), *history]
+               if isinstance(row, Mapping) and row.get("id") == cid]
+    if len(records) > 1:
+        raise CycleError("original review selection is ambiguous")
+    if records:
+        record = records[0]
+        record_policy, requested_effort = record.get("selection_policy"), record.get("effort")
+        if (record.get("operation_id") != operation or (record.get("engine"), record.get("model")) != (engine, model)
+                or workspace.conversation_acp_selector(record) != selector or record_policy not in (None, "catalog")
+                or (qualified and record_policy != "catalog")
+                or ((record_policy == "catalog" or requested_effort is not None) and requested_effort != effort)):
+            raise CycleError("original review conversation and execution selection conflict")
+        if record_policy != "catalog" and "selection_proof" in record:
+            raise CycleError("original review has a startup proof without matching catalog policy")
+        qualified, effort = record_policy == "catalog", requested_effort
+        if qualified:
+            probe = record.get("selection_proof")
+            if (not isinstance(probe, Mapping) or probe.get("conversation_id") != cid
+                    or probe.get("session_id") != proof["native_session_id"]
+                    or any(probe.get(key) != record.get(key) for key in ("engine", "model", "effort", "acp_selector"))):
+                raise CycleError("original review has no matching catalog qualification")
+    elif not qualified:
+        # Older exact execution proofs omitted policy. Their conversation distinguishes
+        # explicit compatibility from an exact catalog selection with no alias field.
+        raise CycleError("original review selection policy is unavailable")
+    workspace.model_request(engine, model, effort)
+    if not qualified and model not in workspace._QUALIFICATION_MODELS[engine]:
+        raise CycleError("original review's legacy selection is no longer admitted")
+    handoff = mapping.get("engine_handoff")
+    legacy_handoff = (entry.get("engine") == "claude-code" and (engine, model, effort) == ("codex", "gpt-6.1-terra", None)
+                      and not qualified and isinstance(handoff, Mapping) and handoff.get("status") == "complete"
+                      and handoff.get("operation_id") == operation and handoff.get("successor_conversation") == cid)
+    if legacy_handoff:
+        confirmation = cast(Mapping[str, Any], handoff).get("confirmation")
+        if confirmation is not None and (not isinstance(confirmation, Mapping)
+                or (confirmation.get("engine"), confirmation.get("model")) != (entry["engine"], entry.get("model"))):
+            raise CycleError("report correction handoff does not bind the admitted engine and model")
+    elif (entry["engine"] != engine or
+            (entry.get("model") is not None and (entry["model"], entry.get("effort")) != (model, effort))):
+        raise CycleError("admission conflicts with the original review selection")
+    successor = mapping.get("conversation")
+    if isinstance(successor, Mapping) and successor.get("operation_id") == reconciliation.get("operation"):
+        if ((successor.get("engine"), successor.get("model"), successor.get("effort")) != (engine, model, effort)
+                or successor.get("selection_policy") != ("catalog" if qualified else None)):
+            raise CycleError("report correction conflicts with the original review selection")
+    return {**entry, "engine": engine, "model": model, "effort": effort, "_qualify_selection": qualified}
+
+
+def _bound_reconciliation(layout: workspace.Layout, saved: Mapping[str, Any], *,
+                          require_stop: bool = True) -> dict[str, Any] | None:
     pending = _reconciliation(saved)
     state = epic_run_state.load_epic_run_state(layout.run_id, root=layout.run_state_dir)
     records = [row for row in state["dispatch_decisions"] if isinstance(row, dict)
@@ -6363,8 +6536,8 @@ def _bound_reconciliation(layout: workspace.Layout, saved: Mapping[str, Any]) ->
         stop = saved.get("stop_intent")
         original = [row for row in records if row.get("operation_id") == pending.get("original_operation")]
         if (pending.get("operation") != saved.get("review_operation") or not isinstance(prior_stop, dict)
-                or not isinstance(stop, dict) or not isinstance(prior_stop.get("stop_id"), str)
-                or stop.get("previous_stop_id") != prior_stop["stop_id"]
+                or not isinstance(prior_stop.get("stop_id"), str)
+                or (require_stop and (not isinstance(stop, dict) or stop.get("previous_stop_id") != prior_stop["stop_id"]))
                 or len(original) != 1 or original[0].get("attempt") != 1
                 or original[0].get("outcome") != "completed"):
             raise CycleError("review reconciliation operation or stop lineage is unknown")
@@ -6412,12 +6585,14 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     same_head_merge_unknown = any(old_head == pr["head_sha"] for _, old_head in merge_obligations)
     saved = _find(layout, pr["number"], identity)
     worker_record = _mapping(layout, entry["worker"])
+    entry = _review_model(entry, worker_record, saved)
     if saved.get("repair_operation"):
         if merge_obligations:
             return {"number": pr["number"], "identity": identity, "action": "wait",
                     "reason": "earlier merge outcome remains unknown; reconcile before repair"}
         return _advance_repair(layout, entry["worker"], pr, entry, saved, candidate=None,
                                http=http, codex_home=codex_home)
+    admission = entry
     entry = _effective_repair_entry(entry, worker_record, saved)
     operation_id = saved.get("review_operation")
     handoff = worker_record.get("engine_handoff")
@@ -6432,9 +6607,18 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
     if operation_id:
         worker_record = _mapping(layout, entry["worker"])
         conversation = worker_record.get("conversation")
+        pending = _reconciliation(saved)
+        if (pending is not None and isinstance(conversation, Mapping)
+                and conversation.get("operation_id") == operation_id
+                and (conversation.get("engine") != admission["engine"] or (
+                    isinstance(handoff, Mapping) and handoff.get("operation_id") == pending.get("original_operation")))):
+            # A correction can inherit a completed quota handoff from the archived review.
+            # Recover the admission for that producer before reading its result or native proof.
+            _bound_reconciliation(layout, saved, require_stop=False)
+            entry = _reconciliation_model({**entry, **entry["_repair_admission_selection"]},
+                                          worker_record, pending, identity, pr["head_sha"])
         cid = conversation.get("id") if isinstance(conversation, dict) else None
         review = saved.get("review") if saved.get("public_report_conversation") == cid and cid else None
-        pending = _reconciliation(saved)
         # Reservation precedes startup, so a pre-launch refusal can leave no bound
         # conversation. Let intake retry the same operation through the fenced lifecycle.
         awaiting_successor = (isinstance(handoff, Mapping) and handoff.get("status") == "awaiting_pr_cycle"
@@ -6468,6 +6652,8 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
             bound_reconciliation = _bound_reconciliation(layout, saved)
             gate = _workflow_review_gate(layout, pr, entry, saved, expectations, require_verification=False)
             repair_candidate = _bounded_repair_candidate(review, _review_gate(review, expectations))
+            if repair_candidate is not None and bound_reconciliation is not None:
+                _reconciliation_model(entry, worker_record, bound_reconciliation, identity, pr["head_sha"])
             if gate["outcome"] == "changes_requested" and _review_gate(review, expectations)["outcome"] == "pass":
                 owner_wait = gate["blocking"][0]
                 try:
@@ -6585,12 +6771,14 @@ def _advance_one(layout: workspace.Layout, pr: dict[str, Any], entry: dict[str, 
             if pending is not None and op == pending["original_operation"]:
                 raise CycleError("report reconciliation cannot reuse the archived review operation")
             saved["review_operation"] = op
-            if pending is not None and pending.get("operation") in (None, op):
+            if pending is not None:
+                if pending.get("operation") not in (None, op):
+                    raise CycleError("report reconciliation operation changed")
                 pending["operation"] = op
-            else:
-                pending = None
+            pending = _bound_reconciliation(layout, saved, require_stop=False)
             _save(layout, saved)
-            started = start_or_reconcile_review(layout, entry["worker"], op, pr, identity, entry, http=http,
+            started = start_or_reconcile_review(layout, entry["worker"], op, pr, identity,
+                                                admission if pending is not None else entry, http=http,
                                                 codex_home=codex_home,
                                                 reconciliation=pending,
                                                 expected_owner_binding=entry.get("_automatic_owner_binding"))

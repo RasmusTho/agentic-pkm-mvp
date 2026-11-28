@@ -127,7 +127,7 @@ class Harness:
                 prompt = tmp_path / f"{worker}.txt"
                 prompt.write_text("Implement the bounded issue")
                 assert self.main("conversation-start", "--worker", worker, "--engine", "claude-code",
-                                 "--prompt-file", str(prompt)) == 0
+                                 "--model", "claude-sonnet-5-5", "--prompt-file", str(prompt)) == 0
                 cid = self.mapping(issue)["conversation"]["id"]
                 self.server.streams[cid] = []
         ew._record_worker(self.layout, ISSUE, lifecycle_owner="owner-6618", builder_session="builder-session-6618",
@@ -369,7 +369,8 @@ def test_existing_terra_assignment_finishes_before_the_shared_login_is_reused(tm
     peer_prompt = tmp_path / "peer.txt"
     peer_prompt.write_text("finish peer")
     h.server.react = False
-    assert h.main("conversation-start", "--worker", "w-b", "--engine", "codex", "--prompt-file", str(peer_prompt)) == 0
+    assert h.main("conversation-start", "--worker", "w-b", "--engine", "codex", "--model", "gpt-6.1-terra",
+                  "--prompt-file", str(peer_prompt)) == 0
     peer_id = h.mapping(PEER)["container_id"]
     peer_conversation = h.mapping(PEER)["conversation"]["id"]
     h.server.streams[peer_conversation] = []

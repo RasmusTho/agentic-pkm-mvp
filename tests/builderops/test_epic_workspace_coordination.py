@@ -145,7 +145,8 @@ class Epic:
             worker = f"w-{issue}"
             assert _cli(self.root, EPIC, self.engine, "worker-create", "--worker", worker, "--issue", str(issue), "--branch", f"b/{issue}", "--next-action", "implement") == 0
             assert self.main("openhands-start", "--worker", worker) == 0
-            assert self.main("conversation-start", "--worker", worker, "--prompt-file", str(prompt)) == 0
+            assert self.main("conversation-start", "--worker", worker, "--model", "claude-sonnet-5-5",
+                             "--prompt-file", str(prompt)) == 0
             self.cid[issue] = ew._load_state(self.layout)["issue_mappings"][str(issue)]["conversation"]["id"]
             self.server.streams[self.cid[issue]] = []
         capsys.readouterr()
@@ -673,7 +674,7 @@ def test_owned_live_fixture_drives_the_production_path_with_simulated_boundaries
     token = "a" * 32
     prompt = tmp_path / "prompt.txt"
     prompt.write_text(fixture._run(["prompt", "--token", token])["prompt"])
-    assert call("conversation-start", "--worker", worker, "--prompt-file", str(prompt)) == 0
+    assert call("conversation-start", "--worker", worker, "--model", "claude-sonnet-5-5", "--prompt-file", str(prompt)) == 0
     layout = ew.Layout(root.resolve(), epic)
     cid = ew._load_state(layout)["issue_mappings"][str(issue)]["conversation"]["id"]
     server.streams[cid] = []

@@ -212,3 +212,19 @@ def test_candidate_repair_author_uses_explicit_sol_high(tmp_path, capsys, monkey
     assert len(calls) == 2
     assert calls[-1][3]["agent_settings"] == {"agent_kind": "acp", "acp_server": "codex",
                                               "acp_model": "gpt-6.1-sol", "acp_effort": "high"}
+
+
+def test_candidate_repair_binds_retained_selection_with_default_admission(tmp_path, capsys, monkeypatch):
+    data, fetch, identity, server, home, _, _ = finding_ready(tmp_path, capsys, monkeypatch)
+    layout, _, _, _, _, entry, _, _, _ = data
+    saved = cycle._find(layout, 10, identity)
+    selected = saved["candidate_review_receipt"]["native_proof"]["model"]
+    admission = {**entry, "model": None}
+    server.lose_next_create = server.create_not_applied = True
+    result = cycle.advance(layout, [admission], fetch=fetch, http=server, codex_home=home)["results"][0]
+    assert result["action"] == "candidate-repair-author", result
+    assert result["conversation_status"] == "unknown"
+    author = cycle._mapping(layout, result["worker"])["conversation"]
+    assert author["model"] == selected and author["operation_id"] == result["operation_id"]
+    assert cycle.advance(layout, [admission], fetch=fetch, http=server, codex_home=home)["results"][0] == result
+    assert len([call for call in server.calls if call[0] == "POST" and call[2] == "/conversations"]) == 2
