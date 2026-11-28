@@ -36,7 +36,7 @@ from starlette.types import Receive, Scope, Send
 
 from app.remote_mcp.grant import RemoteGrant, read_owner_only
 from app.remote_mcp.oauth import CONFIG_PATH_ENV, AuthorizationServer, OAuthError, load_config
-from app.remote_mcp.oauth_http import public_routes
+from app.remote_mcp.oauth_http import SlidingWindow, public_routes
 
 _LOG = logging.getLogger("mimer.remote_mcp")
 
@@ -46,6 +46,11 @@ CREDENTIAL_HEADER = "x-mimer-remote-credential"
 INGRESS_BASE_URL = "http://remote-ingress"
 CAPTURE_ROUTE = "/api/companion/capture/scoped"
 _STATE_KEY = "mimer_remote_grant"
+#: ADR-0070 §5: global (Funnel peers are shared egress) request budget for the MCP path, and a
+#: cap on failed bearer attempts. A valid token is never refused by the failure cap.
+MCP_RATE_PER_MINUTE = 600
+FAILED_BEARER_CAP = 30
+FAILED_BEARER_WINDOW_SECONDS = 600
 # Libraries whose diagnostics may carry request payloads, headers, or tool arguments.
 _QUIET_LOGGERS = ("mcp", "httpx", "httpcore", "uvicorn", "sse_starlette")
 
@@ -158,17 +163,45 @@ def _mcp_server(semantic: Any) -> Any:
     return server
 
 
+async def _send_plain(
+    send: Send, status: int, payload: dict[str, str], extra: list[tuple[bytes, bytes]]
+) -> None:
+    body = json.dumps(payload).encode()
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+                (b"cache-control", b"no-store"),
+                *extra,
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
 class _BearerGate:
     """ASGI gate for the MCP path: valid access token + live grant, or 401 before the SDK runs."""
 
     def __init__(self, oauth: AuthorizationServer, manager: Any) -> None:
         self._oauth = oauth
         self._manager = manager
+        self._rate = SlidingWindow(MCP_RATE_PER_MINUTE, 60)
+        self._failures = SlidingWindow(FAILED_BEARER_CAP, FAILED_BEARER_WINDOW_SECONDS)
+        self._burst_logged = False
         resource_path = urlsplit(oauth.config.resource).path.strip("/")
         metadata = f"{oauth.config.issuer}/.well-known/oauth-protected-resource"
         self._metadata_url = f"{metadata}/{resource_path}" if resource_path else metadata
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if self._rate.hit():  # before any token lookup
+            _LOG.warning("remote_mcp security_event op=bearer outcome=rate_limited")
+            await _send_plain(
+                send, 429, {"error": "temporarily_unavailable"}, [(b"retry-after", b"60")]
+            )
+            return
         headers = [(n, v) for n, v in scope.get("headers") or [] if n.lower() == b"authorization"]
         token: str | None = None
         if len(headers) == 1:
@@ -177,6 +210,18 @@ class _BearerGate:
         try:
             grant = self._oauth.verify_access_token(token)
         except OAuthError as exc:
+            capped = self._failures.exceeded()
+            self._failures.record()
+            if capped:
+                # Over the cap: refuse cheaply and log the burst once, not per request.
+                if not self._burst_logged:
+                    self._burst_logged = True
+                    _LOG.warning("remote_mcp security_event op=bearer outcome=failure_cap_reached")
+                await _send_plain(
+                    send, 429, {"error": "temporarily_unavailable"}, [(b"retry-after", b"60")]
+                )
+                return
+            self._burst_logged = False
             _LOG.warning("remote_mcp security_event op=bearer outcome=%s", exc.error)
             challenge = f'Bearer resource_metadata="{self._metadata_url}"'
             if token:

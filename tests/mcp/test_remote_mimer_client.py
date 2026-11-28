@@ -385,3 +385,21 @@ def test_remote_entrypoint_configuration_refuses_the_ordinary_api(tmp_path):
         entrypoint.read_credential(credential)
     credential.chmod(0o600)
     assert entrypoint.read_credential(credential) == "abc"
+
+
+def test_mcp_path_bounds_failed_bearers_and_total_rate(tmp_path, monkeypatch, caplog):
+    rig = Rig(tmp_path, monkeypatch)
+    token = rig.access_token()
+    monkeypatch.setattr(entrypoint, "FAILED_BEARER_CAP", 3)
+    monkeypatch.setattr(entrypoint, "MCP_RATE_PER_MINUTE", 7)
+    caplog.set_level(logging.WARNING, logger="mimer.remote_mcp")
+    with rig.entry() as client:
+        statuses = [rpc(client, "bad-token", "tools/list").status_code for _ in range(5)]
+        assert statuses == [401, 401, 401, 429, 429]
+        # The failure cap never refuses a valid token.
+        assert rpc(client, token, "tools/list").status_code == 200
+        # The global budget (7/min here) is spent: everything is refused before any token lookup.
+        assert rpc(client, token, "tools/list").status_code == 200
+        assert rpc(client, token, "tools/list").status_code == 429
+    bursts = [r for r in caplog.records if "failure_cap_reached" in r.getMessage()]
+    assert len(bursts) == 1
