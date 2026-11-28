@@ -68,6 +68,9 @@ AuthSubject = Literal[
     # claim it; only the background lifecycle supervisor constructs it from the private
     # delegated background-runtime role record.
     "instance_background_runtime",
+    # ADR-0070: the remote MCP ingress. Only that separate listener can establish it,
+    # after verifying the host-side remote grant.
+    "remote_mcp_grant",
 ]
 
 PrincipalKind = Literal["human", "delegated_operator_role", "background_runtime_role"]

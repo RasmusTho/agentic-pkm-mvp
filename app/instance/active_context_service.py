@@ -106,6 +106,16 @@ def resolve_principal(
     no anonymous fallback and no "derive it from the instance" branch.
     """
 
+    if subject == "remote_mcp_grant":
+        # ADR-0070 single-owner grant: the remote ingress already verified the
+        # host-provisioned grant, so the subject acts for the local operator role
+        # while staying distinguishable in every context and receipt.
+        return PrincipalContext(
+            principal_id=record.local_operator_role_id,
+            principal_kind="delegated_operator_role",
+            subject=subject,
+            revision=record.revision,
+        )
     if subject == "api_key_credential":
         if not presented_credential:
             raise PrincipalPreflightError(
@@ -448,6 +458,21 @@ class ActiveContextSelectionService:
             required_permission=required_permission,
             default_binding_id=snapshot.default_vault_binding_id,
         )
+
+    def resolve_remote_grant_context(
+        self, *, derived: DerivedContext, binding_id: str,
+        action: str, write_class: str, required_permission: str,
+    ) -> ResolutionResult:
+        """ADR-0070: the context the remote grant pins, derived server-side.
+
+        Same one-binding, bearer-free resolution as a sealed compatibility target,
+        through the same live GOV authorizer; only the provenance differs.
+        """
+        result = self.resolve_compatibility_write_context(
+            derived=derived, binding_id=binding_id, action=action,
+            write_class=write_class, required_permission=required_permission,
+        )
+        return replace(result, snapshot=replace(result.snapshot, selection_provenance="remote_grant"))
 
     def resolve_compatibility_write_context(
         self, *, derived: DerivedContext, binding_id: str,

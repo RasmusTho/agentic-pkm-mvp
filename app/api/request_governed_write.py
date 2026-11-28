@@ -11,7 +11,7 @@ from app.api.routes.active_context_selection import (
     build_selection_service,
     get_selection_store,
 )
-from app.auth import api_key_header, resolve_auth_subject
+from app.auth import api_key_header, remote_grant, resolve_auth_subject
 from app.governance.binding_authority import BindingAuthorizationError
 from app.instance.active_context_service import ActiveContextServiceError
 from app.instance.context_selection import ReselectionRequiredError, SelectionPrincipalMismatchError
@@ -30,13 +30,26 @@ def require_capture_context(
     x_active_context_session: str | None = Header(default=None),
     x_active_context_override: str | None = Header(default=None),
 ) -> ActiveContextSetV1:
-    if not (x_active_context_session or x_active_context_override):
+    grant = remote_grant(request)
+    if grant is None and not (x_active_context_session or x_active_context_override):
         raise HTTPException(status_code=401, detail="reselection_required")
     try:
         service = build_selection_service(get_selection_store())
         derived = service.derive(
             resolve_auth_subject(request, api_key), presented_credential=api_key
         )
+        if grant is not None:
+            # ADR-0070: the remote ingress dropped every caller carrier; the only
+            # context is the one its grant pins.
+            context = service.resolve_remote_grant_context(
+                derived=derived,
+                binding_id=grant.vault_binding_id,
+                action="companion.capture.append",
+                write_class="vault_capture_append",
+                required_permission="write",
+            ).snapshot
+            request.state.active_context_set = context
+            return context
         context = service.resolve_request_context(
             derived=derived,
             session_bearer=x_active_context_session,
