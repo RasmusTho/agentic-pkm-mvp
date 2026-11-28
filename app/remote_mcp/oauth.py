@@ -446,10 +446,21 @@ class AuthorizationServer:
             "scope": SCOPE,
         }
 
+    def authenticate_client(
+        self, form: Mapping[str, Sequence[str]], *, authorization: str | None
+    ) -> str:
+        """Return the client id, or raise ``OAuthError(invalid_client | invalid_request)``."""
+
+        return self._authenticate_client(form, authorization)
+
     def exchange(
         self, form: Mapping[str, Sequence[str]], *, authorization: str | None
     ) -> dict[str, object]:
-        client_id = self._authenticate_client(form, authorization)
+        return self.exchange_authenticated(form, self._authenticate_client(form, authorization))
+
+    def exchange_authenticated(
+        self, form: Mapping[str, Sequence[str]], client_id: str
+    ) -> dict[str, object]:
         grant_type = _single(form, "grant_type")
         self._check_resource(form)
         if grant_type == "authorization_code":

@@ -697,6 +697,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "mimer-mcp-sidecar/",
             # ADR-0070 remote HTTP v1 profile: host grant and its ingress proofs.
             "app/remote_mcp/",
+            "app/api/remote_ingress.py",
             "tests/remote_mcp/",
             "tests/mcp/test_mimer_server.py",
             "tests/mcp/test_mimer_sidecar_semantic_parity.py",

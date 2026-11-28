@@ -21,7 +21,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import SplitResult, parse_qs, urlencode, urlsplit
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -104,6 +104,10 @@ def _oauth_json(exc: OAuthError) -> JSONResponse:
     )
 
 
+def _too_many() -> JSONResponse:
+    return JSONResponse({"error": "temporarily_unavailable"}, status_code=429, headers=_NO_STORE)
+
+
 async def _read_form(request: Request) -> dict[str, list[str]]:
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type != "application/x-www-form-urlencoded":
@@ -120,8 +124,9 @@ async def _read_form(request: Request) -> dict[str, list[str]]:
 
 
 def public_app(server: AuthorizationServer) -> Starlette:
-    rate = {name: SlidingWindow(PUBLIC_RATE_PER_MINUTE, 60) for name in ("metadata", "token")}
-    failures = SlidingWindow(FAILED_TOKEN_ATTEMPTS_CAP, FAILED_TOKEN_WINDOW_SECONDS)
+    rate = {"metadata": SlidingWindow(PUBLIC_RATE_PER_MINUTE, 60)}
+    unauthenticated = SlidingWindow(PUBLIC_RATE_PER_MINUTE, 60)
+    grant_failures = SlidingWindow(FAILED_TOKEN_ATTEMPTS_CAP, FAILED_TOKEN_WINDOW_SECONDS)
 
     def limited(
         name: str, handler: Callable[[Request], Awaitable[Response]]
@@ -129,9 +134,7 @@ def public_app(server: AuthorizationServer) -> Starlette:
         async def endpoint(request: Request) -> Response:
             if rate[name].hit():
                 _log(name, "rate_limited", security=True)
-                return JSONResponse(
-                    {"error": "temporarily_unavailable"}, status_code=429, headers=_NO_STORE
-                )
+                return _too_many()
             return await handler(request)
 
         return endpoint
@@ -143,17 +146,28 @@ def public_app(server: AuthorizationServer) -> Starlette:
         return JSONResponse(server.authorization_server_metadata())
 
     async def token(request: Request) -> Response:
-        if failures.exceeded():
-            _log("token", "locked_out", security=True)
-            return JSONResponse(
-                {"error": "temporarily_unavailable"}, status_code=429, headers=_NO_STORE
-            )
+        # Unauthenticated noise from the public internet must never lock out the client:
+        # it has its own budget, and only failures *after* client authentication (which
+        # needs the client secret) count toward the lockout of the authenticated client.
         try:
             form = await _read_form(request)
-            issued = server.exchange(form, authorization=request.headers.get("authorization"))
+            client_id = server.authenticate_client(
+                form, authorization=request.headers.get("authorization")
+            )
         except OAuthError as exc:
-            failures.record()
-            _log("token", exc.error, security=exc.error in {"invalid_client", "invalid_grant"})
+            if unauthenticated.hit():
+                _log("token", "unauthenticated_rate_limited", security=True)
+                return _too_many()
+            _log("token", exc.error, security=exc.error == "invalid_client")
+            return _oauth_json(exc)
+        if grant_failures.exceeded():
+            _log("token", "locked_out", security=True)
+            return _too_many()
+        try:
+            issued = server.exchange_authenticated(form, client_id)
+        except OAuthError as exc:
+            grant_failures.record()
+            _log("token", exc.error, security=exc.error == "invalid_grant")
             return _oauth_json(exc)
         _log("token", "issued")
         return JSONResponse(issued, headers=_NO_STORE)
@@ -168,14 +182,30 @@ def public_app(server: AuthorizationServer) -> Starlette:
             Route(
                 "/.well-known/oauth-authorization-server", limited("metadata", authorization_server)
             ),
-            Route("/oauth/token", limited("token", token), methods=["POST"]),
+            Route("/oauth/token", token, methods=["POST"]),
         ]
     )
 
 
-def owner_identity(request: Request, owner_login: str) -> str | None:
-    """The owner's login when this request is a tailnet Serve request from the owner, else None."""
+def owner_identity(request: Request, owner_login: str, authorization_origin: str) -> str | None:
+    """The owner's login when this request is a tailnet Serve request from the owner, else None.
 
+    The identity headers are only meaningful on a request that Serve forwarded for the
+    configured authorization origin, so the Host must match it (defeats DNS rebinding of the
+    loopback backend). State-changing requests must also come from that origin.
+    """
+
+    expected = urlsplit(authorization_origin)
+    hosts = request.headers.getlist("host")
+    if len(hosts) != 1 or hosts[0].lower() not in _origin_hosts(expected):
+        return None
+    if request.method != "GET":
+        origin = request.headers.get("origin")
+        if origin is not None:
+            if origin.rstrip("/").lower() != authorization_origin.lower():
+                return None
+        elif request.headers.get("sec-fetch-site") != "same-origin":
+            return None
     if "tailscale-funnel-request" in request.headers:
         return None
     logins = request.headers.getlist("tailscale-user-login")
@@ -184,6 +214,12 @@ def owner_identity(request: Request, owner_login: str) -> str | None:
         return None
     login = logins[0].strip()
     return login if login and login.casefold() == owner_login.casefold() else None
+
+
+def _origin_hosts(origin: SplitResult) -> set[str]:
+    host = (origin.hostname or "").lower()
+    port = origin.port
+    return {f"{host}:{port}"} if port not in (None, 443) else {host, f"{host}:443"}
 
 
 def _consent_page(
@@ -223,9 +259,10 @@ def _redirect_error(exc: OAuthError, state: str | None) -> Response:
 
 def tailnet_app(server: AuthorizationServer) -> Starlette:
     owner_login = server.config.owner_login
+    origin = server.config.authorization_origin
 
     async def authorize(request: Request) -> Response:
-        owner = owner_identity(request, owner_login)
+        owner = owner_identity(request, owner_login, origin)
         if owner is None:
             _log("authorize", "identity_refused", security=True)
             return _error_page(403, "This page is only available to the owner on the tailnet.")
@@ -249,7 +286,7 @@ def tailnet_app(server: AuthorizationServer) -> Starlette:
         return HTMLResponse(page, headers=_PAGE_HEADERS)
 
     async def decision(request: Request) -> Response:
-        owner = owner_identity(request, owner_login)
+        owner = owner_identity(request, owner_login, origin)
         if owner is None:
             _log("consent", "identity_refused", security=True)
             return _error_page(403, "This page is only available to the owner on the tailnet.")
@@ -281,7 +318,7 @@ def tailnet_app(server: AuthorizationServer) -> Starlette:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run one listener: ``--surface public|tailnet --port N`` (loopback only)."""
+    """Run one listener: ``--surface public|tailnet --port N | --uds PATH`` (never non-loopback)."""
 
     import argparse
     import os
@@ -293,14 +330,20 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(prog="python -m app.remote_mcp.oauth_http")
     parser.add_argument("--surface", choices=["public", "tailnet"], required=True)
-    parser.add_argument("--port", type=int, required=True)
+    where = parser.add_mutually_exclusive_group(required=True)
+    where.add_argument("--port", type=int, help="loopback TCP port")
+    where.add_argument("--uds", type=Path, help="Unix socket (preferred for the tailnet surface)")
     parser.add_argument("--config", type=Path, default=os.environ.get(CONFIG_PATH_ENV))
     args = parser.parse_args(argv)
     if args.config is None:
         parser.error(f"--config or {CONFIG_PATH_ENV} is required")
     server = AuthorizationServer(load_config(args.config))
     app = public_app(server) if args.surface == "public" else tailnet_app(server)
-    uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False, log_level="warning")
+    if args.uds is not None:
+        os.umask(0o077)
+        uvicorn.run(app, uds=str(args.uds), access_log=False, log_level="warning")
+    else:
+        uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False, log_level="warning")
     return 0
 
 

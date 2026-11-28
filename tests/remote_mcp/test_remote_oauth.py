@@ -28,13 +28,18 @@ from app.remote_mcp.oauth import (
     main as oauth_main,
     provision,
 )
-from app.remote_mcp.oauth_http import FAILED_TOKEN_ATTEMPTS_CAP, public_app, tailnet_app
+from app.remote_mcp.oauth_http import (
+    FAILED_TOKEN_ATTEMPTS_CAP,
+    PUBLIC_RATE_PER_MINUTE,
+    public_app,
+    tailnet_app,
+)
 
 ISSUER = "https://mimer.example.ts.net"
 RESOURCE = f"{ISSUER}/mcp"
 AUTH_ORIGIN = f"{ISSUER}:8443"
 OWNER = "owner@example.invalid"
-OWNER_HEADERS = {"Tailscale-User-Login": OWNER}
+OWNER_HEADERS = {"Tailscale-User-Login": OWNER, "Origin": AUTH_ORIGIN}
 
 
 class Clock:
@@ -86,7 +91,7 @@ def rig(tmp_path: Path) -> Rig:
     return Rig(
         server,
         TestClient(public_app(server)),
-        TestClient(tailnet_app(server)),
+        TestClient(tailnet_app(server), base_url=AUTH_ORIGIN),
         clock,
         config.client_id,
         secret,
@@ -416,11 +421,60 @@ def test_revoking_or_replacing_the_runtime_grant_ends_every_token(rig):
     assert parse_qs(urlsplit(response.headers["location"]).query)["error"] == ["access_denied"]
 
 
-def test_failed_token_attempts_lock_the_token_endpoint(rig):
+def test_only_authenticated_failures_lock_the_token_endpoint(rig):
     tokens = _tokens(rig)
+    # Unauthenticated internet noise has its own budget and never locks out the client.
+    for _ in range(PUBLIC_RATE_PER_MINUTE + 5):
+        rig.public.post("/oauth/token", data={"grant_type": "refresh_token", "refresh_token": "x"})
+    rotated = _refresh(rig, tokens["refresh_token"])
+    assert rotated.status_code == 200
+    assert rig.public.post("/oauth/token", data={"grant_type": "x"}).status_code == 429
+
     for _ in range(FAILED_TOKEN_ATTEMPTS_CAP):
         assert _refresh(rig, "not-a-token").status_code == 400
-    assert _refresh(rig, tokens["refresh_token"]).status_code == 429
+    assert _refresh(rig, rotated.json()["refresh_token"]).status_code == 429
+
+
+@pytest.mark.parametrize(
+    ("base_url", "headers", "method"),
+    [
+        # DNS rebinding of the loopback backend: wrong Host.
+        ("http://127.0.0.1:8443", OWNER_HEADERS, "GET"),
+        ("https://evil.example", OWNER_HEADERS, "GET"),
+        ("https://mimer.example.ts.net", OWNER_HEADERS, "GET"),
+        # Cross-origin POST, or no Origin and no same-origin fetch metadata.
+        (AUTH_ORIGIN, {**OWNER_HEADERS, "Origin": "https://evil.example"}, "POST"),
+        (AUTH_ORIGIN, {"Tailscale-User-Login": OWNER}, "POST"),
+        (AUTH_ORIGIN, {"Tailscale-User-Login": OWNER, "Sec-Fetch-Site": "cross-site"}, "POST"),
+    ],
+)
+def test_tailnet_surface_requires_its_own_host_and_origin(rig, base_url, headers, method):
+    client = TestClient(tailnet_app(rig.server), base_url=base_url)
+    _verifier, challenge = _pkce()
+    if method == "GET":
+        response = client.get(
+            "/oauth/authorize", params=_auth_params(rig, challenge), headers=headers
+        )
+        assert response.status_code == 403
+        assert 'name="csrf"' not in response.text
+        return
+    request_id, csrf = _consent(rig, challenge)
+    response = client.post(
+        "/oauth/authorize/decision",
+        data={"request_id": request_id, "csrf": csrf, "decision": "approve"},
+        headers=headers,
+        follow_redirects=False,
+    )
+    assert response.status_code == 403
+    # The refused attempt did not consume the pending request: the owner can still decide.
+    same_origin = {"Tailscale-User-Login": OWNER, "Sec-Fetch-Site": "same-origin"}
+    ok = rig.tailnet.post(
+        "/oauth/authorize/decision",
+        data={"request_id": request_id, "csrf": csrf, "decision": "approve"},
+        headers=same_origin,
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303
 
 
 def test_token_endpoint_bounds_and_encoding(rig):
