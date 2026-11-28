@@ -536,7 +536,7 @@ def test_owner_cli_provisions_rotates_and_revokes(tmp_path, capsys, rig):
         "provision",
         "--config",
         str(path),
-        "--secret-out",
+        "--handover-out",
         str(secret_file),
         "--issuer",
         ISSUER,
@@ -561,11 +561,13 @@ def test_owner_cli_provisions_rotates_and_revokes(tmp_path, capsys, rig):
     assert load_config(path).client_id == issued["client_id"]
     # The secret file is never overwritten.
     assert (
-        oauth_main(["rotate-secret", "--config", str(path), "--secret-out", str(secret_file)]) == 2
+        oauth_main(["rotate-secret", "--config", str(path), "--handover-out", str(secret_file)])
+        == 2
     )
     rotated_file = tmp_path / "client-secret-2"
     assert (
-        oauth_main(["rotate-secret", "--config", str(path), "--secret-out", str(rotated_file)]) == 0
+        oauth_main(["rotate-secret", "--config", str(path), "--handover-out", str(rotated_file)])
+        == 0
     )
     capsys.readouterr()
     assert json.loads(rotated_file.read_text())["client_secret"] != secret

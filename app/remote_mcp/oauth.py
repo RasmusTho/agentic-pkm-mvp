@@ -662,24 +662,26 @@ def _hand_over_secret(path: Path, client_id: str, secret: str) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.remote_mcp.oauth")
     sub = parser.add_subparsers(dest="command", required=True)
-    prov = sub.add_parser("provision", help="create the client; writes the secret to --secret-out")
+    prov = sub.add_parser(
+        "provision", help="create the client; writes the secret to --handover-out"
+    )
     prov.add_argument("--config", type=Path, required=True)
-    prov.add_argument("--secret-out", type=Path, required=True, help="new file, created 0600")
+    prov.add_argument("--handover-out", type=Path, required=True, help="new file, created 0600")
     for flag in ("--issuer", "--resource", "--authorization-origin", "--owner-login"):
         prov.add_argument(flag, required=True)
     prov.add_argument("--store-path", type=Path, required=True)
     prov.add_argument("--grant-path", type=Path, required=True)
     rotate = sub.add_parser(
-        "rotate-secret", help="replace the client secret; writes it to --secret-out"
+        "rotate-secret", help="replace the client secret; writes it to --handover-out"
     )
     rotate.add_argument("--config", type=Path, required=True)
-    rotate.add_argument("--secret-out", type=Path, required=True, help="new file, created 0600")
+    rotate.add_argument("--handover-out", type=Path, required=True, help="new file, created 0600")
     revoke = sub.add_parser("revoke-tokens", help="revoke every issued token")
     revoke.add_argument("--config", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command in {"provision", "rotate-secret"} and args.secret_out.exists():
-            raise ValueError("--secret-out must not exist")
+        if args.command in {"provision", "rotate-secret"} and args.handover_out.exists():
+            raise ValueError("--handover-out must not exist")
         if args.command == "provision":
             config, secret = provision(
                 args.config,
@@ -690,8 +692,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 store_path=args.store_path,
                 grant_path=args.grant_path,
             )
-            _hand_over_secret(args.secret_out, config.client_id, secret)
-            print(json.dumps({"handover_file": str(args.secret_out)}))
+            _hand_over_secret(args.handover_out, config.client_id, secret)
+            print(json.dumps({"handover_file": str(args.handover_out)}))
         elif args.command == "rotate-secret":
             current = load_config(args.config)
             secret = secrets.token_urlsafe(32)
@@ -699,8 +701,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.config,
                 OAuthConfig(**{**current.__dict__, "client_secret_sha256": _sha256(secret)}),
             )
-            _hand_over_secret(args.secret_out, current.client_id, secret)
-            print(json.dumps({"handover_file": str(args.secret_out)}))
+            _hand_over_secret(args.handover_out, current.client_id, secret)
+            print(json.dumps({"handover_file": str(args.handover_out)}))
         else:
             revoked = OAuthStore(load_config(args.config).store_path).revoke_all()
             print(json.dumps({"revoked": revoked}))
