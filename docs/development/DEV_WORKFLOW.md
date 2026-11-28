@@ -300,15 +300,16 @@ monitoring never starts, loads or stops the existing epic workers. Native descen
 An active or finished conversation is not accepted progress, a merged PR or completed delivery.
 Existing issue ownership and retained workspaces remain with their owning workflows.
 
-Use `sandbox start` in the owner conversation for a separate owner scratch workspace, then follow
-**Open sandbox Canvas** to <https://builder-system.tailcfb3a1.ts.net:9444>. Open the existing admitted
-conversation and send the next bounded read-only/scratch task there. Browser **New Chat** creation
-is refused: one controller-reserved conversation owns that checkout. The selected native engine
-is Codex `gpt-6.1-terra` using the existing ChatGPT subscription, without paid API/provider fallback.
-The native login directory is a single shared slot; start refuses while another worker mounts it.
-Do not interrupt existing epic work to make room. Repository-wide automatic delivery, issue pickup,
-review/repair/merge and control of the existing epic workers remain with their owning workflows;
-this sandbox is not a second factory coordinator.
+The model-policy source candidate uses `sandbox start` for a fresh Codex assignment or
+`sandbox start claude-code` to choose Claude Code. Append an exact model ID and, for Sol, `high`
+to pin the selection. A new catalog-qualified Terra sandbox uses `high` when effort is omitted.
+A bare start on an existing conversation returns its recorded selection.
+Follow **Open sandbox Canvas** to <https://builder-system.tailcfb3a1.ts.net:9444> and use the
+one admitted conversation for bounded read-only or scratch work. New chat creation remains disabled.
+The owner controller uses the provisioned `codex_home` or `claude_env_file` for the chosen engine.
+For catalog selections, owner readiness and Canvas access both require model proof from the same
+initialized native session. An unavailable subscription, catalog or native readback blocks readiness. The installed owner
+image and controller require separate qualification before these source changes take effect.
 
 Within a live sandbox conversation, **Stop** interrupts it; a subsequent message can continue it.
 That UI state does not prove native descendants stopped. For a verified contained stop, return to
@@ -404,9 +405,10 @@ the existing list argument is for admissions supplied directly by the caller.
 
 The source successor adds opt-in initial admission to that same one-shot controller. A protected
 configuration may start with `admissions: []` and one `automatic_native` object containing
-`claimant`, Builder `session`, `lifecycle_repo`, `test_venv`, `engine`, `model`, and optional `effort`.
-For example, the current owner-selected operating choice is `engine: codex`,
-`model: gpt-6.1-sol`, `effort: high`; these settings do not prove the executing model or authentication.
+`claimant`, Builder `session`, `lifecycle_repo`, `test_venv`, and `engine`. The model-policy source
+candidate also accepts `model` and `effort` for an exact choice. With `model` omitted or null,
+the chosen engine resolves its default when the review starts. The exact conversation selection
+binds that review and its continuation. Configuration and execution have separate readbacks.
 The upstream caller invokes the same `--once --root ... --epic ... --config ...` command. No
 per-PR number, SHA, worker or target list needs to be supplied for initial admission.
 
@@ -882,30 +884,52 @@ runtime readback. The recorded #6618 exception is worker `w-6618`, stopped and r
 port in 18700–18799 and a per-worker session key in the controller-only `control/` directory.
 Conversation history is kept in the worker's persistent home. `conversation-start --engine
 claude-code|codex [--model M]` creates the conversation through upstream `agent_settings`
-(`acp_server`, `acp_model`), tagged with epic, Issue and worker. For the current #6615 operating
-choice, use `--engine codex --model gpt-6.1-terra` explicitly for coordination, implementation,
-diagnosis and review. The temporary Claude-first quota priority ended on 2026-11-14; a Claude reset
-does not by itself change this choice. This is not permanent vendor policy. The existing source CLI
-still defaults to Claude Code with `claude-sonnet-5-5` when `--engine` is omitted, so do not omit it
-for this operation. The installed baseline accepts only `gpt-6.1-terra`; the source candidate also admits explicit
-Sol/high as described below, and Astra is refused. The conversation id
+(`acp_server`, `acp_model`), tagged with epic, Issue and worker. Pass the intended `--engine` in
+production callers. The conversation id
 is recorded before the request. A lost response is reconciled by reading that id and is never
 retried as a create. In this source candidate, `conversation-status` reads the newest bounded
 upstream event page (default 50) and classifies only the latest `ConversationErrorEvent` as
 `quota_exhausted`, `authentication`, `context_exhausted`, `transient_network` or `task_failure`.
 The classifier recognizes the observed native session and weekly quota phrases; tool and message
 text cannot trigger a handoff. Upstream 1.60.1 already supports the newest-first event ordering.
-The #6618 source candidate adds `sandbox start gpt-6.1-sol high` for a stopped owner sandbox and
-admits an explicit subscription-backed Sol/high selection with
-`conversation-start --engine codex --model gpt-6.1-sol --effort high` and the same `model` and
-`effort` fields in PR-cycle admission. These fields are set in upstream ACP settings before the
-initial prompt and retained with the conversation; model and effort must agree with native readback.
-The candidate owner gateway and sandbox readiness also require the pinned container, first-party
-provider route and ChatGPT subscription login to be read back before admitting access.
-Terra remains available and the Claude quota handoff remains explicitly Terra. A retained or unknown
-conversation keeps its original selection and requires verified stop before a successor. The source
-candidate is not an installed or qualified Sol runtime: independent review, cold installation and
-an actual selected and observed Sol/high turn are still required.
+
+### OpenHands assignment model selection
+
+In the #6618 model-policy source candidate, an omitted model resolves once on the selected
+worker. Codex reads the installed App Server's visible `model/list` catalog and chooses the highest
+numerical Sol generation starting at 6.2. The chosen model must offer explicit `high` effort.
+The installed CLI's matching-version native cache must contain the same exact visible model and
+effort with a `fetched_at` no more than five minutes old. An RPC failure, expired cache, or a newer
+visible Sol in the cache missing from the App Server response holds startup. This verifies the
+native cache's recorded age and agreement with `model/list`. The RPC carries no upstream fetch time.
+Claude Code takes its selectable IDs from refreshed OpenHands ACP discovery. For moving
+aliases, it reads the installed Claude Agent SDK's `supportedModels()` through the same
+pinned subscription container with no model prompt. The controller requires an exact wire
+ID for each selectable alias and checks for missing, conflicting or duplicate selector
+metadata. SDK entries outside the ACP picker cannot become choices. It chooses the highest
+available generation in the Sonnet, Haiku and Opus families, preferring Sonnet, then Haiku,
+then Opus within that generation. It retains the adapter's effort setting.
+Catalog errors, missing capability and a generation regression below this worker's saved
+native observation block new default assignments. Exact pins remain available. Explicit legacy
+Terra, Sol 6.1 and Claude qualification retain their existing paths and authorization.
+
+The controller verifies the pinned container and first-party subscription route before discovery.
+It initializes the OpenHands conversation without user work and verifies the ACP selection, then
+runs one fixed model check. The native transcript must agree with the conversation, selected model
+and requested effort before the controller sends the task. For an alias, the controller
+records its selector alongside the exact wire model, verifies the initialized ACP session still
+reports that selector, and rechecks the subscription before sending the task. A mismatch or uncertain task delivery
+keeps the reserved writer fenced until a verified stop. Running and historical conversations keep
+their recorded selection. Catalog-selected assignments never change engines automatically. The
+existing explicit Claude quota qualification can still continue on its admitted Terra path.
+A bounded correction of an invalid review report reuses the original attempt's exact model, effort
+and selection policy at the same PR, head and contract. A new revision or contract resolves a new review selection.
+This source candidate requires independent review and qualification on the approved installed image.
+The separate guarded single-Issue factory under `app/builderops/openhands_factory.py` retains the
+legacy exact Terra default in its existing settings and service entrypoints.
+
+### Epic worker quota qualification
+
 In the enabling #6618 source candidate, an applied coordinator pass can transfer a confirmed,
 identity-bound Claude quota failure to a new Codex/Terra conversation. The pass retains the
 existing Issue owner and Builder session, stops the exact predecessor container, checkpoints and

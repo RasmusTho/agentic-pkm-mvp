@@ -33,6 +33,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -42,6 +43,9 @@ from pathlib import Path
 from typing import Any, Callable, Concatenate, Iterator, Mapping, ParamSpec, Sequence, TypeGuard, TypeVar
 
 from app.builderops import epic_run_state
+from app.builderops.openhands_model_selection import (
+    CLAUDE_ID, SOL_ID, ModelSelectionError, claude_alias_matches, model_generation, select_from_catalog,
+)
 
 SCHEMA = "epic_workspace.v1"
 CONTAINER_PREFIX = "epicws"
@@ -61,9 +65,22 @@ OPENHANDS_IMAGE = (
 OPENHANDS_CONTAINER_PORT = 8000
 OPENHANDS_PORT_RANGE = range(18700, 18800)
 CODEX_HOME_TARGET = "/run/codex-home"
-# Engine/model policy for epic workers (#6615 owner revisions 2026-11-12/12b).
-ENGINE_DEFAULT_MODELS = {"claude-code": "claude-sonnet-5-5", "codex": "gpt-6.1-terra"}
-_ENGINE_MODEL = {"claude-code": re.compile(r"^claude-[a-z0-9.-]{1,60}$"), "codex": re.compile(r"^gpt-6\.1-(?:terra|sol)$")}
+NATIVE_ENGINES = ("claude-code", "codex")
+_INSTALLED_ACP = {"codex": "/acp-node/bin/codex-acp", "claude-code": "/acp-node/bin/claude-agent-acp"}
+# These exact qualification routes predate discovery and keep their existing proofs.
+_QUALIFICATION_MODELS = {
+    "codex": {"gpt-6.1-terra", "gpt-6.1-sol"},
+    "claude-code": {"claude-sonnet-4-5", "claude-sonnet-5-5", "claude-opus-5-5"},
+}
+CODEX_CLI = "/acp-node/lib/node_modules/@agentclientprotocol/codex-acp/node_modules/@openai/codex/bin/codex.js"
+_CLAUDE_SDK_ROOT = (
+    "/acp-node/lib/node_modules/@agentclientprotocol/claude-agent-acp/node_modules/@anthropic-ai/claude-agent-sdk"
+)
+CLAUDE_STATUS = (
+    f"import glob,os; p=glob.glob('{_CLAUDE_SDK_ROOT}-*/claude'); "
+    "assert len(p)==1; os.execv(p[0],[p[0],'auth','status','--json'])"
+)
+MODEL_PROBE_REPLY = "OPENHANDS_NATIVE_SELECTION_READY"
 
 _WORKER_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 _BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
@@ -3472,27 +3489,50 @@ def start_openhands_worker(
                                           verification_venv=verification_venv)
 
 
-def resolve_engine(engine: str, model: str | None) -> tuple[str, str]:
-    """Owner-selectable engine/model under the epic policy. Never Astra, never paid API."""
-
-    if engine not in ENGINE_DEFAULT_MODELS:
+def model_request(engine: str, model: str | None, effort: str | None, *,
+                  qualify_selection: bool = False) -> tuple[str, str | None, str | None]:
+    """Validate startup intent. A missing model must be resolved inside the worker fence."""
+    if engine not in NATIVE_ENGINES:
         raise LaunchRefused(f"unsupported engine {engine!r}; use claude-code or codex")
-    chosen = model or ENGINE_DEFAULT_MODELS[engine]
-    if "astra" in chosen.lower() or not _ENGINE_MODEL[engine].match(chosen):
-        raise LaunchRefused(f"model {chosen!r} is not permitted for engine {engine!r}")
-    return engine, chosen
+    if model is None:
+        default_effort = "high" if engine == "codex" else None
+        if effort not in (None, default_effort):
+            raise LaunchRefused("unsupported effort for default selection")
+        return engine, None, default_effort
+    _, model = resolve_engine(engine, model)
+    if engine == "claude-code" and not CLAUDE_ID.fullmatch(model):
+        raise LaunchRefused("new Claude assignments require an exact versioned model ID")
+
+    if qualify_selection and engine == "codex" and model == "gpt-6.1-terra" and effort is None:
+        effort = "high"
+    return engine, model, resolve_effort(engine, model, effort)
+
+
+def resolve_engine(engine: str, model: str | None) -> tuple[str, str]:
+    """Validate an exact identity. The guarded factory's legacy omission is Terra."""
+    if engine not in NATIVE_ENGINES:
+        raise LaunchRefused(f"unsupported engine {engine!r}; use claude-code or codex")
+    if model is None and engine == "codex":
+        model = "gpt-6.1-terra"
+    if not isinstance(model, str) or "astra" in model.casefold():
+        raise LaunchRefused(f"an admitted exact model is required for {engine}")
+    allowed = (model == "gpt-6.1-terra" or SOL_ID.fullmatch(model) if engine == "codex"
+               else re.fullmatch(r"claude-[a-z0-9.-]{1,60}", model))
+    if not allowed:
+        raise LaunchRefused(f"model {model!r} is not permitted for engine {engine!r}")
+    return engine, model
 
 
 def resolve_effort(engine: str, model: str, effort: str | None) -> str | None:
     """Validate explicit per-conversation effort, preserving historical omitted settings."""
     if effort is None:
-        if model == "gpt-6.1-sol":
-            raise LaunchRefused("gpt-6.1-sol requires explicit high effort")
+        if engine == "codex" and SOL_ID.fullmatch(model):
+            raise LaunchRefused(f"{model} requires explicit high effort")
         return None
     if engine != "codex" or effort not in ("high", "xhigh", "max", "ultra"):
         raise LaunchRefused("unsupported explicit effort")
-    if model == "gpt-6.1-sol" and effort != "high":
-        raise LaunchRefused("gpt-6.1-sol requires explicit high effort")
+    if SOL_ID.fullmatch(model) and effort != "high":
+        raise LaunchRefused(f"{model} requires explicit high effort")
     return effort
 
 
@@ -3519,20 +3559,150 @@ def verify_codex_subscription(mapping: Mapping[str, Any], runner: Runner = subpr
                 or row["Config"]["Image"] != image or not isinstance(env, list)
                 or any(isinstance(x, str) and x.split("=", 1)[0] in forbidden for x in env)):
             raise LaunchRefused("native subscription container not verified")
-        cli = "/acp-node/lib/node_modules/@agentclientprotocol/codex-acp/node_modules/@openai/codex/bin/codex.js"
-        login = read(["docker", "exec", cid, "/acp-node/bin/node", cli, "login", "status"])
+        login = read(["docker", "exec", cid, "/acp-node/bin/node", CODEX_CLI, "login", "status"])
         if login.returncode or "logged in using chatgpt" not in (login.stdout + login.stderr).casefold():
             raise LaunchRefused("native subscription login not verified")
         check = ("import pathlib,tomllib; p=pathlib.Path('/run/codex-home/config.toml'); "
                  "c=tomllib.loads(p.read_text()) if p.exists() else {}; "
                  "assert c.get('model_provider') in (None,'openai'); assert c.get('openai_base_url') is None; "
                  "assert c.get('chatgpt_base_url') in (None,'https://chatgpt.com/backend-api/'); "
-                 "assert not c.get('model_providers') and not c.get('profiles'); print('route-ok')")
+                 "assert not c.get('model_providers') and not c.get('profiles'); "
+                 "assert not c.get('model_catalog_json'); print('route-ok')")
         route = read(["docker", "exec", cid, "python", "-c", check])
         if route.returncode or route.stdout.strip() != "route-ok":
             raise LaunchRefused("native subscription route not verified")
     except (OSError, ValueError, KeyError, IndexError, TypeError, subprocess.TimeoutExpired) as exc:
         raise LaunchRefused("native subscription readback unavailable") from exc
+
+
+def verify_claude_subscription(mapping: Mapping[str, Any], runner: Runner = subprocess.run) -> None:
+    cid, image, credentials = (mapping.get(key) for key in ("container_id", "image", "credentials"))
+    if (not isinstance(cid, str) or not re.fullmatch(r"[0-9a-f]{64}", cid)
+            or not isinstance(image, str) or not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image)
+            or not isinstance(credentials, Mapping) or credentials.get("claude") != "oauth-token-env"):
+        raise LaunchRefused("Claude subscription configuration unavailable")
+    try:
+        def read(args: list[str]) -> Any:
+            result = runner(args, capture_output=True, text=True, check=False, timeout=30)
+            return json.loads(result.stdout) if result.returncode == 0 else None
+
+        row = read(["docker", "inspect", cid])[0]
+        pinned = read(["docker", "image", "inspect", image])[0]
+        env = dict(x.split("=", 1) for x in row["Config"]["Env"])
+        forbidden = {"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
+                     "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"}
+        if (row["Id"] != cid or row["Image"] != pinned["Id"] or row["Config"]["Image"] != image
+                or forbidden & env.keys() or not env.get("CLAUDE_CODE_OAUTH_TOKEN")):
+            raise LaunchRefused("Claude subscription container is not verified")
+        login = read(["docker", "exec", cid, "python", "-c", CLAUDE_STATUS])
+        if (not isinstance(login, Mapping) or login.get("loggedIn") is not True
+                or login.get("authMethod") not in ("claude.ai", "oauth_token")
+                or login.get("apiProvider") != "firstParty"):
+            raise LaunchRefused("Claude first-party subscription login is not verified")
+    except (OSError, ValueError, KeyError, IndexError, TypeError, subprocess.TimeoutExpired) as exc:
+        raise LaunchRefused("Claude subscription readback unavailable") from exc
+
+
+# supportedModels() reads SDK initialization metadata. The stream stays open until
+# that read completes and never yields a user message.
+_CLAUDE_CATALOG_PROBE = """
+const abortController = new AbortController();
+let releasePrompt;
+const waiting = new Promise(resolve => { releasePrompt = resolve; });
+async function* noMessages() {
+    await waiting;
+}
+let queryHandle;
+let timer;
+const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("catalog deadline")), 15_000);
+});
+setTimeout(() => process.exit(1), 20_000).unref();
+try {
+    const { query } = await Promise.race([import(process.argv[1]), deadline]);
+    queryHandle = query({prompt: noMessages(), options: {
+        cwd: "/tmp", persistSession: false, settingSources: [], tools: [], abortController,
+    }});
+    const models = await Promise.race([queryHandle.supportedModels(), deadline]);
+    if (!Array.isArray(models) || !models.length || models.length > 512) {
+        throw new Error("invalid catalog size");
+    }
+    const rows = models.map(({value, resolvedModel}) => {
+        if (typeof value !== "string" || !value.length || value.length > 100 ||
+            (resolvedModel != null && (typeof resolvedModel !== "string" || resolvedModel.length > 100))) {
+            throw new Error("invalid model metadata");
+        }
+        return [value, resolvedModel ?? null];
+    });
+    const output = JSON.stringify(rows);
+    if (Buffer.byteLength(output) > 65_536) throw new Error("catalog too large");
+    process.stdout.write(output);
+} catch {
+    process.exitCode = 1;
+} finally {
+    try {
+        queryHandle?.close();
+    } finally {
+        releasePrompt();
+        abortController.abort();
+        clearTimeout(timer);
+    }
+}
+"""
+
+
+def _read_claude_sdk_models(container_id: str, runner: Runner) -> Any:
+    result = runner(["docker", "exec", "-w", "/tmp", container_id, "/acp-node/bin/node", "--input-type=module",
+                     "--eval", _CLAUDE_CATALOG_PROBE, f"{_CLAUDE_SDK_ROOT}/sdk.mjs"],
+                    capture_output=True, text=True, check=False, timeout=25)
+    if result.returncode != 0 or not result.stdout or len(result.stdout) > 65_536:
+        raise ModelSelectionError("Claude SDK catalog readback unavailable or too large")
+    try:
+        return json.loads(result.stdout)
+    except ValueError as exc:
+        raise ModelSelectionError("Claude SDK catalog readback is invalid") from exc
+
+
+def _discover_model(engine: str, model: str | None, effort: str | None, mapping: Mapping[str, Any],
+                    port: int, key: str, http: Callable[..., tuple[int, Any]], runner: Runner
+                    ) -> tuple[str, str | None, str]:
+    try:
+        read_claude_models = None
+        if engine == "codex":
+            verify_codex_subscription(mapping, runner)
+            probe = Path(__file__).with_name("openhands_model_selection.py").read_text(encoding="utf-8")
+            result = runner(["docker", "exec", "-w", CONTAINER_HOME, mapping["container_id"], "python", "-c", probe,
+                             f"{CODEX_HOME_TARGET}/models_cache.json", "/acp-node/bin/node", CODEX_CLI,
+                             "app-server", "--listen", "stdio://"],
+                            capture_output=True, text=True, check=False, timeout=30)
+            if result.returncode != 0:
+                raise LaunchRefused("Codex App Server catalog unavailable or native cache freshness unproved")
+            catalog = json.loads(result.stdout)
+        else:
+            verify_claude_subscription(mapping, runner)
+            code, catalog = http("POST", port, key, "/acp/models", {
+                "agent_settings": {"agent_kind": "acp", "acp_server": engine, "acp_command": [_INSTALLED_ACP[engine]]},
+                "refresh": True,
+            }, 60.0)
+            if code != 200:
+                catalog = None
+            read_claude_models = lambda: _read_claude_sdk_models(mapping["container_id"], runner)
+        selected, effort, selector = select_from_catalog(engine, model, effort, catalog,
+                                                        read_claude_models=read_claude_models)
+        if model is None:
+            history = mapping.get("conversation_history", [])
+            if not isinstance(history, list):
+                raise ModelSelectionError(f"{engine} catalog cannot be reconciled with malformed conversation history")
+            for previous in [*history, mapping.get("conversation")]:
+                if (isinstance(previous, Mapping) and previous.get("engine") == engine
+                        and isinstance(proof := previous.get("selection_proof"), Mapping)
+                        and proof.get("model") == previous.get("model") and isinstance(proof["model"], str)
+                        and model_generation(engine, selected) < model_generation(engine, proof["model"])):
+                    raise ModelSelectionError(f"{engine} catalog has regressed below this worker's observed generation")
+        return selected, effort, selector
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        reason = str(exc) if isinstance(exc, ModelSelectionError) else f"{engine} catalog refresh unavailable"
+        raise LaunchRefused(reason) from exc
 
 
 CONVERSATION_ENDED = "ended_with_container"
@@ -3603,6 +3773,109 @@ def _complete_engine_handoff(entry: dict[str, Any], conversation: Mapping[str, A
         entry["engine_handoff"] = {**handoff, "status": "complete", "successor_conversation": conversation["id"]}
 
 
+def conversation_acp_selector(record: Mapping[str, Any]) -> str:
+    """Return the value ACP accepts, using the exact model for earlier records."""
+    model, selector = record.get("model"), record.get("acp_selector", record.get("model"))
+    if not isinstance(model, str) or not model or not isinstance(selector, str):
+        raise LaunchRefused("conversation model selection is unavailable")
+    if "acp_selector" in record and (record.get("engine") != "claude-code" or not claude_alias_matches(selector, model)):
+        raise LaunchRefused("conversation ACP selector does not bind its exact model")
+    return selector
+
+
+def _initialized_acp_session(record: Mapping[str, Any], info: Mapping[str, Any]) -> str:
+    selector, engine, effort = conversation_acp_selector(record), record["engine"], record.get("effort")
+    agent, state = info.get("agent"), info.get("agent_state")
+    if (not isinstance(agent, Mapping) or agent.get("kind") != "ACPAgent" or agent.get("acp_server") != engine
+            or agent.get("acp_command") != [_INSTALLED_ACP[engine]]
+            or agent.get("acp_model") != selector or info.get("current_model_id") != selector
+            or (effort is not None and (agent.get("acp_effort") != effort or info.get("current_effort") != effort))
+            or not isinstance(state, Mapping) or state.get("acp_session_cwd") != CONTAINER_WORKSPACE
+            or not isinstance(state.get("acp_session_id"), str) or not state["acp_session_id"]
+            or ("acp_selector" in record and state.get("acp_current_model_id") != selector)):
+        raise LaunchRefused("initialized ACP model, effort or session does not match the selection")
+    return state["acp_session_id"]
+
+
+def selection_proof_matches(record: Mapping[str, Any], info: Mapping[str, Any]) -> bool:
+    """Join the proven exact model and selector to the initialized ACP session."""
+    proof = record.get("selection_proof")
+    if record.get("selection_policy") != "catalog" or not isinstance(proof, Mapping):
+        return False
+    try:
+        session = _initialized_acp_session(record, info)
+    except LaunchRefused:
+        return False
+    return ((proof.get("conversation_id"), proof.get("session_id")) == (record.get("id"), session)
+            and all(proof.get(field) == record.get(field) for field in ("engine", "model", "effort", "acp_selector")))
+
+
+def _read_initialized_selection(record: Mapping[str, Any], layout: Layout, worker: str, issue: int,
+                                port: int, key: str, http: Callable[..., tuple[int, Any]]) -> str:
+    cid = record["id"]
+    deadline = time.monotonic() + 45
+    while True:
+        code, info = http("GET", port, key, f"/conversations/{cid}", None, 5.0)
+        if code != 200 or not _conversation_bound(info, layout, issue, worker, cid):
+            raise LaunchRefused("model qualification conversation is unavailable")
+        execution = str(info.get("execution_status", "")).lower()
+        if execution == "finished":
+            break
+        if execution not in ("idle", "running") or time.monotonic() >= deadline:
+            raise LaunchRefused("native model qualification did not finish")
+        time.sleep(0.5)
+
+    return _initialized_acp_session(record, info)
+
+
+def _post_conversation_message(port: int, key: str, cid: str, prompt: str,
+                               http: Callable[..., tuple[int, Any]]) -> bool:
+    code, body = http("POST", port, key, f"/conversations/{cid}/events", {
+        "role": "user", "content": [{"type": "text", "text": prompt}], "run": True,
+    }, 30.0)
+    return code == 200 and isinstance(body, Mapping) and body.get("success") is True
+
+
+def _observe_model_probe(record: Mapping[str, Any], mapping: Mapping[str, Any], layout: Layout,
+                         worker: str, issue: int, port: int, key: str,
+                         http: Callable[..., tuple[int, Any]], runner: Runner) -> dict[str, Any]:
+    """Initialize without a user message, then observe one turn in that same native session."""
+    cid, engine, model, effort = record["id"], record["engine"], record["model"], record.get("effort")
+    code, body = http("POST", port, key, f"/conversations/{cid}/run", None, 10.0)
+    if code != 200 or not isinstance(body, Mapping) or body.get("success") is not True:
+        raise LaunchRefused("model qualification could not initialize the conversation")
+    session = _read_initialized_selection(record, layout, worker, issue, port, key, http)
+    if not _post_conversation_message(port, key, cid,
+            f"Reply exactly {MODEL_PROBE_REPLY}. Do not use tools, inspect files, or make changes.", http):
+        raise LaunchRefused("native model qualification prompt delivery is unconfirmed")
+    if _read_initialized_selection(record, layout, worker, issue, port, key, http) != session:
+        raise LaunchRefused("native session changed during model qualification")
+    response_code, response = http("GET", port, key, f"/conversations/{cid}/agent_final_response", None, 5.0)
+    if (response_code != 200 or not isinstance(response, Mapping)
+            or not isinstance(response.get("response"), str) or response["response"].strip() != MODEL_PROBE_REPLY):
+        raise LaunchRefused("native model qualification response missing or unexpected")
+    event_code, page = http("GET", port, key,
+                            f"/conversations/{cid}/events/search?limit=50&sort_order=TIMESTAMP_DESC", None, 5.0)
+    events = page.get("items") if isinstance(page, Mapping) else None
+    if (event_code != 200 or not isinstance(events, list) or len(events) >= 50
+            or any(not isinstance(event, Mapping) or event.get("kind") in ("ACPToolCallEvent", "ConversationErrorEvent")
+                   or (event.get("kind") == "ActionEvent" and event.get("tool_name") != "finish") for event in events)):
+        raise LaunchRefused("native model qualification events show tools, errors or incomplete evidence")
+    extractor = Path(__file__).with_name("openhands_native_metadata.py").read_text(encoding="utf-8")
+    result = runner(["docker", "exec", mapping["container_id"], "python", "-c", extractor, CONTAINER_HOME,
+                     CODEX_HOME_TARGET, engine, cid], capture_output=True, text=True, check=False, timeout=15)
+    evidence = json.loads(result.stdout) if result.returncode == 0 else None
+    if (not isinstance(evidence, dict) or set(evidence) != {"engine", "conversation_id", "session_id", "model", "effort", "timestamp"}
+            or evidence.get("conversation_id") != cid or evidence.get("session_id") != session
+            or evidence.get("engine") != engine or evidence.get("model") != model or evidence.get("effort") != effort
+            or not isinstance(evidence.get("timestamp"), str) or not evidence["timestamp"]):
+        raise LaunchRefused("native model or effort execution evidence does not match the selection")
+    if "acp_selector" in record:
+        verify_claude_subscription(mapping, runner)
+        evidence["acp_selector"] = record["acp_selector"]
+    return evidence
+
+
 def _start_conversation_locked(
     layout: Layout,
     worker: str,
@@ -3611,6 +3884,7 @@ def _start_conversation_locked(
     model: str | None,
     prompt: str,
     effort: str | None = None,
+    qualify_selection: bool = False,
     operation_id: str | None = None,
     expected_owner_binding: Mapping[str, Any] | None = None,
     http: Callable[..., tuple[int, Any]] = _http,
@@ -3626,14 +3900,20 @@ def _start_conversation_locked(
 
     import uuid
 
-    engine, model = resolve_engine(engine, model)
-    effort = resolve_effort(engine, model, effort)
+    engine, model, effort = model_request(engine, model, effort, qualify_selection=qualify_selection)
     state = _load_state(layout)
     issue = _issue_for_worker(state, worker)
     expected = _worker_mapping(state, worker)
+    prior = expected.get("conversation")
+    if isinstance(prior, Mapping) and prior.get("status") != CONVERSATION_ENDED:
+        raise LaunchRefused(f"conversation {prior.get('id')} could still write; preserve the existing assignment")
+    _assert_no_pending_takeover(expected)
+    qualify = qualify_selection or model not in _QUALIFICATION_MODELS[engine]
+    selector = model
     try:
-        with _endpoint_session(layout, worker, issue, expected, runner) as (_, initial_key):
-            pass
+        with _endpoint_session(layout, worker, issue, expected, runner) as (port, initial_key):
+            if qualify:
+                model, effort, selector = _discover_model(engine, model, effort, expected, port, initial_key, http, runner)
     except EndpointUnavailable as exc:
         raise EpicWorkspaceError(str(exc)) from exc
     conversation_id = str(uuid.uuid4())
@@ -3646,13 +3926,18 @@ def _start_conversation_locked(
         if not re.fullmatch(r"pr-completion-[0-9a-f]{64}", operation_id):
             raise LaunchRefused("invalid PR completion operation id")
         record["operation_id"] = operation_id
+    if qualify:
+        record["selection_policy"] = "catalog"
+    if selector != model:
+        record["acp_selector"] = selector
     reserved = _reserve_conversation(layout, issue, worker, record, expected)
     mapping = _worker_mapping(reserved, worker)
 
-    def finish(value: dict[str, Any]) -> None:
+    def finish(value: dict[str, Any]) -> bool:
         def updater(current: dict[str, Any]) -> dict[str, Any]:
-            if _same_assignment(_worker_mapping(current, worker), mapping):
-                entry = _worker_mapping(current, worker)
+            entry = _worker_mapping(current, worker)
+            if _same_assignment(entry, mapping) and (expected_owner_binding is None or all(
+                    entry.get(field) == bound for field, bound in expected_owner_binding.items())):
                 entry["conversation"] = value
                 _complete_engine_handoff(entry, value)
             else:
@@ -3660,15 +3945,19 @@ def _start_conversation_locked(
             return current
         epic_run_state.update_epic_run_state(layout.run_id, root=layout.run_state_dir, updater=updater,
                                              expected_epic_issue_number=layout.epic)
-    agent_settings = {"agent_kind": "acp", "acp_server": engine, "acp_model": model}
+        return value["status"] != "unknown"
+    agent_settings: dict[str, Any] = {"agent_kind": "acp", "acp_server": engine, "acp_model": selector}
+    if qualify:
+        agent_settings["acp_command"] = [_INSTALLED_ACP[engine]]
     payload = {
         "conversation_id": conversation_id,
         "workspace": {"working_dir": CONTAINER_WORKSPACE},
         "agent_settings": agent_settings,
         "autotitle": False,
         "tags": {"epic": str(layout.epic), "issue": str(issue), "worker": worker},
-        "initial_message": {"role": "user", "content": [{"type": "text", "text": prompt}]},
     }
+    if not qualify:
+        payload["initial_message"] = {"role": "user", "content": [{"type": "text", "text": prompt}]}
     if effort is not None:
         agent_settings["acp_effort"] = effort
     try:
@@ -3683,7 +3972,26 @@ def _start_conversation_locked(
                 code, body = http("POST", port, key, "/conversations", payload, 120.0)
             except Exception:  # noqa: BLE001 - any transport/decode failure leaves the outcome unknown
                 code, body = 0, None
-            if code == 201 and _conversation_bound(body, layout, issue, worker, conversation_id):
+            if qualify:
+                try:
+                    if not (code == 201 and _conversation_bound(body, layout, issue, worker, conversation_id)):
+                        if reconcile_conversation(port, key, conversation_id, layout=layout, issue=issue,
+                                                  worker=worker, http=http) != "created":
+                            raise LaunchRefused("model qualification conversation creation is unconfirmed")
+                    record["selection_proof"] = _observe_model_probe(
+                        record, mapping, layout, worker, issue, port, key, http, runner)
+                    # Bind the result before the non-idempotent prompt POST. A lost POST is
+                    # ambiguous and never retried or inferred from the qualification reply.
+                    if not finish({**record, "status": "creating"}):
+                        raise LaunchRefused("worker assignment changed after model qualification")
+                    if not _post_conversation_message(port, key, conversation_id, prompt, http):
+                        raise LaunchRefused("productive prompt delivery is unconfirmed; do not resend")
+                except (LaunchRefused, OSError, ValueError, subprocess.SubprocessError) as exc:
+                    reason = str(exc) if isinstance(exc, LaunchRefused) else "model qualification or prompt delivery unavailable"
+                    finish({**record, "status": "unknown", "launch_failure": reason})
+                    raise LaunchRefused(reason) from exc
+                record["status"] = "created"
+            elif code == 201 and _conversation_bound(body, layout, issue, worker, conversation_id):
                 record.update(status="created", execution_status=body.get("execution_status"))
             else:
                 record.update(status=reconcile_conversation(port, key, conversation_id, layout=layout, issue=issue,
@@ -3698,11 +4006,12 @@ def _start_conversation_locked(
 @_serialized_worker
 def start_conversation(
     layout: Layout, worker: str, *, engine: str, model: str | None, prompt: str,
-    operation_id: str | None = None, effort: str | None = None, http: Callable[..., tuple[int, Any]] = _http,
+    operation_id: str | None = None, effort: str | None = None, qualify_selection: bool = False,
+    http: Callable[..., tuple[int, Any]] = _http,
     runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
     return _start_conversation_locked(layout, worker, engine=engine, model=model, prompt=prompt, effort=effort,
-                                      operation_id=operation_id, http=http, runner=runner)
+                                      operation_id=operation_id, qualify_selection=qualify_selection, http=http, runner=runner)
 
 
 def reconcile_conversation(port: int, key: str, conversation_id: str, *, layout: Layout, issue: int, worker: str,
@@ -3732,6 +4041,8 @@ def _reconcile_worker_conversation_locked(layout: Layout, worker: str, *, http: 
         raise EpicWorkspaceError("worker has no conversation to reconcile")
     if record.get("status") not in ("creating", "unknown"):
         return dict(record)
+    if record.get("selection_policy") == "catalog":
+        raise LaunchRefused("catalog-selected conversation startup is unconfirmed; preserve it until verified stop")
     if mapping.get("state") != "running":
         raise EpicWorkspaceError("worker is not running; a verified stop already ends its conversation")
     try:
@@ -3848,6 +4159,9 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
     record = mapping.get("conversation")
     if not isinstance(record, Mapping):
         return {"issue": issue, "worker": worker, "conversation": None}
+    needs_selection_proof = record.get("selection_policy") == "catalog" or "acp_selector" in record
+    unavailable = {"issue": issue, "worker": worker, "conversation": dict(record), "reachable": False,
+                   **({"selection_verified": False} if needs_selection_proof else {})}
     count_error = None
     def event_count(port: int, key: str, path: str) -> tuple[int, Any]:
         try:
@@ -3879,9 +4193,9 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
                 if require_event_count:
                     after_code, after_count = event_count(port, key, f"/conversations/{cid}/events/count")
     except LifecycleBusy:
-        return {"issue": issue, "worker": worker, "conversation": dict(record), "reachable": False, "lifecycle_busy": True}
+        return {**unavailable, "lifecycle_busy": True}
     except (OSError, ValueError, KeyError, UnicodeError):
-        return {"issue": issue, "worker": worker, "conversation": dict(record), "reachable": False}
+        return unavailable
     # The server returns the newest page first; retain chronological order within that page.
     items = list(reversed(events.get("items", []))) if ecode == 200 and isinstance(events, Mapping) else []
     count_valid = (not require_event_count or
@@ -3927,6 +4241,8 @@ def conversation_status(layout: Layout, worker: str, *, http: Callable[..., tupl
         "event_count_valid": count_valid,
         "event_count_error": count_error,
         "execution_status": info.get("execution_status") if isinstance(info, Mapping) else None,
+        **({"selection_verified": record.get("status") == "created" and selection_proof_matches(record, info)}
+           if needs_selection_proof else {}),
         "agent_settings": ({"agent_kind": "acp" if info["agent"].get("kind") == "ACPAgent" else None,
                             "acp_server": info["agent"].get("acp_server"), "acp_model": info["agent"].get("acp_model"),
                             "current_model_id": info.get("current_model_id"), "acp_effort": info["agent"].get("acp_effort"),
@@ -3988,9 +4304,10 @@ def _parser() -> argparse.ArgumentParser:
     o.add_argument("--codex-home", help="Codex ChatGPT login directory (mode 0700, outside the root)")
     cs = sub.add_parser("conversation-start", help="start an OpenHands conversation with the selected engine/model")
     cs.add_argument("--worker", required=True)
-    cs.add_argument("--engine", default="claude-code", choices=sorted(ENGINE_DEFAULT_MODELS))
+    cs.add_argument("--engine", default="claude-code", choices=NATIVE_ENGINES)
     cs.add_argument("--model")
     cs.add_argument("--effort")
+    cs.add_argument("--qualify-selection", action="store_true", help="require catalog and native proof for an explicit compatibility model")
     cs.add_argument("--prompt-file", help="task text; required unless --continuation")
     cs.add_argument("--continuation", action="store_true", help="prefix the prompt with the brief rebuilt from run-state")
     ct = sub.add_parser("conversation-status")
@@ -4084,7 +4401,8 @@ def main(
             if args.prompt_file:
                 parts.append(Path(args.prompt_file).read_text(encoding="utf-8"))
             prompt = "\n\n".join(parts)
-            out = start_conversation(layout, args.worker, engine=args.engine, model=args.model, effort=args.effort, prompt=prompt, runner=runner, **_http_kw)
+            out = start_conversation(layout, args.worker, engine=args.engine, model=args.model, effort=args.effort,
+                                     prompt=prompt, qualify_selection=args.qualify_selection, runner=runner, **_http_kw)
         elif args.cmd == "conversation-status":
             out = conversation_status(layout, args.worker, runner=runner, **_http_kw)
         elif args.cmd == "conversation-reconcile":

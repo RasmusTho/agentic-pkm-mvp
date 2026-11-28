@@ -50,7 +50,8 @@ def test_partial_work_and_ambiguous_publication_are_reconciled_before_takeover(t
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Implement the slice")
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
-    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--model", "claude-sonnet-5-5",
+                 "--prompt-file", str(prompt)) == 0
     predecessor = _state(root)["conversation"]["id"]
 
     # Partial work, a push whose outcome is known, and a PR create whose response was lost.
@@ -161,7 +162,8 @@ def test_claude_worker_is_continued_by_codex_from_durable_records(tmp_path, caps
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Implement the slice")
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
-    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--prompt-file", str(prompt)) == 0
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--model", "claude-sonnet-5-5",
+                 "--prompt-file", str(prompt)) == 0
     claude = _json(capsys)
     assert claude["engine"] == "claude-code"
     (layout.checkout("w-a") / "wip.py").write_text("wip\n")
@@ -176,7 +178,8 @@ def test_claude_worker_is_continued_by_codex_from_durable_records(tmp_path, caps
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
     capsys.readouterr()
     posts = lambda: [c for c in server.calls if c[0] == "POST"]  # noqa: E731
-    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex", "--continuation") == 0
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "codex",
+                 "--model", "gpt-6.1-terra", "--continuation") == 0
     codex = _json(capsys)
     assert codex["engine"] == "codex" and codex["model"] == "gpt-6.1-terra" and codex["status"] == "created"
     text = posts()[-1][3]["initial_message"]["content"][0]["text"]
@@ -191,7 +194,8 @@ def test_claude_worker_is_continued_by_codex_from_durable_records(tmp_path, caps
     assert _main(root, engine, server, "takeover", "--worker", "w-a", "--reason", "back to claude") == 0
     assert _json(capsys)["generation"] == 2
     assert _main(root, engine, server, "openhands-start", "--worker", "w-a") == 0
-    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "claude-code", "--continuation") == 0
+    assert _main(root, engine, server, "conversation-start", "--worker", "w-a", "--engine", "claude-code",
+                 "--model", "claude-sonnet-5-5", "--continuation") == 0
     assert _json(capsys)["model"] == "claude-sonnet-5-5"
 
 
@@ -495,7 +499,8 @@ def test_detached_continuation_retains_identity_across_engines_and_takeovers(tmp
     assert _main(root, fresh, server, "worker-create", "--worker", "w-a", "--issue", "6617", "--branch", "b/a", "--next-action", "implement") == 0
     assert _main(root, fresh, server, "openhands-start", "--worker", "w-a") == 0
     capsys.readouterr()
-    assert _main(root, fresh, server, "conversation-start", "--worker", "w-a", "--engine", "codex", "--continuation") == 0
+    assert _main(root, fresh, server, "conversation-start", "--worker", "w-a", "--engine", "codex",
+                 "--model", "gpt-6.1-terra", "--continuation") == 0
     assert _json(capsys)["model"] == "gpt-6.1-terra"
     assert _state(root)["takeover"]["status"] == "consumed"
     (checkout / "later.py").write_text("later\n")
