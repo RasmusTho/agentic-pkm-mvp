@@ -128,6 +128,9 @@ def _consent(rig: Rig, challenge: str) -> tuple[str, str]:
     )
     assert page.status_code == 200, page.text
     assert "binding-a" in page.text and "mimer.capture" in page.text
+    # no-referrer would make the browser send `Origin: null` on the consent POST.
+    assert page.headers["referrer-policy"] == "same-origin"
+    assert page.headers["x-frame-options"] == "DENY"
     request_id = re.search(r'name="request_id" value="([^"]+)"', page.text).group(1)
     csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
     return request_id, csrf
@@ -446,6 +449,7 @@ def test_only_authenticated_failures_lock_the_token_endpoint(rig):
         (AUTH_ORIGIN, {**OWNER_HEADERS, "Origin": "https://evil.example"}, "POST"),
         (AUTH_ORIGIN, {"Tailscale-User-Login": OWNER}, "POST"),
         (AUTH_ORIGIN, {"Tailscale-User-Login": OWNER, "Sec-Fetch-Site": "cross-site"}, "POST"),
+        (AUTH_ORIGIN, {"Tailscale-User-Login": OWNER, "Origin": "null"}, "POST"),
     ],
 )
 def test_tailnet_surface_requires_its_own_host_and_origin(rig, base_url, headers, method):
@@ -467,7 +471,8 @@ def test_tailnet_surface_requires_its_own_host_and_origin(rig, base_url, headers
     )
     assert response.status_code == 403
     # The refused attempt did not consume the pending request: the owner can still decide.
-    same_origin = {"Tailscale-User-Login": OWNER, "Sec-Fetch-Site": "same-origin"}
+    # What a real browser sends for the consent form: an opaque Origin plus fetch metadata.
+    same_origin = {"Tailscale-User-Login": OWNER, "Origin": "null", "Sec-Fetch-Site": "same-origin"}
     ok = rig.tailnet.post(
         "/oauth/authorize/decision",
         data={"request_id": request_id, "csrf": csrf, "decision": "approve"},

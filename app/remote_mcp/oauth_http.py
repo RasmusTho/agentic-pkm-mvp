@@ -42,7 +42,9 @@ _PAGE_HEADERS = {
     **_NO_STORE,
     "X-Frame-Options": "DENY",
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://claude.ai; frame-ancestors 'none'",
-    "Referrer-Policy": "no-referrer",
+    # same-origin: no referrer reaches claude.ai, and the consent POST keeps a real Origin
+    # (no-referrer would make browsers send `Origin: null`).
+    "Referrer-Policy": "same-origin",
 }
 
 
@@ -201,10 +203,12 @@ def owner_identity(request: Request, owner_login: str, authorization_origin: str
         return None
     if request.method != "GET":
         origin = request.headers.get("origin")
-        if origin is not None:
-            if origin.rstrip("/").lower() != authorization_origin.lower():
+        same_origin_fetch = request.headers.get("sec-fetch-site") == "same-origin"
+        if origin is None or origin == "null":
+            # Absent or opaque Origin is admitted only with same-origin fetch metadata.
+            if not same_origin_fetch:
                 return None
-        elif request.headers.get("sec-fetch-site") != "same-origin":
+        elif origin.rstrip("/").lower() != authorization_origin.lower():
             return None
     if "tailscale-funnel-request" in request.headers:
         return None
