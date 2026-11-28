@@ -60,6 +60,26 @@ shipped only in the separate `mimer-mcp-sidecar` distribution, not in `app/` or 
 dependency surface. Streamable HTTP over tailnet/LAN plus per-device authentication are deferred,
 separately gated follow-ons and must not be enabled implicitly.
 
+### Remote HTTP v1 profile (ADR-0070)
+
+ADR-0070 (accepted 2026-11-28) admits one further, separately enabled profile for a Claude custom
+connector. It does not change the stdio sidecar above.
+
+- **Entrypoint:** a separate process serving Streamable HTTP MCP on a loopback-bound listener, reusing
+  the v1 semantic tool layer. Tailscale Funnel on port 443 is the only public path (MCP path, OAuth
+  metadata, token endpoint); the authorization and consent endpoints are tailnet-only through
+  Tailscale Serve and admit only the owner's Tailscale identity.
+- **Authentication:** OAuth 2.1 with one pre-registered client, PKCE, exact redirect, audience-bound
+  short-lived tokens. A token is transport admission only.
+- **Authority:** the entrypoint reaches the runtime only through a separate ingress with loopback
+  trust off, as a distinct remote subject, calling only the context-bound routes with a context the
+  runtime derives from one host-side grant (one vault binding, granted tools, expiry). Revoking that
+  grant is the authoritative kill.
+- **Operations:** a subset of the five v1 tools; default health and capture, retrieval once remote
+  reads qualify, `ask` not granted.
+- Enabling it in any environment needs merged and verified implementation, qualified DEV/TEST
+  acceptance, and separate owner go-aheads for Funnel exposure, credentials and production.
+
 The v1 `tools/list` response declares advisory MCP annotations: `mimer.retrieve`, `mimer.read_note`,
 and `mimer.health` are `readOnlyHint: true`; `mimer.ask` (the runtime may append recall and synthesis
 receipts) and `mimer.capture` are `readOnlyHint: false`, `destructiveHint: false`, and
@@ -133,12 +153,13 @@ How each transport stays inside the envelope:
 
 Base URL: the Mimer runtime API (`app/api/app.py`). All routes below exist on `main` today. Trace correlation: send `x-trace-id` on every call; the runtime's TraceIdMiddleware propagates it into spans, receipts, and events.
 
-**v1 auth posture (owner ruling):** LAN/loopback-only. The client-facing routes below carry no auth dependency today; `X-API-Key` machinery exists (`app/auth.py`) but is applied to only three routes in `companion.py`. A client under this contract MUST refuse to operate against a Mimer host that is not loopback, LAN, or tailnet (`docs/SECURITY_TRUST_BOUNDARIES.md`). Per-agent identity/keys is the named first hardening slice (§9 F2), not a v1 blocker.
+**v1 auth posture (owner ruling):** LAN/loopback-only. The client-facing routes below carry no auth dependency today; `X-API-Key` machinery exists (`app/auth.py`) but is applied to only three routes in `companion.py`. A client under this contract MUST refuse to operate against a Mimer host that is not loopback, LAN, or tailnet (`docs/SECURITY_TRUST_BOUNDARIES.md`). The one exception is the ADR-0070 remote HTTP entrypoint (§2), reached only through its Funnel address with OAuth. Per-agent identity/keys is the named first hardening slice (§9 F2), not a v1 blocker.
 
 For the accepted MCP v1 adapter, C1 means the stdio process inherits its local user session and
 calls the existing loopback API; it does not open a network listener and adds no new auth. This does
 not authorize a networked MCP endpoint. Any later Streamable HTTP transport requires a separate
-B2 + C2 decision and per-device authentication before listener startup.
+B2 + C2 decision and per-device authentication before listener startup; ADR-0070 is that decision
+for its remote entrypoint only (§2).
 
 | Operation | Method + path | Purpose | Provenance/trace | Governance |
 | --- | --- | --- | --- | --- |

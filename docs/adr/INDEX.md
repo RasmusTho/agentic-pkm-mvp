@@ -66,4 +66,4 @@
 - [ADR-0067: Mac mini is the Product model-access portal (Accepted target state, owner-directed 2026-10-07)](./ADR-0067-mac-mini-product-model-access-portal.md)
 - [ADR-0068: Continuous dev delivery — merge on risk, then dev → test → prod (Accepted target state, owner-directed 2026-10-18)](./ADR-0068-continuous-dev-delivery-flow.md)
 - [ADR-0069: Admit the bounded MCP v2 operation profile (Accepted, owner-directed 2026-10-29; partially supersedes ADR-0061 for the v2 operation boundary only)](./ADR-0069-mcp-v2-authority-profile.md)
-- [ADR-0070: Remote Claude connector access to the MCP v1 profile over OAuth-protected HTTPS (Proposed 2026-11-27; admits nothing until owner ratification)](./ADR-0070-remote-mcp-client-profile.md)
+- [ADR-0070: Remote Claude connector access to the MCP v1 profile over OAuth-protected HTTPS (Accepted 2026-11-28; partially supersedes ADR-0061 B1/C1 for the remote entrypoint only)](./ADR-0070-remote-mcp-client-profile.md)

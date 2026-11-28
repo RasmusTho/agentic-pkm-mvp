@@ -1,15 +1,22 @@
 ---
-status: Proposed
+status: Accepted
 owner: Architecture / CES
-date: 2026-11-27
+date: 2026-11-28
 ---
 
 # ADR-0070: Remote Claude connector access to the MCP v1 profile over OAuth-protected HTTPS
 
-**This record is a proposal. It admits nothing.** Until the owner ratifies it and the matching
-client contract is merged, [ADR-0061](ADR-0061-mimer-mcp-client-adapter.md) and
-[ADR-0069](ADR-0069-mcp-v2-authority-profile.md) are unchanged: local stdio only, no remote client,
-no new authentication, and no production effect.
+## Owner decision receipt
+
+The owner ratified this record as written on 2026-11-28 in the
+[ratification receipt on Issue #6667](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6667#issuecomment-7236478483), answering "Ratify OAuth version" when offered this
+OAuth profile or the fixed bearer header alternative. Acceptance authorizes bounded source
+implementation (#6668) only. It does not authorize a Funnel exposure, a credential, a deployment, or
+access to production data; section 6 gates those separately.
+
+[ADR-0061](ADR-0061-mimer-mcp-client-adapter.md) and [ADR-0069](ADR-0069-mcp-v2-authority-profile.md)
+stay authoritative for the local stdio sidecar and the v2 profile, except for the remote-entrypoint
+amendments in section 6.
 
 ## Context
 
@@ -61,7 +68,7 @@ Properties of the delivered v1 path that are acceptable for a local process and 
 5. Captured text is vault content that existing automation may act on. Delivered in #6674 (captured
    panel syntax is made inert) and #6675 (watcher runs honour the manual-only gate).
 
-## Proposed decision
+## Decision
 
 Admit one additional, separately enabled profile, **remote-http v1**, with all of the following.
 The local v1 stdio profile and v2 profile behaviour are unchanged; only the caller scope of the
@@ -97,7 +104,7 @@ context carrier is extended, for this ingress.
 
 The grant is a subset of the five v1 tools. It is configuration, not code.
 
-| Tool | Proposed default | Precondition |
+| Tool | Default | Precondition |
 | --- | --- | --- |
 | `mimer.health` | granted | valid token |
 | `mimer.capture` | granted | inert capture (delivered, #6674) |
@@ -129,7 +136,7 @@ The grant is a subset of the five v1 tools. It is configuration, not code.
   and if it does not, the audience defaults to the single canonical URL.
 - Authorization codes are single-use, live at most 60 seconds, and are bound to the client, the exact
   redirect, the PKCE challenge, the audience, and `state`.
-- Short-lived access tokens (proposed: 1 hour) and refresh tokens with a fixed lifetime (proposed:
+- Short-lived access tokens (default: 1 hour) and refresh tokens with a fixed lifetime (default:
   30 days), usable only with client authentication. Tokens are opaque and stored only as hashes.
   Refresh rotation, if used, accepts the previous token once within a short grace window, so a
   provider retry does not revoke the grant.
