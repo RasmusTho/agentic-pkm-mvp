@@ -67,7 +67,7 @@ def _digest(credential: str) -> str:
     return hashlib.sha256(credential.encode("utf-8")).hexdigest()
 
 
-def _read_owner_only(path: Path) -> str:
+def read_owner_only(path: Path) -> str:
     """Read the grant without following a symlink; refuse a file others can read or write."""
 
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -84,7 +84,7 @@ def load_grant(path: Path) -> RemoteGrant:
     """Parse the grant file or raise ``GrantRefused(503)``."""
 
     try:
-        raw = json.loads(_read_owner_only(path))
+        raw = json.loads(read_owner_only(path))
         if not isinstance(raw, dict) or raw.get("schema") != GRANT_SCHEMA:
             raise ValueError("schema")
         tools = raw["tools"]

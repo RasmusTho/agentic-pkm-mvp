@@ -236,8 +236,17 @@ def _single(params: Mapping[str, Sequence[str]], name: str, *, required: bool = 
 
 
 class AuthorizationServer:
-    def __init__(self, config: OAuthConfig, *, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        config: OAuthConfig,
+        *,
+        clock: Callable[[], float] = time.time,
+        config_path: Path | None = None,
+    ) -> None:
         self.config = config
+        #: When set, client credentials are re-read on every token request, so
+        #: ``rotate-secret`` takes effect on the running server without a restart.
+        self._config_path = config_path
         self.store = OAuthStore(config.store_path)
         self._clock = clock
 
@@ -376,6 +385,18 @@ class AuthorizationServer:
 
     # --- token endpoint (public origin) ---------------------------------------------------
 
+    def _client_credentials(self) -> tuple[str, str]:
+        if self._config_path is None:
+            return self.config.client_id, self.config.client_secret_sha256
+        try:
+            current = load_config(self._config_path)
+        except (OSError, ValueError, KeyError) as exc:
+            # Fail closed: an unreadable config authenticates no client.
+            raise OAuthError(
+                "invalid_client", "client configuration unavailable", status=401
+            ) from exc
+        return current.client_id, current.client_secret_sha256
+
     def _authenticate_client(
         self, form: Mapping[str, Sequence[str]], authorization: str | None
     ) -> str:
@@ -399,13 +420,14 @@ class AuthorizationServer:
         if basic is not None and posted_secret is not None:
             raise OAuthError("invalid_request", "use one client authentication method")
         client_id, secret = basic if basic is not None else (posted_id, posted_secret)
+        expected_id, expected_secret_sha256 = self._client_credentials()
         if basic is not None and posted_id is not None and posted_id != client_id:
             raise OAuthError("invalid_client", "client mismatch", status=401)
         if (
             client_id is None
             or secret is None
-            or not hmac.compare_digest(client_id.encode(), self.config.client_id.encode())
-            or not hmac.compare_digest(_sha256(secret), self.config.client_secret_sha256)
+            or not hmac.compare_digest(client_id.encode(), expected_id.encode())
+            or not hmac.compare_digest(_sha256(secret), expected_secret_sha256)
         ):
             raise OAuthError("invalid_client", "client authentication failed", status=401)
         return client_id
