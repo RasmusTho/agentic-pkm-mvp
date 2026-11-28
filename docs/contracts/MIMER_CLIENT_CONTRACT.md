@@ -60,6 +60,34 @@ shipped only in the separate `mimer-mcp-sidecar` distribution, not in `app/` or 
 dependency surface. Streamable HTTP over tailnet/LAN plus per-device authentication are deferred,
 separately gated follow-ons and must not be enabled implicitly.
 
+### Remote HTTP v1 profile (ADR-0070)
+
+ADR-0070 (accepted 2026-11-28) admits one further, separately enabled profile for a Claude custom
+connector. It does not change the stdio sidecar above.
+
+- **Entrypoint:** a separate process serving Streamable HTTP MCP on a loopback-bound listener, reusing
+  the v1 semantic tool layer. Tailscale Funnel on port 443 is the only public path (MCP path, OAuth
+  metadata, token endpoint); the authorization and consent endpoints are tailnet-only through
+  Tailscale Serve and admit only the owner's Tailscale identity.
+- **Authentication:** OAuth 2.1 with one pre-registered client, PKCE, exact redirect, audience-bound
+  short-lived tokens. A token is transport admission only.
+- **Authority:** the entrypoint reaches the runtime only through a separate ingress with loopback
+  trust off, as a distinct remote subject, calling only the context-bound routes with a context the
+  runtime derives from one host-side grant (one vault binding, granted tools, expiry). Revoking that
+  grant is the authoritative kill.
+- **Operations:** a subset of the five v1 tools; default health and capture, retrieval once remote
+  reads qualify, `ask` not granted.
+- **Remote reads:** only Markdown notes owned by the bound vault; no nested vault, hidden or system
+  content, and no absolute host path; search results, including titles, are filtered the same way.
+- **Writes:** no adapter retry; writes stay disabled unless qualification shows that
+  disconnect-after-write and restart cause no second append. Remote-mode logs carry operation,
+  outcome and trace identifier only.
+- Enabling it needs, in order: merged and verified implementation; the owner's Claude connector
+  confirmed on the tablet; qualified DEV/TEST acceptance with the real client; and a separate
+  production authorization. Turning Funnel on, issuing credentials and production each need the
+  owner's go-ahead at that time.
+- Normative detail is ADR-0070 §§1–6; where this summary is silent, the ADR governs.
+
 The v1 `tools/list` response declares advisory MCP annotations: `mimer.retrieve`, `mimer.read_note`,
 and `mimer.health` are `readOnlyHint: true`; `mimer.ask` (the runtime may append recall and synthesis
 receipts) and `mimer.capture` are `readOnlyHint: false`, `destructiveHint: false`, and
@@ -133,12 +161,13 @@ How each transport stays inside the envelope:
 
 Base URL: the Mimer runtime API (`app/api/app.py`). All routes below exist on `main` today. Trace correlation: send `x-trace-id` on every call; the runtime's TraceIdMiddleware propagates it into spans, receipts, and events.
 
-**v1 auth posture (owner ruling):** LAN/loopback-only. The client-facing routes below carry no auth dependency today; `X-API-Key` machinery exists (`app/auth.py`) but is applied to only three routes in `companion.py`. A client under this contract MUST refuse to operate against a Mimer host that is not loopback, LAN, or tailnet (`docs/SECURITY_TRUST_BOUNDARIES.md`). Per-agent identity/keys is the named first hardening slice (§9 F2), not a v1 blocker.
+**v1 auth posture (owner ruling):** LAN/loopback-only. The client-facing routes below carry no auth dependency today; `X-API-Key` machinery exists (`app/auth.py`) but is applied to only three routes in `companion.py`. A client under this contract MUST refuse to operate against a Mimer host that is not loopback, LAN, or tailnet (`docs/SECURITY_TRUST_BOUNDARIES.md`). The one exception is the ADR-0070 remote HTTP entrypoint (§2), reached only through its Funnel address with OAuth. Per-agent identity/keys is the named first hardening slice (§9 F2), not a v1 blocker.
 
 For the accepted MCP v1 adapter, C1 means the stdio process inherits its local user session and
 calls the existing loopback API; it does not open a network listener and adds no new auth. This does
 not authorize a networked MCP endpoint. Any later Streamable HTTP transport requires a separate
-B2 + C2 decision and per-device authentication before listener startup.
+B2 + C2 decision and per-device authentication before listener startup; ADR-0070 is that decision
+for its remote entrypoint only (§2).
 
 | Operation | Method + path | Purpose | Provenance/trace | Governance |
 | --- | --- | --- | --- | --- |
@@ -532,7 +561,7 @@ Answers per `docs/INTEGRATION_FABRIC_CONTRACT.md` §Contract fields.
 Named follow-on work; each routes through `feature-breakdown`/`docs-to-issue`, none blocks v1 clients operating under the postures above:
 
 - **F1 — Capture provenance field + per-agent actor.** The capture schema is `{text}` with `extra="forbid"`; the actor is hardcoded `companion.capture`, so a Claude-app capture and a Bifrost capture are indistinguishable in DecisionToken/AuthorityReceipt/event. Add an optional provenance object to the schema and thread it through the governed chain.
-- **F2 — Auth coverage + per-agent/per-device identity (first hardening slice).** Apply the existing `X-API-Key` machinery to the client-facing routes and introduce per-client identity/keys; serves both families (and Bifrost B1's remote posture). It is not a blocker for ADR-0061's stdio-only MCP v1 because no listener exists, but it is a mandatory precondition for any separately approved Streamable HTTP MCP transport.
+- **F2 — Auth coverage + per-agent/per-device identity (first hardening slice).** Apply the existing `X-API-Key` machinery to the client-facing routes and introduce per-client identity/keys; serves both families (and Bifrost B1's remote posture). It is not a blocker for ADR-0061's stdio-only MCP v1 because no listener exists, but it is a mandatory precondition for any separately approved Streamable HTTP MCP transport. For the ADR-0070 remote entrypoint only, the separate runtime ingress with loopback trust off and its remote-subject credential satisfies this precondition; F2 stays open for every other client.
 - **F3 — uuid-resolving note fetch or enriched search payload.** Close the §4.2 uuid→path gap at the API instead of by client-side filesystem enrichment.
 - **F4 — API versioning + published OpenAPI for the client surface.** The hub API is unversioned and `api/openapi.yaml` documents 2 of 23+ route modules (audit §3; the surface is still growing); a client-publishable contract needs both.
 - **F5 — Client-visible idempotency key on the *text* capture endpoint.** Still open for `POST /api/companion/capture`: no client-supplied key exists there, so a client must verify-by-read after `not_acknowledged`/timeout instead of retrying (§6 W5). **Delivered for the media lane** by #4384 / PR #4400: `POST /api/heimdal/capture/media` takes `(capture_id, content_sha256)` as its client-minted identity and answers a resend with the same `receipt_id` (§4.4), so that lane retries safely and needs no verify-by-read.

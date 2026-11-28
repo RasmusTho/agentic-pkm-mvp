@@ -6,6 +6,8 @@ date: 2026-10-29
 
 # ADR-0069: Admit the bounded MCP v2 operation profile
 
+> **Amended by [ADR-0070](./ADR-0070-remote-mcp-client-profile.md) (2026-11-28):** the active-context carrier and context-bound routes may also be called by ADR-0070's separate remote runtime ingress, with a context derived server-side from the remote grant. v2 profile behaviour is unchanged.
+
 ## Owner decision receipt
 
 The owner accepted this complete bounded profile on 2026-10-29 in the durable

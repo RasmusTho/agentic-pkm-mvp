@@ -5,6 +5,8 @@ Owner: Architecture (Rasmus)
 Temporal class: Durable decision. Supersede via a new ADR if the accepted topology, transport, authentication posture, or operation boundary changes.
 Source of truth: This ADR owns the accepted MCP adapter decision; `docs/contracts/MIMER_CLIENT_CONTRACT.md` owns the resulting client authority and transport contract. ADR-0047 remains authoritative for the distinct consumer-side remote-multiplex seam, and ADR-0056 remains authoritative except for its MCP deferral/closed transport-set wording, which this ADR supersedes in part.
 
+> **Superseded in part by [ADR-0070](./ADR-0070-remote-mcp-client-profile.md) (2026-11-28):** for the separate remote HTTP entrypoint only, B1 and C1 are replaced by an OAuth-protected Streamable HTTP listener published through Tailscale Funnel, which also goes beyond B2's loopback/LAN/tailnet limit. The stdio sidecar, its A2/B1/C1 posture and the five-operation boundary are unchanged.
+
 # ADR-0061: Admit MCP as an additional Mimer client adapter — topology, wire transport, and auth posture
 
 **Date:** 2026-07-11
