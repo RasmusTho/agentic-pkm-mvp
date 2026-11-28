@@ -343,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.config is None:
         parser.error(f"--config or {CONFIG_PATH_ENV} is required")
-    server = AuthorizationServer(load_config(args.config))
+    server = AuthorizationServer(load_config(args.config), config_path=args.config)
     app = public_app(server) if args.surface == "public" else tailnet_app(server)
     if args.uds is not None:
         os.umask(0o077)

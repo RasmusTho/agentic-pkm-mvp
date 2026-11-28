@@ -602,3 +602,28 @@ def test_grant_file_must_be_private_regular_and_well_formed(tmp_path):
         with pytest.raises(GrantRefused):
             load_grant(path)
     assert not [p for p in tmp_path.iterdir() if p.name.startswith(".remote-grant-")]
+
+
+def test_secret_rotation_takes_effect_on_the_running_server(rig, tmp_path, capsys):
+    running = AuthorizationServer(
+        load_config(rig.config_path), clock=rig.clock, config_path=rig.config_path
+    )
+    client = TestClient(public_app(running))
+    form = {"grant_type": "refresh_token", "refresh_token": _tokens(rig)["refresh_token"]}
+    handover = tmp_path / "rotated"
+    assert (
+        oauth_main(
+            ["rotate-secret", "--config", str(rig.config_path), "--handover-out", str(handover)]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    new_secret = json.loads(handover.read_text())["client_secret"]
+
+    old = client.post("/oauth/token", data=form, headers=rig.basic)
+    assert (old.status_code, old.json()["error"]) == (401, "invalid_client")
+    new_basic = {
+        "Authorization": "Basic "
+        + base64.b64encode(f"{rig.client_id}:{new_secret}".encode()).decode()
+    }
+    assert client.post("/oauth/token", data=form, headers=new_basic).status_code == 200

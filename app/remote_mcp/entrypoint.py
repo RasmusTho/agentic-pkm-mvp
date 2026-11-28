@@ -274,7 +274,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - proces
             credential_file=args.credential_file,
             port=args.port,
         )
-        oauth = AuthorizationServer(load_config(config.oauth_config))
+        oauth = AuthorizationServer(
+            load_config(config.oauth_config), config_path=config.oauth_config
+        )
         client = ingress_client(config.ingress_socket, read_credential(config.credential_file))
     except (OSError, ValueError) as exc:
         parser.error(f"refused: {type(exc).__name__}")
