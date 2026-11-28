@@ -47,7 +47,8 @@ INGRESS_BASE_URL = "http://remote-ingress"
 CAPTURE_ROUTE = "/api/companion/capture/scoped"
 _STATE_KEY = "mimer_remote_grant"
 #: ADR-0070 §5: global (Funnel peers are shared egress) request budget for the MCP path, and a
-#: cap on failed bearer attempts. A valid token is never refused by the failure cap.
+#: cap on failed bearer attempts after which failures are no longer logged one by one. A failed
+#: bearer always receives 401 with the challenge.
 MCP_RATE_PER_MINUTE = 600
 FAILED_BEARER_CAP = 30
 FAILED_BEARER_WINDOW_SECONDS = 600
@@ -210,19 +211,18 @@ class _BearerGate:
         try:
             grant = self._oauth.verify_access_token(token)
         except OAuthError as exc:
-            capped = self._failures.exceeded()
-            self._failures.record()
-            if capped:
-                # Over the cap: refuse cheaply and log the burst once, not per request.
+            # Always answer 401 with the challenge (a client with an expired token must learn to
+            # refresh); the global budget above bounds the lookups. Past the cap, only the
+            # per-failure log lines are suppressed, and capped failures are not recorded, so a
+            # trickle of junk cannot keep the window full.
+            if self._failures.exceeded():
                 if not self._burst_logged:
                     self._burst_logged = True
                     _LOG.warning("remote_mcp security_event op=bearer outcome=failure_cap_reached")
-                await _send_plain(
-                    send, 429, {"error": "temporarily_unavailable"}, [(b"retry-after", b"60")]
-                )
-                return
-            self._burst_logged = False
-            _LOG.warning("remote_mcp security_event op=bearer outcome=%s", exc.error)
+            else:
+                self._failures.record()
+                self._burst_logged = False
+                _LOG.warning("remote_mcp security_event op=bearer outcome=%s", exc.error)
             challenge = f'Bearer resource_metadata="{self._metadata_url}"'
             if token:
                 challenge += ', error="invalid_token"'

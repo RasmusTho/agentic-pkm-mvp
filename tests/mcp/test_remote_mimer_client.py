@@ -394,9 +394,12 @@ def test_mcp_path_bounds_failed_bearers_and_total_rate(tmp_path, monkeypatch, ca
     monkeypatch.setattr(entrypoint, "MCP_RATE_PER_MINUTE", 7)
     caplog.set_level(logging.WARNING, logger="mimer.remote_mcp")
     with rig.entry() as client:
-        statuses = [rpc(client, "bad-token", "tools/list").status_code for _ in range(5)]
-        assert statuses == [401, 401, 401, 429, 429]
-        # The failure cap never refuses a valid token.
+        refused = [rpc(client, "bad-token", "tools/list") for _ in range(5)]
+        # Past the cap a failure still gets 401 with the challenge, so a client whose token
+        # expired is told to refresh rather than locked out; only the logging is capped.
+        assert [r.status_code for r in refused] == [401] * 5
+        assert all(r.headers["www-authenticate"].startswith("Bearer ") for r in refused)
+        # A valid token works throughout.
         assert rpc(client, token, "tools/list").status_code == 200
         # The global budget (7/min here) is spent: everything is refused before any token lookup.
         assert rpc(client, token, "tools/list").status_code == 200
